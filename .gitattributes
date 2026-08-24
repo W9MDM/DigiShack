@@ -1,0 +1,17 @@
+# Normalize line endings. DigiShack is authored on Windows but deployed on Linux
+# under PM2 + NGINX, so everything is stored and checked out as LF — otherwise
+# shell scripts and config files picked up CRLF and broke on the target host.
+* text=auto eol=lf
+
+# Never touch binaries.
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary
+*.woff  binary
+*.woff2 binary
+*.pdf  binary
+
+# Generated — keep it out of diffs and merge conflicts.
+package-lock.json -diff linguist-generated

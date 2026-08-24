@@ -1,0 +1,723 @@
+// DigiShack — Prisma schema (spec Phase 1)
+//
+// Target is MySQL only — no dual-provider strategy.
+//
+// This is the Phase 1 spec schema verbatim, plus four categories of addition.
+// Everything added is listed here so the deltas from the spec are auditable:
+//
+//   1. REQUIRED back-relations. Prisma will not compile a one-sided relation.
+//      The spec omits `Operator.qsos` and `Qso.decodes`, so the schema as
+//      written in the spec is not valid Prisma. Both are added below.
+//   2. Indexes. Needed by the list/dupe-check/award queries. FK indexes are
+//      created implicitly by Prisma on MySQL, so only non-FK ones are declared.
+//   3. `@db.VarChar(n)` on callsign/grid/band/mode columns. MySQL's default
+//      varchar(191) utf8mb4 is 764 bytes per column, which blows InnoDB's
+//      3072-byte key limit in composite unique keys. Narrowing these keeps
+//      PskSpot's dedupe key legal.
+//   4. `createdAt` / `updatedAt` audit columns.
+//
+// One dedupe constraint is added on PskSpot so the Phase 5 BullMQ poller is
+// idempotent — PSKReporter returns overlapping windows on repeat polls, and
+// without this every poll would insert duplicate spot rows.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Authentication (not in the spec's Phase 1 model — added because DigiShack is
+// web-facing and the spec's Role enum was otherwise unenforceable)
+// ---------------------------------------------------------------------------
+//
+// `User` is the login identity; `Operator` remains the QSO-attribution record.
+// They are deliberately separate: an Operator is scoped to exactly one Station
+// (`stationId` is required), so putting credentials on Operator would force a
+// person who operates two stations to hold two logins. It also lets a VIEWER
+// exist without being an operator anywhere.
+//
+// `User.role` is authoritative for authorization. `Operator.role` is left as the
+// spec defines it — it describes that person's function at that station, and is
+// not consulted for access control.
+
+model User {
+  id             String          @id @default(cuid())
+  email          String          @unique @db.VarChar(191)
+  name           String
+  callsign       String?         @db.VarChar(32)
+  passwordHash   String          @db.VarChar(255)
+  role           Role            @default(VIEWER)
+  /// Disabling a user invalidates their access immediately — sessions are
+  /// checked against this on every request, not just at login.
+  active         Boolean         @default(true)
+  lastLoginAt    DateTime?
+  sessions       Session[]
+  operators      Operator[]
+  qslApprovals   QslEmail[] // back-relation required by QslEmail.approvedBy
+  passwordResets PasswordReset[]
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+}
+
+/// A one-time password-reset token, emailed to the account's address.
+///
+/// Same storage discipline as Session: only the SHA-256 of the token is kept, so a
+/// database leak cannot be turned into account takeovers. Single-use (`usedAt`) and
+/// short-lived (`expiresAt`), and every outstanding token for a user is removed when
+/// a new one is issued — the newest email is the only one that works.
+model PasswordReset {
+  id        String    @id @default(cuid())
+  tokenHash String    @unique @db.VarChar(64)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId    String
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
+}
+
+// Bearer tokens for the public REST API (third-party clients: GridTracker,
+// fldigi, scripts). Separate from Session because the trust model differs — a key
+// is long-lived, non-interactive, and belongs to a program rather than a person.
+model ApiKey {
+  id   String @id @default(cuid())
+  name String @db.VarChar(120)
+
+  /// SHA-256 hex of the token. The token itself is displayed once, at creation,
+  /// and is not recoverable afterwards.
+  keyHash String @unique @db.VarChar(64)
+
+  /// Leading characters of the token, so a key is identifiable in a list without
+  /// the list containing anything usable.
+  prefix String @db.VarChar(16)
+
+  /// Capped at OPERATOR by the API — an API key that can manage users or deploy
+  /// code is a much worse thing to leak than one that can log a QSO.
+  role Role @default(VIEWER)
+
+  active     Boolean   @default(true)
+  lastUsedAt DateTime?
+  /// Optional expiry. Null means it does not expire on its own.
+  expiresAt  DateTime?
+
+  /// Who created it. Not a relation — the audit trail should outlive the account.
+  createdById String? @db.VarChar(32)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([active])
+}
+
+model Session {
+  id String @id @default(cuid())
+
+  /// SHA-256 hex of the raw session token. The raw token exists only in the
+  /// client's cookie, so a database leak does not yield usable sessions.
+  tokenHash String @unique @db.VarChar(64)
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId String
+
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  lastSeenAt DateTime @default(now())
+  userAgent  String?  @db.VarChar(255)
+  ip         String?  @db.VarChar(64)
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+// ---------------------------------------------------------------------------
+// Runtime configuration
+// ---------------------------------------------------------------------------
+//
+// Service credentials (QRZ, eQSL, ClubLog, HRDLOG, LoTW, SMTP, bridge token)
+// live here rather than in .env, managed from /settings and encrypted at rest
+// with AES-256-GCM. See lib/settings/.
+//
+// DATABASE_URL and SETTINGS_KEY necessarily stay in .env: settings are stored in
+// the database, so the database credentials can't come from it, and a decryption
+// key can't itself be encrypted.
+
+model Setting {
+  key String @id @db.VarChar(64)
+
+  /// Plaintext for non-secret values; `v1:iv:tag:ciphertext` (base64 parts) for
+  /// secrets. Never returned to a client when `encrypted` is true.
+  value String @db.Text
+
+  encrypted Boolean @default(false)
+
+  updatedAt   DateTime @updatedAt
+  /// User who last changed it. Not a relation — an audit trail should survive
+  /// the account being deleted.
+  updatedById String?  @db.VarChar(32)
+}
+
+// ---------------------------------------------------------------------------
+// DXCC reference data
+// ---------------------------------------------------------------------------
+//
+// Populated from Club Log's cty.xml (https://cdn.clublog.org/cty.php?api=KEY,
+// schema at https://cdn.clublog.org/cty.xsd), either fetched with an API key or
+// uploaded by an admin for an offline install. Nothing is committed to the repo —
+// the file is maintained upstream, changes regularly, and is not ours to
+// redistribute.
+//
+// Club Log's file is used rather than AD1C's cty.dat because cty.dat carries a
+// country name and primary prefix but NOT the numeric ADIF entity code, which is
+// exactly what Qso.dxcc stores.
+
+model DxccEntity {
+  /// ADIF DXCC entity code. The natural key — this is what Qso.dxcc holds.
+  adif Int @id
+
+  name      String    @db.VarChar(191)
+  /// Primary prefix for the entity, e.g. "K" for the USA.
+  prefix    String    @db.VarChar(16)
+  /// Deleted entities still matter: a QSO made before deletion counts for DXCC.
+  deleted   Boolean   @default(false)
+  cqZone    Int?
+  continent String?   @db.VarChar(4)
+  latitude  Float?
+  longitude Float?
+  /// Entities come and go; a QSO is credited against whatever was valid at the time.
+  validFrom DateTime?
+  validTo   DateTime?
+
+  prefixes DxccPrefix[]
+
+  @@index([name])
+  @@index([prefix])
+  @@index([deleted])
+}
+
+model DxccPrefix {
+  id Int @id @default(autoincrement())
+
+  /// A prefix (from <prefixes>) or a complete callsign (from <exceptions>).
+  call String @db.VarChar(32)
+
+  /// True for <exceptions> entries — a whole-callsign override that must be
+  /// matched before any prefix, because it exists precisely to contradict one.
+  exact Boolean @default(false)
+
+  entity DxccEntity @relation(fields: [adif], references: [adif], onDelete: Cascade)
+  adif   Int
+
+  /// Per-prefix overrides of the entity's values, where cty.xml supplies them.
+  cqZone    Int?
+  continent String?   @db.VarChar(4)
+  latitude  Float?
+  longitude Float?
+  validFrom DateTime?
+  validTo   DateTime?
+
+  /// Resolution is "longest matching call/prefix wins", so lookups filter on
+  /// `exact` and scan candidate prefixes by descending length.
+  @@index([call, exact])
+  @@index([adif])
+}
+
+model Station {
+  id                  String               @id @default(cuid())
+  callsign            String               @db.VarChar(32)
+  grid                String               @db.VarChar(12)
+  operators           Operator[]
+  qsos                Qso[]
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+  incompleteExchanges IncompleteExchange[]
+
+  // Deliberately NOT unique: portable/rover operation legitimately produces
+  // several rows for one callsign at different grids (K9XYZ/P, etc.).
+  @@index([callsign])
+}
+
+model Operator {
+  id        String   @id @default(cuid())
+  name      String
+  callsign  String   @db.VarChar(32)
+  station   Station  @relation(fields: [stationId], references: [id], onDelete: Cascade)
+  stationId String
+  /// Describes this person's function at this station. NOT used for
+  /// authorization — see User.role.
+  role      Role     @default(OPERATOR)
+  /// Optional link to a login identity. Null for operators who are logged as
+  /// having made contacts but have no account (guest ops, visitors).
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  userId    String?
+  qsos      Qso[] // back-relation required by Qso.operator
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([callsign])
+}
+
+model Qso {
+  id         String    @id @default(cuid())
+  callsign   String    @db.VarChar(32)
+  band       String    @db.VarChar(12)
+  freqHz     BigInt
+  mode       String    @db.VarChar(12) // FT8, FT4, SSB, CW, etc.
+  startTime  DateTime
+  endTime    DateTime?
+  rstSent    String?   @db.VarChar(12)
+  rstRcvd    String?   @db.VarChar(12)
+  gridSquare String?   @db.VarChar(12)
+  dxcc       Int?
+
+  /// ADIF NAME — the operator's name.
+  ///
+  /// The QRZ lookup has always returned this and there was nowhere to put it, so it
+  /// was fetched and thrown away on every contact. It is also what a QSL card wants
+  /// to open with, and what makes a log searchable by the person rather than the
+  /// callsign — the one thing an operator remembers a year later.
+  name String? @db.VarChar(64)
+  /// ADIF QTH — where they were, as free text ("Porter County, Indiana").
+  ///
+  /// Distinct from `gridSquare`, which is precise and machine-readable, and from
+  /// `state`/`county`, which are award fields with controlled values. This is what
+  /// they said on the air.
+  qth  String? @db.VarChar(96)
+
+  // Standard ADIF award fields. Stored because each is the key to an award that
+  // cannot be derived from anything else already here:
+  //   state -> WAS, cqZone -> WAZ, iota -> IOTA, continent -> WAC.
+  /// ADIF STATE — primary administrative subdivision (US state, VE province…).
+  state     String? @db.VarChar(16)
+  /// ADIF CNTY — secondary subdivision, for county awards.
+  county    String? @db.VarChar(64)
+  /// ADIF CQZ.
+  cqZone    Int?
+  /// ADIF ITUZ.
+  ituZone   Int?
+  /// ADIF IOTA reference, e.g. "NA-001".
+  iota      String? @db.VarChar(16)
+  /// ADIF CONT — NA, SA, EU, AF, AS, OC, AN.
+  continent String? @db.VarChar(4)
+
+  // Special-activity fields, which is how ADIF carries POTA, SOTA, WWFF and the
+  // rest. `sig` is the programme name ("POTA"), `sigInfo` the reference
+  // ("US-1689"). Without them a park chase leaves no trace of what was chased:
+  // the contact is in the log, the park is not, and "have I worked this park?"
+  // — the question the whole activity is built on — cannot be answered locally
+  // at all.
+  //
+  // These are THEIR activity. An activation of our own would be MY_SIG /
+  // MY_SIG_INFO, which is a separate pair and not yet stored.
+  //
+  // This pair is the PRIMARY reference only. One contact can genuinely be several
+  // parks at once — nested and overlapping parks are common, and a "two-fer" or
+  // "five-fer" is one QSO with several equally valid references. Measured against
+  // POTA's own record of this station: 126 of 863 park contacts carry more than
+  // one, up to five. The full set lives in `sigRefs`; these two columns exist
+  // because ADIF, LoTW and eQSL all need exactly one value per contact, and
+  // deriving it on every export would be needless work for the common case.
+  /// ADIF SIG — special activity programme, e.g. "POTA".
+  sig            String?              @db.VarChar(32)
+  /// ADIF SIG_INFO — the PRIMARY reference. See `sigRefs` for all of them.
+  sigInfo        String?              @db.VarChar(32)
+  /// Every special-activity reference for this contact, primary included.
+  sigRefs        QsoSigRef[]
+  qslSent        QslStatus            @default(NONE)
+  qslRcvd        QslStatus            @default(NONE)
+  qslSentAt      DateTime?
+  qslRcvdAt      DateTime?
+  /// ADIF QSL_SENT_VIA / QSL_RCVD_VIA — how the card travelled. Needed to
+  /// export correctly and to work a bureau batch separately from direct mail.
+  qslSentVia     QslRoute?
+  qslRcvdVia     QslRoute?
+  lotwSent       Boolean              @default(false)
+  // WHEN it was uploaded, which is not derivable from anything else.
+  //
+  // Added for reconciliation. An accepted LoTW upload is only a queue acknowledgement, so the
+  // flag above is optimistic and has to be checkable against what LoTW actually holds — and
+  // that query is bounded by RECEIPT date, so the local side needs the same bound. Null for
+  // every contact marked sent before this column existed, which is exactly the set
+  // reconciliation must leave alone rather than judge.
+  lotwSentAt     DateTime?
+  lotwRcvd       Boolean              @default(false)
+  eqslSent       Boolean              @default(false)
+  eqslRcvd       Boolean              @default(false)
+  /// Upload state for the services that only accept QSOs and never confirm them,
+  /// so there is no matching *Rcvd flag. Without these, the only way to answer
+  /// "what have I not uploaded yet" was to download the entire remote log and
+  /// diff it — which works, and is how 3,174 Club Log duplicates were found, but
+  /// it moves megabytes to discover a handful of missing contacts and cannot
+  /// answer the question offline at all.
+  ///
+  /// QRZ was listed here as one of those services. It is not one: QRZ Logbook
+  /// marks a contact confirmed when both operators have logged it, and says so in
+  /// APP_QRZLOG_STATUS on the way back out. See qrzRcvd.
+  /// An emailed QSL card image was sent. NOT the same as `qslSent`.
+  ///
+  /// `qslSent` means a QSL card — paper, in an envelope or via a bureau. Setting it
+  /// for an email made the contact look fully answered, so it would be skipped when
+  /// working through people who sent a card and want one back. Those are different
+  /// obligations and they need different fields.
+  ///
+  /// There is no standard ADIF field for "I emailed a card image", so this exports
+  /// as APP_DIGISHACK_EMAILQSLSENT. The recipient address and the exact body live on
+  /// the related QslEmail row.
+  emailQslSent   Boolean              @default(false)
+  emailQslSentAt DateTime?
+  qrzSent        Boolean              @default(false)
+  /// QRZ shows this contact as confirmed — both operators logged it.
+  ///
+  /// Not the same claim as lotwRcvd, and worth keeping separate: LoTW confirmation
+  /// counts for DXCC, QRZ's does not. It counts for QRZ's own awards and it is
+  /// evidence the contact was real, which is why it is worth having.
+  qrzRcvd        Boolean              @default(false)
+  /// QRZ's own record id (APP_QRZLOG_LOGID), when we have seen this contact in
+  /// their logbook.
+  ///
+  /// The mark that makes a differential download possible. Set it and the next
+  /// sync can start after the highest id already seen instead of fetching the whole
+  /// logbook — which is what it did, every run, however many records were new.
+  qrzLogId       Int?
+  clublogSent    Boolean              @default(false)
+  hrdlogSent     Boolean              @default(false)
+  /// Uploaded to the operator's own Cloudlog or Wavelog installation.
+  ///
+  /// Its own column rather than borrowing hrdlogSent, which was the first shape and
+  /// is the sort of shortcut that is fine until somebody configures both.
+  cloudlogSent   Boolean              @default(false)
+  /// Which radio made this contact — "FLEX-6400", "IC-7300MK2".
+  ///
+  /// Exported as ADIF MY_RIG, but NOT called `rig` here, because `Rig` is a separate
+  /// table in this schema: operator-entered inventory attached to a station, which
+  /// nothing in the radio path reads. This is the radio that actually keyed, as it
+  /// identified itself over the air interface, so it needs no setting up and cannot
+  /// disagree with reality. Null for manual entries, imports, and contacts logged
+  /// through an external decoder, which does not tell us what it is driving.
+  radio          String?              @db.VarChar(64)
+  /// ADIF TX_PWR — transmit power for this contact, in WATTS.
+  ///
+  /// MEASURED, not the power slider: the peak of the radio's own forward-power
+  /// meter across the contact's transmissions. The slider is a request for a
+  /// percentage of rated output and says nothing about what actually left the
+  /// antenna socket. Null on contacts made before this existed, and on any radio
+  /// with no forward-power meter — those fall back to the station-wide
+  /// `qsl.txPower` setting on a QSL card, exactly as before.
+  txPowerW       Float?
+  notes          String?              @db.Text
+  /// The full digital exchange, both directions, one message per line.
+  ///
+  /// An FT8 contact is six messages of thirteen characters and the log kept two of
+  /// them — the report sent and the report received. The rest lived in console output
+  /// and in DigitalDecode rows that are pruned after thirty days, so "did they actually
+  /// receive my report, or did I log an optimistic QSO" was unanswerable a month later.
+  /// Written by the native digital path only; null for manual entries, ADIF imports and
+  /// contacts logged through an external decoder, which never see the exchange.
+  ///
+  /// Text rather than JSON: it is read by a person on the QSO page, and nothing
+  /// downstream parses it back. See lib/digital/transcript.ts for the format.
+  transcript     String?              @db.Text
+  station        Station              @relation(fields: [stationId], references: [id])
+  stationId      String
+  operator       Operator?            @relation(fields: [operatorId], references: [id], onDelete: SetNull)
+  operatorId     String?
+  spots          PskSpot[]
+  decodes        DigitalDecode[] // back-relation required by DigitalDecode.loggedAsQso
+  qslEmails      QslEmail[] // back-relation required by QslEmail.qso
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
+  promotedFrom   IncompleteExchange[]
+
+  @@index([callsign])
+  @@index([startTime])
+  @@index([band, mode])
+  @@index([callsign, band, mode]) // dupe check on entry
+  // "What still needs uploading?" is the query these exist to answer.
+  @@index([qrzSent])
+  @@index([lotwSent, lotwSentAt])
+  @@index([clublogSent])
+  @@index([hrdlogSent])
+  @@index([cloudlogSent])
+  @@index([eqslSent])
+  @@index([emailQslSent])
+  @@index([gridSquare]) // grid award progress
+  @@index([dxcc]) // DXCC award progress
+  @@index([state]) // WAS
+  @@index([cqZone]) // WAZ
+  @@index([iota]) // IOTA
+  @@index([continent]) // WAC
+  @@index([sigInfo]) // "have I worked this park?"
+  @@index([radio]) // "everything worked on the Icom"
+}
+
+/// An exchange that got as far as swapping reports and was never acknowledged.
+///
+/// Kept because discarding it loses a contact the other operator has. DigiShack logs a QSO
+/// when the far station's RR73 decodes; if it never does, the sequence goes to `abandoned` and
+/// nothing survived but a decode row with a null qsoId. The far station heard our roger, logged
+/// the contact, and later asked for a card — which is how 13 of these were found, by
+/// reconciling QRZ card requests against a log that had no record of them.
+///
+/// NOT a QSO. Nothing here is uploaded anywhere or counted for an award until a human promotes
+/// it, because "we sent the final roger and heard nothing" is genuinely ambiguous: the same
+/// pattern covers a contact the other station logged and one they abandoned too. The operator
+/// decides, and `promotedQsoId` records that they did.
+///
+/// Only exchanges where reports went BOTH ways are stored. "We called and nobody answered" is
+/// the overwhelming majority of abandoned sequences and carries no information worth keeping —
+/// storing those would bury the ones that matter under thousands that do not.
+model IncompleteExchange {
+  id         String   @id @default(cuid())
+  callsign   String   @db.VarChar(32)
+  band       String   @db.VarChar(12)
+  mode       String   @db.VarChar(12)
+  freqHz     BigInt?
+  startedAt  DateTime
+  endedAt    DateTime
+  /// The state the sequence reached: `rreport-sent` (we rogered their report and waited for
+  /// RR73) or `rr73-sent` (we sent RR73 and their courtesy 73 never came).
+  stage      String   @db.VarChar(24)
+  /// The report we sent them.
+  reportSent String?  @db.VarChar(8)
+  /// The report they sent us. Always present, by the storage rule above.
+  reportRcvd String?  @db.VarChar(8)
+  gridSquare String?  @db.VarChar(12)
+  /// Why the sequence gave up, in the controller's own words.
+  reason     String   @db.VarChar(191)
+  /// The messages either way, so a human can judge without leaving the page.
+  transcript String?  @db.Text
+
+  station   Station @relation(fields: [stationId], references: [id], onDelete: Cascade)
+  stationId String
+
+  /// Set when an operator promotes this to a real contact. Non-null means "dealt with".
+  promotedQso   Qso?      @relation(fields: [promotedQsoId], references: [id], onDelete: SetNull)
+  promotedQsoId String?
+  /// Set when an operator decides it was not a contact, so it stops being offered.
+  dismissedAt   DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([callsign])
+  @@index([startedAt])
+  @@index([promotedQsoId])
+}
+
+model DigitalDecode {
+  id          String   @id @default(cuid())
+  timestamp   DateTime
+  freqOffset  Int
+  snr         Int
+  message     String   @db.VarChar(128)
+  mode        String   @db.VarChar(12) // FT8 / FT4
+  band        String   @db.VarChar(12)
+  loggedAsQso Qso?     @relation(fields: [qsoId], references: [id], onDelete: SetNull)
+  qsoId       String?
+  createdAt   DateTime @default(now())
+
+  @@index([timestamp])
+  @@index([band, mode])
+}
+
+model PskSpot {
+  id           String   @id @default(cuid())
+  /// The contact this reception belongs to, when it falls inside one.
+  ///
+  /// Optional, because most reports do not. A receiver hearing our CQ reports it whether
+  /// or not anybody answered, and on the first real query 193 of 368 reports belonged to
+  /// no contact — the majority of the evidence about who can hear this station. SET NULL
+  /// on delete rather than cascade: losing a contact must not destroy the proof that the
+  /// transmission was heard.
+  qso          Qso?     @relation(fields: [qsoId], references: [id], onDelete: SetNull)
+  qsoId        String?
+  receiverCall String   @db.VarChar(32)
+  receiverGrid String?  @db.VarChar(12)
+  snr          Int?
+  freqHz       BigInt
+  reportedAt   DateTime
+  createdAt    DateTime @default(now())
+
+  /// Idempotency: PSKReporter's polling windows overlap on purpose, so the same report
+  /// comes back more than once.
+  ///
+  /// Who heard us, when, and on what frequency — the natural identity of a reception
+  /// report. This used to lead with qsoId, and MySQL treats NULLs in a unique index as
+  /// distinct, so keeping it that way would have stopped deduping precisely the rows that
+  /// now have no contact.
+  @@unique([receiverCall, reportedAt, freqHz], name: "psk_spot_dedupe")
+  @@index([reportedAt])
+  @@index([qsoId])
+}
+
+/// ADIF QSL route codes: B=bureau, D=direct, E=electronic, M=manager.
+enum QslRoute {
+  BUREAU
+  DIRECT
+  ELECTRONIC
+  MANAGER
+}
+
+enum QslStatus {
+  NONE
+  REQUESTED
+  SENT
+  CONFIRMED
+}
+
+enum Role {
+  ADMIN
+  OPERATOR
+  VIEWER
+}
+
+/// One queued QSL confirmation email, awaiting review.
+///
+/// Bulk QSL sending is unsolicited mail to other operators, so it never goes
+/// straight out: entries land here as PENDING, a human approves them, and only
+/// then are they sent. The rendered subject and body are stored at queue time so
+/// what was reviewed is provably what gets sent — regenerating at send time would
+/// let a template change alter an already-approved message.
+/// Every special-activity reference on one contact — the POTA n-fer.
+///
+/// A single QSO can be several parks at once, because parks nest and overlap:
+/// working W9ABC at Indiana Dunes is US-0765 (the national park) AND US-2258 (the
+/// state park inside it), and both are true. An activator can claim up to a
+/// handful, and 15% of this station's park contacts do.
+///
+/// This table is the authority on "which references does this contact have?", and
+/// therefore on "have I worked this park?". `Qso.sigInfo` carries the primary one
+/// as a convenience for ADIF and the single-value exports; it is always also a row
+/// here, and `scripts/check-pota-refs.ts` asserts they never drift apart.
+model QsoSigRef {
+  id      String  @id @default(cuid())
+  qso     Qso     @relation(fields: [qsoId], references: [id], onDelete: Cascade)
+  qsoId   String
+  /// ADIF SIG — "POTA", "SOTA", "WWFF".
+  sig     String  @db.VarChar(32)
+  /// ADIF SIG_INFO — the reference, e.g. "US-1689".
+  sigInfo String  @db.VarChar(32)
+  /// The one mirrored onto Qso.sigInfo. Exactly one per QSO per programme.
+  primary Boolean @default(false)
+
+  createdAt DateTime @default(now())
+
+  // A contact cannot hold the same reference twice, however many times an
+  // activator's log repeats it or an import is re-run.
+  @@unique([qsoId, sig, sigInfo])
+  @@index([sigInfo]) // "have I worked this park?"
+  @@index([sig, sigInfo])
+  @@index([qsoId])
+}
+
+model QslEmail {
+  id           String         @id @default(cuid())
+  qso          Qso            @relation(fields: [qsoId], references: [id], onDelete: Cascade)
+  qsoId        String
+  /// Recipient, resolved from QRZ at queue time.
+  toAddress    String         @db.VarChar(191)
+  /// Copy of the callsign, so the queue reads correctly if the QSO is edited.
+  callsign     String         @db.VarChar(32)
+  subject      String         @db.VarChar(255)
+  bodyText     String         @db.Text
+  bodyHtml     String         @db.Text
+  status       QslEmailStatus @default(PENDING)
+  /// Set when sending failed, so a retry has the reason to hand.
+  error        String?        @db.Text
+  /// Who approved it, for accountability on outbound mail.
+  approvedBy   User?          @relation(fields: [approvedById], references: [id], onDelete: SetNull)
+  approvedById String?
+  approvedAt   DateTime?
+  sentAt       DateTime?
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+
+  /// One live queue entry per QSO: re-queuing replaces rather than duplicates.
+  @@unique([qsoId])
+  @@index([status, createdAt])
+}
+
+enum QslEmailStatus {
+  PENDING
+  APPROVED
+  SENT
+  FAILED
+  /// Declined by the reviewer; kept so it is not re-queued endlessly.
+  SKIPPED
+}
+
+/// A callsign this station must never call on its own.
+///
+/// The "do not contact again" list. Somebody who has asked not to be worked again is
+/// asking a person, not a filter, and the request outlives any award chase — so this is a
+/// table rather than a setting: it wants a reason, a date and an audit trail, and it must
+/// survive every settings reset and profile switch.
+///
+/// SCOPE, deliberately: this governs AUTOMATIC operation. Auto Hunt and Auto CQ will
+/// never initiate a contact with a listed callsign and will not answer one in an
+/// unattended mode. It does not gag the operator — a human clicking a callsign is a human
+/// making a judgement, and the software refusing them would be answering a different
+/// question than the one that was asked.
+/// How much of a restriction one list entry is.
+///
+/// Two genuinely different requests, and conflating them is a mistake in both directions.
+/// K1XYZ asked not to be worked TWICE on the same band and mode, and said in the same
+/// breath "Feel free to make another contact with me if it is not a duplicate" — putting him
+/// on a never-call list would honour more than he asked and cost him contacts he wants.
+/// Somebody who asks not to be called at all is owed the stronger rule. One list, because
+/// an operator looking up "am I allowed to call this person" is asking one question.
+enum DoNotCallKind {
+  /// Never call them, on any band, in any mode.
+  NEVER
+  /// Call them only for a band+mode slot not already in the log — no duplicates.
+  NO_DUPES
+}
+
+model DoNotCall {
+  id        String        @id @default(cuid())
+  /// Upper-cased on write. The natural key, so a second attempt updates rather than duplicates.
+  callsign  String        @unique @db.VarChar(32)
+  /// Why, in the operator's words. Six months later this is the only thing that explains the entry.
+  reason    String?       @db.VarChar(255)
+  /// Who added it, kept as free text so a deleted user does not erase the provenance.
+  addedBy   String?       @db.VarChar(64)
+  /// NEVER by default: an entry whose intent was not recorded must fail safe toward
+  /// calling less, not more.
+  kind      DoNotCallKind @default(NEVER)
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+}
+
+/// Somebody who does not want QSL email from this station.
+///
+/// Separate from `DoNotCall`, and the separation is the point: that list is about the
+/// RADIO — never call them, or never duplicate them. This is about the MAILBOX. An operator
+/// who is happy to be worked every week may still not want a card in their inbox, and one
+/// who never wants another contact may be perfectly glad of an email for the ones already
+/// made. Conflating them would honour neither request accurately.
+///
+/// K2XYZ replied to a QSL email with the single word "Unsubscribe". He had no link to click,
+/// because there was none to click — so he used the only mechanism available to him, which
+/// was to hope somebody read it. This table is what a link writes to.
+model QslOptOut {
+  id        String          @id @default(cuid())
+  /// Upper-cased on write.
+  callsign  String          @unique @db.VarChar(32)
+  /// How the request reached us, so an unexplained row can be judged later.
+  source    QslOptOutSource @default(MANUAL)
+  /// Their own words where there were any, or the QRZ marker that was matched.
+  note      String?         @db.VarChar(255)
+  createdAt DateTime        @default(now())
+}
+
+enum QslOptOutSource {
+  /// Somebody added them by hand, usually after a reply like K2XYZ's.
+  MANUAL
+  /// They clicked the unsubscribe link in one of our emails.
+  LINK
+  /// Their QRZ QSL-route field carries NOQSOCC or NOEQSL — the community convention.
+  QRZ_MARKER
+}

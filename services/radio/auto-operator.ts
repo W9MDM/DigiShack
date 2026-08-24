@@ -1,0 +1,1614 @@
+import type { FlexDaxSource } from "@/lib/flex/dax";
+import type { DigitalSource, DigitalTransmitter } from "@/lib/radio/types";
+import type { DigitalMode } from "@/lib/ham/digital-freqs";
+import type { FlexDaxTransmitter } from "@/lib/flex/tx";
+import type { OperatingGuards } from "@/lib/digital/qso";
+import { parseMessage, standardMessages, type MayCallChecks } from "@/lib/digital/qso";
+import { rankCandidates, type Candidate, type WorkedIndex } from "@/lib/digital/worth";
+import type { QsoController } from "./qso-controller";
+import {
+  bandIsUnproductive,
+  pickBandForSwr,
+  pickBusiestBand,
+  shouldHopForBetterBand,
+  shouldReturnToPreviousBand,
+  type BandActivity,
+} from "@/lib/radio/band-hop";
+
+// The automated operating modes, layered over the QSO controller:
+//
+//   cq         call CQ on our cycle; work whoever answers; repeat
+//   hunt       watch the decodes for callable CQs and work them, one at a time
+//   hunt-pota  hunt, but only stations calling "CQ POTA"
+//
+// (Auto Call — working one chosen station through a full QSO — is the
+// click-to-call flow itself, so it needs no mode here. The POTA spot-feed
+// variant that retunes to activators is on the roadmap; this hunts the POTA
+// CQs already audible on frequency.)
+//
+// Every transmission still goes through the operating guards: dupe suppression,
+// attempt limits and cooldowns, the runaway brake, the deaf guard and the
+// dead-band stop. When a guard pauses operation and band-hopping is enabled,
+// the operator moves to the next band on the list, listens for two cycles, and
+// either resumes or hops again.
+
+// Defined in lib/radio/auto-mode.ts so the schedule and settings can share it.
+// Imported for local use AND re-exported, because `export ... from` alone does not
+// bring the name into this module's scope — the file uses AutoMode in three places.
+import type { AutoMode } from "@/lib/radio/auto-mode";
+
+export type { AutoMode };
+
+export interface AutoState {
+  mode: AutoMode;
+  cqParity: 0 | 1 | null;
+  cqOffsetHz: number | null;
+  /** Windows to listen before transmitting (fresh enable or fresh band). */
+  warmup: number;
+  pausedReason: string | null;
+  lastAction: string | null;
+  /**
+   * Callsigns that called us mid-QSO and are waiting to be called back.
+   *
+   * Oldest first, i.e. the order they will be worked in.
+   */
+  waiting: string[];
+}
+
+export interface PotaChasePrefs {
+  /**
+   * Bands chase mode may retune to.
+   *
+   * `null` means "the band chase started on, and only that one" — the default,
+   * because it is the one that keeps the radio somewhere it can hear. An empty
+   * array means any band.
+   */
+  bands: string[] | null;
+  giveUpMs: number;
+  retryMs: number;
+  workAudible: boolean;
+  preferNew: boolean;
+  returnToCalling: boolean;
+}
+
+export interface AutoOperatorOptions {
+  /**
+   * Typed to the narrow shapes in lib/radio/types.ts, not to the FlexRadio classes.
+   *
+   * These layers only ever read `source.periodMs` and call `tx.transmit` / `tx.unkey`.
+   * Naming the concrete Flex types here was what made the whole operating layer look
+   * Flex-specific when it never was — and it was the only thing stopping the Icom from
+   * using it.
+   */
+  source: DigitalSource;
+  tx: DigitalTransmitter;
+  guards: OperatingGuards;
+  controller: QsoController;
+  identity: { myCall: string; myGrid: string };
+  getBandMode: () => { band: string | null; mode: DigitalMode; dialHz: number | null };
+  wasWorked: (call: string, band: string, mode: string, sinceMs: number) => Promise<boolean>;
+  /**
+   * The do-not-call list and the band-slot check, resolved fresh at each call attempt.
+   *
+   * A function rather than a value because both are backed by the database and the list
+   * can be edited while the station is operating — capturing it once at construction would
+   * mean an operator adding somebody to the list watched the station call them anyway
+   * until the next restart, which is the whole failure this feature exists to prevent.
+   */
+  callChecks: () => MayCallChecks;
+  /** Retune the radio to a band's calling frequency. */
+  retune: (band: string, mode: DigitalMode) => Promise<boolean>;
+  bandHop: () => Promise<{
+    enabled: boolean;
+    bands: string[];
+    toBusiest: boolean;
+    /** Leave a working band when another is this many times busier. <=1 is off. */
+    whenBetterRatio: number;
+  }>;
+  /**
+   * Stations per band the PSKReporter network currently sees, for hop-to-busiest.
+   *
+   * Injected rather than imported so this file stays testable without a network, and
+   * returns null when the feed is unavailable — the caller falls back to rotating.
+   */
+  bandActivity?: () => Promise<BandActivity[] | null>;
+  /** Receive noise floor in dBm, or null when not measured. */
+  noiseDbm?: () => number | null;
+  /** What has been worked, for award-aware ranking. Refreshed periodically. */
+  workedIndex: (band: string | null) => Promise<WorkedIndex>;
+  /** Resolve a callsign to its DXCC entity, or null when no data is loaded. */
+  resolveEntity: (
+    call: string,
+  ) => Promise<{ adif: number; name: string; cqZone: number | null; continent: string | null } | null>;
+  /** Hunt preferences from settings. */
+  huntPrefs: () => Promise<{ newOnly: boolean; minSnr: number }>;
+  /** Current POTA activators on the digital modes. */
+  potaSpots: () => Promise<
+    { activator: string; freqHz: number; band: string | null; mode: string; reference: string; parkName: string | null }[]
+  >;
+  /** Move the radio to an exact frequency (POTA activators are off the calling frequency). */
+  tuneHz: (hz: number) => Promise<boolean>;
+  /** POTA chase preferences from settings. */
+  potaPrefs: () => Promise<PotaChasePrefs>;
+  broadcast: (event: unknown) => void;
+  log: (line: string) => void;
+}
+
+/** Listen this many windows after enabling a mode or changing band. */
+const WARMUP_WINDOWS = 2;
+
+/** Fewer decodes than this after a hop means the band is no better — move on. */
+const HOP_MIN_DECODES = 3;
+
+/**
+ * How long a tail-ender is still worth calling back.
+ *
+ * Ten minutes is roughly forty FT8 cycles. Someone who called during a contact will
+ * wait through the one they interrupted, but not through five more — past this they
+ * have worked somebody else or moved band, and calling into empty air costs a full
+ * give-up period of transmissions nobody answers.
+ */
+const CALLBACK_TTL_MS = 10 * 60_000;
+
+/**
+ * Most stations to hold.
+ *
+ * A pileup on a rare station is the case that would otherwise grow without bound.
+ * Oldest are worked first, so this drops the newest arrival — the one likeliest to
+ * still be calling by the time we get through the rest.
+ */
+const MAX_CALLBACKS = 8;
+
+/**
+ * How often to ask whether another band has overtaken this one.
+ *
+ * Five minutes, and the asymmetry is the reason: a needless hop throws away a
+ * working band and spends two warm-up cycles finding out, while arriving five
+ * minutes late to a better one costs almost nothing. It also keeps the question
+ * well inside the PSKReporter fetcher own cache interval, so asking is free.
+ */
+const BETTER_BAND_CHECK_MS = 5 * 60_000;
+
+/**
+ * How much of the old band's decode rate a new band must deliver to be worth staying.
+ *
+ * Well below 1 on purpose: bands are not expected to match, only to not be markedly
+ * worse. At parity the radio would bounce straight back from a band that was slightly
+ * quieter but full of stations it had never worked.
+ */
+const KEEP_BAND_FRACTION = 0.6;
+
+/** Windows on a band before its decode rate means anything. */
+const RATE_MIN_WINDOWS = 4;
+
+/** How long a band stays marked deaf here before it is worth trying again. */
+const POOR_BAND_MS = 30 * 60_000;
+
+/** How often to ask whether the band we are on is still worth sitting on. */
+const PRODUCTIVITY_CHECK_MS = 10 * 60_000;
+
+/** Windows before a band can be judged to have fallen away under us. */
+const UNPRODUCTIVE_MIN_WINDOWS = 40;
+
+/** Second half of a stay below this fraction of the first means it has gone. */
+const UNPRODUCTIVE_DECAY = 0.4;
+
+/**
+ * Contact attempts before a success rate means anything, and the bar it must clear.
+ *
+ * Measured from this station across ~750 attempts: contacts complete 66% of the time
+ * at 0..-5 dB, 67% at -6..-10, 51% at -11..-15 and 48% at -16..-20. So half is
+ * NORMAL, and a band has to be well under it — a third — before that is evidence of
+ * anything but ordinary luck.
+ */
+const UNPRODUCTIVE_MIN_ATTEMPTS = 8;
+const UNPRODUCTIVE_MIN_SUCCESS = 0.34;
+
+/** Someone who called us while the transmitter was busy with another contact. */
+interface PendingCallback {
+  call: string;
+  grid: string | null;
+  snr: number;
+  offsetHz: number;
+  /** The window they called us in — fixes which parity is theirs. */
+  windowStart: number;
+  /** Verbatim, so the contact's transcript opens with what they said. */
+  message: string;
+  /** When they last called, for expiry. */
+  at: number;
+}
+
+export class AutoOperator {
+  private readonly o: AutoOperatorOptions;
+  private mode: AutoMode = "off";
+  private cqParity: 0 | 1 | null = null;
+  private cqOffsetHz: number | null = null;
+  private warmup = 0;
+  private lastAction: string | null = null;
+  private cqedLastWindow = false;
+  private seenWindows = new Set<number>();
+  /** Offsets heard recently, for picking a clear CQ frequency. */
+  private recentOffsets: number[] = [];
+  /**
+   * Where we are in the hop list. Starts BEFORE the first entry, not at it.
+   *
+   * `hopNext` increments before reading, so starting at 0 meant the first hop went to
+   * the second band on the list and the operator's first choice was skipped — every
+   * subsequent hop reached it, so this was invisible except on the one hop most likely
+   * to be watched. Starting at -1 makes the first hop the first band, and the
+   * skip-the-current-band loop still moves past it when we are already there.
+   */
+  private hopIndex = -1;
+  private hopDecodeCount = 0;
+  /** When we last asked whether another band had overtaken this one. */
+  private lastBetterCheck = 0;
+  /**
+   * SWR last measured while transmitting on each band.
+   *
+   * How the station learns its own antenna: a band that tripped the SWR guard is
+   * remembered so it is not chosen again, and a band that loaded flat is preferred
+   * over one never tried.
+   */
+  private bandSwr = new Map<string, number>();
+  /** Decodes per cycle this receiver measured on each band. */
+  private bandRate = new Map<string, number>();
+  /** Windows spent on the current band, and decodes heard in them. */
+  private windowsOnBand = 0;
+  private decodesOnBand = 0;
+  /**
+   * Where to go back to if the band just moved to turns out to be deaf here.
+   *
+   * Set only by a move made on NETWORK figures, which are the ones that can be wrong
+   * about this antenna. Carries the rate the old band was actually giving us, since
+   * that is the thing the new band has to beat.
+   */
+  private returnIfWorse: { band: string; rate: number } | null = null;
+  /**
+   * Bands this receiver has proved deaf on, and when to reconsider them.
+   *
+   * Without this the network figures would send the radio straight back to the band
+   * it just fled, every five minutes, for as long as the numbers looked good.
+   */
+  private poorBands = new Map<string, number>();
+  /** Per-window decode counts for this stay, so a band can be judged against itself. */
+  private windowDecodes: number[] = [];
+  /** Contacts made and lost on this band since arriving. */
+  private madeOnBand = 0;
+  private lostOnBand = 0;
+  /** Noise floor measured on each band, for a relative idea of "noisy". */
+  private bandNoise = new Map<string, number>();
+  private lastProductivityCheck = 0;
+  private hopping = false;
+  /** POTA chase: who we retuned for, and when to give up on them. */
+  private chasing: { activator: string; since: number; reference: string } | null = null;
+  private chaseTried = new Map<string, number>();
+  private lastSpotCheck = 0;
+  /**
+   * The last spot list, held for the poll interval.
+   *
+   * Separating "how often to ask POTA" from "how often to decide" is what makes
+   * giving up on an activator responsive. Gating the decision on the network poll
+   * meant that after abandoning a dead frequency the radio stayed on it for up to
+   * another minute — and, worse, could not take the way home either, because the
+   * return path was behind the same gate.
+   */
+  private spotCache: Awaited<ReturnType<AutoOperatorOptions["potaSpots"]>> | null = null;
+  /**
+   * The band and mode chase mode started on, and the frequency we last retuned away
+   * to.
+   *
+   * Both exist so the radio can find its way back. Chasing moves the dial — sometimes
+   * to another band — and once the chase ends there is nothing else that knows where
+   * "here" was. Without this the radio stays parked on the last activator's frequency,
+   * hears nothing, and cannot fall back to ordinary hunting: observed live, sitting on
+   * 18.100 MHz for an Argentine park while 20 m was producing 650 decodes an hour.
+   */
+  private chaseHome: { band: string; mode: DigitalMode } | null = null;
+  private chaseParkedHz: number | null = null;
+  /**
+   * Stations that called us while we were already working someone.
+   *
+   * A tail-ender used to be dropped outright: the auto operator hands the
+   * transmitter to the QSO controller for the duration of a contact and returned
+   * before ever looking at the decodes, so somebody calling into the gap was heard,
+   * ignored, and never called back. On a busy band that is the single most common
+   * way to lose a contact that was offered to you.
+   *
+   * Oldest first — whoever asked first gets worked first.
+   */
+  private callbacks: PendingCallback[] = [];
+
+  constructor(opts: AutoOperatorOptions) {
+    this.o = opts;
+    opts.source.on("decodes", ({ windowStart, decodes }) => {
+      void this.onWindow(
+        windowStart.getTime(),
+        decodes.map((d) => ({ message: d.message, snr: d.snr, freqOffset: d.freqOffset })),
+        false,
+      );
+    });
+    opts.source.on("window", ({ windowStart, skipped, rms }) => {
+      if (skipped) void this.onWindow(windowStart.getTime(), [], rms < 1e-5);
+    });
+  }
+
+  get state(): AutoState {
+    return {
+      mode: this.mode,
+      cqParity: this.cqParity,
+      cqOffsetHz: this.cqOffsetHz,
+      warmup: this.warmup,
+      pausedReason: this.o.guards.pausedReason,
+      lastAction: this.lastAction,
+      waiting: this.callbacks.map((c) => c.call),
+    };
+  }
+
+  setMode(mode: AutoMode): void {
+    this.mode = mode;
+    this.warmup = mode === "off" ? 0 : WARMUP_WINDOWS;
+    this.cqParity = null; // chosen at the first CQ, from the clock
+    this.cqOffsetHz = null;
+    this.cqedLastWindow = false;
+    this.hopping = false;
+    // The band-comparison timer starts NOW, so a fresh mode listens for its first
+    // interval before it will move on somebody else's figures.
+    this.lastBetterCheck = Date.now();
+    this.windowsOnBand = 0;
+    this.decodesOnBand = 0;
+    this.returnIfWorse = null;
+    // Anyone waiting was waiting for the operating this mode change just ended.
+    // Carrying them across a switch to Off — or to another band via chase — would
+    // call someone back minutes later from somewhere they never heard us.
+    this.callbacks = [];
+
+    // Where chase mode should come back to. Captured here rather than derived later
+    // because by the time the chase ends the dial has moved, possibly to another
+    // band, and nothing else remembers where the operator left it.
+    if (mode === "pota-chase") {
+      const { band, mode: dMode } = this.o.getBandMode();
+      this.chaseHome = band ? { band, mode: dMode } : null;
+      this.chasing = null;
+      this.chaseParkedHz = null;
+      this.lastSpotCheck = 0; // poll on the first window, not 60 s in
+      this.spotCache = null;
+    } else {
+      this.chaseHome = null;
+    }
+
+    if (mode !== "off") this.o.guards.rearm();
+    this.lastAction = mode === "off" ? "stopped" : `enabled ${mode}`;
+    this.o.log(`[auto] mode = ${mode}`);
+    this.broadcastState();
+  }
+
+  private async onWindow(
+    windowStartMs: number,
+    decodes: { message: string; snr: number; freqOffset: number }[],
+    silent: boolean,
+  ): Promise<void> {
+    if (this.seenWindows.has(windowStartMs)) return;
+    this.seenWindows.add(windowStartMs);
+    if (this.seenWindows.size > 16) {
+      for (const w of [...this.seenWindows].sort((a, b) => a - b).slice(0, 8)) {
+        this.seenWindows.delete(w);
+      }
+    }
+
+    // Remember where signals are, for clear-frequency selection.
+    if (decodes.length > 0) {
+      this.recentOffsets = decodes.map((d) => d.freqOffset);
+      this.hopDecodeCount += decodes.length;
+    }
+
+    // Was our CQ answered in this window? Feed the guard's dead-band counter.
+    const me = this.o.identity.myCall.toUpperCase();
+    const answers = decodes.filter((d) => {
+      const p = parseMessage(d.message);
+      return p.kind === "directed" && p.to === me;
+    });
+
+    this.o.guards.afterRxWindow({
+      decodes: decodes.length,
+      silent,
+      answeredUs: answers.length > 0,
+      wasCqing: this.cqedLastWindow,
+    });
+    // The flag is consumed by any window that carried AUDIO, whether or not anything
+    // decoded in it.
+    //
+    // It used to require a decode, which made the count wrong in both directions. On a band
+    // with traffic an unanswered CQ was only counted if the very next window happened to
+    // decode nothing, so on 20M at midday the guard barely counted at all — measured live,
+    // three unanswered CQs produced two increments. On a quiet-but-not-silent band the flag
+    // was never consumed and one CQ counted once per window.
+    //
+    // Keyed on `silent` because that is the distinction the original comment was reaching
+    // for. Our own transmit window carries no receive audio — DAX goes quiet and the Icom's
+    // is muted deliberately — so it is silent, and a silent window must not consume the flag
+    // or an answer arriving in the NEXT window would be counted against a CQ nobody had
+    // failed to answer. A band with nothing but noise still carries audio, so its windows
+    // consume it, and one CQ counts once.
+
+    if (this.mode === "off") return;
+
+    // What the antenna did here, recorded every window. The guards only hold an SWR
+    // reading taken while transmitting, so this is always about the band we are on.
+    this.noteBandSwr();
+
+    // And what this receiver actually HEARS here, which is the only measure of a
+    // band that accounts for our own antenna and location.
+    this.windowsOnBand++;
+    this.decodesOnBand += decodes.length;
+    // Per-window history, so a band can be judged against its own earlier self, and
+    // the noise floor it is sitting under.
+    this.windowDecodes.push(decodes.length);
+    if (this.windowDecodes.length > 120) this.windowDecodes.shift();
+    const noise = this.o.noiseDbm?.();
+    const nowBand = this.o.getBandMode().band;
+    if (nowBand && noise != null) this.bandNoise.set(nowBand.toUpperCase(), noise);
+
+    // Note anyone calling us BEFORE the checks that gate transmitting.
+    //
+    // Remembering a station costs no transmission, so warm-up, a quiet pause and a
+    // guard fault are all irrelevant to it — and each of those returns early below.
+    // Placed after them, a tail-ender calling during the two warm-up windows of a
+    // fresh band, or while the guards were paused, was heard and forgotten.
+    if (this.o.controller.hasActive) this.noteCallbacks(answers, windowStartMs);
+
+    // A paused guard is where band-hopping takes over — otherwise wait for the
+    // operator to re-arm.
+    // Only hop on a QUIET pause — with ONE exception, high SWR.
+    //
+    // PA temperature and a dead receiver follow the radio to whatever band it moves
+    // to, so hopping on those is just a paused station that also keeps retuning.
+    // SWR is different: it is antenna resonance, and an aerial that will not load on
+    // one band is very often flat on another. After the ATU has already had its go
+    // there is nothing left to try except somewhere else.
+    //
+    // The old blanket rule was written to stop hopping calling rearm() and clearing
+    // an SWR trip while STAYING on the same band, which kept transmitting into a
+    // suspect antenna. Moving first and re-arming second is the opposite case.
+    if (this.o.guards.pausedReason && this.o.guards.pauseCause !== "quiet") {
+      if (this.isSwrFault() && (await this.hopAwayFromSwr())) {
+        this.broadcastState();
+        return;
+      }
+      this.lastAction = `paused: ${this.o.guards.pausedReason}`;
+      return;
+    }
+    if (this.o.guards.pausedReason) {
+      await this.maybeHop();
+      this.broadcastState();
+      return;
+    }
+
+    if (this.warmup > 0) {
+      this.warmup--;
+      // A fresh band that stays this quiet is not worth CQing into.
+      //
+      // This is why a hop is sometimes immediately followed by another with no CQ in
+      // between, which looks like a fault in the log and is not. Seen on the first on-air
+      // run: 40M at 10:29:29, judged quiet with 0 decodes, 20M at 10:30:00, settled there
+      // with 42. Two hops and one ATU cycle each, in 31 seconds, exactly as designed.
+      if (this.warmup === 0 && this.hopping) {
+        if (this.hopDecodeCount < HOP_MIN_DECODES) {
+          this.lastAction = `band too quiet (${this.hopDecodeCount} decodes) — hopping on`;
+          this.o.log(`[auto] ${this.lastAction}`);
+          await this.hopNext();
+        } else {
+          this.hopping = false;
+          this.lastAction = `settled on new band (${this.hopDecodeCount} decodes)`;
+          this.o.log(`[auto] ${this.lastAction}`);
+        }
+      }
+      this.broadcastState();
+      return;
+    }
+
+    // Hand answers to the controller: someone called us while we were CQing.
+    if (!this.o.controller.hasActive && answers.length > 0 && this.cqParity !== null) {
+      // Strongest answer wins; the rest will call again next cycle.
+      const best = answers.sort((a, b) => b.snr - a.snr)[0]!;
+      const p = parseMessage(best.message);
+      if (p.kind === "directed") {
+        const grid = p.payload.type === "grid" ? p.payload.grid : null;
+        this.o.controller.startAnswer({
+          theirCall: p.from,
+          theirGrid: grid,
+          theirSnr: best.snr,
+          parity: this.cqParity,
+          offsetHz: this.cqOffsetHz ?? 1500,
+          // What they called us with, for the contact's transcript.
+          theirMessage: best.message,
+          theirWindowStart: windowStartMs,
+        });
+        this.lastAction = `answering ${p.from}`;
+        this.broadcastState();
+        return;
+      }
+    }
+
+    // While a QSO runs, the controller owns the transmitter. Anyone who called in
+    // the meantime was noted above.
+    if (this.o.controller.hasActive) {
+      this.broadcastState();
+      return;
+    }
+
+    // Anyone who called while we were busy gets worked before we go looking for
+    // someone new. They asked first, and they are still on frequency.
+    if (await this.callBackWaiting()) {
+      this.broadcastState();
+      return;
+    }
+
+    // Did the last move survive contact with our own antenna?
+    //
+    // Asked every window rather than at the end of warm-up, and that placement is
+    // the whole point: warm-up is two windows and a decode rate needs four to mean
+    // anything, so judging at the settle point asked a question the answer to which
+    // was always "too early to say" — and then never asked again. Here it waits
+    // until there is a real sample, roughly a minute after arriving.
+    //
+    // Before the better-band check below, because "was the last move wrong" has to
+    // be settled before another one is considered.
+    if (await this.maybeReturnFromDeafBand()) {
+      this.broadcastState();
+      return;
+    }
+
+    // Is the band we are on still worth sitting on at all? Independent of any hop.
+    if (await this.maybeLeaveUnproductiveBand()) {
+      this.broadcastState();
+      return;
+    }
+
+    // The band we are on may simply have been overtaken. Checked here, between
+    // contacts, so this can never interrupt one.
+    if (await this.maybeHopToBetterBand()) {
+      this.broadcastState();
+      return;
+    }
+
+    if (this.mode === "pota-chase") {
+      await this.potaChaseWindow(windowStartMs, decodes);
+    } else if (this.mode === "hunt" || this.mode === "hunt-pota") {
+      await this.huntWindow(windowStartMs, decodes);
+    } else if (this.mode === "cq") {
+      await this.cqWindow(windowStartMs);
+    }
+    this.broadcastState();
+  }
+
+  /**
+   * Find the best callable CQ in this window and go after it.
+   *
+   * "Best" is award value first, signal strength only as a tiebreaker: on a busy
+   * band, ranking by SNR alone means working the same nearby stations forever
+   * while a new entity two S-units down goes unanswered.
+   */
+  private async huntWindow(
+    windowStartMs: number,
+    decodes: { message: string; snr: number; freqOffset: number }[],
+  ): Promise<void> {
+    const { band, mode } = this.o.getBandMode();
+    const me = this.o.identity.myCall.toUpperCase();
+
+    const cqs = decodes
+      .map((d) => ({ d, p: parseMessage(d.message) }))
+      .filter((x) => x.p.kind === "cq" && x.p.from !== me)
+      .filter((x) =>
+        this.mode === "hunt-pota"
+          ? (x.p as { modifier: string | null }).modifier === "POTA"
+          : true,
+      );
+    if (cqs.length === 0) {
+      this.lastAction = "no CQs heard this window";
+      return;
+    }
+
+    const worked = await this.workedFor(band);
+    const prefs = await this.o.huntPrefs();
+
+    const candidates: Candidate[] = [];
+    const byCall = new Map<
+      string,
+      {
+        snr: number;
+        freqOffset: number;
+        sig: string | null;
+        sigInfo: string | null;
+        /** The CQ verbatim, so the contact's transcript opens with what we answered. */
+        message: string;
+      }
+    >();
+    for (const { d, p } of cqs) {
+      if (p.kind !== "cq") continue;
+      // "CQ POTA" is the activator telling us this is a park contact. Which park is
+      // not in the message — there is no room for it — so the reference comes from
+      // the spot feed when it agrees on callsign AND band, and is left empty
+      // otherwise. SIG without SIG_INFO is valid ADIF and is honestly what we know;
+      // taking a reference from a spot on a different band would be inventing data.
+      const mod = (p as { modifier: string | null }).modifier;
+      const isPota = mod === "POTA";
+      const park = isPota ? this.parkFor(p.from, band) : null;
+      byCall.set(p.from, {
+        snr: d.snr,
+        freqOffset: d.freqOffset,
+        sig: isPota ? "POTA" : null,
+        sigInfo: park,
+        message: d.message,
+      });
+      candidates.push({
+        call: p.from,
+        snr: d.snr,
+        grid: p.grid,
+        dxcc: await this.o.resolveEntity(p.from),
+        // The same park the contact would be logged against, so an unworked
+        // reference ranks an activator up — this is the scoring the decode list's
+        // badges show, and the two must not disagree about what is worth calling.
+        park,
+        // They said "CQ POTA", which is true whether or not the spot feed has
+        // caught up enough to tell us which park.
+        potaCq: isPota,
+      });
+    }
+
+    const ranked = rankCandidates(candidates, worked, {
+      newOnly: prefs.newOnly,
+      minSnr: prefs.minSnr,
+    });
+
+    for (const c of ranked) {
+      const heard = byCall.get(c.call);
+      if (!heard) continue;
+      const may = await this.o.guards.mayCall(
+        c.call,
+        band ?? "?",
+        mode,
+        Date.now(),
+        this.o.wasWorked,
+        this.o.callChecks(),
+      );
+      if (!may.allowed) continue;
+
+      const result = await this.o.controller.startCall({
+        theirCall: c.call,
+        theirGrid: c.grid,
+        theirSnr: heard.snr,
+        theirOffsetHz: heard.freqOffset,
+        theirWindowStart: windowStartMs,
+        sig: heard.sig,
+        sigInfo: heard.sigInfo,
+        theirMessage: heard.message,
+      });
+      if (result.ok) {
+        const why = c.reasons.length ? ` — ${c.reasons.join(", ")}` : "";
+        this.lastAction = `hunting ${c.call} (${heard.snr} dB)${why}`;
+        this.o.log(`[auto] ${this.lastAction}`);
+        return;
+      }
+    }
+    this.lastAction = prefs.newOnly
+      ? "nothing new on frequency"
+      : "no callable CQs (dupes / cooling down)";
+  }
+
+  /**
+   * Chase spotted POTA activators: retune to a park frequency, work whoever is
+   * there, move to the next spot.
+   *
+   * Different from hunt-pota, which only works activators already audible on the
+   * calling frequency. Here the radio goes to them.
+   *
+   * The order of business each window matters, and the first version had it wrong.
+   * A spot is a *reason to move the dial*, and moving the dial costs the give-up
+   * period of hearing nothing if the guess was bad. So:
+   *
+   *   1. If parked on someone, deal with them.
+   *   2. Otherwise work any POTA CQ already audible — free, no retune, and the
+   *      activator is frequently audible before the spot feed catches up.
+   *   3. Only then consider retuning, and only to a band that can actually be
+   *      heard from here.
+   *   4. With nothing to chase, go home to the calling frequency.
+   *
+   * Step 3's band rule is the whole difference between working parks and touring
+   * empty frequencies. Live, 30 FT8 spots were spread over eight bands including
+   * 160 m Poland and 10 m Brazil at 20:00 UTC from Indiana.
+   */
+  private async potaChaseWindow(
+    windowStartMs: number,
+    decodes: { message: string; snr: number; freqOffset: number }[],
+  ): Promise<void> {
+    const { band, mode } = this.o.getBandMode();
+    const prefs = await this.o.potaPrefs();
+
+    // Already parked on an activator: look for them in this window.
+    if (this.chasing) {
+      const target = this.chasing.activator;
+      const heard = decodes
+        .map((d) => ({ d, p: parseMessage(d.message) }))
+        .find(
+          (x) =>
+            (x.p.kind === "cq" && x.p.from === target) ||
+            (x.p.kind === "directed" && x.p.from === target),
+        );
+
+      if (heard) {
+        const may = await this.o.guards.mayCall(
+          target,
+          band ?? "?",
+          mode,
+          Date.now(),
+          this.o.wasWorked,
+          this.o.callChecks(),
+        );
+        if (may.allowed) {
+          const grid = heard.p.kind === "cq" ? heard.p.grid : null;
+          const r = await this.o.controller.startCall({
+            theirCall: target,
+            theirGrid: grid,
+            theirSnr: heard.d.snr,
+            theirOffsetHz: heard.d.freqOffset,
+            theirWindowStart: windowStartMs,
+            // We know exactly which park this is: it is why we retuned.
+            sig: "POTA",
+            sigInfo: this.chasing.reference,
+            theirMessage: heard.d.message,
+          });
+          if (r.ok) {
+            this.lastAction = `chasing ${target} at ${this.chasing.reference}`;
+            this.o.log(`[auto] ${this.lastAction}`);
+            return;
+          }
+        }
+        // Heard but not callable (dupe/cooldown) — no reason to stay parked.
+        this.chaseTried.set(target, Date.now());
+        this.chasing = null;
+      } else if (Date.now() - this.chasing.since > prefs.giveUpMs) {
+        // Long enough without hearing them: they have moved, gone, or are not
+        // propagating here. Do not sit on a dead frequency.
+        this.o.log(`[auto] gave up on ${target} (not heard)`);
+        this.chaseTried.set(target, Date.now());
+        this.chasing = null;
+      } else {
+        // Waiting for someone we cannot hear — but not deaf to everyone else.
+        //
+        // This branch used to `return`, and that cost four hours of an evening. The
+        // radio sat parked on one silent activator after another while AE2NY, never
+        // worked before, called CQ POTA at −6 dB on the same band for twelve minutes.
+        // Every window was spent waiting for a station that was not there, and the
+        // one that was got ignored, because the audible-CQ path lives below this
+        // point and was never reached.
+        //
+        // A workable activator in front of us beats a silent one we retuned for, so
+        // the park is abandoned rather than defended. The target is NOT marked as
+        // tried: nothing failed with them, we simply took the better option, and they
+        // are still worth chasing afterwards.
+        if (prefs.workAudible && decodes.length > 0) {
+          const before = this.o.controller.hasActive;
+          await this.huntPotaAudible(windowStartMs, decodes);
+          if (!before && this.o.controller.hasActive) return;
+        }
+        this.lastAction = `parked on ${target} (${this.chasing.reference}), listening`;
+        return;
+      }
+    }
+
+    // Free contacts first: a POTA CQ audible right here needs no retune and costs
+    // no listening time. huntWindow already does exactly this selection, award
+    // ranking included, so chase mode borrows it rather than growing a second copy
+    // that would drift out of step.
+    if (prefs.workAudible && decodes.length > 0) {
+      const before = this.o.controller.hasActive;
+      await this.huntPotaAudible(windowStartMs, decodes);
+      if (!before && this.o.controller.hasActive) return;
+    }
+
+    // POTA is asked at most once a minute; the cached answer is re-examined every
+    // window. The feed genuinely does not change faster than that, but our own
+    // situation does — an activator we just abandoned changes which spot is next.
+    let spots: Awaited<ReturnType<AutoOperatorOptions["potaSpots"]>>;
+    if (this.spotCache && Date.now() - this.lastSpotCheck < 60_000) {
+      spots = this.spotCache;
+    } else {
+      this.lastSpotCheck = Date.now();
+      try {
+        spots = await this.o.potaSpots();
+        this.spotCache = spots;
+      } catch (err) {
+        this.lastAction = `POTA spots unavailable: ${(err as Error).message}`;
+        // Fall back to the stale list rather than doing nothing: a network blip
+        // should not strand the radio on a frequency it has given up on.
+        if (!this.spotCache) return;
+        spots = this.spotCache;
+      }
+    }
+
+    // Blank setting means "stay on the band chase started on". Falling back to the
+    // *current* band would defeat the purpose: one accepted cross-band spot would
+    // silently redefine home and the restriction would follow the drift.
+    const allowed = prefs.bands ?? (this.chaseHome ? [this.chaseHome.band] : band ? [band] : []);
+
+    const candidates = spots.filter((s) => {
+      if (s.mode !== mode) return false; // an FT8 chase must not retune to an FT4 spot
+      if (allowed.length > 0 && (!s.band || !allowed.includes(s.band))) return false;
+      const tried = this.chaseTried.get(s.activator);
+      return !(tried && Date.now() - tried < prefs.retryMs);
+    });
+
+    for (const spot of await this.rankSpots(candidates, prefs.preferNew, band)) {
+      const may = await this.o.guards.mayCall(
+        spot.activator,
+        spot.band ?? "?",
+        spot.mode,
+        Date.now(),
+        this.o.wasWorked,
+        this.o.callChecks(),
+      );
+      if (!may.allowed) continue;
+
+      if (!(await this.o.tuneHz(spot.freqHz))) {
+        this.lastAction = `could not tune to ${(spot.freqHz / 1e6).toFixed(3)} MHz`;
+        continue;
+      }
+      this.chaseParkedHz = spot.freqHz;
+      this.chasing = {
+        activator: spot.activator,
+        since: Date.now(),
+        reference: spot.reference,
+      };
+      this.warmup = WARMUP_WINDOWS;
+      this.lastAction = `tuned ${(spot.freqHz / 1e6).toFixed(3)} for ${spot.activator} (${spot.reference})`;
+      this.o.log(`[auto] ${this.lastAction}`);
+      return;
+    }
+
+    // Nothing worth chasing. Go home rather than sit on the last park's frequency
+    // with the receiver pointed at nobody.
+    const scope = allowed.length > 0 ? allowed.join("/") : "any band";
+    if (prefs.returnToCalling && this.chaseParkedHz !== null && this.chaseHome) {
+      const home = this.chaseHome;
+      if (await this.o.retune(home.band, home.mode)) {
+        this.chaseParkedHz = null;
+        this.warmup = WARMUP_WINDOWS;
+        this.lastAction = `no POTA activators on ${scope} — back to ${home.band} ${home.mode}`;
+        this.o.log(`[auto] ${this.lastAction}`);
+        return;
+      }
+    }
+    this.lastAction = `no new POTA activators on ${mode}, ${scope} (${spots.length} spots)`;
+  }
+
+  /**
+   * The park reference for an activator we can hear, from the cached spot feed.
+   *
+   * Requires the band to agree as well as the callsign. The same operator can be
+   * spotted in one park on 20 m and — later, or by a stale spot — somewhere else
+   * entirely; matching on callsign alone would write a confident, wrong reference
+   * into the log, which is worse than writing none.
+   *
+   * Returns null when chase mode has never polled, which is the normal case in the
+   * plain hunt modes. No reference is the honest answer there.
+   */
+  private parkFor(call: string, band: string | null): string | null {
+    if (!this.spotCache || !band) return null;
+    const hit = this.spotCache.find((s) => s.activator === call && s.band === band);
+    return hit?.reference ?? null;
+  }
+
+  /**
+   * Work an audible "CQ POTA" without moving the dial.
+   *
+   * Temporarily borrows huntWindow by way of `hunt-pota`, so the candidate
+   * filtering, award ranking and guard checks are the same code in both modes. The
+   * mode field is restored in a `finally` — leaking `hunt-pota` here would silently
+   * turn a chase into a hunt.
+   */
+  private async huntPotaAudible(
+    windowStartMs: number,
+    decodes: { message: string; snr: number; freqOffset: number }[],
+  ): Promise<void> {
+    const saved = this.mode;
+    this.mode = "hunt-pota";
+    try {
+      await this.huntWindow(windowStartMs, decodes);
+    } finally {
+      this.mode = saved;
+    }
+  }
+
+  /**
+   * Order spots by how much they are worth going to.
+   *
+   * Freshness alone — what the feed gives — ignores the two things that decide
+   * whether a retune pays off: whether the activator is on a band we are already
+   * listening to (no retune, no deaf period at all), and whether the contact would
+   * be new. Spots arrive freshest-first, so ties keep that order.
+   *
+   * Novelty is scored per DXCC entity and per band-slot, not per callsign: the
+   * guards already refuse dupes, and "have I worked this exact activator" is a
+   * question this ranking does not need to answer to put the right spot first.
+   */
+  private async rankSpots<T extends { activator: string; band: string | null }>(
+    spots: T[],
+    preferNew: boolean,
+    currentBand: string | null,
+  ): Promise<T[]> {
+    if (spots.length === 0) return spots;
+
+    const worked = preferNew ? await this.workedFor(currentBand) : null;
+    const scored = await Promise.all(
+      spots.map(async (s, i) => {
+        // Same band outranks everything: it is the only case with no cost at all.
+        let score = s.band && s.band === currentBand ? 100 : 0;
+        if (worked) {
+          const e = await this.o.resolveEntity(s.activator);
+          if (e) {
+            if (!worked.dxcc.has(e.adif)) score += 50;
+            else if (s.band === currentBand && !worked.dxccThisBand.has(e.adif)) score += 15;
+          }
+        }
+        return { s, score, i };
+      }),
+    );
+    scored.sort((a, b) => b.score - a.score || a.i - b.i);
+    return scored.map((x) => x.s);
+  }
+
+  /**
+   * The worked index, cached for a minute.
+   *
+   * It is several aggregate queries over the whole log — at 26 k QSOs that is
+   * not something to run every 15 seconds, and it changes only when we log
+   * something (which invalidates it explicitly).
+   */
+  private workedCache: { band: string | null; at: number; index: WorkedIndex } | null = null;
+
+  private async workedFor(band: string | null): Promise<WorkedIndex> {
+    const c = this.workedCache;
+    if (c && c.band === band && Date.now() - c.at < 60_000) return c.index;
+    const index = await this.o.workedIndex(band);
+    this.workedCache = { band, at: Date.now(), index };
+    return index;
+  }
+
+  /** Called after a QSO is logged: the index is now stale. */
+  invalidateWorked(): void {
+    this.workedCache = null;
+  }
+
+  /** Call CQ in the next window if it is (or becomes) our parity. */
+  private async cqWindow(windowStartMs: number): Promise<void> {
+    const period = this.o.source.periodMs;
+    const next = windowStartMs + period;
+
+    // First CQ picks the parity (the very next window) and a clear offset.
+    if (this.cqParity === null) {
+      this.cqParity = (Math.floor(next / period) % 2) as 0 | 1;
+    }
+    if (Math.floor(next / period) % 2 !== this.cqParity) return;
+
+    if (this.cqOffsetHz === null) this.cqOffsetHz = this.pickClearOffset();
+
+    const gate = this.o.guards.beforeTx();
+    if (!gate.allowed) {
+      this.lastAction = `CQ blocked: ${gate.reason}`;
+      return;
+    }
+
+    const { mode } = this.o.getBandMode();
+    const msg = standardMessages({
+      myCall: this.o.identity.myCall,
+      myGrid: this.o.identity.myGrid,
+      theirCall: "X",
+      theirSnr: 0,
+    }).tx6;
+
+    this.cqedLastWindow = true;
+    this.lastAction = `CQ at ${this.cqOffsetHz} Hz`;
+    void this.o.tx
+      .transmit({ message: msg, mode, offsetHz: this.cqOffsetHz, startAt: next })
+      .then((r) => {
+        if (!r.sent) {
+          this.o.log(`[auto] CQ refused: ${r.reason}`);
+          // Correct the status line.
+          //
+          // It was set optimistically above and never revised, so a CQ the radio
+          // refused — transmit gated off, a guard, another client holding the
+          // transmitter — displayed as "CQ at 1500 Hz" indefinitely. The operator sees
+          // a station calling CQ and hears nothing, and every other indicator agrees
+          // with the lie.
+          this.lastAction = `CQ refused: ${r.reason ?? "the radio would not transmit"}`;
+          this.cqedLastWindow = false;
+          this.broadcastState();
+        } else {
+          this.o.log(`[auto] sent "${msg}" (timing ${r.timingErrorMs}ms)`);
+        }
+        this.o.broadcast({ kind: "qso-tx", message: msg, sent: r.sent, reason: r.reason });
+      })
+      .catch((err) => {
+        this.lastAction = `CQ failed: ${(err as Error).message}`;
+        this.broadcastState();
+        this.o.log(`[auto] CQ error: ${(err as Error).message}`);
+      });
+  }
+
+  /**
+   * A frequency with nothing decoded near it last cycle.
+   *
+   * Prefers the 1000–2600 Hz range (audible on everyone's filters) and requires
+   * 60 Hz clearance either side — an FT8 signal is 50 Hz wide.
+   */
+  private pickClearOffset(): number {
+    for (let attempt = 0; attempt < 40; attempt++) {
+      const hz = 1000 + Math.floor(Math.random() * 1600);
+      if (this.recentOffsets.every((o) => Math.abs(o - hz) > 60)) return hz;
+    }
+    return 1000 + Math.floor(Math.random() * 1600); // busy band: take pot luck
+  }
+
+  /**
+   * Note anyone calling us while the transmitter is busy with someone else.
+   *
+   * The station we are CURRENTLY working is skipped: their messages are addressed to
+   * us too, and queuing them would have us call back someone we just finished.
+   */
+  private noteCallbacks(
+    answers: { message: string; snr: number; freqOffset: number }[],
+    windowStartMs: number,
+  ): void {
+    if (answers.length === 0) return;
+    const busyWith = this.o.controller.state.theirCall?.toUpperCase() ?? null;
+
+    for (const d of answers) {
+      const p = parseMessage(d.message);
+      if (p.kind !== "directed") continue;
+      const call = p.from.toUpperCase();
+      if (call === busyWith) continue;
+
+      const grid = p.payload.type === "grid" ? p.payload.grid : null;
+      const existing = this.callbacks.find((c) => c.call === call);
+      if (existing) {
+        // Calling again: refresh what we know, but KEEP the original position in
+        // the queue. Someone calling twice has waited longer, not less.
+        existing.snr = d.snr;
+        existing.offsetHz = d.freqOffset;
+        existing.windowStart = windowStartMs;
+        existing.at = Date.now();
+        if (grid) existing.grid = grid;
+        continue;
+      }
+
+      // Bounded: a genuine pileup could otherwise grow without limit, and nobody
+      // at the back of a twenty-deep queue is still waiting by the time we reach
+      // them. Oldest are served first, so the cap drops the newest arrival.
+      if (this.callbacks.length >= MAX_CALLBACKS) continue;
+
+      this.callbacks.push({
+        call,
+        grid,
+        snr: d.snr,
+        offsetHz: d.freqOffset,
+        windowStart: windowStartMs,
+        message: d.message,
+        at: Date.now(),
+      });
+      this.o.log(`[auto] ${call} called during the QSO — queued for a call back`);
+    }
+    this.lastAction =
+      this.callbacks.length > 0
+        ? `working ${busyWith ?? "someone"}; ${this.callbacks.length} waiting`
+        : this.lastAction;
+  }
+
+  /** Drop anyone who has been waiting too long to still be there. */
+  private pruneCallbacks(now = Date.now()): void {
+    const before = this.callbacks.length;
+    this.callbacks = this.callbacks.filter((c) => now - c.at < CALLBACK_TTL_MS);
+    const dropped = before - this.callbacks.length;
+    if (dropped > 0) {
+      this.o.log(`[auto] gave up calling back ${dropped} station(s) — too long ago`);
+    }
+  }
+
+  /**
+   * Work the next station that called us while we were busy.
+   *
+   * Returns true when a call was started, so the caller knows not to go hunting.
+   * Entries are dropped as they are tried: a station the guards refuse (a dupe, a
+   * cooldown) must not sit at the head of the queue blocking everyone behind it.
+   */
+  private async callBackWaiting(): Promise<boolean> {
+    this.pruneCallbacks();
+    if (this.callbacks.length === 0) return false;
+
+    const { band, mode } = this.o.getBandMode();
+    while (this.callbacks.length > 0) {
+      const next = this.callbacks.shift()!;
+      const may = await this.o.guards.mayCall(
+        next.call,
+        band ?? "?",
+        mode,
+        Date.now(),
+        this.o.wasWorked,
+        this.o.callChecks(),
+      );
+      if (!may.allowed) {
+        this.o.log(`[auto] not calling back ${next.call}: ${may.reason}`);
+        continue;
+      }
+
+      const result = await this.o.controller.startCall({
+        theirCall: next.call,
+        theirGrid: next.grid,
+        theirSnr: next.snr,
+        theirOffsetHz: next.offsetHz,
+        // The window they called US in fixes whose parity is whose. Still correct
+        // however long ago that was — parity is the window index mod 2, so it
+        // alternates predictably rather than drifting.
+        theirWindowStart: next.windowStart,
+        theirMessage: next.message,
+      });
+      if (result.ok) {
+        this.lastAction = `calling back ${next.call} (${this.callbacks.length} still waiting)`;
+        this.o.log(`[auto] ${this.lastAction}`);
+        return true;
+      }
+      this.o.log(`[auto] could not call back ${next.call}: ${result.reason ?? "refused"}`);
+    }
+    return false;
+  }
+
+  /**
+   * Leave a band that is working, because another one is working far better.
+   *
+   * The rule that was missing. Hopping only ever triggered on a QUIET pause — a dead
+   * band or unanswered CQs — so a station making contacts on 40 m stayed there while
+   * 20 m ran three times busier. An operator looking at the band strip could see it;
+   * nothing in the software was looking.
+   *
+   * Rate-limited hard, because the cost of being wrong is asymmetric: a needless hop
+   * throws away a working band and spends two warm-up cycles finding out, while
+   * arriving five minutes late to a better one costs almost nothing.
+   */
+  private async maybeHopToBetterBand(): Promise<boolean> {
+    const cfg = await this.o.bandHop();
+    if (!cfg.enabled || cfg.whenBetterRatio <= 1 || cfg.bands.length === 0) return false;
+    if (this.hopping || this.warmup > 0 || this.o.controller.hasActive) return false;
+
+    // Never leave a band we have not measured.
+    //
+    // Two reasons, and the second is the important one. A rate is needed to know
+    // whether the move was worth making — and without it `returnIfWorse` is null, so
+    // the deaf-band safety net does not arm and a bad move becomes permanent. The
+    // very first window after enabling a mode used to satisfy the timer below (it
+    // starts at zero), so the radio could move on network figures before it had
+    // listened to where it already was.
+    if (this.currentBandRate() === null) return false;
+
+    const now = Date.now();
+    if (now - this.lastBetterCheck < BETTER_BAND_CHECK_MS) return false;
+    this.lastBetterCheck = now;
+
+    if (!this.o.bandActivity) return false;
+    let activity: BandActivity[] | null;
+    try {
+      activity = await this.o.bandActivity();
+    } catch {
+      return false;
+    }
+
+    const { band: current, mode } = this.o.getBandMode();
+    const better = shouldHopForBetterBand({
+      current,
+      // Bands this receiver has already proved deaf on are off the table, however
+      // good the network says they are — we have been and listened.
+      bands: this.hearableBands(cfg.bands),
+      activity,
+      ratio: cfg.whenBetterRatio,
+    });
+    if (!better) return false;
+
+    this.o.log(
+      `[auto] ${better.band} is running ${better.to} stations against ${better.from} on ` +
+        `${current} — moving`,
+    );
+    const ok = await this.o.retune(better.band, mode);
+    if (!ok) {
+      this.lastAction = `could not move to ${better.band}`;
+      return false;
+    }
+    // Remember where to come back to, and what that band was really giving us.
+    //
+    // Only this path sets it: this is the move made on NETWORK figures, and network
+    // figures are the ones that can be wrong about our antenna. A hop away from a
+    // dead band has nothing worth returning to.
+    const hereRate = this.currentBandRate();
+    this.returnIfWorse =
+      current && hereRate !== null ? { band: current, rate: hereRate } : null;
+    this.resetBandCounters(current);
+
+    // Same bookkeeping a quiet-band hop does: listen before transmitting, and drop
+    // the CQ state that belonged to the band we just left.
+    this.lastAction = `moved to ${better.band} (${better.to} stations vs ${better.from}), listening`;
+    this.hopping = true;
+    this.hopDecodeCount = 0;
+    this.warmup = WARMUP_WINDOWS;
+    this.cqParity = null;
+    this.cqOffsetHz = null;
+    this.cqedLastWindow = false;
+    // Anyone waiting called us on the band we have just left.
+    this.callbacks = [];
+    const at = cfg.bands.indexOf(better.band);
+    if (at >= 0) this.hopIndex = at;
+    return true;
+  }
+
+  /**
+   * The hop list, minus bands this receiver has recently proved deaf on.
+   *
+   * Expiry rather than a permanent mark: propagation is the usual reason a band was
+   * deaf, and propagation changes. Half an hour later it is worth another look.
+   */
+  private hearableBands(bands: string[]): string[] {
+    const now = Date.now();
+    return bands.filter((b) => {
+      const until = this.poorBands.get(b.toUpperCase());
+      if (until === undefined) return true;
+      if (now >= until) {
+        this.poorBands.delete(b.toUpperCase());
+        return true;
+      }
+      return false;
+    });
+  }
+
+  /**
+   * How a contact ended, for judging whether this band is paying.
+   *
+   * Called by the QSO controller. Hearing plenty and working nobody is a failure the
+   * decode count can never show, and it is the expensive one — every abandoned call
+   * costs four transmit cycles.
+   */
+  noteContactOutcome(result: "made" | "lost"): void {
+    if (result === "made") this.madeOnBand++;
+    else this.lostOnBand++;
+  }
+
+  /**
+   * Leave a band that is not paying, even though nothing has hopped us here.
+   *
+   * The gap this closes: every other check compares the band we moved TO against the
+   * one we left, so a band we simply sat down on and stayed — through a restart, or
+   * because the network never showed anything better — was never questioned at all.
+   * Observed live: 20 m at under two decodes a cycle for three hours, with a −80 dBm
+   * noise floor, while 114 receivers were copying our transmit perfectly.
+   */
+  private async maybeLeaveUnproductiveBand(): Promise<boolean> {
+    const cfg = await this.o.bandHop();
+    if (!cfg.enabled || cfg.bands.length === 0) return false;
+    if (this.hopping || this.warmup > 0 || this.o.controller.hasActive) return false;
+
+    const now = Date.now();
+    if (now - this.lastProductivityCheck < PRODUCTIVITY_CHECK_MS) return false;
+    this.lastProductivityCheck = now;
+
+    const { band: current, mode } = this.o.getBandMode();
+    if (!current) return false;
+
+    // The quietest floor this station has measured ANYWHERE, which is the only
+    // honest yardstick for "noisy" — no absolute number means anything without
+    // knowing what this receiver and antenna read on a good band.
+    const here = this.o.noiseDbm?.() ?? null;
+    let quietest: number | null = null;
+    for (const [b, dbm] of this.bandNoise) {
+      if (b === current.toUpperCase()) continue;
+      if (quietest === null || dbm < quietest) quietest = dbm;
+    }
+
+    const verdict = bandIsUnproductive({
+      here: {
+        windows: this.windowDecodes,
+        made: this.madeOnBand,
+        lost: this.lostOnBand,
+      },
+      minWindows: UNPRODUCTIVE_MIN_WINDOWS,
+      decayFraction: UNPRODUCTIVE_DECAY,
+      minAttempts: UNPRODUCTIVE_MIN_ATTEMPTS,
+      minSuccess: UNPRODUCTIVE_MIN_SUCCESS,
+      noise: { hereDbm: here, quietestDbm: quietest },
+    });
+    if (!verdict) return false;
+
+    // Somewhere else to go, chosen the same way any other hop chooses.
+    let target: string | null = null;
+    const usable = this.hearableBands(cfg.bands);
+    if (cfg.toBusiest && this.o.bandActivity) {
+      try {
+        target = pickBusiestBand(usable, current, await this.o.bandActivity());
+      } catch {
+        target = null;
+      }
+    }
+    if (!target) {
+      target = usable.find((b) => b.toUpperCase() !== current.toUpperCase()) ?? null;
+    }
+    if (!target) return false;
+
+    this.o.log(`[auto] leaving ${current}: ${verdict.reason} — trying ${target}`);
+    if (!(await this.o.retune(target, mode))) {
+      this.lastAction = `could not leave ${current}`;
+      return false;
+    }
+
+    // Marked poor so the network figures cannot walk us straight back into it.
+    this.poorBands.set(current.toUpperCase(), Date.now() + POOR_BAND_MS);
+    this.returnIfWorse = null;
+    this.resetBandCounters(current);
+    this.lastAction = `left ${current} — ${verdict.reason}`;
+    this.hopping = true;
+    this.hopDecodeCount = 0;
+    this.warmup = WARMUP_WINDOWS;
+    this.cqParity = null;
+    this.cqOffsetHz = null;
+    this.cqedLastWindow = false;
+    this.callbacks = [];
+    const at = cfg.bands.indexOf(target);
+    if (at >= 0) this.hopIndex = at;
+    return true;
+  }
+
+  /** Decodes per cycle on the band we are on, or null if too early to say. */
+  private currentBandRate(): number | null {
+    if (this.windowsOnBand < RATE_MIN_WINDOWS) return null;
+    return this.decodesOnBand / this.windowsOnBand;
+  }
+
+  /**
+   * Start counting again, filing what the band we are leaving actually gave us.
+   *
+   * Called on every band change, whatever caused it, so the record is of real
+   * measured performance rather than of the reason for moving.
+   */
+  private resetBandCounters(leaving: string | null): void {
+    const rate = this.currentBandRate();
+    if (leaving && rate !== null) this.bandRate.set(leaving.toUpperCase(), rate);
+    this.windowsOnBand = 0;
+    this.decodesOnBand = 0;
+    this.windowDecodes = [];
+    this.madeOnBand = 0;
+    this.lostOnBand = 0;
+    this.lastProductivityCheck = Date.now();
+  }
+
+  /**
+   * Go back, because the band the network recommended is deaf from here.
+   *
+   * The band-conditions figures are what the WHOLE PSKReporter network hears. They
+   * are the best guide to where the activity is and they say nothing at all about
+   * what one antenna in one place can hear — wrong time of day for the path, wrong
+   * angle for the aerial, a local noise source. So a move made on those figures is
+   * checked against decodes per cycle in this receiver, which is the only measure
+   * that includes us.
+   *
+   * The band returned FROM is remembered as deaf for half an hour, or the same
+   * figures would send the radio straight back every five minutes.
+   */
+  private async maybeReturnFromDeafBand(): Promise<boolean> {
+    const back = this.returnIfWorse;
+    if (!back) return false;
+
+    const here = this.currentBandRate();
+    // Not enough windows yet to judge. Leave the intent in place and decide later.
+    if (here === null) return false;
+    this.returnIfWorse = null;
+
+    if (
+      !shouldReturnToPreviousBand({
+        hereRate: here,
+        thereRate: back.rate,
+        keepFraction: KEEP_BAND_FRACTION,
+      })
+    ) {
+      return false;
+    }
+
+    const { band: current, mode } = this.o.getBandMode();
+    if (current) this.poorBands.set(current.toUpperCase(), Date.now() + POOR_BAND_MS);
+
+    this.o.log(
+      `[auto] ${current ?? "?"} is hearing ${here.toFixed(1)} decodes a cycle against ` +
+        `${back.rate.toFixed(1)} on ${back.band} — the network hears it, we do not. Going back.`,
+    );
+    if (!(await this.o.retune(back.band, mode))) {
+      this.lastAction = `could not return to ${back.band}`;
+      return false;
+    }
+
+    this.resetBandCounters(current);
+    this.lastAction = `${current ?? "?"} was deaf here — back on ${back.band}`;
+    // Settled, not hopping: this is a return to a band already known to work, so
+    // there is nothing to re-judge when the warm-up ends.
+    this.hopping = false;
+    this.hopDecodeCount = 0;
+    this.warmup = WARMUP_WINDOWS;
+    this.cqParity = null;
+    this.cqOffsetHz = null;
+    this.cqedLastWindow = false;
+    this.callbacks = [];
+    return true;
+  }
+
+  /** Is the current pause the antenna refusing to load, rather than some other fault? */
+  private isSwrFault(): boolean {
+    return (
+      this.o.guards.pauseCause === "fault" && /\bSWR\b/i.test(this.o.guards.pausedReason ?? "")
+    );
+  }
+
+  /**
+   * Record what the antenna did on this band, so a later SWR trip has somewhere to go.
+   *
+   * The guards only keep an SWR reading taken while actually transmitting, which is
+   * the only time the figure means anything — so whatever is there belongs to the
+   * band we are on now.
+   */
+  private noteBandSwr(): void {
+    const { band } = this.o.getBandMode();
+    const swr = this.o.guards.health.swr;
+    if (band && swr !== null && swr > 0) this.bandSwr.set(band.toUpperCase(), swr);
+  }
+
+  /**
+   * The antenna will not load here. Try a band where it will.
+   *
+   * Re-arming is safe ONLY because we have moved first: the fault was about this
+   * band, and the new one is a genuinely different load. If nowhere is left to go,
+   * this returns false and the station stays paused for a human — which is the right
+   * answer for an antenna that is refusing everywhere, since that is a feedline or a
+   * switch rather than a band.
+   */
+  private async hopAwayFromSwr(): Promise<boolean> {
+    const cfg = await this.o.bandHop();
+    if (!cfg.enabled || cfg.bands.length === 0) return false;
+    if (this.o.controller.hasActive) return false;
+
+    const { band: current, mode } = this.o.getBandMode();
+    // Remember that THIS band failed before choosing, so it cannot be chosen again.
+    const swrHere = this.o.guards.health.swr;
+    if (current && swrHere !== null && swrHere > 0) {
+      this.bandSwr.set(current.toUpperCase(), swrHere);
+    }
+
+    const target = pickBandForSwr({
+      bands: cfg.bands,
+      current,
+      swrByBand: this.bandSwr,
+      limit: this.o.guards.swrLimit,
+    });
+    if (!target) {
+      this.o.log(
+        `[auto] high SWR on ${current ?? "this band"} and no band left to try — staying paused`,
+      );
+      return false;
+    }
+
+    this.o.log(
+      `[auto] SWR ${swrHere?.toFixed(1) ?? "?"}:1 on ${current ?? "?"} — trying ${target}`,
+    );
+    if (!(await this.o.retune(target, mode))) {
+      this.lastAction = `could not move to ${target} after high SWR`;
+      return false;
+    }
+
+    // Only now. A new band is a different load, so the reading that tripped the
+    // guard no longer describes what the transmitter is about to key into.
+    this.o.guards.rearm();
+    this.returnIfWorse = null;
+    this.resetBandCounters(current);
+    this.lastAction = `high SWR on ${current ?? "?"} — moved to ${target}`;
+    this.hopping = true;
+    this.hopDecodeCount = 0;
+    this.warmup = WARMUP_WINDOWS;
+    this.cqParity = null;
+    this.cqOffsetHz = null;
+    this.cqedLastWindow = false;
+    this.callbacks = [];
+    const at = cfg.bands.indexOf(target);
+    if (at >= 0) this.hopIndex = at;
+    return true;
+  }
+
+  /** Guard paused us. If band-hopping is on, move; otherwise stay paused. */
+  private async maybeHop(): Promise<void> {
+    const cfg = await this.o.bandHop();
+    if (!cfg.enabled || cfg.bands.length === 0 || this.o.controller.hasActive) return;
+    await this.hopNext(cfg.bands);
+  }
+
+  /**
+   * The band on the hop list the network sees the most stations on right now.
+   *
+   * Null when the feed is unavailable, when nothing on the list is being seen, or
+   * when the only busy band is the one already tuned — every one of which means
+   * "no better answer than rotating", and rotating is what the caller then does.
+   *
+   * Only bands from the configured list are ever considered: the list is the
+   * operator's statement of what this antenna can actually work, and 6 m being alive
+   * is no use to a station with no 6 m antenna.
+   */
+  private async busiestBand(bands: string[], current: string | null): Promise<string | null> {
+    if (!this.o.bandActivity) return null;
+    let activity: BandActivity[] | null;
+    try {
+      activity = await this.o.bandActivity();
+    } catch {
+      // A band-conditions lookup must never be able to stop the station operating.
+      return null;
+    }
+    const best = pickBusiestBand(bands, current, activity);
+    if (best) {
+      const n = activity?.find((a) => a.band.toUpperCase() === best)?.transmitting ?? 0;
+      this.o.log(`[auto] busiest band on the hop list: ${best} (${n} stations seen)`);
+    }
+    return best;
+  }
+
+  private async hopNext(bands?: string[]): Promise<void> {
+    const hop = await this.o.bandHop();
+    const cfg = bands ?? hop.bands;
+    if (cfg.length === 0) return;
+
+    const { band: current, mode } = this.o.getBandMode();
+
+    // Busiest-first, when the operator asked for it and the network can answer.
+    let target = hop.toBusiest ? await this.busiestBand(cfg, current) : null;
+    if (target) {
+      // Keep the rotation cursor with us, so a later fallback rotation carries on
+      // from where we actually are rather than from wherever the cursor was left.
+      const at = cfg.indexOf(target);
+      if (at >= 0) this.hopIndex = at;
+    } else {
+      // Next band on the list that isn't the one we're on.
+      for (let i = 0; i < cfg.length; i++) {
+        this.hopIndex = (this.hopIndex + 1) % cfg.length;
+        if (cfg[this.hopIndex] !== current) break;
+      }
+      target = cfg[this.hopIndex]!;
+    }
+
+    // A rotation hop is not a network-driven move, so there is nothing to come
+    // back to — and any earlier intent belonged to a band we have now left twice.
+    this.returnIfWorse = null;
+    this.resetBandCounters(current);
+    this.o.log(`[auto] band hop -> ${target}`);
+    const ok = await this.o.retune(target, mode);
+    if (!ok) {
+      this.lastAction = `band hop to ${target} failed`;
+      return;
+    }
+    this.lastAction = `hopped to ${target}, listening`;
+    this.hopping = true;
+    this.hopDecodeCount = 0;
+    this.warmup = WARMUP_WINDOWS;
+    this.cqParity = null;
+    this.cqOffsetHz = null;
+    // The outstanding CQ went out on the band we have just left.
+    //
+    // Without this it stays outstanding and the first window on the new band is counted
+    // against it, so a band gets one window less than its share before being judged quiet.
+    // Not the cause of anything observed — the first on-air hop chain was the deliberate
+    // scan below doing its job — but a CQ belongs to the band it was sent on.
+    this.cqedLastWindow = false;
+    // rearmIfQuiet, not rearm: a band change is a response to a quiet band, and it
+    // must not clear an SWR trip, a hot PA or a dead receiver. rearm() cleared all
+    // of them — including lastSwr — so a fault hopped band and kept transmitting.
+    this.o.guards.rearmIfQuiet();
+  }
+
+  private broadcastState(): void {
+    this.o.broadcast({ kind: "auto", auto: this.state });
+  }
+}

@@ -1,0 +1,150 @@
+@import "tailwindcss";
+
+/* DigiShack theme — permanent dark mode, red accent, Oswald.
+ *
+ * There is no light mode and no theme toggle: the spec calls for permanent
+ * dark. Don't add a `dark:` variant anywhere; the base tokens ARE the dark
+ * tokens. */
+
+@theme {
+  /* --- accent ---
+   *
+   * Two reds, because one cannot do both jobs.
+   *
+   * #c21807 is the brand colour and it is excellent as a FILL: white on it measures
+   * 6.13:1. As TEXT on these surfaces it measures 2.45–3.23:1, which fails WCAG AA
+   * (4.5:1) and fails even the large-text floor (3:1) on surface-2 and surface-3. It
+   * was being used for both, in 39 places.
+   *
+   * So `accent` is for backgrounds, borders and rules; `accent-bright` is the one to
+   * put text in. Worst case across all four surfaces: 4.90:1.
+   *
+   * Verified by measurement, not by eye — a red on near-black looks fine to anyone
+   * with ordinary vision and is genuinely hard to read for anyone without. */
+  --color-accent: #c21807;
+  --color-accent-bright: #ff5c3d;
+  --color-accent-hover: #e01d09;
+  --color-accent-muted: #7d1005;
+  --color-accent-fg: #ffffff;
+
+  /* --- surfaces, darkest to lightest --- */
+  --color-bg: #0a0a0b;
+  --color-surface: #131316;
+  --color-surface-2: #1c1c21;
+  --color-surface-3: #26262d;
+
+  /* --- borders --- */
+  --color-line: #2e2e36;
+  --color-line-strong: #43434e;
+
+  /* --- text --- */
+  --color-fg: #f2f2f4;
+  --color-fg-muted: #a1a1ac;
+  /* Was #6e6e7a, which measured 2.99:1 on surface-3 — under the 3:1 floor. This is
+   * 4.76:1 at worst, so the quietest text in the interface is still readable. */
+  --color-fg-subtle: #90909c;
+
+  /* --- semantic status (band/mode/QSL states) --- */
+  --color-ok: #3fb950;
+  --color-warn: #d29922;
+  /* Was #f85149, which measured 4.48:1 on surface-3 — two hundredths under AA, and
+   * this is the colour error messages are written in. */
+  --color-danger: #fa5e57;
+  --color-info: #58a6ff;
+
+  /* --- typography --- */
+  --font-display: var(--font-oswald), "Oswald", ui-sans-serif, system-ui,
+    sans-serif;
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, "Cascadia Mono", "Consolas", monospace;
+
+  /* Square-ish, instrument-panel feel rather than pill-shaped. */
+  --radius-sm: 2px;
+  --radius-md: 3px;
+  --radius-lg: 4px;
+}
+
+@layer base {
+  :root {
+    color-scheme: dark;
+  }
+
+  html {
+    background-color: var(--color-bg);
+  }
+
+  body {
+    background-color: var(--color-bg);
+    color: var(--color-fg);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* Headings and numeric readouts use Oswald — it's a condensed face, which
+   * suits callsigns, frequencies and band labels. */
+  h1,
+  h2,
+  h3,
+  h4 {
+    font-family: var(--font-display);
+    font-weight: 500;
+    letter-spacing: 0.01em;
+  }
+
+  /* Callsigns, frequencies, grids: tabular so columns align in the log table. */
+  .tnum {
+    font-variant-numeric: tabular-nums;
+  }
+
+  ::selection {
+    background-color: var(--color-accent);
+    color: var(--color-accent-fg);
+  }
+
+  /* The focus ring uses the bright accent: a focus indicator has to reach 3:1 against
+   * its background to be an indicator at all, and the brand red manages 2.45 on the
+   * lighter surfaces — where most focusable controls sit. */
+  :focus-visible {
+    outline: 2px solid var(--color-accent-bright);
+    outline-offset: 1px;
+  }
+
+  /* Dark scrollbars — the default light track is jarring against #0a0a0b. */
+  * {
+    scrollbar-color: var(--color-line-strong) transparent;
+  }
+}
+
+@layer utilities {
+  /* `no-scrollbar` was used in the header nav and the band strip and DEFINED NOWHERE.
+   *
+   * Tailwind does not provide it, so both were plain `overflow-x-auto` with a visible
+   * scrollbar all along — and the 0.52.0 note claiming the nav "scrolls rather than
+   * overflowing" was describing a class that did nothing. */
+  .no-scrollbar {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* Bigger hit areas on touch and other imprecise pointers.
+   *
+   * Applied by pointer capability rather than by viewport width: a 24px control is
+   * just as hard to hit on a touchscreen laptop as on a phone, and an operator with
+   * arthritis has the same trouble with a mouse. 44px is the usual floor.
+   *
+   * Deliberately NOT applied on fine pointers — this interface is meant to be dense
+   * on a desktop, and inflating every control there would cost more than it gains. */
+  @media (pointer: coarse) {
+    button,
+    [role="button"],
+    a.nav-target,
+    input[type="checkbox"],
+    input[type="radio"] {
+      min-height: 44px;
+      min-width: 44px;
+    }
+  }
+}

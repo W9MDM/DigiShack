@@ -1,0 +1,3 @@
+-- AlterTable
+ALTER TABLE `Qso` ADD COLUMN `name` VARCHAR(64) NULL,
+    ADD COLUMN `qth` VARCHAR(96) NULL;

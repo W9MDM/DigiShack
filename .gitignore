@@ -1,0 +1,67 @@
+# dependencies
+/node_modules
+/.pnp
+.pnp.*
+
+# testing
+/coverage
+
+# next.js
+/.next/
+/out/
+next-env.d.ts
+
+# production
+/build
+
+# typescript
+*.tsbuildinfo
+
+# env files — ignore real secrets, but keep the committed template
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# debug / PM2 logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+/logs
+*.log
+
+# ADIF / Cabrillo dropped in for import, and generated exports
+/exports
+*.adi
+*.adif
+
+# misc
+.DS_Store
+*.pem
+psk*.tmp.xml
+bridge.log
+
+# QSL card artwork is the operator's own asset and can be tens of MB.
+# Kept out of git; the path is set by qsl.card.baseImage in Settings.
+data/qsl/*
+!data/qsl/README.md
+
+# Credential files the update runner used to leak into the repo root: a Windows
+# tmpdir path lost its backslashes inside GIT_CONFIG_VALUE_0 and resolved as
+# drive-relative, so git wrote the helper store here instead of %TEMP%.
+# Fixed in runner.ts, but belt and braces -- these must never be committable.
+UsersMATTME~1*
+*digishack-git-*
+
+# Database dumps: the operator's own data, and they contain every credential.
+backups/
+
+# The raw decode log (digital.decodeCsvDir). The operator's own data, a few megabytes
+# per day, and reconstructible from nothing else -- which is the point of keeping it,
+# and also the reason it must not be committed.
+data/decodes/
+
+# Accumulated GitHub traffic figures. GitHub keeps 14 days; this file is the only
+# copy of anything older, and it is this station's record rather than source.
+/data/traffic-history.json

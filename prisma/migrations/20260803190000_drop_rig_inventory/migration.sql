@@ -1,0 +1,19 @@
+-- The Rig table goes. The operator's decision, and the right one.
+--
+-- It was operator-entered inventory: a name, a type (FLEX_6000 / FLEX_8000 / HAMLIB_NET /
+-- MANUAL) and an IP address, attached to a station. NOTHING in the radio path ever read it.
+-- The radio DigiShack actually operates is configured in Settings, and a contact records
+-- `Qso.radio` — what the radio called itself over the air, which cannot disagree with
+-- reality.
+--
+-- So the table was worse than unused: it invited an operator to configure a radio in a
+-- place that does nothing. This install had two rows, and one of them was exactly that
+-- mistake being made:
+--
+--     "Barn Flex"   FLEX_6000   192.0.2.10
+--     "Backup HF"   MANUAL      (no address)
+--
+-- Recorded here because dropping a table is not reversible and those two lines are the
+-- only thing of value in it. "Why do we have rigs and radios?" was the question that
+-- started this, and the answer was that we should not.
+DROP TABLE `Rig`;

@@ -1,0 +1,17 @@
+-- Transmit power for the contact, in WATTS.
+--
+-- ADIF TX_PWR, and watts because that is what the field means and what a QSL card
+-- says. The radios report a PERCENTAGE of their rated output (both the FlexRadio's
+-- `transmit set rfpower=` and the Icom's CI-V level), so the bridge converts using
+-- the configured maximum and stores the result here — a percentage in a TX_PWR
+-- field would export as nonsense to anyone else's log.
+--
+-- Nullable, and deliberately so: 26,000 existing contacts have no per-QSO figure and
+-- inventing one would put a number on a QSL card that nobody measured. Those fall
+-- back to the station-wide qsl.txPower setting exactly as before.
+--
+-- DOUBLE rather than an integer: QRP operators log 0.5 W and 2.5 W, and rounding
+-- those to zero or three would misreport the whole point of the contact.
+--
+-- Written by hand and applied with `migrate deploy` — see the 20260805021500 note.
+ALTER TABLE `Qso` ADD COLUMN `txPowerW` DOUBLE NULL;
