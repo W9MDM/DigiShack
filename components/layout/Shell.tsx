@@ -3,7 +3,7 @@ import { Ft0Button } from "@/components/layout/Ft0Button";
 import { UtcClock } from "@/components/layout/UtcClock";
 import { useRouter } from "next/router";
 import type { UiFlags } from "@/lib/auth/guard";
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
 import { Badge } from "@/components/ui/primitives";
 import { apiPost } from "@/lib/client/api";
@@ -87,6 +87,29 @@ export function Shell({
   const { pathname } = useRouter();
   const user = useUser();
   const [signingOut, setSigningOut] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+
+  // A drawer that survives the navigation it just triggered covers the page the
+  // operator asked for. Closing on pathname rather than on click also covers the
+  // links that redirect and the browser back button.
+  useEffect(() => {
+    setMenuOpen(false);
+  }, [pathname]);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") setMenuOpen(false);
+    }
+    // Scrolling the page behind a full-height drawer loses your place in it.
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", onKey);
+    return () => {
+      document.body.style.overflow = prev;
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [menuOpen]);
 
   const visible = NAV.filter(
     (item) =>
@@ -127,8 +150,61 @@ export function Shell({
       >
         Skip to content
       </a>
-      <header className="border-b border-line bg-surface sticky top-0 z-20">
-        <div className="mx-auto max-w-[1600px] flex items-center gap-6 px-4 h-12">
+      <header className="border-b border-line bg-surface sticky top-0 z-20 pt-[env(safe-area-inset-top)]">
+        <div className="mx-auto max-w-[1600px] flex items-center gap-3 md:gap-6 px-4 h-12">
+          {/*
+           * The menu button, and the whole reason this file was rewritten.
+           *
+           * The nav below was a single scrolling row sharing one flex line with the
+           * clock, the FT-0 button, the callsign and Sign out — and it carried
+           * `min-w-0`, which permits a flex item to shrink to nothing. On a phone the
+           * right-hand cluster is not compressible, so it took the width and the nav
+           * got whatever was left: a few pixels. `no-scrollbar` then removed the one
+           * remaining hint that anything was there to scroll at all. The links were
+           * not merely awkward to reach, they were INVISIBLE.
+           *
+           * Horizontal scrolling was the wrong shape for this regardless. Fifteen
+           * destinations behind a swipe with no scrollbar is a menu you have to
+           * already know the contents of.
+           */}
+          <button
+            type="button"
+            onClick={() => setMenuOpen((v) => !v)}
+            aria-expanded={menuOpen}
+            aria-controls="mobile-nav"
+            aria-label={menuOpen ? "Close menu" : "Open menu"}
+            className={cn(
+              "md:hidden -ml-2 inline-flex items-center justify-center",
+              "rounded-sm px-2 text-fg-muted hover:text-fg hover:bg-surface-2",
+            )}
+          >
+            {/* Drawn rather than imported: two glyphs are not worth an icon set, and
+                this install may have no outbound internet at all. */}
+            <svg
+              width="22"
+              height="22"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              aria-hidden="true"
+            >
+              {menuOpen ? (
+                <>
+                  <path d="M6 6l12 12" />
+                  <path d="M18 6L6 18" />
+                </>
+              ) : (
+                <>
+                  <path d="M3 6h18" />
+                  <path d="M3 12h18" />
+                  <path d="M3 18h18" />
+                </>
+              )}
+            </svg>
+          </button>
+
           <Link href="/" className="flex items-baseline gap-1.5 shrink-0">
             <span className="font-display text-xl uppercase tracking-wider">
               Digi
@@ -138,12 +214,12 @@ export function Shell({
             </span>
           </Link>
 
-          {/* Scrolls rather than overflowing. Below md the nav was wider than the
-              viewport and the items past the edge were simply unreachable — no wrap,
-              no menu, no scroll. */}
+          {/* Desktop only. Below md the same links are in the drawer, so this row no
+              longer has to survive a 360px viewport — which is why it can go on being
+              this dense. */}
           <nav
             aria-label="Main"
-            className="flex items-center gap-0.5 overflow-x-auto no-scrollbar min-w-0"
+            className="hidden md:flex items-center gap-0.5 overflow-x-auto no-scrollbar min-w-0"
           >
             {visible.map((item) => {
               const active = isActive(pathname, item.href);
@@ -166,7 +242,7 @@ export function Shell({
             })}
           </nav>
 
-          <div className="ml-auto flex items-center gap-3">
+          <div className="ml-auto flex items-center gap-2 md:gap-3">
             <UtcClock />
             <Ft0Button />
             {user && (
@@ -192,11 +268,13 @@ export function Shell({
                     {user.role}
                   </Badge>
                 )}
+                {/* Sign out lives in the drawer on a phone. Kept here on desktop,
+                    where there is room and where it has always been. */}
                 <button
                   type="button"
                   onClick={() => void signOut()}
                   disabled={signingOut}
-                  className="text-xs text-fg-subtle hover:text-accent-bright disabled:opacity-50"
+                  className="hidden md:inline text-xs text-fg-subtle hover:text-accent-bright disabled:opacity-50"
                 >
                   {signingOut ? "Signing out…" : "Sign out"}
                 </button>
@@ -206,7 +284,119 @@ export function Shell({
         </div>
       </header>
 
-      <main id="main" className="flex-1 mx-auto w-full max-w-[1600px] px-4 py-6">
+      {/* Backdrop. Rendered only while open so it cannot swallow taps when closed. */}
+      {menuOpen && (
+        <div
+          className="md:hidden fixed inset-0 z-30 bg-black/60"
+          onClick={() => setMenuOpen(false)}
+          aria-hidden="true"
+        />
+      )}
+
+      {/*
+       * The drawer.
+       *
+       * Kept mounted so the slide has something to animate, and hidden with
+       * `invisible` + `pointer-events-none` rather than unmounted so an offscreen
+       * panel can never intercept a tap. The links drop out of the tab order when it
+       * is closed, which `invisible` alone does not do.
+       */}
+      <nav
+        id="mobile-nav"
+        aria-label="Main"
+        aria-hidden={!menuOpen}
+        className={cn(
+          "md:hidden fixed z-40 top-0 left-0 h-full w-72 max-w-[85vw]",
+          "flex flex-col overflow-y-auto",
+          "border-r border-line bg-surface",
+          "pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]",
+          "transition-transform duration-200 ease-out",
+          menuOpen
+            ? "translate-x-0"
+            : "-translate-x-full pointer-events-none invisible",
+        )}
+      >
+        <div className="flex items-center justify-between px-4 h-12 border-b border-line">
+          <span className="font-display text-lg uppercase tracking-wider">
+            Menu
+          </span>
+          <button
+            type="button"
+            onClick={() => setMenuOpen(false)}
+            aria-label="Close menu"
+            className="-mr-2 px-2 text-fg-muted hover:text-fg"
+          >
+            <svg
+              width="20"
+              height="20"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              aria-hidden="true"
+            >
+              <path d="M6 6l12 12" />
+              <path d="M18 6L6 18" />
+            </svg>
+          </button>
+        </div>
+
+        <div className="flex flex-col py-2">
+          {visible.map((item) => {
+            const active = isActive(pathname, item.href);
+            return (
+              <Link
+                key={item.href}
+                href={item.href}
+                aria-current={active ? "page" : undefined}
+                tabIndex={menuOpen ? undefined : -1}
+                className={cn(
+                  "nav-target flex items-center px-4 py-3 text-base border-l-2",
+                  active
+                    ? "text-fg border-accent bg-surface-2"
+                    : "text-fg-muted border-transparent hover:text-fg hover:bg-surface-2",
+                )}
+              >
+                {item.label}
+              </Link>
+            );
+          })}
+        </div>
+
+        {user && (
+          <div className="mt-auto border-t border-line px-4 py-3 flex flex-col gap-2">
+            <Link
+              href="/account"
+              tabIndex={menuOpen ? undefined : -1}
+              className="text-sm text-fg-muted hover:text-accent-bright"
+            >
+              {user.callsign ? (
+                <span className="font-display tracking-wide">
+                  {user.callsign}
+                </span>
+              ) : (
+                user.name
+              )}
+              <span className="text-fg-subtle"> — account</span>
+            </Link>
+            <button
+              type="button"
+              onClick={() => void signOut()}
+              disabled={signingOut}
+              tabIndex={menuOpen ? undefined : -1}
+              className="self-start text-sm text-fg-subtle hover:text-accent-bright disabled:opacity-50"
+            >
+              {signingOut ? "Signing out…" : "Sign out"}
+            </button>
+          </div>
+        )}
+      </nav>
+
+      <main
+        id="main"
+        className="flex-1 mx-auto w-full max-w-[1600px] px-4 py-6 pb-[max(1.5rem,env(safe-area-inset-bottom))]"
+      >
         {children}
       </main>
     </div>

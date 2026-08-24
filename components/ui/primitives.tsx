@@ -302,7 +302,24 @@ export function PageHeader({
         </h1>
         {subtitle && <p className="text-sm text-fg-muted mt-0.5">{subtitle}</p>}
       </div>
-      {actions && <div className="flex items-center gap-2">{actions}</div>}
+      {/*
+       * `flex-wrap` here, not just on the row above.
+       *
+       * The outer row wraps, so the actions cluster drops onto its own line on a narrow
+       * screen — and then could not wrap INTERNALLY, so its min-content width became the
+       * document's width. On /decodes that cluster is the band-conditions strip plus a TX
+       * badge plus a live badge plus a button, and at 375px it pushed the page about
+       * 165px wider than the viewport: every page on the site scrolled sideways, header
+       * included, because of one missing class on a shared component.
+       *
+       * Found by measurement at 375px, not by reading — the same row looks perfectly
+       * fine at every width where it happens to fit.
+       */}
+      {actions && (
+        <div className="flex flex-wrap items-center justify-end gap-2 min-w-0">
+          {actions}
+        </div>
+      )}
     </div>
   );
 }

@@ -4,8 +4,10 @@ import type { AppProps } from "next/app";
 import { Oswald } from "next/font/google";
 import Head from "next/head";
 import { useRouter } from "next/router";
+import { useEffect } from "react";
 
 import { Shell } from "@/components/layout/Shell";
+import { registerServiceWorker } from "@/lib/client/service-worker";
 import { SessionProvider, type SessionUser } from "@/lib/client/session";
 import type { UiFlags } from "@/lib/auth/guard";
 
@@ -31,11 +33,27 @@ export default function App({ Component, pageProps }: AppProps) {
   // paint rather than flickering after a client fetch.
   const uiFlags = (pageProps as { uiFlags?: UiFlags }).uiFlags;
 
+  // Registered from the app root so it happens on the login screen too — an operator
+  // who installs from there gets the app, not a shortcut to a login form.
+  useEffect(() => {
+    void registerServiceWorker();
+  }, []);
+
   return (
     <div className={oswald.variable}>
       <Head>
         <title>DigiShack</title>
-        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        {/*
+         * `viewport-fit=cover` lets the page reach into the notch and home-indicator
+         * areas, which is what makes a standalone install look like an app rather than
+         * a web page with two grey bars. It is only safe alongside the
+         * env(safe-area-inset-*) padding in the Shell — without that, the header ends
+         * up underneath the status bar.
+         */}
+        <meta
+          name="viewport"
+          content="width=device-width, initial-scale=1, viewport-fit=cover"
+        />
         <meta name="theme-color" content="#0a0a0b" />
       </Head>
       <SessionProvider user={user}>

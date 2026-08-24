@@ -238,7 +238,7 @@ function ImportPanel({ onDone }: { onDone: () => void }) {
           </div>
 
           {report.sample.length > 0 && (
-            <div className="mt-3 max-h-80 overflow-y-auto border border-line rounded-sm">
+            <div className="mt-3 max-h-80 overflow-y-auto overflow-x-auto border border-line rounded-sm">
               <table className="w-full text-xs">
                 <thead className="sticky top-0 bg-surface-2">
                   <tr className="text-left uppercase tracking-wide text-fg-muted">
@@ -545,7 +545,8 @@ export default function PotaPage() {
       <div className="grid gap-4 lg:grid-cols-2">
         {p && p.recentActivations.length > 0 && (
           <Card title="Your recent activations">
-            <table className="w-full text-sm">
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[22rem] text-sm">
               <thead>
                 <tr className="text-left text-xs uppercase tracking-wide text-fg-muted">
                   <th className="py-1 font-medium">Date</th>
@@ -580,6 +581,7 @@ export default function PotaPage() {
                 ))}
               </tbody>
             </table>
+          </div>
           </Card>
         )}
 
@@ -594,7 +596,8 @@ export default function PotaPage() {
               before that lives in POTA&apos;s own totals above.
             </EmptyState>
           ) : (
-            <table className="w-full text-sm">
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[22rem] text-sm">
               <thead>
                 <tr className="text-left text-xs uppercase tracking-wide text-fg-muted">
                   <th className="py-1 font-medium">Time (UTC)</th>
@@ -633,6 +636,7 @@ export default function PotaPage() {
                 ))}
               </tbody>
             </table>
+          </div>
           )}
         </Card>
       </div>
