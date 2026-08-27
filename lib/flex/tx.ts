@@ -2,6 +2,7 @@ import { nowMs } from "@/lib/time/clock";
 import dgram from "node:dgram";
 
 import { FlexClient } from "@/lib/flex/client";
+import { resolveAntenna } from "@/lib/flex/antennas";
 import { nextWindowStart, PERIOD_MS, transmitStartAt } from "@/lib/radio/timing";
 import { buildWaveform, samplesPerSymbol } from "@/lib/radio/waveform";
 
@@ -87,6 +88,18 @@ export interface TransmitterOptions {
    * Ignored when a slice already exists — the existing TX slice is used as-is.
    */
   freqHz?: number;
+  /**
+   * Which antenna port to transmit into, on a radio that has more than one.
+   *
+   * This was `ANT1`, hardcoded into the `slice create` below. On the live path it never
+   * ran — the transmitter shares the decode path's slice, which is where the antenna is
+   * now applied — but the standalone path is what every bench script and every
+   * receive-disabled test uses, and a transmitter that keys into a socket the operator
+   * has nothing plugged into is worse than one that refuses.
+   *
+   * Ignored in shared mode, where the slice and its antenna belong to the DAX source.
+   */
+  antenna?: { tx?: string | null; rx?: string | null };
   /** Must be true for anything to key the radio. */
   allowTransmit: boolean;
   /**
@@ -185,6 +198,10 @@ export class FlexDaxTransmitter {
       port: options.port ?? 4992,
       daxChannel: options.daxChannel ?? 1,
       freqHz: options.freqHz ?? 7_074_000,
+      antenna: {
+        tx: options.antenna?.tx ?? null,
+        rx: options.antenna?.rx ?? options.antenna?.tx ?? null,
+      },
       allowTransmit: options.allowTransmit,
       isTransmitAllowed: options.isTransmitAllowed ?? null,
       shared: options.shared ?? null,
@@ -283,8 +300,12 @@ export class FlexDaxTransmitter {
 
     if (!txSlice) {
       const mhz = (this.opts.freqHz / 1_000_000).toFixed(6);
+      // `ant=` on a create is the receive port. ANT1 stays the fallback for a station
+      // that has configured nothing, but it is no longer the only possibility.
+      const createAnt =
+        resolveAntenna(this.opts.antenna.rx, client.state.antennas.rx).ant ?? "ANT1";
       const madeSlice = await client.command(
-        `slice create freq=${mhz} ant=ANT1 mode=DIGU`,
+        `slice create freq=${mhz} ant=${createAnt} mode=DIGU`,
       );
       if (madeSlice.status !== 0) {
         throw new Error(
@@ -312,6 +333,37 @@ export class FlexDaxTransmitter {
       }
     }
     this.sliceIndex = txSlice.index;
+
+    // The transmit port, on a slice that is ours to steer — ours by creation, or the
+    // restored default profile. Same condition as the tune and mode steering above, and
+    // for the same reason: an operator's own slice stays on the antenna they chose.
+    //
+    // A port the radio does not have is REFUSED, not silently replaced with ANT1. This
+    // is the transmit path, so a wrong antenna is not a display fault: it is RF into a
+    // socket with a cap on it.
+    if (this.createdSlice || this.otherGuiClients === 0) {
+      const ports = client.state.antennas;
+      const rx = resolveAntenna(this.opts.antenna.rx, ports.rx, "receive");
+      const tx = resolveAntenna(this.opts.antenna.tx, ports.tx, "transmit");
+      for (const refused of [rx.refused, tx.refused]) {
+        if (refused) console.warn(`[flex/tx] ${refused}`);
+      }
+      const sets = [
+        ...(rx.ant ? [`rxant=${rx.ant}`] : []),
+        ...(tx.ant ? [`txant=${tx.ant}`] : []),
+      ];
+      if (sets.length > 0) {
+        const r = await client.command(`slice set ${txSlice.index} ${sets.join(" ")}`);
+        if (r.status !== 0) {
+          console.warn(
+            `[flex/tx] the radio refused ${sets.join(" ")} on slice ${txSlice.index} ` +
+              `(0x${r.status.toString(16)})`,
+          );
+        } else {
+          console.log(`[flex/tx] slice ${txSlice.index} ${sets.join(" ")}`);
+        }
+      }
+    }
 
     // MISSING PIECE #1: the slice must be told which DAX channel feeds it. Without
     // this the channel is connected to nothing, and TX audio sent to it is

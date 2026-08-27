@@ -319,6 +319,20 @@ export default function RigPage({ wsUrl }: Props) {
   // see lib/radio/capabilities.ts for the three defects that made that necessary.
   const caps = radioCapabilities(status?.source ?? null);
 
+  // The antenna ports, when the radio has a choice to offer.
+  //
+  // Not a capability in lib/radio/capabilities.ts, deliberately: the ports differ between
+  // a 6300 and a 6600, and again with a transverter fitted, so a table there would be a
+  // second opinion about hardware — and the radio states this itself in every slice
+  // status (`ant_list`, `tx_ant_list`). Null when there is nothing to choose between,
+  // which is a single-socket radio, an external decoder, or a radio that has not spoken
+  // yet, and all three want the same thing: no picker.
+  const antennas = useMemo(() => {
+    const ports = status?.receiver?.antennas;
+    if (!ports) return null;
+    return ports.rx.length > 1 || ports.tx.length > 1 ? ports : null;
+  }, [status?.receiver?.antennas]);
+
   // Where a band button lands. Two behaviours that used to be two separate rows of
   // identical-looking buttons, with the explanation at the bottom of the second one.
   const [bandTarget, setBandTarget] = useState<"calling" | "centre">("calling");
@@ -1025,6 +1039,66 @@ export default function RigPage({ wsUrl }: Props) {
                 ))}
               </Select>
             </div>
+            {/* The antenna port, on a radio that has more than one.
+                
+                Drawn from the list THE RADIO reported and only when there is a choice in
+                it, which is the rule the rest of this page follows: a FLEX-6400 answers
+                ANT1, ANT2, RX_A, XVTA, an IC-7300 has one socket and gets no picker, and
+                nothing here keeps a table of models. Two lists because the radio keeps
+                two — RX_A is a receive-only BNC and appears in one and not the other, so
+                a transmit picker that offered it would be offering a port that cannot
+                transmit. */}
+            {antennas && (
+              <div>
+                <Legend>
+                  Antenna
+                  <HelpTip label="About the antenna ports">
+                    The sockets this radio says it has, and the one it says it is using.
+                    DigiShack used to write ANT1 into every slice it created and never read
+                    the antenna back, so a station with the wire on ANT2 got a bridge
+                    listening to an empty socket. Changing the receive port moves the RF
+                    panadapter with it — a panadapter carries its own antenna, and one left
+                    behind draws a spectrum of the wrong aerial with correct axis labels.
+                  </HelpTip>
+                </Legend>
+                <div className="flex gap-2">
+                  {(
+                    [
+                      ["RX", "rxAnt", antennas.rx, status?.receiver?.rxAnt ?? null],
+                      ["TX", "txAnt", antennas.tx, status?.receiver?.txAnt ?? null],
+                    ] as const
+                  )
+                    // A list of one is not a choice. On a radio where only the receive
+                    // list is longer — a receive-only BNC and one transmit socket — this
+                    // draws the RX picker alone rather than a TX picker with nothing in it.
+                    .filter(([, , list]) => list.length > 1)
+                    .map(([label, field, list, current]) => (
+                      <label key={field} className="flex-1 min-w-0">
+                        <span className="sr-only">{label} antenna</span>
+                        <Select
+                          id={field}
+                          /* The radio's own answer, like the AGC picker beside it —
+                             never the last click. The antenna can be changed in
+                             SmartSDR or on the radio's own screen. */
+                          value={current ?? ""}
+                          disabled={busy !== null}
+                          onChange={(e) => void send({ [field]: e.target.value }, field)}
+                          title={`${label} antenna${current ? ` — on ${current}` : ""}`}
+                        >
+                          <option value="" disabled>
+                            {current ? `${label} ${current}` : `${label} not reported yet`}
+                          </option>
+                          {list.map((a) => (
+                            <option key={a} value={a}>
+                              {label} {a}
+                            </option>
+                          ))}
+                        </Select>
+                      </label>
+                    ))}
+                </div>
+              </div>
+            )}
             <div>
               <Legend>
                 AGC

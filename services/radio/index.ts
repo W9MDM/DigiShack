@@ -41,6 +41,7 @@ import { getLotwCredentials, syncLotwConfirmations } from "@/lib/integrations/lo
 import type { AutoOperator, AutoMode } from "./auto-operator";
 import { isAutoMode } from "@/lib/radio/auto-mode";
 import { FlexClient } from "@/lib/flex/client";
+import { resolveAntenna } from "@/lib/flex/antennas";
 import { LivenessWatchdog, windowTimeoutMs } from "@/lib/radio/watchdog";
 import {
   isTransmitArmed,
@@ -1066,6 +1067,13 @@ async function startFlexSource(): Promise<() => Promise<void>> {
 
   const daxChannel = await getNumberSetting("flex.daxChannel", 1);
   const depth = await getNumberSetting("flex.decodeDepth", 2);
+  // Which antenna socket, on a radio with more than one. Blank leaves the radio alone.
+  // Read here rather than inside the source so the transmitter gets the same answer from
+  // the same read — two reads of one setting is how they end up on different antennas.
+  const antenna = {
+    tx: await getSetting("flex.antenna"),
+    rx: await getSetting("flex.rxAntenna"),
+  };
   // `digital.mode`, not `flex.mode`: which digital mode to decode is a property of
   // the operating, not of the radio, and the Icom needs the same answer.
   const configuredMode = ((await getSetting("digital.mode")) ?? "auto").toLowerCase();
@@ -1112,6 +1120,8 @@ async function startFlexSource(): Promise<() => Promise<void>> {
     // Where a bare radio comes up: the source creates its own slice here when
     // nothing else (SmartSDR, AetherSDR) has one open.
     freqHz: await getNumberSetting("flex.defaultFreqHz", 7_074_000),
+    // The antenna port, applied only to a slice DigiShack owns. See the option.
+    antenna,
     // RF spectrum, a second source alongside the audio waterfall rather than a
     // replacement for it. Off unless asked for: it costs about as much bandwidth
     // from the radio as the audio stream does.
@@ -1263,6 +1273,10 @@ async function startFlexSource(): Promise<() => Promise<void>> {
       allowTransmit,
       // Read per transmission, so Settings takes effect immediately.
       isTransmitAllowed: transmitGate("flex"),
+      // Ignored in shared mode, which is this path — the slice and its antenna belong to
+      // the DAX source above. Passed anyway so the two can never be configured apart if
+      // a future caller stops sharing.
+      antenna,
       shared,
       // The same estimate the decode windows use, from the DAX source's probe —
       // two estimates of one path is how keying and windows end up disagreeing.
@@ -1286,7 +1300,11 @@ async function startFlexSource(): Promise<() => Promise<void>> {
     try {
       const pre = await tx.preflight();
       status.txBlockers = pre.blockers;
-      status.txWarnings = pre.warnings;
+      // Antenna refusals ride along with the preflight warnings, because they are the
+      // same kind of thing and /rig already shows this list. A configured port the radio
+      // does not have is refused rather than replaced with ANT1 (see resolveAntenna), and
+      // a refusal nobody can see is the original fault in a quieter voice.
+      status.txWarnings = [...pre.warnings, ...(flexSource?.antennaWarnings ?? [])];
       // preflight's power reading is NOT trusted over the live one.
       //
       // It collects status for 1.5 s after re-issuing `sub tx all`, and on a connection
@@ -2836,7 +2854,12 @@ async function main(): Promise<void> {
             return;
           }
           const body = await readJson(req);
-          const unsupported = ["filterLo", "filterHi"].filter((k) => body[k] !== undefined);
+          // rxAnt/txAnt: these radios have ONE antenna socket, so there is nothing to
+          // select. Named rather than ignored, for the same reason as the filter widths —
+          // a control that silently does nothing is the failure this list exists to stop.
+          const unsupported = ["filterLo", "filterHi", "rxAnt", "txAnt"].filter(
+            (k) => body[k] !== undefined,
+          );
           if (body.agc !== undefined && String(body.agc).toLowerCase() === "off") {
             unsupported.push("agc=off");
           }
@@ -2964,6 +2987,33 @@ async function main(): Promise<void> {
         if (body.rfGain !== undefined) {
           cmds.push(`slice set ${sliceIdx} rfgain=${Math.round(Number(body.rfGain))}`);
         }
+        // The antenna port, on a radio with more than one.
+        //
+        // Validated against the list THE RADIO reported rather than against a table here:
+        // a 6400 answers ANT1, ANT2, RX_A, XVTA and a 6300 does not have the same four,
+        // and the transmit list is shorter than the receive list because RX_A is a
+        // receive-only BNC. Refused with the real list in the message — sending an
+        // unknown port would either be ignored by the radio or, worse, accepted.
+        let panAnt: string | null = null;
+        if (body.rxAnt !== undefined || body.txAnt !== undefined) {
+          const ports = rig.state.antennas;
+          for (const [field, role, list] of [
+            ["rxAnt", "receive", ports.rx],
+            ["txAnt", "transmit", ports.tx],
+          ] as const) {
+            if (body[field] === undefined) continue;
+            const choice = resolveAntenna(String(body[field]), list, role);
+            if (choice.refused) {
+              sendJson(res, 400, { error: choice.refused });
+              return;
+            }
+            if (!choice.ant) continue;
+            cmds.push(
+              `slice set ${sliceIdx} ${role === "receive" ? "rxant" : "txant"}=${choice.ant}`,
+            );
+            if (role === "receive") panAnt = choice.ant;
+          }
+        }
         // The radio accepts these and, in the case of `nb`, never mentions them again —
         // see noteNoiseState. The command is still what changes the radio; the note is
         // what lets the panel show that it happened.
@@ -2994,6 +3044,10 @@ async function main(): Promise<void> {
         if (allOk && flexSource) {
           if (body.nb !== undefined) flexSource.noteNoiseState("nb", Boolean(body.nb));
           if (body.nr !== undefined) flexSource.noteNoiseState("nr", Boolean(body.nr));
+          // The panadapter carries its own antenna and does not follow the slice. A
+          // receiver moved to ANT2 with the display left on ANT1 shows a spectrum of a
+          // socket nobody is listening to, and nothing about the display says so.
+          if (panAnt) await flexSource.setPanadapterAntenna(panAnt).catch(() => {});
         }
 
         sendJson(res, allOk ? 200 : 502, { ok: allOk, results });

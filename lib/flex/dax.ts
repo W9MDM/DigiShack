@@ -14,6 +14,7 @@ import { EventEmitter } from "node:events";
 import { decodeFT4, decodeFT8, HashCallBook } from "@e04/ft8ts";
 
 import { FlexClient } from "@/lib/flex/client";
+import { hasAntennaChoice, resolveAntenna } from "@/lib/flex/antennas";
 import {
   FlexPanadapter,
   PAN_MAX_DBM,
@@ -119,6 +120,24 @@ export interface DaxSourceOptions {
    * Ignored when any slice already exists.
    */
   freqHz?: number;
+  /**
+   * Which antenna port to use, on a radio that has more than one.
+   *
+   * Both were `ANT1`, hardcoded into the `slice create` below, and nothing read the
+   * antenna back — so an operator whose HF wire is on ANT2 got a bridge that listened to
+   * an empty socket and would have transmitted into one. Every FLEX-6000 has two ports
+   * and the bigger ones have five.
+   *
+   * `rx` is for an operator with a separate receive antenna — a loop, a beverage, the
+   * 6600's RX_A BNC — and defaults to `tx` when it is not given, because one antenna for
+   * both is the normal case and making it say so twice is how they end up disagreeing.
+   *
+   * Applied ONLY to a slice DigiShack owns: one it created, or the radio's restored
+   * default profile when no other GUI client is connected. An operator's own slice is
+   * left exactly where they put it — see the restored-profile note at the slice-create
+   * site for why those two cases are distinguishable at all.
+   */
+  antenna?: { tx?: string | null; rx?: string | null };
   /**
    * RF panadapter: tens of kHz of band, alongside the audio waterfall rather than
    * instead of it.
@@ -240,6 +259,27 @@ export class FlexDaxSource extends EventEmitter<Events> {
   private sliceIndex: number | null = null;
   private createdSlice = false;
 
+  /**
+   * Antenna settings the RADIO would not accept, in words, for the operator to read.
+   *
+   * A configured port that does not exist is refused rather than quietly replaced with
+   * ANT1 (see resolveAntenna), and a refusal nobody can see is the same failure in a
+   * quieter voice — the operator sets ANT2, DigiShack uses ANT1, and the only evidence
+   * is a band that sounds dead. The service copies these into the status the /rig page
+   * already shows.
+   */
+  readonly antennaWarnings: string[] = [];
+
+  /**
+   * The receive port we asked the radio for, null when we asked for nothing.
+   *
+   * Kept because the PANADAPTER needs the same answer and is started later: it carries
+   * its own `rxant` (measured — `display pan … rxant=ANT1 ant_list=…`), so a slice moved
+   * to ANT2 with the panadapter left behind draws a confident spectrum of a different
+   * antenna with nothing on the display to say so.
+   */
+  private appliedRxAnt: string | null = null;
+
 
   private spectrumTimer: NodeJS.Timeout | null = null;
 
@@ -283,6 +323,61 @@ export class FlexDaxSource extends EventEmitter<Events> {
   }
 
   /**
+   * Follow a live antenna change with the RF panadapter.
+   *
+   * Called by the service after it has moved the SLICE, so the two cannot disagree: the
+   * panadapter has its own `rxant` and a display left on the old socket keeps drawing a
+   * spectrum of an antenna the receiver is no longer using — with correct axis labels,
+   * which is what makes it convincing.
+   */
+  async setPanadapterAntenna(ant: string): Promise<void> {
+    this.appliedRxAnt = ant;
+    await this.pan?.setRxAnt(ant);
+  }
+
+  /**
+   * Move a slice we own to the configured antenna ports.
+   *
+   * One command, both fields, because each is a round trip and the radio switches
+   * relays between them — sending `rxant` and `txant` separately puts a two-antenna
+   * station briefly on a mismatched pair.
+   *
+   * A port the radio does not have is not sent at all: resolveAntenna refuses it and the
+   * refusal is recorded for the operator to read. The alternative — falling back to ANT1
+   * — is precisely the fault this work exists to remove, and doing it after being told
+   * otherwise would be worse than doing it by default.
+   */
+  private async applyAntennas(client: FlexClient, sliceIndex: number): Promise<void> {
+    const ports = client.state.antennas;
+    const rx = resolveAntenna(this.opts.antenna.rx, ports.rx, "receive");
+    const tx = resolveAntenna(this.opts.antenna.tx, ports.tx, "transmit");
+
+    for (const refused of [rx.refused, tx.refused]) {
+      if (!refused) continue;
+      console.warn(`[flex/ant] ${refused}`);
+      this.antennaWarnings.push(refused);
+    }
+
+    const sets: string[] = [];
+    if (rx.ant) sets.push(`rxant=${rx.ant}`);
+    if (tx.ant) sets.push(`txant=${tx.ant}`);
+    if (sets.length === 0) return;
+
+    const r = await client.command(`slice set ${sliceIndex} ${sets.join(" ")}`);
+    if (r.status !== 0) {
+      const note =
+        `The radio refused ${sets.join(" ")} on slice ${sliceIndex} ` +
+        `(0x${r.status.toString(16)}) — it is still on whatever port it was.`;
+      console.warn(`[flex/ant] ${note}`);
+      this.antennaWarnings.push(note);
+      return;
+    }
+    // Remembered for the panadapter, which is started later and carries its own rxant.
+    this.appliedRxAnt = rx.ant;
+    console.log(`[flex/ant] slice ${sliceIndex} ${sets.join(" ")}`);
+  }
+
+  /**
    * Record a noise-blanker or noise-reduction setting we just made.
    *
    * NECESSARY BECAUSE THE RADIO DOES NOT REPORT `nb` AT ALL. Measured against a FLEX-8400
@@ -319,6 +414,12 @@ export class FlexDaxSource extends EventEmitter<Events> {
       silenceRms: options.silenceRms ?? 1e-5,
       passbandHz: options.passbandHz,
       freqHz: options.freqHz ?? 7_074_000,
+      // `rx` falls back to `tx` here, once, so nothing downstream has to remember that
+      // one antenna for both is the normal case.
+      antenna: {
+        tx: options.antenna?.tx ?? null,
+        rx: options.antenna?.rx ?? options.antenna?.tx ?? null,
+      },
       panadapter: options.panadapter ?? { enabled: false },
       dialHz: options.dialHz,
     };
@@ -474,8 +575,15 @@ export class FlexDaxSource extends EventEmitter<Events> {
 
       if (!slice) {
         const mhz = (this.opts.freqHz / 1_000_000).toFixed(6);
+        // `ant=` on a create is the RECEIVE port; the transmit one is a separate field
+        // and is set below with the rest. ANT1 remains the fallback for a radio that has
+        // said nothing and an operator who has configured nothing — it is the socket a
+        // single-antenna station uses — but it is now a default rather than the only
+        // possibility, which is what it used to be.
+        const createAnt =
+          resolveAntenna(this.opts.antenna.rx, client.state.antennas.rx).ant ?? "ANT1";
         const madeSlice = await client.command(
-          `slice create freq=${mhz} ant=ANT1 mode=DIGU`,
+          `slice create freq=${mhz} ant=${createAnt} mode=DIGU`,
         );
         if (madeSlice.status !== 0) {
           throw new Error(
@@ -514,6 +622,22 @@ export class FlexDaxSource extends EventEmitter<Events> {
       }
     }
 
+    // The antenna, on a slice that is ours to steer — one we created, or the restored
+    // default profile. The condition is deliberately the SAME one the tune and mode
+    // steering above uses: a slice an operator is working on is not ours to move, and
+    // moving a working station's antenna out from under them would be the worst thing in
+    // this file. Frequency, mode and antenna are one decision about one slice.
+    if ((this.createdSlice || otherGuiClients === 0) && this.sliceIndex !== null) {
+      await this.applyAntennas(client, this.sliceIndex);
+    } else if (hasAntennaChoice(client.state.antennas) && this.opts.antenna.tx) {
+      // Configured, but not applied, and the operator is entitled to know which.
+      const note =
+        `Antenna left as the operator's slice had it: another SmartSDR client owns slice ` +
+        `${this.sliceIndex}, so DigiShack did not move it to ${this.opts.antenna.tx}.`;
+      console.warn(`[flex/ant] ${note}`);
+      this.antennaWarnings.push(note);
+    }
+
     const created = await client.command(
       `stream create type=dax_rx dax_channel=${this.opts.daxChannel}`,
     );
@@ -548,6 +672,12 @@ export class FlexDaxSource extends EventEmitter<Events> {
         nr: seed.raw.nr !== undefined ? seed.raw.nr === "1" : null,
         filterLo: seed.filterLo ?? null,
         filterHi: seed.filterHi ?? null,
+        // Which port the radio is ACTUALLY on, and which ones it has. Reported rather
+        // than assumed, for the same reason as everything else in this shape: DigiShack
+        // spent a year certain the answer was ANT1 because it had written ANT1 itself.
+        rxAnt: seed.rxAnt,
+        txAnt: seed.txAnt,
+        antennas: client.state.antennas,
       };
       this.emit("receiverControls", { ...this.receiverState });
     }
@@ -570,13 +700,27 @@ export class FlexDaxSource extends EventEmitter<Events> {
         // filter the operator can see on the radio's own screen.
         filterLo: slice.filterLo ?? this.receiverState.filterLo ?? null,
         filterHi: slice.filterHi ?? this.receiverState.filterHi ?? null,
+        // Same carry-forward as the filter, and for the same reason: the radio broadcasts
+        // `rxant`/`txant` on a change and mentions them in no other status line, so
+        // reading them off `raw` unconditionally would blank the panel on the next
+        // `mode=` update.
+        rxAnt: slice.rxAnt ?? this.receiverState.rxAnt ?? null,
+        txAnt: slice.txAnt ?? this.receiverState.txAnt ?? null,
+        antennas: client.state.antennas,
       };
       if (
         next.agc === this.receiverState.agc &&
         next.nb === this.receiverState.nb &&
         next.nr === this.receiverState.nr &&
         next.filterLo === this.receiverState.filterLo &&
-        next.filterHi === this.receiverState.filterHi
+        next.filterHi === this.receiverState.filterHi &&
+        next.rxAnt === this.receiverState.rxAnt &&
+        next.txAnt === this.receiverState.txAnt &&
+        // The port LIST changes once, when the radio first mentions it, and a panel with
+        // no antenna picker until the operator happens to touch something is the same
+        // class of fault as an AGC control that could only remember its own clicks.
+        next.antennas?.rx.length === this.receiverState.antennas?.rx.length &&
+        next.antennas?.tx.length === this.receiverState.antennas?.tx.length
       ) {
         return;
       }
@@ -633,6 +777,11 @@ export class FlexDaxSource extends EventEmitter<Events> {
       fps: this.opts.panadapter.fps,
       spanHz: this.opts.panadapter.spanHz,
       average: this.opts.panadapter.average,
+      // The port the SLICE was actually moved to, not the port that was configured: if
+      // the radio refused the antenna the display must keep showing what the receiver is
+      // really hearing. A panadapter on a different antenna from the receiver is a lie
+      // told with correct axis labels.
+      rxAnt: this.appliedRxAnt,
     });
     pan.on("error", (e) => this.emit("error", e));
 

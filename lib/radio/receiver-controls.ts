@@ -13,6 +13,25 @@
  * consumer has to keep that distinction: a receiver panel that renders "off" for a
  * noise blanker it has simply not read yet is worse than one that renders nothing.
  */
+/**
+ * The antenna ports a radio has, split by what each one can do.
+ *
+ * Two lists rather than one because the difference is real and measurable: a FLEX-6400
+ * reports `ant_list=ANT1,ANT2,RX_A,XVTA` and `tx_ant_list=ANT1,ANT2,XVTA`, and RX_A is a
+ * receive-only BNC. One list would let a picker offer a transmit port that cannot
+ * transmit — the same class of fault as the AGC picker offering an Icom a mode its
+ * command set does not have.
+ *
+ * Empty means the radio has said nothing, or has nothing to choose between. Both are
+ * handled the same way by every consumer: draw no picker.
+ */
+export interface AntennaPorts {
+  /** Ports the receiver can listen on. */
+  rx: readonly string[];
+  /** Ports the transmitter can use. Never the receive-only sockets. */
+  tx: readonly string[];
+}
+
 export interface ReceiverControls {
   agc: string | null;
   nb: boolean | null;
@@ -31,6 +50,19 @@ export interface ReceiverControls {
    */
   filterLo?: number | null;
   filterHi?: number | null;
+  /**
+   * Which antenna port the receiver is listening on, and which one the transmitter
+   * will use, as the RADIO reports them.
+   *
+   * Null carries the same meaning as everywhere else in this file: the radio has not
+   * said. That is not the same as "it is on ANT1", and DigiShack assumed exactly that
+   * for a year — `ant=ANT1` was hardcoded into both places it creates a slice, so an
+   * operator with the wire on ANT2 got a bridge listening to an empty socket.
+   */
+  rxAnt?: string | null;
+  txAnt?: string | null;
+  /** What this radio has to choose between. Empty when it has one port, or has not said. */
+  antennas?: AntennaPorts;
 }
 
 /** A receiver whose state is entirely unknown. The honest starting point. */
@@ -40,6 +72,9 @@ export const UNREAD_RECEIVER: ReceiverControls = {
   nr: null,
   filterLo: null,
   filterHi: null,
+  rxAnt: null,
+  txAnt: null,
+  antennas: { rx: [], tx: [] },
 };
 
 /** Does this modulation listen BELOW the dial? */

@@ -40,6 +40,16 @@ const bodySchema = z.object({
   filterLo: z.number().optional(),
   filterHi: z.number().optional(),
   agc: z.enum(["off", "slow", "med", "fast"]).optional(),
+  /**
+   * Antenna port, on a radio with more than one socket.
+   *
+   * Not an enum: the valid names are the RADIO'S, it reports them itself (a FLEX-6400
+   * answers ANT1, ANT2, RX_A, XVTA and a 6300 answers something shorter), and a list
+   * written here would be a second opinion about hardware this process cannot see. The
+   * bridge validates against what the radio said and refuses with the real list.
+   */
+  rxAnt: z.string().trim().toUpperCase().max(16).optional(),
+  txAnt: z.string().trim().toUpperCase().max(16).optional(),
   rfGain: z.number().min(-20).max(60).optional(),
   nb: z.boolean().optional(),
   nr: z.boolean().optional(),

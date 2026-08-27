@@ -779,6 +779,40 @@ export const SETTINGS: SettingDef[] = [
     default: "false",
   },
   {
+    key: "flex.antenna",
+    label: "Antenna port",
+    type: "string",
+    group: "flex",
+    help:
+      "Which antenna socket to use, on a radio that has more than one. Every FLEX-6000 has " +
+      "ANT1 and ANT2, and the larger models add receive-only BNCs and a transverter port — " +
+      "DigiShack used to write ANT1 into every slice it created and never read the antenna " +
+      "back, so a station with the wire on ANT2 got a bridge listening to an empty socket. " +
+      "The names are the RADIO'S own: it reports them (a FLEX-6400 answers ANT1, ANT2, RX_A, " +
+      "XVTA) and /rig offers exactly that list. ANT2, ant2 and a bare 2 all mean the same " +
+      "socket. Leave blank to use whatever the radio is already set to, which is right for a " +
+      "single-antenna station and for one where the choice is made in SmartSDR. A port this " +
+      "radio does not have is REFUSED and said so on /rig, not quietly turned back into ANT1. " +
+      "Only ever applied to a slice DigiShack owns — an operator working a station in " +
+      "SmartSDR does not get their antenna moved underneath them.",
+    placeholder: "ANT1",
+  },
+  {
+    key: "flex.rxAntenna",
+    label: "Receive antenna port",
+    type: "string",
+    group: "flex",
+    help:
+      "A separate socket to LISTEN on: a receive loop, a beverage, or the 6600's RX_A BNC. " +
+      "Blank means listen on the antenna above, which is the normal case. The radio keeps two " +
+      "lists and so does DigiShack — a receive-only socket appears in one and not the other, " +
+      "so it can be selected here and cannot be selected for transmit. The RF panadapter is " +
+      "moved with it: a panadapter carries its own antenna, and one left on a different socket " +
+      "from the receiver draws a confident spectrum of the wrong aerial with correct-looking " +
+      "axis labels.",
+    placeholder: "RX_A",
+  },
+  {
     key: "flex.atuOnBandChange",
     label: "Tune ATU on band change",
     type: "boolean",

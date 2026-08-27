@@ -279,6 +279,20 @@ export interface FlexPanadapterOptions {
   spanHz?: number;
   /** Radio-side frame averaging, 0-100. See `PAN_AVERAGE`. */
   average?: number;
+  /**
+   * Which antenna port the panadapter looks at.
+   *
+   * A panadapter has its OWN antenna, separate from the slice's — measured on a
+   * FLEX-6400: `display pan 0x40000000 rxant=ANT1 loopa=0 loopb=0
+   * ant_list=ANT1,ANT2,RX_A,XVTA`. So on a radio with the wire on ANT2, setting the
+   * slice alone leaves the spectrum display showing a bare socket: correct axis labels,
+   * plausible noise floor, and nothing in it, with no indication anywhere that the
+   * display and the receiver are looking at different antennas.
+   *
+   * Null leaves it as the radio has it, which is right for a single-antenna station and
+   * for one where the operator has made the choice in SmartSDR.
+   */
+  rxAnt?: string | null;
 }
 
 /**
@@ -345,6 +359,7 @@ export class FlexPanadapter extends EventEmitter<Events> {
     bins: number;
     fps: number;
     average: number;
+    rxAnt: string | null;
   };
 
   constructor(
@@ -361,6 +376,7 @@ export class FlexPanadapter extends EventEmitter<Events> {
       // status never reflects what was applied, so an out-of-range value would be
       // accepted silently and never traceable back to the setting that produced it.
       average: clamp(options.average ?? PAN_AVERAGE_DEFAULT, 0, 100),
+      rxAnt: options.rxAnt ?? null,
     };
   }
 
@@ -374,6 +390,7 @@ export class FlexPanadapter extends EventEmitter<Events> {
     bins: number;
     fps: number;
     average: number;
+    rxAnt: string | null;
   } {
     return { ...this.requested };
   }
@@ -442,6 +459,10 @@ export class FlexPanadapter extends EventEmitter<Events> {
         // Time averaging on, frequency-domain weighting still off: see PAN_AVERAGE_DEFAULT
         // for why those two are not the same decision.
         ` average=${this.requested.average} weighted_average=0` +
+        // Only when there is something to say. An omitted field leaves the radio's own
+        // choice alone, which is what a single-antenna station wants; sending a default
+        // here would drag every panadapter back to ANT1 on every band change.
+        (this.requested.rxAnt ? ` rxant=${this.requested.rxAnt}` : "") +
         ` min_dbm=${PAN_MIN_DBM} max_dbm=${PAN_MAX_DBM}`,
     );
     if (r.status !== 0) {
@@ -450,6 +471,18 @@ export class FlexPanadapter extends EventEmitter<Events> {
         new Error(`The radio refused the panadapter settings (0x${r.status.toString(16)})`),
       );
     }
+  }
+
+  /**
+   * Move the display to a different antenna port, live.
+   *
+   * Re-issues the whole `display pan set` at the current centre, because that command
+   * takes every setting at once and there is no per-field form of it. Cheap and
+   * idempotent — the same call the dial-follow already makes on every band change.
+   */
+  async setRxAnt(ant: string): Promise<void> {
+    this.requested.rxAnt = ant;
+    await this.tune(this.requested.centerHz);
   }
 
   /**

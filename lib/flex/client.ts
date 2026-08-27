@@ -1,6 +1,9 @@
 import net from "node:net";
 import { EventEmitter } from "node:events";
 
+import { mergeAntennaPorts, NO_ANTENNA_PORTS } from "@/lib/flex/antennas";
+import type { AntennaPorts } from "@/lib/radio/receiver-controls";
+
 // FlexRadio SmartSDR command API client (TCP 4992).
 //
 // Wire protocol, verified against a FLEX-6400 on SmartSDR 4.2.18:
@@ -97,6 +100,16 @@ export interface FlexSlice {
   /** Receive antenna. */
   rxAnt: string | null;
   txAnt: string | null;
+  /**
+   * The ports this slice can be moved to, from the radio's own `ant_list` and
+   * `tx_ant_list`.
+   *
+   * On the slice as well as on the radio because that is where the radio sends it, and
+   * because a slice is the thing that gets moved. Radio-wide in practice — every slice
+   * on a 6400 reports the same four ports — but taking it from the object that reported
+   * it is what stops this becoming another assumption to be wrong about later.
+   */
+  antennas: AntennaPorts;
   active: boolean;
   tx: boolean;
   /** Filter edges in Hz relative to the carrier. */
@@ -120,6 +133,14 @@ export interface FlexRadioState {
   atuPresent: boolean;
   numSlice: number | null;
   numTx: number | null;
+  /**
+   * Antenna ports, accumulated from every status line that mentions them.
+   *
+   * Both `slice` and `display pan` lines carry `ant_list`, so this fills in even before
+   * a slice exists — which matters, because the one place DigiShack most needs to know
+   * the ports is `slice create`, and at that moment there is no slice to read them off.
+   */
+  antennas: AntennaPorts;
 }
 
 type Events = {
@@ -155,6 +176,7 @@ export class FlexClient extends EventEmitter<Events> {
     transmitting: false,
     atuPresent: false,
     numSlice: null,
+    antennas: NO_ANTENNA_PORTS,
     numTx: null,
   };
 
@@ -359,6 +381,13 @@ export class FlexClient extends EventEmitter<Events> {
 
     this.emit("status", { handle, object, id, index, flags, fields });
 
+    // Antenna ports, from whichever object mentioned them. Radio-wide, so it does not
+    // matter which: a `display pan` line arriving before any slice is exactly as good an
+    // answer, and is sometimes the only one available before `slice create`.
+    if (fields.ant_list !== undefined || fields.tx_ant_list !== undefined) {
+      this.state.antennas = mergeAntennaPorts(fields, this.state.antennas);
+    }
+
     if (object === "slice" && index !== null) {
       this.onSliceStatus(index, fields);
     } else if (object === "interlock") {
@@ -389,6 +418,9 @@ export class FlexClient extends EventEmitter<Events> {
       mode: raw.mode ?? existing?.mode ?? null,
       rxAnt: raw.rxant ?? existing?.rxAnt ?? null,
       txAnt: raw.txant ?? existing?.txAnt ?? null,
+      // From `raw`, which is already the merge of every status this slice has sent, so a
+      // line carrying only `mode=` cannot blank the list. See mergeAntennaPorts.
+      antennas: mergeAntennaPorts(raw, existing?.antennas),
       active: raw.active !== undefined ? raw.active === "1" : (existing?.active ?? false),
       tx: raw.tx !== undefined ? raw.tx === "1" : (existing?.tx ?? false),
       filterLo: raw.filter_lo !== undefined ? Number(raw.filter_lo) : (existing?.filterLo ?? null),
