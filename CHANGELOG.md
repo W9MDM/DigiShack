@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.119.2 - public release
+## 1.119.3 - public release
 
 Development happens in a private repository; this is where the public history starts.
 Earlier entries are not reproduced - they quote real operators by callsign, include
