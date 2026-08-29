@@ -9,6 +9,7 @@ import {
   PageHeader,
 } from "@/components/ui/primitives";
 import { withPageAuth } from "@/lib/auth/guard";
+import { MIN_PASSWORD_LENGTH } from "@/lib/auth/password-policy";
 import { ApiError, apiPost } from "@/lib/client/api";
 import { useUser } from "@/lib/client/session";
 
@@ -80,7 +81,19 @@ export default function AccountPage() {
                 required
               />
             </Field>
-            <Field label="New password" htmlFor="next" required>
+            {/* The rule, BEFORE it is broken.
+                
+                Twelve characters and nothing else — no character classes, because length
+                beats composition and a passphrase is both stronger and easier to
+                remember. It was written down only in the schema, so the first an operator
+                heard of it was a red box saying "Validation failed", which does not name
+                a length or a rule or anything at all. */}
+            <Field
+              label="New password"
+              htmlFor="next"
+              required
+              hint={`At least ${MIN_PASSWORD_LENGTH} characters. No capitals, digits or symbols required — a passphrase like "hebron clock tower" is fine, and stronger than a short one with punctuation in it.`}
+            >
               <Input
                 id="next"
                 type="password"

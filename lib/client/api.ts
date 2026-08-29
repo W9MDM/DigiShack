@@ -77,11 +77,27 @@ async function request<T>(
     const payload = parsed as
       | { error?: string; reason?: string; details?: unknown }
       | undefined;
-    throw new ApiError(
-      res.status,
-      payload?.error ?? payload?.reason ?? `Request failed (${res.status})`,
-      isFieldErrors(payload?.details) ? payload.details : undefined,
-    );
+    const details = isFieldErrors(payload?.details) ? payload.details : undefined;
+    let message = payload?.error ?? payload?.reason ?? `Request failed (${res.status})`;
+
+    // "Validation failed" is not a message, it is a category.
+    //
+    // Every schema refusal answers 400 with that generic string and the ACTUAL reason in
+    // `details` — `{ newPassword: ["Password must be at least 12 characters"] }`. Most
+    // forms render only the message, so the operator was shown a red box saying
+    // "Validation failed" while the sentence telling them exactly what to do sat one field
+    // away, unread. Reported from the change-password form, where the rule (twelve
+    // characters, no character classes) is otherwise written down nowhere they would look.
+    //
+    // Only the generic string is replaced. A message the server chose deliberately is left
+    // alone, and `details` is still carried, so the handful of pages that render field
+    // errors themselves are unaffected.
+    if (details && message === "Validation failed") {
+      const reasons = Object.values(details).flat().filter(Boolean);
+      if (reasons.length > 0) message = reasons.join(" ");
+    }
+
+    throw new ApiError(res.status, message, details);
   }
 
   return parsed as T;
