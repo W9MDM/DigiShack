@@ -528,6 +528,19 @@ export async function runUploads(
         r.uploaded = rows.length;
         await markUploaded(service as UploadService, rows.map((q) => q.id));
         resetBreaker(service);
+      } else if (res.permanent) {
+        // SKIPPED, not FAILED, and the difference is the whole point.
+        //
+        // The bridge alerts after three consecutive sweeps where a service failed and
+        // uploaded nothing. Club Log's edge refusal is permanent, so it met that bar every
+        // day — an email about a condition already investigated, already documented as
+        // unfixable from here, and with nothing for the reader to do. Reporting it as
+        // skipped keeps it visible on the page and out of the inbox.
+        //
+        // The contacts stay flagged unsent, so if Club Log ever starts accepting them
+        // they go out on the next sweep with nothing to reconfigure.
+        r.skipped = res.detail;
+        noteFailure(service, res.detail);
       } else {
         r.failed = rows.length;
         r.errors.push(res.detail ?? "failed");

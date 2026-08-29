@@ -52,6 +52,17 @@ export interface ClubLogUploadResult {
   detail: string;
   /** QSOs in the batch that was sent. */
   sent: number;
+  /**
+   * This installation will NEVER be able to upload, so retrying is waste.
+   *
+   * Distinguished from an ordinary failure because the two deserve opposite treatment. A
+   * timeout or a bad password is worth another sweep and worth an email; a bare nginx 403
+   * on `putlogs.php` is a refusal at the edge, before PHP, that has been ruled out as
+   * credentials, method, encoding and IP block — see the note at the top of this file. It
+   * will answer the same way for ever, and retrying it every ten minutes produced a daily
+   * "clublog uploads are failing" email about a condition nobody can act on.
+   */
+  permanent?: boolean;
 }
 
 /**
@@ -101,7 +112,24 @@ export async function uploadAdifToClubLog(
     // for auth and quota problems. Both need reporting verbatim — its messages
     // are specific and guessing at them helps nobody.
     if (!res.ok) {
-      return { ok: false, sent: 0, detail: `HTTP ${res.status}: ${body.slice(0, 300)}` };
+      // A 403 whose body is an nginx error page rather than anything Club Log wrote is
+      // the documented dead end: the request never reached the application, so no
+      // credential or payload change can affect it. Club Log's OWN 403 would carry its
+      // own words, and that one IS worth retrying — hence matching on the body, not just
+      // the status.
+      const edgeRefusal =
+        res.status === 403 && /<html|nginx/i.test(body) && !/clublog/i.test(body);
+      return {
+        ok: false,
+        sent: 0,
+        permanent: edgeRefusal,
+        detail: edgeRefusal
+          ? "Club Log refuses uploads from this installation at its edge (a bare nginx 403, " +
+            "before the application). Ruled out by measurement: credentials, IP block, HTTP " +
+            "method and encoding — downloads from the same address work. Nothing here can " +
+            "change it; point Club Log at LoTW instead, which needs nothing from DigiShack."
+          : `HTTP ${res.status}: ${body.slice(0, 300)}`,
+      };
     }
     const failed = /error|invalid|denied|fail/i.test(body);
     return {

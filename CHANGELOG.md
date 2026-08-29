@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.133.0 - public release
+## 1.134.0 - public release
 
 Development happens in a private repository; this is where the public history starts.
 Earlier entries are not reproduced - they quote real operators by callsign, include
@@ -22,6 +22,7 @@ Notes for anyone running this:
 
 ## Release history
 
+- **1.134.0** — Club Log stops emailing about a dead end
 - **1.133.0** — The blank QSL card was a missing font, not missing data
 - **1.132.0** — Clicking Call mid-exchange resumes it, and a finished station says so
 - **1.131.0** — Installing DigiShack made it refuse to update
