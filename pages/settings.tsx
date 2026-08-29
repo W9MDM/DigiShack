@@ -42,7 +42,15 @@ interface SettingView {
 }
 
 interface SettingsResponse {
-  groups: { id: string; title: string; blurb?: string }[];
+  groups: {
+    id: string;
+    title: string;
+    blurb?: string;
+    /** Document in docs/ that explains this group, without the .md. */
+    doc?: string;
+    /** What the reader will find there, for the icon's tooltip. */
+    docLabel?: string;
+  }[];
   settings: SettingView[];
   keyProblem: string | null;
   envOnly: string[];
@@ -246,7 +254,37 @@ export default function SettingsPage() {
               if (items.length === 0) return null;
 
               return (
-                <Card key={group.id} title={group.title}>
+                <Card
+                  key={group.id}
+                  title={
+                    <div className="flex items-center gap-2">
+                      <span>{group.title}</span>
+                      {/* Where to read more about this group.
+                          
+                          Set only where a document genuinely covers the settings under it —
+                          a link to a page that turns out not to discuss them is worse than
+                          no link, because the reader pays a click to find that out. The
+                          tooltip says what they will find, so the click is informed.
+                          
+                          Points at the public repository rather than an in-app viewer:
+                          rendering markdown would mean a new dependency for one icon. The
+                          same files are on disk in `docs/` for a shack with no internet,
+                          which the tooltip names. */}
+                      {group.doc && (
+                        <a
+                          href={`https://github.com/W9MDM/DigiShack/blob/main/docs/${group.doc}.md`}
+                          target="_blank"
+                          rel="noreferrer"
+                          title={`${group.docLabel ?? "Documentation"} — docs/${group.doc}.md`}
+                          aria-label={`Help for ${group.title}`}
+                          className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-line-strong text-[10px] font-semibold text-fg-muted hover:border-accent-bright hover:text-accent-bright"
+                        >
+                          i
+                        </a>
+                      )}
+                    </div>
+                  }
+                >
                   {group.blurb && (
                     <p className="text-sm text-fg-muted mb-4">{group.blurb}</p>
                   )}

@@ -109,3 +109,27 @@ writes them.
 LoTW upload (TQSL is required and not wired), eQSL upload, HRDLOG, and Club Log, which is
 blocked outside this codebase: their server returns 403 before authentication is even
 attempted. See the [roadmap](roadmap.md).
+
+## N3FJP Amateur Contact Log
+
+The one target here that is not a web service: a Windows program on your own desk with a
+TCP listener. Switch it on in ACLog under **Settings → Application Program Interface (API)
+→ "TCP API Enabled (Server)"**, then set `uploads.n3fjp`, `n3fjp.host` and `n3fjp.port`
+under Settings → Uploads and Settings → N3FJP Amateur Contact Log.
+
+**`n3fjp.host` is the trap.** `127.0.0.1` is correct only when DigiShack runs on the same
+machine as ACLog. A container or a separate server needs the desktop PC's own LAN address,
+and pointing it at localhost means DigiShack connects to itself and finds nothing. The API
+has no password of any kind, so point it only at your own network and never expose port
+1100 to the internet.
+
+Contacts are sent as ADIF through `ADDADIFRECORD`, chosen over the other two documented
+methods because DigiShack already produces ADIF for four other services — one writer, one
+set of field decisions. It joins the ordinary upload sweep, so contacts made while ACLog is
+closed are not lost: they stay flagged unsent and go out on the next sweep after it comes
+back.
+
+**The API returns no acknowledgement for this command.** N3FJP documents a response for the
+ENTER action and says nothing about a reply to ADDADIFRECORD, so "sent" means the bytes
+were written to a healthy connection — not that Amateur Contact Log accepted the record.
+The wire format is verified against a live ACLog; the acceptance is not, and cannot be.

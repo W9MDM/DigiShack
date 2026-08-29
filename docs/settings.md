@@ -57,9 +57,9 @@ XML API for callsign and email lookup (needs a paid XML subscription), plus the 
 
 | Setting | Key | Type | Default | What it does |
 |---|---|---|---|---|
-| QRZ username | `qrz.username` | text | from `QRZ_USERNAME` |  |
-| QRZ password | `qrz.password` | secret | from `QRZ_PASSWORD` |  |
-| QRZ Logbook API key | `qrz.logbookApiKey` | secret | from `QRZ_LOGBOOK_API_KEY` |  |
+| QRZ username | `qrz.username` | text | from `QRZ_USERNAME` | Your QRZ.com login, used to LOOK UP callsigns — names, grids and addresses for QSL cards. Nothing to do with uploading contacts, which uses the logbook API key below and works without this. |
+| QRZ password | `qrz.password` | secret | from `QRZ_PASSWORD` | Password for the lookup account above. A QRZ XML subscription is needed for full lookup data; without one QRZ returns a reduced record and DigiShack uses what it gets. |
+| QRZ Logbook API key | `qrz.logbookApiKey` | secret | from `QRZ_LOGBOOK_API_KEY` | Uploads contacts to your QRZ logbook. A DIFFERENT credential from the username and password above — find it on QRZ under Logbook → Settings, one key per logbook. Uploading is switched on separately under Uploads. |
 
 ## Logbook of the World
 
@@ -67,8 +67,8 @@ Uploads are signed by a local TQSL install; the username and password are used t
 
 | Setting | Key | Type | Default | What it does |
 |---|---|---|---|---|
-| LoTW username | `lotw.username` | text | from `LOTW_USERNAME` |  |
-| LoTW password | `lotw.password` | secret | from `LOTW_PASSWORD` |  |
+| LoTW username | `lotw.username` | text | from `LOTW_USERNAME` | Your LoTW login, used to DOWNLOAD confirmations. Uploads are signed by your certificate rather than by this, so downloads work with these credentials alone. |
+| LoTW password | `lotw.password` | secret | from `LOTW_PASSWORD` | Password for the LoTW account above. This is the website password, not the passphrase protecting your certificate file — a common mix-up. |
 | Download confirmations automatically | `lotw.autoSync` | on/off | `true` | Fetch new LoTW confirmations on a timer instead of only when the Sync button is pressed. Download only — uploading needs your TQSL certificate — so this is read-only against ARRL. Does nothing until a username and password are set. |
 | How often to check LoTW (minutes) | `lotw.syncMinutes` | number | `60` | An incremental check is one small request. Hourly is what Cloudlog recommends for the same service, and LoTW rate-limits heavy use. Minimum 15. |
 | Check that LoTW kept what we uploaded | `lotw.reconcile` | on/off | `true` | An accepted LoTW upload only means the file was QUEUED — the records are validated afterwards and the outcome arrives by email. So a batch marked sent here may not be in your LoTW log, and nothing would ever retry it. This asks LoTW what it actually holds and clears the flag on anything missing, so it goes up again. It only ever clears a flag: the cost of a wrong answer is one redundant upload, which LoTW discards as a duplicate. |
@@ -82,20 +82,24 @@ Uploads are signed by a local TQSL install; the username and password are used t
 
 ## eQSL.cc
 
+Electronic QSL cards. Unlike the other services the upload IS the card, so there is no log-only mode — sending is an approach to the other operator, which is why the reciprocal-only option under Uploads exists.
+
 | Setting | Key | Type | Default | What it does |
 |---|---|---|---|---|
-| eQSL username | `eqsl.username` | text | from `EQSL_USERNAME` |  |
+| eQSL username | `eqsl.username` | text | from `EQSL_USERNAME` | Your eQSL.cc login, used both to send cards and to fetch your inbox. On eQSL the upload IS the card, so there is no log-only mode to fall back on. |
 | eQSL QTH nickname | `eqsl.qthNickname` | text | — | Required only when your eQSL login owns more than one QTH. With several, eQSL refuses every request with 'Username/Password found more than 1 account' until told which to use. Find the nicknames under My Profile on eqsl.cc. MEASURED: this satisfies the request but does NOT filter the inbox — the downloaded records carry no station or QTH field, so confirmations belonging to your other profiles arrive too and match nothing in this log. That is expected on a multi-QTH account, not a fault. IT IS ALSO USED ON UPLOADS, so if you move, change it: cards sent under an old QTH carry the wrong location to the recipient. A nickname that does not exist is reported by eQSL as "No such Username/Password found", which points at the password and not at the real cause — this application says so explicitly instead. |
 | Download eQSL confirmations automatically | `eqsl.autoSync` | on/off | `true` | Pulls your eQSL inbox and matches it to the log, which is what earns award credit. This is READ ONLY — it uploads nothing and posts no cards to anyone, so it is safe to leave on whether or not you ever upload. `syncEqslInbox` had been written and was never called by anything, which is why confirmations only ever arrived through an ADIF import. |
 | How often to check eQSL (minutes) | `eqsl.syncMinutes` | number | `60` | Hourly is plenty — confirmations are not urgent. Minimum 15. |
-| eQSL password | `eqsl.password` | secret | from `EQSL_PASSWORD` |  |
+| eQSL password | `eqsl.password` | secret | from `EQSL_PASSWORD` | Password for the eQSL account above. eQSL rejects an upload with a clear message when this is wrong, which the Integrations page reports verbatim. |
 
 ## ClubLog
 
+DXCC statistics, an online log and the OQRS card service. Authenticates by REGISTERED EMAIL rather than callsign. Uploads from this installation are refused at Club Log's edge; downloads work, and the code says so where it happens.
+
 | Setting | Key | Type | Default | What it does |
 |---|---|---|---|---|
-| ClubLog email | `clublog.email` | text | from `CLUBLOG_EMAIL` |  |
-| ClubLog password | `clublog.password` | secret | from `CLUBLOG_PASSWORD` |  |
+| ClubLog email | `clublog.email` | text | from `CLUBLOG_EMAIL` | Club Log authenticates by the email address you REGISTERED WITH, not by callsign. An easy one to get wrong, and it produces an unhelpful refusal when you do. |
+| ClubLog password | `clublog.password` | secret | from `CLUBLOG_PASSWORD` | Your Club Log account password. The API endpoints prefer an application password (below); downloads work with either. |
 | Club Log station callsign | `clublog.callsign` | text | — | Which callsign's log to upload to. Leave blank to use the station on the QSO. |
 | ClubLog application password | `clublog.appPassword` | secret | — | Club Log's separate API credential, created under Settings -> Application Passwords on clublog.org. Uploads may require this rather than the account password; downloads work with either. |
 
@@ -111,10 +115,12 @@ Self-hosted logging software. Unlike the public services this needs no developer
 
 ## HRDLOG.net
 
+Ham Radio Deluxe's online logbook. Needs the callsign the account logs under plus its upload code, which is not the website password.
+
 | Setting | Key | Type | Default | What it does |
 |---|---|---|---|---|
-| HRDLOG callsign | `hrdlog.callsign` | text | from `HRDLOG_CALLSIGN` |  |
-| HRDLOG upload code | `hrdlog.code` | secret | from `HRDLOG_CODE` |  |
+| HRDLOG callsign | `hrdlog.callsign` | text | from `HRDLOG_CALLSIGN` | The callsign your HRDLOG.net account logs under. Paired with the upload code below — both are needed. |
+| HRDLOG upload code | `hrdlog.code` | secret | from `HRDLOG_CODE` | HRDLOG.net's upload code, issued in your account settings there. Not your website password. |
 
 ## N3FJP Amateur Contact Log
 
@@ -178,7 +184,7 @@ Used when the digital source is `wsjtx`. Point the decoder's UDP server at this 
 | Setting | Key | Type | Default | What it does |
 |---|---|---|---|---|
 | UDP port | `wsjtx.udpPort` | number | `2237` | Port the decoder broadcasts the WSJT-X protocol on. WSJT-X defaults to 2237. |
-| UDP bind address | `wsjtx.udpHost` | text | `0.0.0.0` |  |
+| UDP bind address | `wsjtx.udpHost` | text | `0.0.0.0` | Address DigiShack listens on for WSJT-X's UDP broadcasts. 0.0.0.0 accepts them from any machine on the network; 127.0.0.1 only from this one. Used only when the digital source is the external decoder. |
 | Auto-log QSOs from the decoder | `wsjtx.autoLog` | on/off | `false` | Write a QSO when the external decoder reports a completed contact. |
 
 ## FlexRadio (direct)
@@ -268,13 +274,13 @@ Used by the QSL emailer. Those are unsolicited emails to other operators, so bul
 
 | Setting | Key | Type | Default | What it does |
 |---|---|---|---|---|
-| SMTP host | `smtp.host` | text | from `SMTP_HOST` |  |
-| SMTP port | `smtp.port` | number | `587` |  |
-| Implicit TLS (port 465) | `smtp.secure` | on/off | `false` | Leave off for STARTTLS on 587. |
-| SMTP username | `smtp.user` | text | from `SMTP_USER` |  |
+| SMTP host | `smtp.host` | text | from `SMTP_HOST` | Mail server for everything DigiShack sends — QSL emails and station alerts. Without it both are silently unavailable, which is why the Integrations page reports SMTP on its own. |
+| SMTP port | `smtp.port` | number | `587` | 587 for STARTTLS, which is the usual choice. 465 for implicit TLS with the setting below turned on. 25 only on a local relay. |
+| Implicit TLS (port 465) | `smtp.secure` | on/off | `false` | On only for implicit TLS on port 465. Leave it OFF for STARTTLS on 587, which is the usual arrangement — the connection is still encrypted, just negotiated after connecting. |
+| SMTP username | `smtp.user` | text | from `SMTP_USER` | The account to authenticate as. Often the full email address rather than a short name, depending on the provider. |
 | SMTP password | `smtp.password` | secret | from `SMTP_PASSWORD` | For Microsoft app passwords, remove the spaces. |
 | Operator name for QSL emails | `qsl.operatorName` | text | — | Signed at the bottom of QSL confirmations, alongside the station callsign. Leave blank to sign with the callsign only. |
-| From address | `smtp.from` | text | from `SMTP_FROM` |  |
+| From address | `smtp.from` | text | from `SMTP_FROM` | The address messages appear to come from. Many providers refuse to send when this does not match the authenticated account, and the refusal usually names the mismatch. |
 
 ## Automatic operating limits
 
@@ -291,12 +297,12 @@ Brakes on the autonomous modes. The wall-clock and QSO limits are the only ones 
 | Stop automatic operating after (minutes) | `auto.maxRunMinutes` | limit | `240` | Wall-clock ceiling on one run. 0 disables it. This is the ONLY guard that bounds automatic operation in time — every other brake counts events and is reset by making progress, so a station that keeps working people could otherwise transmit indefinitely. |
 | Stop after this many QSOs | `auto.maxQsosPerRun` | limit | `100` | Ceiling on contacts in one run. 0 disables it. Not reset by anything short of a re-arm. |
 | Stop above this SWR | `auto.maxSwr` | limit | `3` | High SWR unattended means a damaged or disconnected antenna. A Flex folds power back past 3:1 anyway. Changing band does NOT clear this — it needs you to look at the antenna. |
-| Stop above this PA temperature (C) | `auto.maxPaTempC` | limit | `75` | Pauses to let the amplifier cool. |
+| Stop above this PA temperature (C) | `auto.maxPaTempC` | limit | `75` | Pauses transmitting when the PA reaches this temperature, in Celsius, and resumes once it has fallen back. A duty-cycle brake that reads the radio rather than guessing from a timer. |
 | Pause after this many transmissions without you | `auto.maxConsecutiveTx` | limit | `20` | The runaway brake. Reset by any operator interaction and by every completed QSO, which is why the wall-clock limit above exists as well. |
 | Give up after this many unanswered CQs | `auto.maxUnansweredCqs` | limit | `15` | Treated as a quiet band, so band-hopping may move rather than stop. |
 | Stop after this many silent receive windows | `auto.deafWindowLimit` | limit | `4` | Windows that decode nothing AND carry no audio — a dead audio path, wrong slice or antenna fault. A station that cannot hear must not transmit. |
-| Give up on a station after this many calls | `auto.maxCallAttempts` | limit | `5` |  |
-| Do not re-call a station for (minutes) | `auto.failureCooldownMin` | limit | `30` |  |
+| Give up on a station after this many calls | `auto.maxCallAttempts` | limit | `5` | How many times an automatic mode calls one station before giving up and moving on. Each attempt is a full transmit cycle, so this is a time budget as much as a persistence setting — four is roughly two minutes on FT8. |
+| Do not re-call a station for (minutes) | `auto.failureCooldownMin` | limit | `30` | How long to leave a station alone after giving up on them. Stops you watching the same unanswered call repeat every few minutes while the rest of the band goes unworked. |
 | Skip stations already worked within (hours) | `auto.dupeWindowHours` | limit | `24` | Same band and mode. Stops the automatic modes from re-working the same people all day. |
 | Never make a duplicate contact, with EVERYONE | `auto.skipWorkedOnBandMode` | on/off | `false` | OFF by default, and the normal way to prevent duplicates is the per-callsign list below rather than this. Turning this on applies one blanket rule to every station you work: no second contact on a band and mode already in the log, ever. Some operators want exactly that; most would rather honour the specific people who have asked. A different MODE on the same band is still allowed either way, because that is a genuinely new slot. |
 | Never re-work a station on a band already worked | `auto.skipWorkedOnBand` | on/off | `false` | A stricter rule than the dupe window above, and a different question: that one asks whether you worked them RECENTLY on this band and mode, this asks whether you have EVER worked them on this band, in any mode. Mode-agnostic on purpose — a band slot is a band slot, and somebody worked on 20 m FT4 is not a new 20 m contact because today it is FT8. Off by default: with a large log this silences a great deal of a domestic band, which is right for an award chaser filling slots and wrong for anyone who just wants contacts. It only ever restricts the automatic modes; you can still call anyone by hand. |
@@ -378,14 +384,14 @@ Your Grid: {THEIR_GRID}` | Fixed-width detail block. A line whose only token is 
 | Card footer line | `qsl.card.footer` | text | `73, Thanks for the QSO! Will QSL by mail for any cards received as well.` | Full-width line under the table. Blank to omit it. Tokens: {THEIR_CALL} {MY_CALL} {MY_NAME} {MY_GRID} {THEIR_GRID} {DATE} {TIME} {DATETIME} {YEAR} {BAND} {MODE} {FREQ} {RST_SENT} {RST_RCVD} {POWER} {MY_QTH} |
 | Card width for email (px) | `qsl.card.width` | number | `1600` | Artwork is scaled to this before the table is drawn. 1600 is a good balance; full resolution artwork can be tens of MB and this goes out once per QSO. |
 | Table width (fraction) | `qsl.card.tableWidth` | number | `0.6` | 0.6 = 60% of the card width. Geometry is fractional so one setting fits any artwork size. |
-| Table inset from right (fraction) | `qsl.card.tableRight` | number | `0.012` |  |
-| Table inset from bottom (fraction) | `qsl.card.tableBottom` | number | `0.012` |  |
+| Table inset from right (fraction) | `qsl.card.tableRight` | number | `0.012` | How far the QSO table sits from the RIGHT edge, as a fraction of the card's width (0.05 = five per cent in). A fraction rather than pixels, so one setting works whether the artwork is 1500 px wide or 5000. |
+| Table inset from bottom (fraction) | `qsl.card.tableBottom` | number | `0.012` | How far the table sits from the BOTTOM edge, as a fraction of the card's height. Same reasoning as the setting above. |
 | Table font scale | `qsl.card.fontScale` | number | `1` | 1 = automatic size from the table width. Raise or lower to taste. |
 | Card font | `qsl.card.font` | text | `PT Sans Narrow` | Typeface for the QSO table. DigiShack SHIPS these, so they render identically on every machine: "PT Sans Narrow" (condensed, the classic QSL table and the default), "Lato" (a wider humanist sans) or "PT Serif" (more formal). All three are SIL Open Font License 1.1 with the licence text beside them in assets/fonts. Any other name is passed to the system, which works only if that font is installed on the server — the bundled ones need nothing. This exists because a card drawn with no font available comes out with an empty table and a row of empty boxes, which looks like missing QSO data rather than a missing typeface. |
-| Table text colour | `qsl.card.textColor` | text | `#000000` |  |
-| Table heading background | `qsl.card.headingBg` | text | `#ffffff` |  |
-| Table cell background | `qsl.card.cellBg` | text | `#ffffff` |  |
-| Table border colour | `qsl.card.borderColor` | text | `#000000` |  |
+| Table text colour | `qsl.card.textColor` | text | `#000000` | Colour of the table text, as a CSS colour such as #000000. Choose it against your artwork rather than against the cell fill, since a photographic card shows through a translucent cell. |
+| Table heading background | `qsl.card.headingBg` | text | `#ffffff` | Fill behind the column headings. Accepts a CSS colour including one with alpha — rgba(255,255,255,0.85) is usually what you want over a photograph. |
+| Table cell background | `qsl.card.cellBg` | text | `#ffffff` | Fill behind the QSO values, beneath the headings. Usually lighter or more transparent than the heading fill so the two rows read as one table. |
+| Table border colour | `qsl.card.borderColor` | text | `#000000` | Colour of the lines between cells. Match it to the text for a printed-form look, or make it translucent to let the artwork through. |
 | Card JPEG quality | `qsl.card.quality` | number | `88` | 40-100. 88 keeps a photographic card around 200 kB. |
 
 ## Environment fallbacks

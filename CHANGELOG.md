@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.136.0 - public release
+## 1.137.0 - public release
 
 Development happens in a private repository; this is where the public history starts.
 Earlier entries are not reproduced - they quote real operators by callsign, include
@@ -22,6 +22,7 @@ Notes for anyone running this:
 
 ## Release history
 
+- **1.137.0** — Every setting explains itself, and says where to read more
 - **1.136.0** — DigiShack ships its own card fonts, and you can pick one
 - **1.135.0** — The stall recovery now rebuilds the stream instead of nudging the display
 - **1.134.0** — Club Log stops emailing about a dead end

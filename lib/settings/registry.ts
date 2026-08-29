@@ -69,46 +69,78 @@ export interface SettingGroup {
   id: string;
   title: string;
   blurb?: string;
+  /**
+   * Document in `docs/` that explains this group, without the `.md`.
+   *
+   * Rendered as a help icon beside the heading. Set only where a document genuinely
+   * covers the group: a link to a page that turns out not to discuss the setting is
+   * worse than no link, because the reader pays a click to discover that.
+   */
+  doc?: string;
+  /** What the reader will find there. Shown as the icon's tooltip. */
+  docLabel?: string;
 }
 
 export const SETTING_GROUPS: SettingGroup[] = [
   {
     id: "general",
+    doc: "getting-started",
+    docLabel: "First run and the settings every station needs",
     title: "General",
     blurb: "Instance-wide behaviour.",
   },
   {
     id: "qrz",
+    doc: "logbook-sync",
+    docLabel: "QRZ lookup and logbook upload — two different credentials",
     title: "QRZ.com",
     blurb:
       "XML API for callsign and email lookup (needs a paid XML subscription), plus the Logbook API key for uploads. The Logbook key is per-logbook and separate from your XML login.",
   },
   {
     id: "lotw",
+    doc: "lotw-upload",
+    docLabel: "Certificates, signing and downloading confirmations",
     title: "Logbook of the World",
     blurb:
       "Uploads are signed by a local TQSL install; the username and password are used to download inbound confirmations.",
   },
   {
     id: "eqsl",
+    doc: "logbook-sync",
+    docLabel: "eQSL, where the upload is the card",
     title: "eQSL.cc",
+    blurb:
+      "Electronic QSL cards. Unlike the other services the upload IS the card, so there is no log-only mode — sending is an approach to the other operator, which is why the reciprocal-only option under Uploads exists.",
   },
   {
     id: "clublog",
+    doc: "logbook-sync",
+    docLabel: "Club Log, and why uploads from here are refused",
     title: "ClubLog",
+    blurb:
+      "DXCC statistics, an online log and the OQRS card service. Authenticates by REGISTERED EMAIL rather than callsign. Uploads from this installation are refused at Club Log's edge; downloads work, and the code says so where it happens.",
   },
   {
     id: "cloudlog",
+    doc: "logbook-sync",
+    docLabel: "Cloudlog and Wavelog on your own server",
     title: "Cloudlog / Wavelog",
     blurb:
       "Self-hosted logging software. Unlike the public services this needs no developer registration and imposes no rate limit — it is your own server. Wavelog is a fork of Cloudlog and speaks the same API, so either works here.",
   },
   {
     id: "hrdlog",
+    doc: "logbook-sync",
+    docLabel: "HRDLOG.net",
     title: "HRDLOG.net",
+    blurb:
+      "Ham Radio Deluxe's online logbook. Needs the callsign the account logs under plus its upload code, which is not the website password.",
   },
   {
     id: "n3fjp",
+    doc: "logbook-sync",
+    docLabel: "Setting up the TCP API, and why 127.0.0.1 is usually wrong",
     title: "N3FJP Amateur Contact Log",
     blurb:
       "A logging program on your own desk rather than a web service, reached over its TCP " +
@@ -119,6 +151,8 @@ export const SETTING_GROUPS: SettingGroup[] = [
   },
   {
     id: "dxcc",
+    doc: "getting-started",
+    docLabel: "Where the callsign-to-entity data comes from",
     title: "DXCC reference data",
     blurb:
       "Callsign-to-entity mapping. The DXCC page downloads it in one click from " +
@@ -128,90 +162,120 @@ export const SETTING_GROUPS: SettingGroup[] = [
   },
   {
     id: "pskreporter",
+    doc: "operating",
+    docLabel: "Reporting what you hear to PSKReporter",
     title: "PSKReporter",
     blurb:
       "PSKReporter asks developers to identify their traffic and to poll no more than once per callsign every 5 minutes. Anonymous polling risks being blocked.",
   },
   {
     id: "digital",
+    doc: "digital-modes",
+    docLabel: "FT8, FT4 and FT2 — windows, decoding and what each setting costs",
     title: "Digital modes",
     blurb:
       "Where decodes and rig status come from. `wsjtx` takes them from an external decoder — WSJT-X or a fork of it — over its UDP protocol; `flex` and `icom` talk to the radio directly with no external decoder at all. All three are implemented — pick one.",
   },
   {
     id: "bridge",
+    doc: "architecture",
+    docLabel: "The radio service: what it owns and why it is a separate process",
     title: "DigiShack bridge",
     blurb:
       "DigiShack's own radio service (`npm run bridge`): the process that owns the radio, decodes, transmits and serves the live feed. It runs separately from the web application because it binds a UDP socket, and a bound socket cannot be shared across cluster workers. These settings are about the service itself, whichever radio it is driving.",
   },
   {
     id: "wsjtx",
+    doc: "digital-modes",
+    docLabel: "Reading an external decoder over UDP",
     title: "External decoder (WSJT-X)",
     blurb:
       "Used when the digital source is `wsjtx`. Point the decoder's UDP server at this host. Any program speaking the WSJT-X UDP protocol works — WSJT-X itself, JTDX, wsjtx-omega.",
   },
   {
     id: "flex",
+    doc: "panadapter",
+    docLabel: "The FlexRadio path, the panadapter and what is measured versus assumed",
     title: "FlexRadio (direct)",
     blurb:
       "Used when the digital source is `flex`. DigiShack connects to the radio's SmartSDR API itself. Read-only: it never changes slices, modes or transmits — an operator's SmartSDR session is not disturbed.",
   },
   {
     id: "schedule",
+    doc: "operating",
+    docLabel: "Operating windows and how the schedule decides",
     title: "Operating schedule",
     blurb:
       "What the station should be doing, and when. All times are the SERVER's LOCAL time, not UTC — sleeping hours are a fact about your house, not about the log. Three separate things: which automatic mode runs during which hours, a quiet period when nothing transmits at all, and a duty-cycle limit that rests the finals.",
   },
   {
     id: "watchdog",
+    doc: "troubleshooting",
+    docLabel: "What restarts the bridge, and what to look at when it does",
     title: "Bridge watchdog",
     blurb:
       "Restarts the radio bridge when it stops working while still appearing to run. PM2 only checks that the process exists, and on 2 August 2026 the process existed for five hours after it had produced its last decode. This watches the decode windows instead, which arrive once per T/R period whether or not anything is heard.",
   },
   {
     id: "icom",
+    doc: "icom",
+    docLabel: "The IC-7300 path: CI-V, audio and what this radio cannot do",
     title: "Icom (network)",
     blurb:
       "Used when the digital source is `icom`. Speaks the RS-BA1 network protocol directly — the same one the Icom remote software uses — so no third-party bridge, no virtual audio cable and no virtual COM port. The username and password are the ones set in the radio's own network menu, not your callsign or your DigiShack login.",
   },
   {
     id: "alerts",
+    doc: "troubleshooting",
+    docLabel: "What the station emails about, and what each alert means",
     title: "Issue alerts",
     blurb:
       "Email when the station goes wrong — the radio unreachable, the bridge restarted by its watchdog, uploads failing repeatedly. One email per condition with a cooldown, and a recovery note when it comes back. Uses the same SMTP settings as QSL email.",
   },
   {
     id: "update",
+    doc: "development",
+    docLabel: "Self-update from the public repository",
     title: "Software updates",
     blurb:
       "Lets an admin pull and deploy a new version from the Updates page. This runs code from the remote branch on this server, so it is off until you turn it on. Only ever fast-forwards, and refuses to run with uncommitted local changes.",
   },
   {
     id: "smtp",
+    doc: "qsl",
+    docLabel: "Outgoing email, used for QSL cards and station alerts",
     title: "Outgoing email",
     blurb:
       "Used by the QSL emailer. Those are unsolicited emails to other operators, so bulk sends always go through a review queue.",
   },
   {
     id: "auto",
+    doc: "operating",
+    docLabel: "Automatic operating and every brake on it",
     title: "Automatic operating limits",
     blurb:
       "Brakes on the autonomous modes. The wall-clock and QSO limits are the only ones that bound a session in absolute terms — every other guard counts events and is reset by making progress. SWR and PA temperature protect the radio, and a band change deliberately does not clear them.",
   },
   {
     id: "uploads",
+    doc: "logbook-sync",
+    docLabel: "How the upload sweep works, and the cutoff that protects a back catalogue",
     title: "Automatic uploading",
     blurb:
       "Pushing contacts to the log-hosting services as they are made. Off by default, and it uploads only contacts logged AFTER you switch it on — a log that predates this feature is almost certainly already on those services from whatever you used before, and re-sending 26,000 contacts to discover that is rude to them and slow for you. Use the compare on the Integrations page to mark what is already there.",
   },
   {
     id: "pota",
+    doc: "pota",
+    docLabel: "Parks on the Air: spots, chasing and references",
     title: "POTA chasing",
     blurb:
       "How the POTA chase mode picks activators. The band rule is the important one: a chaser that follows every spot spends most of its time tuned to frequencies where nothing is audible, and every excursion costs the give-up time before it can try again.",
   },
   {
     id: "qsl",
+    doc: "qsl",
+    docLabel: "QSL cards, email and the artwork",
     title: "QSL card and email",
     blurb:
       "Everything the recipient sees is a template here, not a string in the code. A QSL card makes claims about how you operate — which services you upload to, whether you will answer a paper card — and those are yours to word. Use the Preview button on the QSL page to see a real card before sending anything.",
@@ -254,6 +318,8 @@ export const SETTINGS: SettingDef[] = [
     label: "QRZ username",
     type: "string",
     group: "qrz",
+    help:
+      "Your QRZ.com login, used to LOOK UP callsigns — names, grids and addresses for QSL cards. Nothing to do with uploading contacts, which uses the logbook API key below and works without this.",
     envFallback: "QRZ_USERNAME",
   },
   {
@@ -261,6 +327,8 @@ export const SETTINGS: SettingDef[] = [
     label: "QRZ password",
     type: "secret",
     group: "qrz",
+    help:
+      "Password for the lookup account above. A QRZ XML subscription is needed for full lookup data; without one QRZ returns a reduced record and DigiShack uses what it gets.",
     envFallback: "QRZ_PASSWORD",
   },
   {
@@ -268,6 +336,8 @@ export const SETTINGS: SettingDef[] = [
     label: "QRZ Logbook API key",
     type: "secret",
     group: "qrz",
+    help:
+      "Uploads contacts to your QRZ logbook. A DIFFERENT credential from the username and password above — find it on QRZ under Logbook → Settings, one key per logbook. Uploading is switched on separately under Uploads.",
     envFallback: "QRZ_LOGBOOK_API_KEY",
   },
 
@@ -277,6 +347,8 @@ export const SETTINGS: SettingDef[] = [
     label: "LoTW username",
     type: "string",
     group: "lotw",
+    help:
+      "Your LoTW login, used to DOWNLOAD confirmations. Uploads are signed by your certificate rather than by this, so downloads work with these credentials alone.",
     envFallback: "LOTW_USERNAME",
   },
   {
@@ -284,6 +356,8 @@ export const SETTINGS: SettingDef[] = [
     label: "LoTW password",
     type: "secret",
     group: "lotw",
+    help:
+      "Password for the LoTW account above. This is the website password, not the passphrase protecting your certificate file — a common mix-up.",
     envFallback: "LOTW_PASSWORD",
   },
   {
@@ -402,6 +476,8 @@ export const SETTINGS: SettingDef[] = [
     label: "eQSL username",
     type: "string",
     group: "eqsl",
+    help:
+      "Your eQSL.cc login, used both to send cards and to fetch your inbox. On eQSL the upload IS the card, so there is no log-only mode to fall back on.",
     envFallback: "EQSL_USERNAME",
   },
   {
@@ -448,6 +524,8 @@ export const SETTINGS: SettingDef[] = [
     label: "eQSL password",
     type: "secret",
     group: "eqsl",
+    help:
+      "Password for the eQSL account above. eQSL rejects an upload with a clear message when this is wrong, which the Integrations page reports verbatim.",
     envFallback: "EQSL_PASSWORD",
   },
 
@@ -457,6 +535,8 @@ export const SETTINGS: SettingDef[] = [
     label: "ClubLog email",
     type: "string",
     group: "clublog",
+    help:
+      "Club Log authenticates by the email address you REGISTERED WITH, not by callsign. An easy one to get wrong, and it produces an unhelpful refusal when you do.",
     envFallback: "CLUBLOG_EMAIL",
   },
   {
@@ -464,6 +544,8 @@ export const SETTINGS: SettingDef[] = [
     label: "ClubLog password",
     type: "secret",
     group: "clublog",
+    help:
+      "Your Club Log account password. The API endpoints prefer an application password (below); downloads work with either.",
     envFallback: "CLUBLOG_PASSWORD",
   },
   {
@@ -553,6 +635,8 @@ export const SETTINGS: SettingDef[] = [
     label: "HRDLOG callsign",
     type: "string",
     group: "hrdlog",
+    help:
+      "The callsign your HRDLOG.net account logs under. Paired with the upload code below — both are needed.",
     envFallback: "HRDLOG_CALLSIGN",
   },
   {
@@ -560,6 +644,8 @@ export const SETTINGS: SettingDef[] = [
     label: "HRDLOG upload code",
     type: "secret",
     group: "hrdlog",
+    help:
+      "HRDLOG.net's upload code, issued in your account settings there. Not your website password.",
     envFallback: "HRDLOG_CODE",
   },
 
@@ -1115,6 +1201,8 @@ export const SETTINGS: SettingDef[] = [
     label: "UDP bind address",
     type: "string",
     group: "wsjtx",
+    help:
+      "Address DigiShack listens on for WSJT-X's UDP broadcasts. 0.0.0.0 accepts them from any machine on the network; 127.0.0.1 only from this one. Used only when the digital source is the external decoder.",
     envFallback: "WSJTX_UDP_HOST",
     legacyKeys: ["omega.udpHost"],
     default: "0.0.0.0",
@@ -1187,6 +1275,8 @@ export const SETTINGS: SettingDef[] = [
     label: "SMTP host",
     type: "string",
     group: "smtp",
+    help:
+      "Mail server for everything DigiShack sends — QSL emails and station alerts. Without it both are silently unavailable, which is why the Integrations page reports SMTP on its own.",
     envFallback: "SMTP_HOST",
   },
   {
@@ -1194,6 +1284,8 @@ export const SETTINGS: SettingDef[] = [
     label: "SMTP port",
     type: "number",
     group: "smtp",
+    help:
+      "587 for STARTTLS, which is the usual choice. 465 for implicit TLS with the setting below turned on. 25 only on a local relay.",
     envFallback: "SMTP_PORT",
     default: "587",
   },
@@ -1202,7 +1294,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Implicit TLS (port 465)",
     type: "boolean",
     group: "smtp",
-    help: "Leave off for STARTTLS on 587.",
+    help: "On only for implicit TLS on port 465. Leave it OFF for STARTTLS on 587, which is the usual arrangement — the connection is still encrypted, just negotiated after connecting.",
     envFallback: "SMTP_SECURE",
     default: "false",
   },
@@ -1211,6 +1303,8 @@ export const SETTINGS: SettingDef[] = [
     label: "SMTP username",
     type: "string",
     group: "smtp",
+    help:
+      "The account to authenticate as. Often the full email address rather than a short name, depending on the provider.",
     envFallback: "SMTP_USER",
   },
   {
@@ -1370,7 +1464,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Stop above this PA temperature (C)",
     type: "limit",
     group: "auto",
-    help: "Pauses to let the amplifier cool.",
+    help: "Pauses transmitting when the PA reaches this temperature, in Celsius, and resumes once it has fallen back. A duty-cycle brake that reads the radio rather than guessing from a timer.",
     default: "75",
   },
   {
@@ -1402,6 +1496,8 @@ export const SETTINGS: SettingDef[] = [
     label: "Give up on a station after this many calls",
     type: "limit",
     group: "auto",
+    help:
+      "How many times an automatic mode calls one station before giving up and moving on. Each attempt is a full transmit cycle, so this is a time budget as much as a persistence setting — four is roughly two minutes on FT8.",
     default: "5",
   },
   {
@@ -1409,6 +1505,8 @@ export const SETTINGS: SettingDef[] = [
     label: "Do not re-call a station for (minutes)",
     type: "limit",
     group: "auto",
+    help:
+      "How long to leave a station alone after giving up on them. Stops you watching the same unanswered call repeat every few minutes while the rest of the band goes unworked.",
     default: "30",
   },
   {
@@ -1731,6 +1829,8 @@ export const SETTINGS: SettingDef[] = [
     label: "Table inset from right (fraction)",
     type: "number",
     group: "qsl",
+    help:
+      "How far the QSO table sits from the RIGHT edge, as a fraction of the card's width (0.05 = five per cent in). A fraction rather than pixels, so one setting works whether the artwork is 1500 px wide or 5000.",
     default: "0.012",
   },
   {
@@ -1738,6 +1838,8 @@ export const SETTINGS: SettingDef[] = [
     label: "Table inset from bottom (fraction)",
     type: "number",
     group: "qsl",
+    help:
+      "How far the table sits from the BOTTOM edge, as a fraction of the card's height. Same reasoning as the setting above.",
     default: "0.012",
   },
   {
@@ -1769,6 +1871,8 @@ export const SETTINGS: SettingDef[] = [
     label: "Table text colour",
     type: "string",
     group: "qsl",
+    help:
+      "Colour of the table text, as a CSS colour such as #000000. Choose it against your artwork rather than against the cell fill, since a photographic card shows through a translucent cell.",
     default: "#000000",
   },
   {
@@ -1776,6 +1880,8 @@ export const SETTINGS: SettingDef[] = [
     label: "Table heading background",
     type: "string",
     group: "qsl",
+    help:
+      "Fill behind the column headings. Accepts a CSS colour including one with alpha — rgba(255,255,255,0.85) is usually what you want over a photograph.",
     default: "#ffffff",
   },
   {
@@ -1783,6 +1889,8 @@ export const SETTINGS: SettingDef[] = [
     label: "Table cell background",
     type: "string",
     group: "qsl",
+    help:
+      "Fill behind the QSO values, beneath the headings. Usually lighter or more transparent than the heading fill so the two rows read as one table.",
     default: "#ffffff",
   },
   {
@@ -1790,6 +1898,8 @@ export const SETTINGS: SettingDef[] = [
     label: "Table border colour",
     type: "string",
     group: "qsl",
+    help:
+      "Colour of the lines between cells. Match it to the text for a printed-form look, or make it translucent to let the artwork through.",
     default: "#000000",
   },
   {
@@ -1805,6 +1915,8 @@ export const SETTINGS: SettingDef[] = [
     label: "From address",
     type: "string",
     group: "smtp",
+    help:
+      "The address messages appear to come from. Many providers refuse to send when this does not match the authenticated account, and the refusal usually names the mismatch.",
     placeholder: "DigiShack <noreply@example.com>",
     envFallback: "SMTP_FROM",
   },
