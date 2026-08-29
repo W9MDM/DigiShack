@@ -241,6 +241,19 @@ export interface UpdateCheck {
    * that replaces both guesses: the fetch either worked or it did not.
    */
   anonymousOk: boolean;
+  /**
+   * What each incoming version actually DOES, newest first.
+   *
+   * The page listed commit subjects, and on the public mirror those are
+   * "DigiShack 1.129.0" — a version number twice over. So the one question an
+   * operator has before pressing Update, "what changes if I do this", had no
+   * answer anywhere.
+   *
+   * Read from the CHANGELOG the mirror now carries, which publish-public.ts
+   * generates from the private repository's commit subjects — one line per
+   * release, by the convention that a commit subject IS its changelog heading.
+   */
+  changes: { version: string; summary: string }[];
 }
 
 async function currentVersion(): Promise<string> {
@@ -273,6 +286,7 @@ export async function checkForUpdate(): Promise<UpdateCheck> {
     remoteHost: remoteHostname(),
     // Assumed false until a fetch actually succeeds with no token in hand.
     anonymousOk: false,
+    changes: [],
   };
 
   const branchRes = await run("git", ["rev-parse", "--abbrev-ref", "HEAD"]);
@@ -357,6 +371,31 @@ export async function checkForUpdate(): Promise<UpdateCheck> {
             .filter(Boolean)
             .slice(0, 30);
 
+    // What the incoming versions actually do.
+    //
+    // Read from the REMOTE changelog rather than the local one, because the point is to
+    // describe versions this installation does not have yet. Lines look like
+    //
+    //     - **1.129.0** — Answer in this window, late, rather than the next one
+    //
+    // newest first, and the running version is the stopping point: everything above it is
+    // what pressing Update would bring in.
+    let changes: { version: string; summary: string }[] = [];
+    if (local !== remote) {
+      const clog = await run("git", ["show", `origin/${branch}:CHANGELOG.md`]);
+      if (clog.code === 0) {
+        for (const line of clog.output.split("\n")) {
+          const m = /^-\s+\*\*(\d+\.\d+\.\d+)\*\*\s+[—-]\s+(.+?)\s*$/.exec(line);
+          if (!m) continue;
+          if (m[1] === version) break;
+          changes.push({ version: m[1]!, summary: m[2]! });
+          // A long-neglected install could be dozens behind; the page needs the recent
+          // ones, not a scroll of history.
+          if (changes.length >= 30) break;
+        }
+      }
+    }
+
     return {
       ...base,
       branch,
@@ -367,6 +406,7 @@ export async function checkForUpdate(): Promise<UpdateCheck> {
       dirty: dirtyFiles.length > 0,
       dirtyFiles,
       incoming,
+      changes,
     };
   } finally {
   }

@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.129.0 - public release
+## 1.130.0 - public release
 
 Development happens in a private repository; this is where the public history starts.
 Earlier entries are not reproduced - they quote real operators by callsign, include
@@ -19,3 +19,141 @@ Notes for anyone running this:
   Its panadapter dB scale is not calibrated; readings are relative.
 - **Some behaviour is measured against hardware and some is read from documentation.**
   Where they differ the code says which it is.
+
+## Release history
+
+- **1.130.0** — The Updates page now says what the update does
+- **1.129.0** — Answer in this window, late, rather than the next one in thirty seconds
+- **1.128.0** — The whole exchange on screen, not just our last line
+- **1.127.0** — Every call waited an extra cycle, and the Call button did not call
+- **1.126.0** — Uploads had no way in from a browser at all
+- **1.125.0** — DXCC data needs no API key, and now the page says so
+- **1.124.0** — The integrations page listed five of seven services
+- **1.123.1** — The N3FJP address was filed where nobody would look for it
+- **1.123.0** — Contacts go to N3FJP Amateur Contact Log too
+- **1.122.0** — It updates itself from a public repo, so it needs no token at all
+- **1.121.0** — Call, during an automatic mode, did nothing at all
+- **1.120.0** — Two ways to name a station the receiver has not named
+- **1.119.3** — The guard caught its own new check, and a dropped file left its npm entry
+- **1.119.2** — A clean history is not a clean repository page
+- **1.119.1** — What the antenna work was actually measured against
+- **1.119.0** — ANT1 was not a choice, it was a typo repeated
+- **1.118.2** — The publish guard refused the identity the publish had just pinned
+- **1.118.1** — One missing class, every page scrolling sideways
+- **1.118.0** — A menu you can reach on a phone, and an app you can install
+- **1.117.0** — The mirror now commits as K9XYZ
+- **1.116.0** — Screenshots, at last
+- **1.115.0** — Counting who actually takes it
+- **1.114.0** — The README never said what it does
+- **1.113.1** — The roadmap had gone stale in the worst way
+- **1.113.0** — Findable, and the link that pointed nowhere
+- **1.112.0** — Paste the requests, promote what matches
+- **1.111.0** — Stop throwing away the exchange the other station logged
+- **1.110.0** — Timed from when they came back to us
+- **1.109.0** — Forty-three contacts back in the log
+- **1.108.1** — The number moved twice; here is what it actually is
+- **1.108.0** — 1,389 contacts that happened and were never logged
+- **1.107.1** — PM2 never runs npm, so package.json was the wrong file
+- **1.107.0** — Everything looked like it came from localhost
+- **1.106.1** — If they aren't in my log they don't belong
+- **1.106.0** — "No such Username/Password" when the password is fine
+- **1.105.2** — The eQSL inbox does not say which profile a card is for
+- **1.105.1** — A signal report is not a formula
+- **1.105.0** — CSV export, and one copy of the row mapper
+- **1.104.0** — Have I worked them, on what, and is it confirmed
+- **1.103.1** — The silent years were missing from the history
+- **1.103.0** — What this station has done
+- **1.102.2** — The mirror's Prisma client is a stale artifact
+- **1.102.1** — The reconciliation query walked into the trap next to it
+- **1.102.0** — Ask LoTW what it actually kept
+- **1.101.0** — Pull the confirmations, and only reply to a card
+- **1.100.0** — Everything stopped on 1 August
+- **1.99.0** — A duplicate ended the whole run
+- **1.98.0** — The public build could not update itself, or install itself
+- **1.97.0** — A work email in a public repository
+- **1.96.0** — A crontab, because there was no way to ask
+- **1.95.0** — Twenty-five meant twenty-five requests, not twenty-five contacts
+- **1.94.2** — Queued is not added, and 1.94.1 said otherwise
+- **1.94.1** — What LoTW actually said
+- **1.94.0** — The certificate is the password
+- **1.93.0** — Send that one again
+- **1.92.0** — The page that never loaded, and the page that never knew you
+- **1.91.0** — A card you can upload and see, and one that reaches Winlink
+- **1.90.0** — eQSL uploads, and a menu that stops moving
+- **1.89.0** — What Cloudlog has that we do not, and how LoTW upload works
+- **1.88.1** — Credit where FT-0 came from, and say what the button does
+- **1.88.0** — No lineage notes, and Proxmox picks the container id
+- **1.87.3** — Two more things the publisher got wrong, both found by running it
+- **1.87.2** — The publisher must not publish itself
+- **1.87.1** — Publishing both repositories is one command, and it refuses to leak
+- **1.87.0** — Help that answers the questions this software actually generates
+- **1.86.0** — The Rig page says what it is
+- **1.85.0** — No default callsign, anywhere, ever
+- **1.84.2** — The unsubscribe link, and nothing else
+- **1.84.1** — Two ways the link would not have reached anybody
+- **1.84.0** — A way out of the QSL email, in the email
+- **1.83.1** — A list of people, not a rule for everyone
+- **1.83.0** — No duplicate contacts, because somebody had to ask twice
+- **1.82.1** — The do-not-call list belongs in settings, not on the decodes
+- **1.82.0** — Two ways to not call somebody
+- **1.81.0** — Panels that heal themselves, and admit when they cannot
+- **1.80.1** — The other path to the same silence
+- **1.80.0** — Keep telling me the radio is off
+- **1.79.2** — And the live reading gets the last word
+- **1.79.1** — The power warning was frozen at whatever it said on connect
+- **1.79.0** — A watchdog that watches the radio, not our own clock
+- **1.78.0** — A trace that is a shape, and one that remembers
+- **1.77.0** — How old that trace is, how far in you are, and a readable dial
+- **1.76.1** — The noise buttons worked all along; nothing could see it
+- **1.76.0** — Which part of the band this is, and whether you may transmit
+- **1.75.0** — Arrow keys on the dial, and the band tells you who is on it
+- **1.74.1** — A noise floor you can see, so voice looks like voice
+- **1.74.0** — Clicking the band lands on a frequency somebody would choose
+- **1.73.3** — The Listen button was never the problem; nginx had no route
+- **1.73.2** — The scaler that darkened everything, measured on the radio
+- **1.73.1** — Three fixes that were never broken, only undeployed
+- **1.73.0** — The noise had the whole palette, and the filter was a guess
+- **1.72.0** — Tuning the panadapter the way every other SDR does
+- **1.71.0** — PSKReporter blocked us, and the band strip went blank
+- **1.70.2** — A band you can hear is one to stay on
+- **1.70.1** — Auditing the rest of it, and the SMTP test nobody could press
+- **1.70.0** — An Integrations page, because there was nowhere to press
+- **1.69.0** — LoTW sync, on a schedule, and the reason it never worked
+- **1.68.0** — Leaving a band that is not paying, judged three ways
+- **1.67.0** — The dashboard says how today is going
+- **1.66.1** — The band-reality check could not actually fire
+- **1.66.0** — A band the network hears is not a band we can hear
+- **1.65.1** — Run the ATU when POTA chase crosses a band
+- **1.65.0** — High SWR moves band instead of stopping the station
+- **1.64.0** — Tail-ender queue, sharper hunt priority, and leaving an overtaken band
+- **1.63.0** — Real transmit power, per contact
+- **1.62.0** — QSL gateways: Winlink, arrl.net, and placeholder addresses
+- **1.61.0** — Chips a mature station can earn, and hop-to-busiest-band
+- **1.60.6** — CQ POTA, CQ DX and worth-working in the decode filter
+- **1.60.5** — High SWR emails
+- **1.60.4** — A restart no longer stamps the schedule over the operator mode
+- **1.60.3** — The band picker on one line
+- **1.60.2** — The Work station panel at half height
+- **1.60.1** — Self-update: untracked files do not block, token enterable on /update
+- **1.60.0** — The schedule shows its hand, and a contact can be skipped
+- **0.14.1** — Fix waterfall palette and dynamic range
+- **0.14.0** — Add waterfall display and a full digital page
+- **0.13.0** — FT4 in the self-contained path, plus a live band-activity page
+- **0.12.1** — Exit cleanly when the bridge port is already in use
+- **0.12.0** — Self-contained FT8/FT4 decoding from FlexRadio DAX audio
+- **0.11.0** — Add native FlexRadio path with selectable digital source
+- **0.10.0** — Phase 4a: wsjtx-omega UDP bridge
+- **0.9.1** — Fix LoTW full-history sync: semantics, chunking and backoff
+- **0.9.0** — Phase 2: QRZ logbook and LoTW integration
+- **0.8.0** — Phase 2: public REST API with API keys
+- **0.7.0** — Phase 2: award tracking for DXCC, WAS, WAZ, WAC, grid and IOTA
+- **0.6.1** — Fix git invocation on Windows in the update runner
+- **0.6.0** — Add update-from-the-UI with git token auth
+- **0.5.0** — Phase 2: DXCC entity resolution from Club Log cty.xml
+- **0.4.1** — Fix ADIF parser dropping records with multi-byte characters
+- **0.4.0** — Add encrypted settings UI, install and update scripts
+- **0.3.1** — Add dev seed data
+- **0.3.0** — Phase 2: ADIF 3.x import and export
+- **0.2.0** — Add authentication: users, roles, server-side sessions
+- **0.1.1** — Normalize line endings to LF via .gitattributes
+- **0.1.0** — Phase 1: rewrite as DigiShack logbook on Pages Router + MySQL

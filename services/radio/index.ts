@@ -983,10 +983,34 @@ function onDecodedWindow(
     }
 
     if (decodeMs > 2_000) {
-      // The gap between FT8 cycles is about 2.4 s. Overrunning it means the next
-      // window starts before this one finished.
+      // MEASURED, and it is not what this warning used to say.
+      //
+      // It advised lowering the decoder depth, which does nothing. Benchmarked on the
+      // live installation (Xeon E5-2630 v3), 15 s windows, freqHigh 3000:
+      //
+      //   depth 1: 1312-2021 ms      depth 2: 1435-1795 ms      depth 3: 3910-6692 ms
+      //
+      // Depth 1 costs the SAME as depth 2 — occasionally more — so the advice sent an
+      // operator to a setting that could not help. Narrowing the passband does not help
+      // either: at freqHigh 1500 the same window took 2334 ms and found 5 of 12 signals
+      // against 12 of 12 at 3000. And the cost barely moves with band activity — one
+      // signal and twenty cost about the same.
+      //
+      // What it IS: a fixed floor of roughly 1.5-2.3 s in the decoder itself. The only
+      // levers that would move it are a faster machine or a faster decoder. Depth 3 is
+      // the one setting that genuinely matters here, and only because it makes things
+      // three times worse.
+      //
+      // The consequence worth knowing is not an overrun — the cycle gap is ~2.4 s and
+      // this fits, just. It is that answering a station in the very next window needs
+      // the decode finished within the 1.86 s of slack an FT8 window has after its
+      // 12.64 s transmission, and at this speed it often is not. See firstTxWindow in
+      // services/radio/qso-controller.ts.
       console.warn(
-        `[bridge] decode took ${decodeMs}ms, which risks overrunning the cycle — consider a lower ${depthSetting}`,
+        `[bridge] decode took ${decodeMs}ms. The gap between cycles is about 2.4s, so this ` +
+          `still fits — but a reply may miss the next window and go out a cycle later. ` +
+          `Lowering ${depthSetting} does NOT help (depth 1 measures the same as depth 2); ` +
+          `only a faster machine does.`,
       );
     }
 

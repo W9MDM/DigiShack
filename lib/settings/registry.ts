@@ -703,7 +703,14 @@ export const SETTINGS: SettingDef[] = [
     label: "Decoder depth",
     type: "number",
     group: "flex",
-    help: "1-4. Depth 2 (~0.55s per window) is the live default; 3 fits with less margin; 4 takes ~11s and cannot keep up with the 15s FT8 cycle.",
+    help:
+      "1-4. Leave it at 2. MEASURED on a Xeon E5-2630 v3 with a 3 kHz passband: depth 1 " +
+      "takes 1312-2021 ms and depth 2 takes 1435-1795 ms — the SAME, sometimes worse, so " +
+      "lowering it buys nothing and only decodes less. Depth 3 is 3910-6692 ms, three to " +
+      "four times the cost, and 4 is far beyond the 15 s cycle. Cost barely changes with " +
+      "how busy the band is: one signal and twenty measure about the same, because it is " +
+      "a search over the passband rather than work per station. An earlier version of " +
+      "this text claimed ~0.55 s for depth 2; that was never true on this hardware.",
     default: "2",
   },
   {

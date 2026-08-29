@@ -30,6 +30,8 @@ interface UpdateCheck {
   remoteHost: string;
   /** The fetch got through with no credential — a public repository needs none. */
   anonymousOk: boolean;
+  /** What each incoming version does, newest first. */
+  changes: { version: string; summary: string }[];
 }
 
 interface UpdateStep {
@@ -280,8 +282,32 @@ export default function UpdatePage() {
           )}
         </Card>
 
-        <Card title="Incoming commits">
-          {check?.incoming.length ? (
+        <Card title="What's new">
+          {/* WHAT THE UPDATE DOES, not what it is called.
+              
+              This card listed commit subjects, and on the public mirror those are
+              "DigiShack 1.129.0" — a version number twice over, next to a version number.
+              So the one question anyone has before pressing Update, "what changes if I do
+              this", had no answer on the page that asks them to press it.
+              
+              The summaries come from the mirror's CHANGELOG, which the publish generates
+              from the private repository's commit subjects — that convention means every
+              release already has a written one-line description, it simply never reached
+              anywhere a reader could see it. */}
+          {check?.changes?.length ? (
+            <ul className="flex flex-col gap-2">
+              {check.changes.map((c) => (
+                <li key={c.version} className="flex gap-2 items-baseline">
+                  <span className="tnum text-xs text-accent-bright shrink-0">
+                    {c.version}
+                  </span>
+                  <span className="text-sm text-fg">{c.summary}</span>
+                </li>
+              ))}
+            </ul>
+          ) : check?.incoming.length ? (
+            // Fallback for a remote with no generated changelog — an older mirror, or a
+            // private fork. Better than an empty card, and honest about being raw.
             <ul className="flex flex-col gap-1 font-mono text-xs">
               {check.incoming.map((c) => (
                 <li key={c} className="text-fg-muted">
