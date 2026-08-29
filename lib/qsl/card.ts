@@ -11,6 +11,7 @@
 // The table is positioned and sized as a FRACTION of the image, not in pixels, so
 // one set of settings works whether the artwork is 1500 px wide or 5625.
 
+import { existsSync, readdirSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 
@@ -125,6 +126,65 @@ export interface RenderedCard {
  * Throws if the artwork is missing or unreadable — a QSL email whose whole point
  * is the card should fail loudly rather than go out without it.
  */
+/**
+ * The font stack the card's SVG asks for.
+ *
+ * DejaVu and Liberation FIRST, because those are what a Linux box actually has —
+ * `fonts-dejavu-core` is the near-universal one and Liberation is the metric-compatible
+ * Arial substitute. The Windows and macOS names follow for a desktop install.
+ *
+ * The old stack was "Arial Narrow, Helvetica, sans-serif": three names, none of which
+ * exists on Linux. It worked anyway, by accident — fontconfig resolves `sans-serif` to
+ * whatever is installed, which on a box with DejaVu is DejaVu Sans. On a box with NO
+ * fonts there is nothing to resolve to, and the card comes out with an empty table and a
+ * row of tofu boxes. That reads as missing QSO data rather than a missing font, which is
+ * exactly how it was reported.
+ */
+const CARD_FONT_STACK =
+  "DejaVu Sans, Liberation Sans, Arial Narrow, Helvetica, Arial, sans-serif";
+
+/** Where a Linux system keeps fonts. Checked in order; the first hit is enough. */
+const FONT_DIRS = [
+  "/usr/share/fonts",
+  "/usr/local/share/fonts",
+  "/usr/share/texmf/fonts",
+];
+
+let fontsPresentCache: boolean | null = null;
+
+/**
+ * Does this machine have ANY font sharp could render with?
+ *
+ * Checked because the failure is silent and misleading: sharp composites the SVG happily,
+ * librsvg draws nothing it has no glyphs for, and the result is a perfectly valid image
+ * with an empty table. No error is raised anywhere, so the operator sees a card that
+ * looks like the QSO data failed to populate.
+ *
+ * Deliberately NOT `fc-list`: fontconfig's command line tools are a separate package and
+ * are absent even on this project's own working installation, so asking them would report
+ * "no fonts" on a machine that renders cards correctly every day. The font FILES are what
+ * librsvg needs, so the files are what this looks for.
+ */
+export function systemFontsPresent(): boolean {
+  if (fontsPresentCache !== null) return fontsPresentCache;
+  const hasFont = (dir: string, depth = 0): boolean => {
+    if (depth > 3 || !existsSync(dir)) return false;
+    let entries: import("node:fs").Dirent[];
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return false;
+    }
+    for (const e of entries) {
+      if (e.isFile() && /\.(ttf|otf|ttc|pfb)$/i.test(e.name)) return true;
+      if (e.isDirectory() && hasFont(path.join(dir, e.name), depth + 1)) return true;
+    }
+    return false;
+  };
+  fontsPresentCache = FONT_DIRS.some((d) => hasFont(d));
+  return fontsPresentCache;
+}
+
 export async function renderQslCard(
   qso: QsoForTemplate,
   station: StationForTemplate,
@@ -132,6 +192,29 @@ export async function renderQslCard(
 ): Promise<RenderedCard> {
   const cfg = settings ?? (await loadCardSettings());
   const values = templateValues(qso, station);
+
+  // NO FONTS, NO CARD — refused up front rather than produced blank.
+  //
+  // This is the failure that prompted the check, and its whole problem is that it does not
+  // look like a font failure. sharp composites the SVG happily, librsvg draws nothing for
+  // glyphs it cannot find, and the result is a perfectly valid image with an empty QSO
+  // table and a row of tofu boxes. Every layer reports success. The operator sees a card
+  // that appears not to have been populated with QSO data, and goes looking in the log.
+  //
+  // A minimal container has no fonts at all. This project's own working installation has
+  // them only because `fonts-dejavu-core` arrived as somebody else's dependency, which is
+  // luck rather than design — the card asks for "Arial Narrow, Helvetica", neither of
+  // which exists on Linux, and works only because fontconfig substitutes whatever is
+  // installed for the final `sans-serif`. With nothing installed there is nothing to
+  // substitute.
+  if (!systemFontsPresent()) {
+    throw new Error(
+      "No fonts are installed on this server, so the QSO table would render blank — " +
+        "which looks like missing contact data rather than a missing font. Install one: " +
+        "`apt install fonts-dejavu-core` (Debian/Ubuntu) or `dnf install dejavu-sans-fonts` " +
+        "(Fedora/RHEL), then generate the card again.",
+    );
+  }
 
   const abs = path.isAbsolute(cfg.baseImage)
     ? cfg.baseImage
@@ -201,10 +284,10 @@ export async function renderQslCard(
     // Headings bold, values regular — the convention on printed cards, and it
     // keeps a six-column table readable at email size.
     parts.push(
-      `<text x="${cx.toFixed(1)}" y="${(rowH * 0.7).toFixed(1)}" font-family="Arial Narrow, Helvetica, sans-serif" font-size="${font.toFixed(1)}" font-weight="bold" fill="${esc(cfg.textColor)}" text-anchor="middle">${esc(cols[i]!.heading)}</text>`,
+      `<text x="${cx.toFixed(1)}" y="${(rowH * 0.7).toFixed(1)}" font-family="${CARD_FONT_STACK}" font-size="${font.toFixed(1)}" font-weight="bold" fill="${esc(cfg.textColor)}" text-anchor="middle">${esc(cols[i]!.heading)}</text>`,
     );
     parts.push(
-      `<text x="${cx.toFixed(1)}" y="${(rowH * 1.7).toFixed(1)}" font-family="Arial Narrow, Helvetica, sans-serif" font-size="${font.toFixed(1)}" fill="${esc(cfg.textColor)}" text-anchor="middle">${esc(cols[i]!.value)}</text>`,
+      `<text x="${cx.toFixed(1)}" y="${(rowH * 1.7).toFixed(1)}" font-family="${CARD_FONT_STACK}" font-size="${font.toFixed(1)}" fill="${esc(cfg.textColor)}" text-anchor="middle">${esc(cols[i]!.value)}</text>`,
     );
     if (i > 0) {
       // Dividers stop at the data row. Running them the full height would draw
@@ -226,7 +309,7 @@ export async function renderQslCard(
       `<line x1="0" y1="${rowH * 2}" x2="${tableW}" y2="${rowH * 2}" stroke="${esc(cfg.borderColor)}" stroke-width="1"/>`,
     );
     parts.push(
-      `<text x="${(tableW / 2).toFixed(1)}" y="${(rowH * 2.68).toFixed(1)}" font-family="Arial Narrow, Helvetica, sans-serif" font-size="${(font * 0.92).toFixed(1)}" fill="${esc(cfg.textColor)}" text-anchor="middle">${esc(footer)}</text>`,
+      `<text x="${(tableW / 2).toFixed(1)}" y="${(rowH * 2.68).toFixed(1)}" font-family="${CARD_FONT_STACK}" font-size="${(font * 0.92).toFixed(1)}" fill="${esc(cfg.textColor)}" text-anchor="middle">${esc(footer)}</text>`,
     );
   }
 
