@@ -52,6 +52,20 @@ const VITA_HEADER_BYTES = 28;
 const AUDIO_PACKET_CLASS = 0x03e3;
 const METER_PACKET_CLASS = 0x8002;
 
+/**
+ * How long without audio before the streams are rebuilt, ms.
+ *
+ * Comfortably inside the 90 s liveness watchdog so there is time for the rebuild to work
+ * AND for audio to resume before the process is killed — the whole point is to recover
+ * without a restart. Comfortably outside a transmission, too: DAX receive audio goes
+ * near-silent while the radio is transmitting, and an FT8 cycle is 15 s, so anything much
+ * below 20 s would fire during ordinary operating.
+ */
+const AUDIO_REBUILD_AFTER_MS = 30_000;
+
+/** Minimum gap between rebuild attempts, so a radio that is truly gone is left alone. */
+const AUDIO_REBUILD_COOLDOWN_MS = 45_000;
+
 /** DAX RX audio sample rate. */
 export const DAX_SAMPLE_RATE = 24_000;
 
@@ -254,6 +268,19 @@ export class FlexDaxSource extends EventEmitter<Events> {
   private client: FlexClient | null = null;
   private socket: dgram.Socket | null = null;
   private streamId: string | null = null;
+  /**
+   * The UDP port the radio was told to send to, kept so the streams can be rebuilt.
+   *
+   * The radio ties every stream to a client's registered port. Re-registering is the
+   * first thing a rebuild has to do, and without holding the port there is nothing to
+   * re-register.
+   */
+  private udpPort = 0;
+  /** When an audio packet last arrived. 0 = none yet. */
+  private lastAudioAt = 0;
+  private audioRecoverTimer: NodeJS.Timeout | null = null;
+  /** When a rebuild was last attempted, so a dead radio is not hammered. */
+  private lastRebuildAt = 0;
   private smeterTimer: NodeJS.Timeout | null = null;
   /** Slice feeding our DAX channel; created by us when the radio had none. */
   private sliceIndex: number | null = null;
@@ -320,6 +347,91 @@ export class FlexDaxSource extends EventEmitter<Events> {
   /** What the radio last reported for the receiver controls. */
   get receiverControls(): ReceiverControls {
     return { ...this.receiverState };
+  }
+
+  /**
+   * Rebuild the radio's streams after they stop arriving.
+   *
+   * THE RECOVERY THAT EXISTED DID NOT RECOVER ANYTHING. When frames stopped, the only
+   * thing that happened was `display pan set` being re-sent — see the panadapter stall
+   * check below. That could at best have fixed the panadapter; it never touched the DAX
+   * audio stream, which is what the liveness watchdog is actually measuring. Measured
+   * over one day on the live installation: seven stall episodes, five of which ran the
+   * full 90 seconds and ended in the process being killed and restarted. The watchdog
+   * was not a safety net, it was the recovery mechanism, and it costs ~25 s off air and
+   * an abandoned contact every time.
+   *
+   * What the radio actually needs is its streams recreated. Both directions stop
+   * together — audio AND panadapter, which are separate streams on the same socket —
+   * while the TCP command channel stays ESTABLISHED with nothing queued, so the control
+   * link is healthy and only the streaming has stopped. Re-registering the UDP port and
+   * recreating the stream is the smallest thing that could plausibly restore it.
+   *
+   * UNVERIFIED: that this fixes it. The commands are the same ones that establish the
+   * streams at connect, and they are cheap and idempotent, but the fault has not been
+   * reproduced on demand — it happens every few hours and the evidence so far is a
+   * network-counter sampler left running on the box. If a stall survives this, the
+   * watchdog still fires at 90 s exactly as before, so the worst case is unchanged.
+   */
+  private async rebuildStreams(): Promise<void> {
+    const client = this.client;
+    if (!client || !this.udpPort) return;
+
+    // One attempt per stall, not one per check. A radio that is genuinely gone must not
+    // be sent a stream teardown every few seconds for the rest of the outage.
+    const now = Date.now();
+    if (now - this.lastRebuildAt < AUDIO_REBUILD_COOLDOWN_MS) return;
+    this.lastRebuildAt = now;
+
+    console.warn(
+      `[flex] no receiver audio for ${((now - this.lastAudioAt) / 1000).toFixed(0)}s — ` +
+        `rebuilding the DAX stream before the watchdog gives up`,
+    );
+
+    try {
+      // The radio ties streams to the client's registered port, so this comes first.
+      await client.command(`client udpport ${this.udpPort}`).catch(() => {});
+
+      if (this.streamId) {
+        // `stream remove` needs the 0x prefix; without it the radio answers 0x50000059
+        // and the stream leaks — the same trap the connect path documents.
+        await client.command(`stream remove 0x${this.streamId}`).catch(() => {});
+        this.streamId = null;
+      }
+
+      const created = await client.command(
+        `stream create type=dax_rx dax_channel=${this.opts.daxChannel}`,
+      );
+      if (created.status !== 0) {
+        console.warn(
+          `[flex] could not recreate the DAX stream (0x${created.status.toString(16)}) — ` +
+            `leaving it to the watchdog`,
+        );
+        return;
+      }
+      this.streamId = created.message.trim();
+
+      // Re-assert the slice's DAX routing. Cheap, and a slice that lost it produces a
+      // stream that exists and carries nothing — indistinguishable from this fault.
+      if (this.sliceIndex !== null) {
+        await client
+          .command(`slice set ${this.sliceIndex} dax=${this.opts.daxChannel}`)
+          .catch(() => {});
+      }
+
+      // The panadapter is a separate stream and stops with the audio, so it is rebuilt in
+      // the same breath rather than waiting for its own 15 s nudge to fail again.
+      if (this.pan) {
+        const dial = this.opts.dialHz?.() ?? this.opts.freqHz;
+        await this.pan.tune(dial).catch(() => {});
+      }
+
+      console.log(`[flex] DAX stream rebuilt as ${this.streamId}`);
+    } catch (err) {
+      console.warn(
+        `[flex] stream rebuild failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
 
   /**
@@ -519,6 +631,7 @@ export class FlexDaxSource extends EventEmitter<Events> {
         resolve((socket.address() as { port: number }).port);
       });
     });
+    this.udpPort = udpPort;
 
     const client = new FlexClient(this.opts.host, this.opts.port);
     this.client = client;
@@ -727,6 +840,19 @@ export class FlexDaxSource extends EventEmitter<Events> {
       this.receiverState = next;
       this.emit("receiverControls", { ...next });
     });
+
+    // Audio liveness, checked here rather than only in the service.
+    //
+    // The bridge's watchdog notices the same silence and responds by killing the process.
+    // This gets a chance first, because a rebuilt stream costs a couple of commands and a
+    // restart costs ~25 s off air and whatever contact was in progress.
+    this.lastAudioAt = Date.now();
+    this.audioRecoverTimer = setInterval(() => {
+      if (!this.lastAudioAt) return;
+      if (Date.now() - this.lastAudioAt < AUDIO_REBUILD_AFTER_MS) return;
+      void this.rebuildStreams();
+    }, 5_000);
+    this.audioRecoverTimer.unref?.();
 
     this.emit("connected", {
       streamId: this.streamId,
@@ -962,6 +1088,8 @@ export class FlexDaxSource extends EventEmitter<Events> {
     this.panStatuses.clear();
     if (this.spectrumTimer) clearInterval(this.spectrumTimer);
     this.spectrumTimer = null;
+    if (this.audioRecoverTimer) clearInterval(this.audioRecoverTimer);
+    this.audioRecoverTimer = null;
     if (this.smeterTimer) clearInterval(this.smeterTimer);
     this.smeterTimer = null;
 
@@ -1013,6 +1141,7 @@ export class FlexDaxSource extends EventEmitter<Events> {
     // investigated twice.
     if (packetClass === WATERFALL_PACKET_CLASS) return;
     if (packetClass !== AUDIO_PACKET_CLASS) return;
+    this.lastAudioAt = Date.now();
 
     // Interleaved stereo float32 BE; L and R are identical on a receive slice.
     //
