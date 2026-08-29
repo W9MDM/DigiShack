@@ -97,6 +97,15 @@ export interface QsoLogContext {
 
 export interface QsoControllerOptions {
   /**
+   * The radio's own transmit-filter ceiling in Hz, asked fresh, or null when it does not
+   * report one.
+   *
+   * A closure rather than a number because it arrives asynchronously — the FlexRadio sends
+   * `transmit … lo=100 hi=3100` when it feels like it, and a value read at construction
+   * would be null for ever on a connection that had not seen one yet.
+   */
+  txFilterHiHz?: () => number | null;
+  /**
    * Typed to the narrow shapes in lib/radio/types.ts, not to the FlexRadio classes.
    *
    * These layers only ever read `source.periodMs` and call `tx.transmit` / `tx.unkey`.
@@ -183,11 +192,37 @@ export interface QsoPublicState {
 export const MAX_TX_OFFSET_HZ = 2_800;
 const MIN_TX_OFFSET_HZ = 200;
 
+/**
+ * Room left below the filter's edge for the signal itself.
+ *
+ * An offset names where a transmission STARTS; FT8 spreads eight tones 6.25 Hz apart above
+ * it and FT4 four tones 20.83 Hz apart, so the signal reaches about 90 Hz higher than the
+ * number. Answering at exactly the filter edge would put most of the tones outside it.
+ */
+const TX_EDGE_GUARD_HZ = 100;
+
 export class QsoController {
   private readonly o: QsoControllerOptions;
   private seq: QsoSequencer | null = null;
   /** Window parity (windowIndex % 2) we transmit on. */
   private txParity: 0 | 1 | null = null;
+
+  /**
+   * The highest offset this radio will actually transmit at, asked fresh.
+   *
+   * `MAX_TX_OFFSET_HZ` is the conservative default and stays the answer for a radio that
+   * does not report its transmit filter — an IC-7300 selects its passband in a menu that
+   * CI-V cannot read. A FlexRadio DOES report it (`transmit … lo=100 hi=3100`), and
+   * refusing to answer anyone between 2800 and 3100 Hz on a radio that says it can reach
+   * 3100 is throwing away a slice of the band for no reason.
+   */
+  private maxTxOffset(): number {
+    const reported = this.o.txFilterHiHz?.() ?? null;
+    if (reported === null || !Number.isFinite(reported)) return MAX_TX_OFFSET_HZ;
+    // Never BELOW the conservative default: a radio reporting something implausibly
+    // narrow must not silently shrink what we will answer.
+    return Math.max(MAX_TX_OFFSET_HZ, Math.round(reported) - TX_EDGE_GUARD_HZ);
+  }
   private txOffsetHz = 1500;
   private lastSent: string | null = null;
   private seenWindows = new Set<number>();
@@ -291,10 +326,11 @@ export class QsoController {
     // be someone else, and there is nothing to be gained by calling into a passband the
     // transmitter cannot reach.
     const wanted = Math.round(req.theirOffsetHz);
-    if (wanted > MAX_TX_OFFSET_HZ) {
+    const ceiling = this.maxTxOffset();
+    if (wanted > ceiling) {
       return {
         ok: false,
-        reason: `${req.theirCall} is at ${wanted} Hz, above the ${MAX_TX_OFFSET_HZ} Hz the transmitter can place audio at — decodable, not answerable`,
+        reason: `${req.theirCall} is at ${wanted} Hz, above the ${ceiling} Hz the transmitter can place audio at — decodable, not answerable`,
       };
     }
 
@@ -311,7 +347,7 @@ export class QsoController {
     const theirParity = (Math.floor(req.theirWindowStart / period) % 2) as 0 | 1;
     this.txParity = ((theirParity + 1) % 2) as 0 | 1;
     // Answer on their frequency — the normal convention when calling a CQ.
-    this.txOffsetHz = Math.max(MIN_TX_OFFSET_HZ, Math.min(MAX_TX_OFFSET_HZ, wanted));
+    this.txOffsetHz = Math.max(MIN_TX_OFFSET_HZ, Math.min(ceiling, wanted));
 
     this.seq = new QsoSequencer({
       myCall: this.o.identity.myCall,
@@ -410,7 +446,10 @@ export class QsoController {
   }): boolean {
     if (this.seq && !this.seq.isDone) return false;
     this.txParity = req.parity;
-    this.txOffsetHz = Math.max(MIN_TX_OFFSET_HZ, Math.min(MAX_TX_OFFSET_HZ, Math.round(req.offsetHz)));
+    this.txOffsetHz = Math.max(
+      MIN_TX_OFFSET_HZ,
+      Math.min(this.maxTxOffset(), Math.round(req.offsetHz)),
+    );
     this.seq = new QsoSequencer({
       myCall: this.o.identity.myCall,
       myGrid: this.o.identity.myGrid,

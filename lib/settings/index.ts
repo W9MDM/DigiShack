@@ -256,6 +256,8 @@ export interface SettingView {
   group: string;
   help?: string;
   placeholder?: string;
+  /** Choices, for a `select`. Carried from the registry so the page needs no table. */
+  options?: { value: string; label: string }[];
   source: SettingSource;
   /** Non-secret values only. Always null for secrets. */
   value: string | null;
@@ -309,6 +311,10 @@ export async function describeSettings(): Promise<SettingView[]> {
       group: def.group,
       help: def.help,
       placeholder: def.placeholder,
+      // The choices, for a `select`. Sent with the setting rather than hardcoded in the
+      // page, so adding a bundled font is a change to the registry alone and the picker
+      // cannot drift out of step with what is actually installed.
+      options: def.options,
       source,
       value,
       masked,

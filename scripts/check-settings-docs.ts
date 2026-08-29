@@ -96,6 +96,28 @@ function main(): void {
     );
   }
 
+  console.log("\nevery picker has something to pick");
+  {
+    // A `select` with no options renders an empty dropdown, which is worse than the text
+    // box it replaced: the operator cannot type the value they wanted either.
+    const selects = SETTINGS.filter((s) => s.type === "select");
+    const empty = selects.filter((s) => (s.options?.length ?? 0) === 0);
+    ok(empty.length === 0, "no select setting is missing its options", empty.map((s) => s.key).join(", "));
+
+    // A default that is not among the choices leaves the picker showing a value it cannot
+    // offer, and the first save silently changes it to something else.
+    const strayDefault = selects.filter(
+      (s) => s.default !== undefined && !(s.options ?? []).some((o) => o.value === s.default),
+    );
+    ok(
+      strayDefault.length === 0,
+      "every select default is one of its own options",
+      strayDefault.map((s) => `${s.key}=${s.default}`).join(", "),
+    );
+    ok(selects.length > 0, `${selects.length} setting(s) offer a list rather than free text`);
+  }
+
+
   console.log(`\n${pass} passed, ${fail} failed\n`);
   if (fail > 0) process.exit(1);
 }

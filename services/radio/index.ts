@@ -1375,6 +1375,10 @@ async function startFlexSource(): Promise<() => Promise<void>> {
       station,
       dialHz: () => status.dialFrequency,
       radio: () => status.radio?.model ?? null,
+      // Read fresh from the GUI connection's own view of the radio. The FlexRadio reports
+      // `transmit … lo=100 hi=3100`; the Icom reports nothing and gets null, which leaves
+      // the conservative default in force.
+      txFilterHiHz: () => flexGuiClient?.state.txFilterHiHz ?? flexRig?.state.txFilterHiHz ?? null,
       // The receive noise floor, so the operator can tell a quiet band from a
       // band buried in local noise. Reset on every retune below.
       noiseDbm: () => noiseFloor.dbm(),

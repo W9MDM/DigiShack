@@ -134,6 +134,20 @@ export interface FlexRadioState {
   numSlice: number | null;
   numTx: number | null;
   /**
+   * The transmit filter's upper edge, in Hz, as the RADIO reports it.
+   *
+   * `transmit … lo=100 hi=3100` on a FLEX-6400. This is the highest audio the transmitter
+   * will actually pass, and it decides which decoded stations can be answered at all —
+   * a station heard above it is decodable and not answerable.
+   *
+   * It was hardcoded at 2800 for both radios, which is right for an IC-7300's USB-D and
+   * needlessly tight here: at 2800 this station refuses to answer anyone between 2800 and
+   * 3100 Hz, which on a busy band is a real slice of the passband. Null until the radio
+   * says, and the conservative default applies until then.
+   */
+  txFilterHiHz: number | null;
+
+  /**
    * Antenna ports, accumulated from every status line that mentions them.
    *
    * Both `slice` and `display pan` lines carry `ant_list`, so this fills in even before
@@ -177,6 +191,7 @@ export class FlexClient extends EventEmitter<Events> {
     atuPresent: false,
     numSlice: null,
     antennas: NO_ANTENNA_PORTS,
+    txFilterHiHz: null,
     numTx: null,
   };
 
@@ -390,6 +405,11 @@ export class FlexClient extends EventEmitter<Events> {
 
     if (object === "slice" && index !== null) {
       this.onSliceStatus(index, fields);
+    } else if (object === "transmit") {
+      // The transmit passband. Only when the radio actually says so — a status line
+      // carries only the fields that changed, and most `transmit` lines carry neither.
+      const hi = Number(fields.hi);
+      if (Number.isFinite(hi) && hi > 0) this.state.txFilterHiHz = hi;
     } else if (object === "interlock") {
       // state=TRANSMITTING is the authoritative TX indicator.
       const st = fields.state;

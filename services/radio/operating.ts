@@ -127,6 +127,13 @@ export interface OperatingDeps {
    * `info` comes back, which is after the operating layer is built.
    */
   radio: () => string | null;
+  /**
+   * The radio's transmit-filter ceiling in Hz, or null when it does not report one.
+   *
+   * Optional because only the FlexRadio answers it. An IC-7300 selects its transmit
+   * passband in a menu CI-V cannot read, so it keeps the conservative default.
+   */
+  txFilterHiHz?: () => number | null;
   /** Receive noise floor in dBm, for judging whether a band is worth sitting on. */
   noiseDbm?: () => number | null;
   /** Move to a band's calling frequency. The FlexRadio also runs its ATU here. */
@@ -527,6 +534,9 @@ export async function buildOperating(deps: OperatingDeps): Promise<Operating> {
     guards,
     identity,
     getBandMode,
+    // What the RADIO says its transmitter can reach, so a station at 2903 Hz on a rig
+    // whose filter runs to 3100 is answerable instead of refused on a constant.
+    txFilterHiHz: deps.txFilterHiHz,
     radio: deps.radio,
     txPower,
     // Straight to the auto operator: it keeps the tally per band.

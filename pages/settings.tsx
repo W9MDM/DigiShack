@@ -28,11 +28,13 @@ import { SETTINGS_TABS, settingsTabFor } from "@/lib/settings/tabs";
 interface SettingView {
   key: string;
   label: string;
-  type: "string" | "secret" | "number" | "boolean" | "text" | "limit";
+  type: "string" | "secret" | "number" | "boolean" | "text" | "limit" | "select";
   wide?: boolean;
   group: string;
   help?: string;
   placeholder?: string;
+  /** Choices, for a `select`. Written as the same plain string a text field would write. */
+  options?: { value: string; label: string }[];
   source: "database" | "env" | "default" | "unset";
   value: string | null;
   masked: string | null;
@@ -553,6 +555,32 @@ function SettingField({
             // typed with the wrong case.
             className="w-full rounded-sm border border-line bg-bg-raised px-2 py-1.5 font-mono text-xs leading-relaxed text-fg focus:border-accent-bright focus-visible:outline-2 focus-visible:outline-accent-bright focus-visible:outline-offset-1"
           />
+        ) : s.type === "select" ? (
+          /* A fixed list of valid values gets a list.
+             
+             The card font shipped with three typefaces and a free-text box, so the only
+             route to a working value was reading the help and typing the family name
+             exactly — "theres no drop down to pick the font, how is someone supposed to
+             know what fonts loaded". They could not.
+             
+             A value already saved that is NOT one of the choices is kept and shown rather
+             than silently snapped to the first option: a card configured before this
+             existed may legitimately name a font installed on the server. */
+          <Select
+            id={s.key}
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+            disabled={cleared}
+          >
+            {value !== "" && !(s.options ?? []).some((o) => o.value === value) && (
+              <option value={value}>{value} (not one of the bundled fonts)</option>
+            )}
+            {(s.options ?? []).map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </Select>
         ) : s.type === "boolean" ? (
           <Select
             id={s.key}
