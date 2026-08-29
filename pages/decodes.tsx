@@ -12,6 +12,7 @@ import {
   Button,
   Card,
   ErrorBanner,
+  Input,
   PageHeader,
   Select,
 } from "@/components/ui/primitives";
@@ -199,6 +200,15 @@ export default function DigitalPage({ wsUrl }: Props) {
   const [filter, setFilter] = useState<
     "all" | "cq" | "cq-pota" | "cq-dx" | "worth" | "me"
   >("all");
+  /**
+   * Free-text search across the decode list.
+   *
+   * The six-way picker below answers "show me a KIND of station" and could not answer
+   * "is W1AW on the air", which is the question an operator actually asks when someone
+   * says they are calling. There was no way to ask it at all: 500 rows scrolling past at
+   * one screenful per cycle, and Ctrl-F only ever finds what is currently mounted.
+   */
+  const [search, setSearch] = useState("");
   const [gain, setGain] = useState(1);
   const [lastAt, setLastAt] = useState<number | null>(null);
   const [now, setNow] = useState(() => Date.now());
@@ -395,26 +405,40 @@ export default function DigitalPage({ wsUrl }: Props) {
   );
 
   const visible = useMemo(() => {
-    if (filter === "all") return rows;
-    if (filter === "me") return rows.filter((r) => mentionsMe(r.message));
+    // Search first, then the category filter, and the two AND together — a search that
+    // silently widened the filter would be a different list from the one on screen.
+    // Matched against the whole MESSAGE, not just the parsed callsign: a message names
+    // both stations, so searching a call finds people calling them as well as their own
+    // transmissions, and a grid or "POTA" finds those too.
+    const needle = search.trim().toUpperCase();
+    const searched = needle
+      ? rows.filter(
+          (r) =>
+            r.message.toUpperCase().includes(needle) ||
+            (r.callsign ?? "").toUpperCase().includes(needle),
+        )
+      : rows;
+
+    if (filter === "all") return searched;
+    if (filter === "me") return searched.filter((r) => mentionsMe(r.message));
     // "Worth working" is the auto-operator's own ranking, not a second opinion:
     // the same scoring behind the award badges on each row, so what the operator
     // filters to and what Auto Hunt would pick cannot disagree.
     if (filter === "worth") {
-      return rows.filter((r) => r.callsign && (worth.get(r.callsign)?.length ?? 0) > 0);
+      return searched.filter((r) => r.callsign && (worth.get(r.callsign)?.length ?? 0) > 0);
     }
     // The CQ filters read the modifier the PARSER extracted rather than matching
     // text. "CQ POTA K9XYZ EN61" and "CQ K9XYZ EN61" differ by a token that
     // lib/digital/qso.ts already isolates, and a /CQ POTA/ regex would also match
     // a directed message that happens to mention it.
-    return rows.filter((r) => {
+    return searched.filter((r) => {
       const p = parseMessage(r.message);
       if (p.kind !== "cq") return false;
       if (filter === "cq-pota") return p.modifier === "POTA";
       if (filter === "cq-dx") return p.modifier === "DX";
       return true;
     });
-  }, [rows, filter, mentionsMe, worth]);
+  }, [rows, filter, search, mentionsMe, worth]);
 
   /** Markers for the most recent cycle only — older ones aren't on screen. */
   const markers = useMemo<WaterfallMarker[]>(() => {
@@ -862,6 +886,27 @@ export default function DigitalPage({ wsUrl }: Props) {
             <Card
               title={`Decodes (${visible.length})`}
               actions={
+                <div className="flex items-center gap-2">
+                  {/* Type a callsign. Uppercased as you type because that is how every
+                      decode is written, and a lowercase search matching nothing would
+                      read as "they are not on the air". */}
+                  <Input
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value.toUpperCase())}
+                    placeholder="Find a callsign…"
+                    aria-label="Search decodes"
+                    className="w-40 tnum"
+                  />
+                  {search !== "" && (
+                    <button
+                      type="button"
+                      onClick={() => setSearch("")}
+                      title="Clear the search"
+                      className="text-xs text-fg-muted hover:text-fg"
+                    >
+                      clear
+                    </button>
+                  )}
                 <Select
                   value={filter}
                   onChange={(e) => setFilter(e.target.value as typeof filter)}
@@ -876,6 +921,7 @@ export default function DigitalPage({ wsUrl }: Props) {
                     {myCall ? `Mentions ${myCall}` : "Mentions me"}
                   </option>
                 </Select>
+                </div>
               }
             >
               {visible.length === 0 ? (
@@ -885,15 +931,32 @@ export default function DigitalPage({ wsUrl }: Props) {
                 // an operator looking for a fault in the receiver.
                 rows.length > 0 ? (
                   <p className="text-sm text-fg-subtle">
+                    {/* Three different nothings, and an operator needs to know which:
+                        nothing heard at all, nothing matching the category, and nothing
+                        matching what they typed. The last one is the one that means
+                        "that station is not on the air right now". */}
                     None of the {rows.length} decode{rows.length === 1 ? "" : "s"} heard
-                    match this filter.{" "}
-                    <button
-                      type="button"
-                      className="text-accent-bright hover:underline"
-                      onClick={() => setFilter("all")}
-                    >
-                      Show everything
-                    </button>
+                    {search ? ` mention ${search}` : " match this filter"}
+                    {search && filter !== "all" ? " within this filter" : ""}.{" "}
+                    {search && (
+                      <button
+                        type="button"
+                        className="text-accent-bright hover:underline"
+                        onClick={() => setSearch("")}
+                      >
+                        Clear the search
+                      </button>
+                    )}
+                    {search && filter !== "all" ? " · " : ""}
+                    {filter !== "all" && (
+                      <button
+                        type="button"
+                        className="text-accent-bright hover:underline"
+                        onClick={() => setFilter("all")}
+                      >
+                        Show everything
+                      </button>
+                    )}
                   </p>
                 ) : (
                   <p className="text-sm text-fg-subtle">
@@ -1033,6 +1096,79 @@ export default function DigitalPage({ wsUrl }: Props) {
 }
 
 /**
+ * Call a station that is not on the decode list.
+ *
+ * Every other route into a QSO starts from a decode: click the row, press Call, and the
+ * fields come off what was heard. That leaves no way to work a station an operator KNOWS
+ * is on — a sked, a net, someone saying so on the phone — because nothing they have sent
+ * has decoded here. The controls existed; there was simply no way to name a station the
+ * receiver had not already named.
+ *
+ * The offset is asked for rather than assumed. Answering on the caller's own frequency is
+ * the convention, and with nothing decoded there is no frequency to answer on — so 1500
+ * is a starting point and the operator overrides it when they know better.
+ */
+function ManualCall({
+  busy,
+  onCall,
+}: {
+  busy: boolean;
+  onCall: (call: string, offsetHz: number) => void;
+}) {
+  const [call, setCall] = useState("");
+  const [offset, setOffset] = useState("1500");
+
+  const trimmed = call.trim().toUpperCase();
+  // Loose on purpose: portable and special-event calls are full of slashes and digits,
+  // and a strict pattern here would refuse a legal callsign the encoder accepts. The
+  // bridge and the FT8 encoder both validate properly; this only stops empty submits.
+  const valid = /^[A-Z0-9/]{3,16}$/.test(trimmed);
+  const offsetHz = Number(offset);
+  const offsetOk = Number.isFinite(offsetHz) && offsetHz >= 200 && offsetHz <= 2900;
+
+  return (
+    <form
+      className="flex flex-wrap items-center gap-2"
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (valid && offsetOk && !busy) onCall(trimmed, Math.round(offsetHz));
+      }}
+    >
+      <Input
+        value={call}
+        onChange={(e) => setCall(e.target.value.toUpperCase())}
+        placeholder="W1AW"
+        aria-label="Callsign to call"
+        className="w-32 tnum"
+      />
+      <label className="flex items-center gap-1 text-xs text-fg-subtle">
+        at
+        <Input
+          value={offset}
+          onChange={(e) => setOffset(e.target.value)}
+          inputMode="numeric"
+          aria-label="Audio offset in hertz"
+          className="w-20 tnum"
+        />
+        Hz
+      </label>
+      <Button type="submit" variant="primary" disabled={busy || !valid || !offsetOk}>
+        {busy ? "…" : "Call"}
+      </Button>
+      {call !== "" && !valid && (
+        <span className="text-xs text-danger">Not a callsign</span>
+      )}
+      {!offsetOk && (
+        // 2900 rather than 3000: most radios will not place audio above about 2.9 kHz
+        // whatever the receiver hears, which is the same limit the passband setting
+        // warns about.
+        <span className="text-xs text-danger">Offset must be 200–2900 Hz</span>
+      )}
+    </form>
+  );
+}
+
+/**
  * The panel that runs one QSO: pick a station from the decode list, review the
  * standard messages, start calling, watch the exchange advance, halt any time.
  *
@@ -1062,13 +1198,45 @@ function WorkStationPanel({
   // Prefer the live QSO for display; fall back to the clicked target.
   const call = active ? qso!.theirCall : (target?.callsign ?? null);
 
-  async function act(action: "call" | "qso-halt" | "qso-skip" | "rearm") {
+  async function act(
+    action: "call" | "qso-halt" | "qso-skip" | "rearm",
+    /**
+     * Fields for a call to someone who is NOT on the decode list.
+     *
+     * Everything the sequencer needs normally comes off the decode that was clicked.
+     * A station an operator knows is on — because it was arranged on a net, or because
+     * they are being told so on the phone — produces no decode, so there was nothing to
+     * click and no way to call them at all.
+     */
+    manual?: { theirCall: string; theirOffsetHz: number },
+  ) {
     setBusy(true);
     setError(null);
     try {
       await apiPost("/api/bridge/control", {
         action,
-        ...(action === "call" && target
+        ...(action === "call" && manual
+          ? {
+              theirCall: manual.theirCall,
+              theirGrid: null,
+              // Unheard, so there is no report to echo back. The sequencer sends a
+              // grid-square first message anyway, and the report it eventually sends
+              // is measured from THEIR reply, not from this.
+              theirSnr: 0,
+              theirOffsetHz: manual.theirOffsetHz,
+              // NOT 0, which the bridge would otherwise default to.
+              //
+              // startCall derives the transmit cycle from this: `theirParity` is
+              // floor(windowStart / period) % 2 and we take the opposite. A zero makes
+              // that parity 0 every time, so every manual call would transmit on odd
+              // windows — a coin flip, and when it lost we would be transmitting at the
+              // same instant as the station we are calling and never hear them. `now`
+              // makes it the CURRENT window's parity, so we answer in the next one,
+              // which is what calling someone means.
+              theirWindowStart: Date.now(),
+            }
+          : {}),
+        ...(action === "call" && !manual && target
           ? {
               theirCall: target.callsign,
               theirGrid: gridFromMessage(target.message),
@@ -1096,9 +1264,22 @@ function WorkStationPanel({
   if (!target && !active && !qso?.pausedReason) {
     return (
       <div className="mb-4 rounded-sm border border-dashed border-line-strong bg-surface px-3 py-2 text-sm text-fg-muted">
-        Pick a station to work — press <span className="text-fg">Call</span> on any
-        decode below, or click its row. The exchange then runs itself: report,
-        roger-report, RR73, logged.
+        <p>
+          Pick a station to work — press <span className="text-fg">Call</span> on any
+          decode below, or click its row. The exchange then runs itself: report,
+          roger-report, RR73, logged.
+        </p>
+        <div className="mt-2 border-t border-line pt-2">
+          <p className="mb-1.5 text-xs text-fg-subtle">
+            Or call someone who has not decoded here — a sked, or a station you have been
+            told is on. We transmit in the next cycle, so they answer in the one after.
+          </p>
+          <ManualCall
+            busy={busy}
+            onCall={(c, hz) => void act("call", { theirCall: c, theirOffsetHz: hz })}
+          />
+        </div>
+        {error && <p className="mt-2 text-xs text-danger">{error}</p>}
       </div>
     );
   }
