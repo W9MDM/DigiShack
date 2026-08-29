@@ -35,6 +35,7 @@ import { pruneDecodes } from "@/lib/db/retention";
 import { type OperatingGuards, parseMessage } from "@/lib/digital/qso";
 import { FlexDaxTransmitter, RF_POWER_WARN_PCT } from "@/lib/flex/tx";
 import type { QsoController } from "./qso-controller";
+import { MAX_TX_OFFSET_HZ, resolveMaxTxOffset } from "./qso-controller";
 import { buildOperating, callingFrequencyHz } from "./operating";
 import { runAutoQsl } from "@/lib/qsl/auto";
 import { getLotwCredentials, syncLotwConfirmations } from "@/lib/integrations/lotw";
@@ -166,6 +167,22 @@ interface RigStatus {
   /** RF power, percent, as the radio reports it. Native flex path only. */
   rfPower: number | null;
   /**
+   * The transmit filter's upper edge as the RADIO reports it, and the highest offset that
+   * leaves us willing to answer at.
+   *
+   * Surfaced because 1.143.0 raised the ceiling from a hardcoded 2800 Hz to whatever the
+   * radio says, and there was no way to tell whether that had taken effect. A `transmit`
+   * status line carries only the fields that CHANGED, so a radio that never sent `hi`
+   * would leave the ceiling at the default with nothing anywhere reporting it — the fix
+   * doing nothing and the fix working look identical from outside.
+   *
+   * Null on a radio that does not report it, which is not a fault: an IC-7300 selects its
+   * transmit passband in a menu CI-V cannot read, and the conservative default applies.
+   */
+  txFilterHiHz: number | null;
+  /** What `txFilterHiHz` resolves to — the number a refusal message quotes. */
+  maxTxOffsetHz: number;
+  /**
    * Whether the radio's TCP command channel is up.
    *
    * Tracked separately from `connected` on purpose: DAX audio is UDP, so decodes
@@ -259,6 +276,8 @@ const status: RigStatus = {
   rxDF: null,
   txDF: null,
   rfPower: null,
+  txFilterHiHz: null,
+  maxTxOffsetHz: MAX_TX_OFFSET_HZ,
   commandChannel: false,
   txBlockers: [],
   txWarnings: [],
@@ -1497,14 +1516,24 @@ async function startFlexSource(): Promise<() => Promise<void>> {
   rig.on("status", (st) => {
     // The transmit object carries rfpower; surface it so the UI slider can show
     // the radio's actual setting rather than an optimistic guess.
-    if (st.object.split(/\s+/)[0] === "transmit" && st.fields.rfpower !== undefined) {
+    if (st.object.split(/\s+/)[0] !== "transmit") return;
+    let changed = false;
+    if (st.fields.rfpower !== undefined) {
       const p = Number(st.fields.rfpower);
       if (Number.isFinite(p) && p !== status.rfPower) {
         status.rfPower = p;
         applyPowerWarning(p);
-        broadcast({ kind: "status", status });
+        changed = true;
       }
     }
+    // The transmit passband, read off the same object. See status.txFilterHiHz.
+    const hi = rig.state.txFilterHiHz;
+    if (hi !== status.txFilterHiHz) {
+      status.txFilterHiHz = hi;
+      status.maxTxOffsetHz = resolveMaxTxOffset(hi);
+      changed = true;
+    }
+    if (changed) broadcast({ kind: "status", status });
   });
 
   flexRig = rig;

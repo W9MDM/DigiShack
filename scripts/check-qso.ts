@@ -13,6 +13,7 @@ import {
   parseMessage,
   standardMessages,
 } from "@/lib/digital/qso";
+import { MAX_TX_OFFSET_HZ, resolveMaxTxOffset } from "@/services/radio/qso-controller";
 
 let pass = 0;
 let fail = 0;
@@ -675,6 +676,38 @@ async function main(): Promise<void> {
     }
   }
 
+
+  // ---------------------------------------------------------------------------------
+  // The transmit ceiling - how high up the passband we are willing to answer.
+  //
+  // > "?? are we not suing the full ft8 band?"
+  //
+  // Beside a decode reading "KF6FIR is at 2903 Hz, above the 2800 Hz the transmitter can
+  // place audio at". The radio disagreed: `transmit freq=7.074000 lo=100 hi=3100`. The
+  // 2800 constant reasons about an IC-7300's USB-D roll-off - correct for an IC-7300 and
+  // needlessly tight on a Flex, so this station was refusing everyone in a 300 Hz strip.
+  //
+  // Asserted here because the failure mode is SILENCE. A radio that never reports `hi`
+  // leaves the ceiling at the default, and the fix doing nothing looks exactly like the
+  // fix working.
+  console.log("");
+  console.log("Transmit ceiling");
+  {
+    eq(resolveMaxTxOffset(null), MAX_TX_OFFSET_HZ, "a radio that says nothing keeps 2800");
+    eq(resolveMaxTxOffset(NaN), MAX_TX_OFFSET_HZ, "so does a garbled reading");
+    // MEASURED on a FLEX-6400: `sub tx all` delivers lo=100 hi=3100 at subscribe, so this
+    // is the number a Flex install actually resolves to.
+    eq(resolveMaxTxOffset(3100), 3000, "a Flex reporting hi=3100 answers up to 3000");
+    ok(resolveMaxTxOffset(3100) > 2903, "which is above the KF6FIR decode that started this");
+    // 100 Hz of guard, because an offset names where a transmission STARTS and FT8 puts
+    // eight tones about 90 Hz above it. Answering at the edge puts most of them outside.
+    eq(resolveMaxTxOffset(2900), MAX_TX_OFFSET_HZ, "the guard is 100 Hz below the edge");
+    // Never BELOW the conservative default. A radio reporting an implausibly narrow filter
+    // must not silently shrink what we will answer.
+    eq(resolveMaxTxOffset(1500), MAX_TX_OFFSET_HZ, "an implausibly narrow filter cannot shrink it");
+    eq(resolveMaxTxOffset(0), MAX_TX_OFFSET_HZ, "nor can a zero");
+    eq(resolveMaxTxOffset(-1), MAX_TX_OFFSET_HZ, "nor a negative");
+  }
 
   console.log(`\n${pass} passed, ${fail} failed\n`);
   if (fail > 0) process.exit(1);

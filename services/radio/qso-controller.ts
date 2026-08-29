@@ -201,6 +201,23 @@ const MIN_TX_OFFSET_HZ = 200;
  */
 const TX_EDGE_GUARD_HZ = 100;
 
+/**
+ * The highest offset a radio will actually transmit at, from what it reports.
+ *
+ * A free function as well as a method because the ANSWER has to be visible. Shipped in
+ * 1.143.0 reading only from inside the controller, this was unfalsifiable from outside:
+ * a `transmit` status line carries only the fields that changed, so if the radio never
+ * sent `hi` the ceiling would stay at the conservative default and nothing anywhere would
+ * say so — the fix would silently do nothing and look exactly like the fix working.
+ * MEASURED since: `sub tx all` does deliver `lo=100 hi=3100` on a FLEX-6400 at subscribe.
+ */
+export function resolveMaxTxOffset(reported: number | null): number {
+  if (reported === null || !Number.isFinite(reported)) return MAX_TX_OFFSET_HZ;
+  // Never BELOW the conservative default: a radio reporting something implausibly narrow
+  // must not silently shrink what we will answer.
+  return Math.max(MAX_TX_OFFSET_HZ, Math.round(reported) - TX_EDGE_GUARD_HZ);
+}
+
 export class QsoController {
   private readonly o: QsoControllerOptions;
   private seq: QsoSequencer | null = null;
@@ -217,11 +234,7 @@ export class QsoController {
    * 3100 is throwing away a slice of the band for no reason.
    */
   private maxTxOffset(): number {
-    const reported = this.o.txFilterHiHz?.() ?? null;
-    if (reported === null || !Number.isFinite(reported)) return MAX_TX_OFFSET_HZ;
-    // Never BELOW the conservative default: a radio reporting something implausibly
-    // narrow must not silently shrink what we will answer.
-    return Math.max(MAX_TX_OFFSET_HZ, Math.round(reported) - TX_EDGE_GUARD_HZ);
+    return resolveMaxTxOffset(this.o.txFilterHiHz?.() ?? null);
   }
   private txOffsetHz = 1500;
   private lastSent: string | null = null;
