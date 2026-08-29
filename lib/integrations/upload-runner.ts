@@ -23,7 +23,11 @@ import { uploadAdifToClubLog } from "@/lib/integrations/clublog";
 import { uploadToCloudlog } from "@/lib/integrations/cloudlog";
 import { N3FJP_DEFAULT_PORT, sendToN3fjp } from "@/lib/integrations/n3fjp";
 import { insertQrzQso } from "@/lib/integrations/qrz-logbook";
-import { markUploaded, type UploadService } from "@/lib/integrations/upload-state";
+import {
+  SERVICE_LABEL,
+  markUploaded,
+  type UploadService,
+} from "@/lib/integrations/upload-state";
 import { getEqslCredentials, uploadEqslQso } from "@/lib/integrations/eqsl";
 import {
   type LotwCert,
@@ -165,18 +169,65 @@ async function loadPending(
   limit: number,
   ignoreCutoff: boolean,
   reciprocalOnly = false,
+  qsoIds?: string[],
 ) {
+  const where = pendingWhere(service, { since, ignoreCutoff, reciprocalOnly, qsoIds });
   return prisma.qso.findMany({
-    where: {
-      [SENT_FIELD[service]]: false,
-      ...(ignoreCutoff || !since ? {} : { startTime: { gte: since } }),
-      // eQSL only, and only when asked for: send a card back to whoever sent us one.
-      ...(reciprocalOnly && service === "eqsl" ? { eqslRcvd: true } : {}),
-    },
+    where,
     orderBy: { startTime: "asc" },
     take: limit,
     include: QSO_FOR_UPLOAD,
   });
+}
+
+/**
+ * Which contacts a run should pick up — the whole selection rule, as data.
+ *
+ * Pulled out of `loadPending` so it can be asserted without a database. The rule it
+ * encodes is not obvious and getting it wrong is silent: a query that finds nothing
+ * reports a clean run of zero, which reads as success.
+ *
+ * NAMED CONTACTS IGNORE EVERY FILTER, INCLUDING THE SENT FLAG. That is the reprocess
+ * path, and the contact it is asked to send is usually one already MARKED sent — an
+ * upload the operator does not believe happened, a service that was down, a logging
+ * program that was closed. Filtering on `sent = false` there would find nothing and
+ * report success, which is the exact failure the button exists to escape.
+ *
+ * The cutoff and the eQSL reciprocal rule go with it. Both are restraint about what to
+ * send UNASKED, and somebody has just asked.
+ */
+export function pendingWhere(
+  service: UploadableService,
+  opts: {
+    since?: Date | null;
+    ignoreCutoff?: boolean;
+    reciprocalOnly?: boolean;
+    qsoIds?: string[];
+  },
+): Record<string, unknown> {
+  if (opts.qsoIds) return { id: { in: opts.qsoIds } };
+  return {
+    [SENT_FIELD[service]]: false,
+    ...(opts.ignoreCutoff || !opts.since ? {} : { startTime: { gte: opts.since } }),
+    // eQSL only, and only when asked for: send a card back to whoever sent us one.
+    ...(opts.reciprocalOnly && service === "eqsl" ? { eqslRcvd: true } : {}),
+  };
+}
+
+/**
+ * Which services a run touches.
+ *
+ * An explicit list wins over `only`, and both win over the preferences — a reprocess names
+ * its destinations and a service being switched off for automatic sweeps says nothing
+ * about whether the operator may send one contact there by hand.
+ */
+export function resolveServices(
+  opts: { only?: UploadableService; services?: UploadableService[] },
+  prefs: Pick<UploadPrefs, UploadableService>,
+): UploadableService[] {
+  if (opts.services) return opts.services;
+  if (opts.only) return [opts.only];
+  return UPLOADABLE.filter((s) => prefs[s]);
 }
 
 
@@ -274,24 +325,32 @@ export interface UploadRunResult {
  * explicit operator action with the count shown first.
  */
 export async function runUploads(
-  opts: { ignoreCutoff?: boolean; limit?: number; only?: UploadableService } = {},
+  opts: {
+    ignoreCutoff?: boolean;
+    limit?: number;
+    only?: UploadableService;
+    /**
+     * Send THESE contacts, whatever their upload state — the reprocess path.
+     *
+     * Named contacts bypass the sent flag, the cutoff and the eQSL reciprocal rule; see
+     * `loadPending`. Pair it with `services`, because the point of naming a contact is
+     * usually to send it somewhere it did not reach.
+     */
+    qsoIds?: string[];
+    /** Exactly these services, whatever the preferences say. */
+    services?: UploadableService[];
+  } = {},
 ): Promise<UploadRunResult> {
   const prefs = await getUploadPrefs();
-  if (!prefs.enabled && !opts.ignoreCutoff) {
+  // A reprocess works with automatic uploading OFF, and that is not an oversight: an
+  // operator who has just been told a contact never reached QRZ should not have to switch
+  // on a sweep of everything else to send that one contact.
+  if (!prefs.enabled && !opts.ignoreCutoff && !opts.qsoIds) {
     return { ran: false, reason: "Automatic uploading is off", services: [] };
   }
 
   const limit = opts.limit ?? prefs.maxPerRun;
-  const wanted: UploadableService[] = opts.only
-    ? [opts.only]
-    : [
-        ...(prefs.qrz ? (["qrz"] as const) : []),
-        ...(prefs.clublog ? (["clublog"] as const) : []),
-        ...(prefs.cloudlog ? (["cloudlog"] as const) : []),
-        ...(prefs.eqsl ? (["eqsl"] as const) : []),
-        ...(prefs.lotw ? (["lotw"] as const) : []),
-        ...(prefs.n3fjp ? (["n3fjp"] as const) : []),
-      ];
+  const wanted = resolveServices(opts, prefs);
 
   const services: ServiceResult[] = [];
 
@@ -306,7 +365,10 @@ export async function runUploads(
       errors: [],
     };
 
-    if (tripped(service)) {
+    // The breaker exists to stop a SWEEP hammering a service that is down. It has no
+    // business refusing a person who has clicked reprocess on one contact — they may well
+    // be clicking it because they have just fixed whatever tripped it.
+    if (tripped(service) && !opts.qsoIds) {
       r.skipped = `${FAILURE_LIMIT} consecutive failures — last: ${breaker[service]?.lastError ?? "?"}`;
       services.push(r);
       continue;
@@ -316,7 +378,9 @@ export async function runUploads(
     // one contact — which is how the signature was first tested against the live service —
     // gets one contact.
     const take =
-      opts.limit !== undefined
+      opts.qsoIds
+        ? opts.qsoIds.length
+        : opts.limit !== undefined
         ? limit
         : service === "lotw"
           ? prefs.lotwBatch
@@ -329,6 +393,7 @@ export async function runUploads(
       take,
       opts.ignoreCutoff ?? false,
       prefs.eqslReciprocalOnly,
+      opts.qsoIds,
     );
     if (rows.length === 0) {
       services.push(r);
@@ -554,6 +619,93 @@ export async function runUploads(
   return { ran: true, reason: null, services };
 }
 
+/**
+ * Has this service been given what it needs to accept an upload?
+ *
+ * Each answers differently, and a chain of ternaries had already let one fall through to
+ * Club Log's answer. Kept as a switch so that adding a service without saying what
+ * "configured" means for it is a type error rather than a wrong badge.
+ */
+export async function isConfigured(service: UploadableService): Promise<boolean> {
+  switch (service) {
+    case "qrz":
+      return Boolean(await getSetting("qrz.logbookApiKey"));
+    case "cloudlog":
+      return (
+        Boolean(await getSetting("cloudlog.url")) && Boolean(await getSetting("cloudlog.apiKey"))
+      );
+    case "eqsl":
+      return (
+        Boolean(await getSetting("eqsl.username")) && Boolean(await getSetting("eqsl.password"))
+      );
+    case "lotw":
+      // A certificate, not a credential. The LoTW username and password are for
+      // downloading confirmations and cannot upload anything.
+      return (await lotwCertInfo()) !== null;
+    case "clublog":
+      return Boolean(await getSetting("clublog.email"));
+    case "n3fjp":
+      // A host is the whole configuration — the port has a documented default and the API
+      // has no credential at all, which is why it must only ever be pointed at a machine
+      // on the operator's own network.
+      return Boolean(await getSetting("n3fjp.host"));
+  }
+}
+
+/**
+ * Where ONE contact stands with every service — the reprocess panel's whole content.
+ *
+ * Written because the log page could not answer the question an operator actually asks of
+ * a contact: "did this go anywhere?" The flags are on the row and were never rendered, so
+ * a QSO that reached nothing looked exactly like one that reached everything.
+ *
+ * Returns null when there is no such contact.
+ */
+export async function qsoDestinations(qsoId: string): Promise<QsoDestination[] | null> {
+  const q = await prisma.qso.findUnique({
+    where: { id: qsoId },
+    select: {
+      qrzSent: true,
+      clublogSent: true,
+      cloudlogSent: true,
+      eqslSent: true,
+      lotwSent: true,
+      lotwSentAt: true,
+      n3fjpSent: true,
+    },
+  });
+  if (!q) return null;
+
+  const prefs = await getUploadPrefs();
+  const out: QsoDestination[] = [];
+  for (const service of UPLOADABLE) {
+    out.push({
+      service,
+      label: SERVICE_LABEL[service],
+      sent: q[SENT_FIELD[service]],
+      // LoTW is the only one that records WHEN, because its acceptance is a queue
+      // acknowledgement that has to be checkable later. See markUploaded.
+      sentAt: service === "lotw" ? (q.lotwSentAt?.toISOString() ?? null) : null,
+      configured: await isConfigured(service),
+      enabled: prefs[service],
+    });
+  }
+  return out;
+}
+
+export interface QsoDestination {
+  service: UploadableService;
+  label: string;
+  /** The flag on the contact — what we BELIEVE, which is the thing being doubted. */
+  sent: boolean;
+  /** LoTW only; null everywhere else. */
+  sentAt: string | null;
+  /** Enough settings to attempt an upload at all. */
+  configured: boolean;
+  /** Switched on for automatic sweeps. A reprocess does not require it. */
+  enabled: boolean;
+}
+
 export interface PendingCounts {
   service: UploadableService;
   /** Awaiting upload and newer than the cutoff — what automatic mode will send. */
@@ -573,38 +725,7 @@ export async function uploadCounts(): Promise<PendingCounts[]> {
     const pending = prefs.since
       ? await prisma.qso.count({ where: { [field]: false, startTime: { gte: prefs.since } } })
       : backlog;
-    // Each service answers this differently and a chain of ternaries had already let one
-    // fall through to Club Log's answer. Kept as a switch so adding a service that forgets
-    // to say what "configured" means for it is a type error rather than a wrong badge.
-    let configured: boolean;
-    switch (service) {
-      case "qrz":
-        configured = Boolean(await getSetting("qrz.logbookApiKey"));
-        break;
-      case "cloudlog":
-        configured =
-          Boolean(await getSetting("cloudlog.url")) && Boolean(await getSetting("cloudlog.apiKey"));
-        break;
-      case "eqsl":
-        configured =
-          Boolean(await getSetting("eqsl.username")) && Boolean(await getSetting("eqsl.password"));
-        break;
-      case "lotw":
-        // A certificate, not a credential. The LoTW username and password are for
-        // downloading confirmations and cannot upload anything.
-        configured = (await lotwCertInfo()) !== null;
-        break;
-      case "clublog":
-        configured = Boolean(await getSetting("clublog.email"));
-        break;
-      case "n3fjp":
-        // A host is the whole configuration — the port has a documented default and the
-        // API has no credential at all, which is why it must only ever be pointed at a
-        // machine on the operator's own network.
-        configured = Boolean(await getSetting("n3fjp.host"));
-        break;
-    }
-    out.push({ service, pending, backlog, configured });
+    out.push({ service, pending, backlog, configured: await isConfigured(service) });
   }
   return out;
 }

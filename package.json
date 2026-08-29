@@ -1,6 +1,6 @@
 {
   "name": "digishack",
-  "version": "1.143.0",
+  "version": "1.144.0",
   "license": "GPL-3.0-or-later",
   "private": true,
   "description": "Web-based amateur radio logging platform — Cloudlog-level parity with native FT4/FT8 and FlexRadio support",
@@ -34,6 +34,7 @@
     "check:qsl": "tsx scripts/check-qsl.ts",
     "check:backup": "tsx scripts/check-backup.ts",
     "check:upload-state": "tsx scripts/check-upload-state.ts",
+    "check:reprocess": "tsx scripts/check-reprocess.ts",
     "check:ft2": "tsx scripts/check-ft2.ts",
     "check:pota-merge": "tsx scripts/check-pota-merge.ts",
     "check:pota-refs": "tsx scripts/check-pota-refs.ts",

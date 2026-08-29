@@ -39,11 +39,14 @@ A DXpedition acknowledging one station and reporting to another in one transmiss
 a genuine RR73 to us; `parseMessage` does not handle the form, and the contact — Fiji — was
 recovered by hand. Also involves the hashed-callsign form `<3D2USU>`.
 
-### Reprocess a logged contact to chosen integrations
-Open a contact and re-send it to selected services, for when it missed them: uploads were
-off, a service was failing, or it was promoted from an incomplete exchange after the sweep
-had passed. The per-service `*Sent` flags already exist on `Qso`, so this is clearing the
-chosen ones and letting the sweep pick it up, plus a UI to choose which.
+### ~~Reprocess a logged contact to chosen integrations~~ — DONE in 1.144.0
+Shipped as a Destinations panel on the contact page plus `/api/qsos/[id]/destinations`.
+
+Note the design changed on the way: the sketch here was "clear the chosen `*Sent` flags and
+let the sweep pick it up", and that is wrong twice over. It reports success the instant the
+flag is cleared, before anything has been sent; and on an installation with no bridge
+running there is no sweep at all, so the contact would sit cleared and unsent for ever. It
+uploads directly instead, and reports what each service actually answered.
 
 ---
 

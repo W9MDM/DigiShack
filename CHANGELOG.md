@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.143.0 - public release
+## 1.144.0 - public release
 
 Development happens in a private repository; this is where the public history starts.
 Earlier entries are not reproduced - they quote real operators by callsign, include
@@ -22,6 +22,7 @@ Notes for anyone running this:
 
 ## Release history
 
+- **1.144.0** — Send one contact again, to the places you pick
 - **1.143.0** — Answer as high as the radio can actually transmit
 - **1.142.0** — The card font is a list you pick from
 - **1.141.0** — The Updates page said "Updating…" for ever, and would not reload itself

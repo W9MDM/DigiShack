@@ -2,6 +2,7 @@ import Link from "next/link";
 import { useRouter } from "next/router";
 import { useEffect, useState } from "react";
 
+import { Destinations } from "@/components/qso/Destinations";
 import {
   QsoForm,
   type QsoFormValues,
@@ -245,6 +246,8 @@ export default function QsoDetailPage() {
               </ul>
             )}
           </Card>
+
+          <Destinations qsoId={qso.id} canEdit={canEdit} />
 
           <Card title="Record">
             <dl className="text-sm flex flex-col gap-1.5">
