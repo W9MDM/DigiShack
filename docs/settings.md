@@ -38,7 +38,7 @@ be read: `DATABASE_URL`, `SETTINGS_KEY` and `PORT`.
 - [Automatic operating limits](#automatic-operating-limits) — 18 settings
 - [Automatic uploading](#automatic-uploading) — 13 settings
 - [POTA chasing](#pota-chasing) — 7 settings
-- [QSL card and email](#qsl-card-and-email) — 30 settings
+- [QSL card and email](#qsl-card-and-email) — 31 settings
 
 ## General
 
@@ -381,6 +381,7 @@ Your Grid: {THEIR_GRID}` | Fixed-width detail block. A line whose only token is 
 | Table inset from right (fraction) | `qsl.card.tableRight` | number | `0.012` |  |
 | Table inset from bottom (fraction) | `qsl.card.tableBottom` | number | `0.012` |  |
 | Table font scale | `qsl.card.fontScale` | number | `1` | 1 = automatic size from the table width. Raise or lower to taste. |
+| Card font | `qsl.card.font` | text | `PT Sans Narrow` | Typeface for the QSO table. DigiShack SHIPS these, so they render identically on every machine: "PT Sans Narrow" (condensed, the classic QSL table and the default), "Lato" (a wider humanist sans) or "PT Serif" (more formal). All three are SIL Open Font License 1.1 with the licence text beside them in assets/fonts. Any other name is passed to the system, which works only if that font is installed on the server — the bundled ones need nothing. This exists because a card drawn with no font available comes out with an empty table and a row of empty boxes, which looks like missing QSO data rather than a missing typeface. |
 | Table text colour | `qsl.card.textColor` | text | `#000000` |  |
 | Table heading background | `qsl.card.headingBg` | text | `#ffffff` |  |
 | Table cell background | `qsl.card.cellBg` | text | `#ffffff` |  |

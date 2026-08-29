@@ -19,6 +19,11 @@ import sharp from "sharp";
 
 import { getBooleanSetting, getNumberSetting, getSetting } from "@/lib/settings";
 import {
+  DEFAULT_CARD_FONT,
+  ensureFontconfig,
+  fontStack,
+} from "@/lib/qsl/fonts";
+import {
   applyTemplate,
   templateValues,
   type QsoForTemplate,
@@ -56,6 +61,8 @@ export interface CardSettings {
   tableBottom: number;
   tableWidth: number;
   fontScale: number;
+  /** Family name for the table text. One of the bundled fonts, or a host font by name. */
+  font: string;
   textColor: string;
   headingBg: string;
   cellBg: string;
@@ -85,6 +92,7 @@ export async function loadCardSettings(): Promise<CardSettings> {
     tableBottom: await getNumberSetting("qsl.card.tableBottom", 0.012),
     tableWidth: await getNumberSetting("qsl.card.tableWidth", 0.6),
     fontScale: await getNumberSetting("qsl.card.fontScale", 1),
+    font: (await getSetting("qsl.card.font")) ?? DEFAULT_CARD_FONT,
     textColor: (await getSetting("qsl.card.textColor")) ?? "#000000",
     headingBg: (await getSetting("qsl.card.headingBg")) ?? "#ffffff",
     cellBg: (await getSetting("qsl.card.cellBg")) ?? "#ffffff",
@@ -126,22 +134,6 @@ export interface RenderedCard {
  * Throws if the artwork is missing or unreadable — a QSL email whose whole point
  * is the card should fail loudly rather than go out without it.
  */
-/**
- * The font stack the card's SVG asks for.
- *
- * DejaVu and Liberation FIRST, because those are what a Linux box actually has —
- * `fonts-dejavu-core` is the near-universal one and Liberation is the metric-compatible
- * Arial substitute. The Windows and macOS names follow for a desktop install.
- *
- * The old stack was "Arial Narrow, Helvetica, sans-serif": three names, none of which
- * exists on Linux. It worked anyway, by accident — fontconfig resolves `sans-serif` to
- * whatever is installed, which on a box with DejaVu is DejaVu Sans. On a box with NO
- * fonts there is nothing to resolve to, and the card comes out with an empty table and a
- * row of tofu boxes. That reads as missing QSO data rather than a missing font, which is
- * exactly how it was reported.
- */
-const CARD_FONT_STACK =
-  "DejaVu Sans, Liberation Sans, Arial Narrow, Helvetica, Arial, sans-serif";
 
 /** Where a Linux system keeps fonts. Checked in order; the first hit is enough. */
 const FONT_DIRS = [
@@ -207,7 +199,11 @@ export async function renderQslCard(
   // which exists on Linux, and works only because fontconfig substitutes whatever is
   // installed for the final `sans-serif`. With nothing installed there is nothing to
   // substitute.
-  if (!systemFontsPresent()) {
+  // Point librsvg at the shipped fonts. Does nothing if they are missing from the tree,
+  // in which case the host-font check below is what catches it.
+  const bundled = ensureFontconfig();
+
+  if (!bundled && !systemFontsPresent()) {
     throw new Error(
       "No fonts are installed on this server, so the QSO table would render blank — " +
         "which looks like missing contact data rather than a missing font. Install one: " +
@@ -284,10 +280,10 @@ export async function renderQslCard(
     // Headings bold, values regular — the convention on printed cards, and it
     // keeps a six-column table readable at email size.
     parts.push(
-      `<text x="${cx.toFixed(1)}" y="${(rowH * 0.7).toFixed(1)}" font-family="${CARD_FONT_STACK}" font-size="${font.toFixed(1)}" font-weight="bold" fill="${esc(cfg.textColor)}" text-anchor="middle">${esc(cols[i]!.heading)}</text>`,
+      `<text x="${cx.toFixed(1)}" y="${(rowH * 0.7).toFixed(1)}" font-family="${esc(fontStack(cfg.font))}" font-size="${font.toFixed(1)}" font-weight="bold" fill="${esc(cfg.textColor)}" text-anchor="middle">${esc(cols[i]!.heading)}</text>`,
     );
     parts.push(
-      `<text x="${cx.toFixed(1)}" y="${(rowH * 1.7).toFixed(1)}" font-family="${CARD_FONT_STACK}" font-size="${font.toFixed(1)}" fill="${esc(cfg.textColor)}" text-anchor="middle">${esc(cols[i]!.value)}</text>`,
+      `<text x="${cx.toFixed(1)}" y="${(rowH * 1.7).toFixed(1)}" font-family="${esc(fontStack(cfg.font))}" font-size="${font.toFixed(1)}" fill="${esc(cfg.textColor)}" text-anchor="middle">${esc(cols[i]!.value)}</text>`,
     );
     if (i > 0) {
       // Dividers stop at the data row. Running them the full height would draw
@@ -309,7 +305,7 @@ export async function renderQslCard(
       `<line x1="0" y1="${rowH * 2}" x2="${tableW}" y2="${rowH * 2}" stroke="${esc(cfg.borderColor)}" stroke-width="1"/>`,
     );
     parts.push(
-      `<text x="${(tableW / 2).toFixed(1)}" y="${(rowH * 2.68).toFixed(1)}" font-family="${CARD_FONT_STACK}" font-size="${(font * 0.92).toFixed(1)}" fill="${esc(cfg.textColor)}" text-anchor="middle">${esc(footer)}</text>`,
+      `<text x="${(tableW / 2).toFixed(1)}" y="${(rowH * 2.68).toFixed(1)}" font-family="${esc(fontStack(cfg.font))}" font-size="${(font * 0.92).toFixed(1)}" fill="${esc(cfg.textColor)}" text-anchor="middle">${esc(footer)}</text>`,
     );
   }
 

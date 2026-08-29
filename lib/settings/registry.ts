@@ -1749,6 +1749,22 @@ export const SETTINGS: SettingDef[] = [
     default: "1",
   },
   {
+    key: "qsl.card.font",
+    label: "Card font",
+    type: "string",
+    group: "qsl",
+    help:
+      "Typeface for the QSO table. DigiShack SHIPS these, so they render identically on " +
+      "every machine: \"PT Sans Narrow\" (condensed, the classic QSL table and the " +
+      "default), \"Lato\" (a wider humanist sans) or \"PT Serif\" (more formal). All three " +
+      "are SIL Open Font License 1.1 with the licence text beside them in assets/fonts. " +
+      "Any other name is passed to the system, which works only if that font is installed " +
+      "on the server — the bundled ones need nothing. This exists because a card drawn " +
+      "with no font available comes out with an empty table and a row of empty boxes, " +
+      "which looks like missing QSO data rather than a missing typeface.",
+    default: "PT Sans Narrow",
+  },
+  {
     key: "qsl.card.textColor",
     label: "Table text colour",
     type: "string",
