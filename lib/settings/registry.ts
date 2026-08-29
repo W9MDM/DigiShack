@@ -108,6 +108,16 @@ export const SETTING_GROUPS: SettingGroup[] = [
     title: "HRDLOG.net",
   },
   {
+    id: "n3fjp",
+    title: "N3FJP Amateur Contact Log",
+    blurb:
+      "A logging program on your own desk rather than a web service, reached over its TCP " +
+      "API. Enable the listener in ACLog first, under Settings -> Application Program " +
+      "Interface (API) -> \"TCP API Enabled (Server)\". There is no password of any kind on " +
+      "that API, so point DigiShack at a machine on your own network and never expose the " +
+      "port to the internet. Switch the actual sending on under Uploads.",
+  },
+  {
     id: "dxcc",
     title: "DXCC reference data",
     blurb:
@@ -517,7 +527,7 @@ export const SETTINGS: SettingDef[] = [
     key: "n3fjp.host",
     label: "N3FJP address",
     type: "string",
-    group: "uploads",
+    group: "n3fjp",
     help:
       "Where Amateur Contact Log is running. 127.0.0.1 is right only when DigiShack is on " +
       "the SAME machine — a container or a separate server needs the desktop PC's own LAN " +
@@ -531,7 +541,7 @@ export const SETTINGS: SettingDef[] = [
     key: "n3fjp.port",
     label: "N3FJP API port",
     type: "number",
-    group: "uploads",
+    group: "n3fjp",
     help: "The port shown in that API window. 1100 is the default and rarely changed.",
     default: "1100",
   },
