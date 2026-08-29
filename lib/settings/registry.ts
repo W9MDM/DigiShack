@@ -1,4 +1,6 @@
 import { tokenHelp } from "@/lib/qsl/template";
+// The list only — lib/qsl/fonts.ts imports node:fs and this module reaches the browser.
+import { BUNDLED_FONTS, DEFAULT_CARD_FONT } from "@/lib/qsl/font-list";
 
 /** Token list, shown in the QSL template hints. */
 const TOKEN_HELP = tokenHelp();
@@ -23,7 +25,14 @@ const TOKEN_HELP = tokenHelp();
  * it through a one-line input makes it unusable — which is the practical
  * difference between "configurable" and "configurable in theory".
  */
-export type SettingType = "string" | "secret" | "number" | "boolean" | "text" | "limit";
+export type SettingType =
+  | "string"
+  | "secret"
+  | "number"
+  | "boolean"
+  | "text"
+  | "limit"
+  | "select";
 
 /**
  * `limit` is a number with an on/off checkbox, stored as 0 when off.
@@ -38,6 +47,18 @@ export interface SettingDef {
   key: string;
   label: string;
   type: SettingType;
+  /**
+   * The choices, for `select`.
+   *
+   * Added because a setting whose valid values are a fixed list was still a free-text box:
+   * the card font shipped with three typefaces and no way to discover their names, so the
+   * only route to a working value was reading the help text and typing it exactly.
+   * "How is someone supposed to know what fonts loaded" — they were not.
+   *
+   * A `select` writes the same plain string as a `string` setting, so nothing downstream
+   * changes and a value set before the picker existed still loads.
+   */
+  options?: { value: string; label: string }[];
   /**
    * Render across both columns of the settings grid.
    *
@@ -1853,7 +1874,11 @@ export const SETTINGS: SettingDef[] = [
   {
     key: "qsl.card.font",
     label: "Card font",
-    type: "string",
+    type: "select",
+    // Built from the shipped list rather than written out twice: adding a font to
+    // assets/fonts and the list is then the whole change, and the picker cannot drift out
+    // of step with what is actually installed.
+    options: BUNDLED_FONTS.map((f) => ({ value: f.family, label: f.label })),
     group: "qsl",
     help:
       "Typeface for the QSO table. DigiShack SHIPS these, so they render identically on " +
@@ -1864,7 +1889,7 @@ export const SETTINGS: SettingDef[] = [
       "on the server — the bundled ones need nothing. This exists because a card drawn " +
       "with no font available comes out with an empty table and a row of empty boxes, " +
       "which looks like missing QSO data rather than a missing typeface.",
-    default: "PT Sans Narrow",
+    default: DEFAULT_CARD_FONT,
   },
   {
     key: "qsl.card.textColor",

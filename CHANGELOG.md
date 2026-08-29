@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.138.0 - public release
+## 1.139.0 - public release
 
 Development happens in a private repository; this is where the public history starts.
 Earlier entries are not reproduced - they quote real operators by callsign, include
@@ -22,6 +22,7 @@ Notes for anyone running this:
 
 ## Release history
 
+- **1.139.0** — Three messages close a contact, and only one was accepted from each side
 - **1.138.0** — "Validation failed" is a category, not a message
 - **1.137.0** — Every setting explains itself, and says where to read more
 - **1.136.0** — DigiShack ships its own card fonts, and you can pick one

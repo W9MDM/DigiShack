@@ -2,6 +2,12 @@ import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { tmpdir } from "node:os";
 
+import {
+  BUNDLED_FONTS,
+  DEFAULT_CARD_FONT,
+  type BundledFont,
+} from "@/lib/qsl/font-list";
+
 // Fonts DigiShack ships, so a QSL card renders the same on every machine.
 //
 // THE PROBLEM THIS SOLVES: sharp draws the card's table by handing an SVG to librsvg,
@@ -22,6 +28,8 @@ import { tmpdir } from "node:os";
 // The generated config lists the bundled directory AND the system directories, so a host
 // that does have fonts keeps them. Bundled families are simply always available too.
 
+export { BUNDLED_FONTS, DEFAULT_CARD_FONT, type BundledFont };
+
 /** Where the shipped font files live, relative to the repository root. */
 const FONT_DIR = path.join(process.cwd(), "assets", "fonts");
 
@@ -34,28 +42,6 @@ const FONT_DIR = path.join(process.cwd(), "assets", "fonts");
  * All three are SIL Open Font License 1.1, with the licence text shipped beside them.
  * Chosen for what a QSL card actually wants rather than for variety:
  */
-export const BUNDLED_FONTS: { family: string; label: string; files: string[] }[] = [
-  {
-    // The traditional card look. Arial Narrow is what the old hardcoded stack asked for
-    // and PT Sans Narrow is the free equivalent — condensed, so a six-column QSO table
-    // fits across the width of the artwork without shrinking the type.
-    family: "PT Sans Narrow",
-    label: "PT Sans Narrow — condensed, the classic QSL table",
-    files: ["PTSansNarrow-Regular.ttf", "PTSansNarrow-Bold.ttf"],
-  },
-  {
-    family: "Lato",
-    label: "Lato — a wider humanist sans",
-    files: ["Lato-Regular.ttf", "Lato-Bold.ttf"],
-  },
-  {
-    family: "PT Serif",
-    label: "PT Serif — serif, for a more formal card",
-    files: ["PTSerif-Regular.ttf", "PTSerif-Bold.ttf"],
-  },
-];
-
-export const DEFAULT_CARD_FONT = "PT Sans Narrow";
 
 /** Do the shipped font files exist where they should? */
 export function bundledFontsPresent(): boolean {

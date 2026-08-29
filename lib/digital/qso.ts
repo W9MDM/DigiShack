@@ -305,27 +305,66 @@ export class QsoSequencer {
         this.reportRcvd = formatReport(p.payload.db);
         if (this.state === "report-sent") this.state = "rr73-sent";
         break;
+      // THREE MESSAGES CLOSE A CONTACT: RRR, RR73 and a bare 73.
+      //
+      // They are not interchangeable in what they OWE — an RRR or RR73 confirms our
+      // report and leaves us to sign off, while a 73 has already signed off — but any of
+      // the three, arriving once reports have crossed, means the far station considers
+      // the contact made. Treating any of them as silence loses a QSO both operators have
+      // logged.
+      //
+      // Measured against the live decode log: of 142 incomplete exchanges, eleven had an
+      // acknowledgement addressed to us that we did not act on, including
+      //
+      //     K9XYZ EA3ISZ 73     K9XYZ KN6RK RRR     K9XYZ KI7OXA RRR
+      //
+      // because each token was accepted from only one side of the sequence.
       case "rrr":
       case "rr73":
-        // They confirmed our R-report: the QSO is complete for both sides. We
-        // still owe a courtesy 73, which tick() sends as it completes.
-        if (this.state === "rreport-sent" || this.state === "calling") {
-          this.completeAt(at);
+        // Confirming our R-report (we were the caller), or confirming our RR73 with an
+        // RRR instead of the 73 the old code insisted on (we were the answerer).
+        if (
+          this.state === "rreport-sent" ||
+          this.state === "calling" ||
+          this.state === "rr73-sent"
+        ) {
+          // Only the caller still owes a sign-off. An answerer in `rr73-sent` has already
+          // sent RR73, so another transmission would burn a cycle on a finished contact.
+          this.completeAt(at, this.state === "rr73-sent");
         }
         break;
       case "73":
-        // Their 73 after our RR73 closes an answerer QSO.
-        if (this.state === "rr73-sent") this.completeAt(at);
+        // A 73 closes from either side, and never leaves anything owed: they have signed
+        // off, so answering with a second 73 is a wasted cycle.
+        //
+        // This used to complete only from `rr73-sent`. As the CALLER, in `rreport-sent`,
+        // a plain 73 was ignored and the exchange was abandoned a minute later as
+        // unacknowledged — three of the eleven above. Not every operator sends RR73, and
+        // some software closes with 73 by default.
+        if (this.state === "rr73-sent" || this.state === "rreport-sent") {
+          this.completeAt(at, true);
+        }
         break;
     }
   }
 
-  private completeAt(at: number): void {
+  /**
+   * `closedWith73` means THEY signed off, not merely confirmed.
+   *
+   * The distinction decides whether we owe a courtesy 73. It used to be inferred from the
+   * state alone — `calling` or `rreport-sent` meant we were mid-sequence and therefore
+   * owed one — and that inference was safe only while a bare 73 could not reach those
+   * states. Now that it can (see the `73` case above), the state no longer tells the two
+   * apart: an RR73 in `rreport-sent` leaves us owing a sign-off, and a 73 in the same
+   * state does not, because both operators have already said it.
+   */
+  private completeAt(at: number, closedWith73 = false): void {
     if (this.state !== "complete") {
-      // A courtesy 73 is owed only when THEY closed with RR73/RRR (we were still
-      // mid-sequence). When their 73 closes it, both sides have signed off and
-      // one more transmission would just burn a cycle on a finished contact.
-      this.owes73 = this.state === "calling" || this.state === "rreport-sent";
+      // A courtesy 73 is owed only when THEY closed with RR73/RRR and we were still
+      // mid-sequence. When their 73 closes it, both sides have signed off and one more
+      // transmission would just burn a cycle on a finished contact.
+      this.owes73 =
+        !closedWith73 && (this.state === "calling" || this.state === "rreport-sent");
       this.state = "complete";
       this.completedAtMs = at;
     }

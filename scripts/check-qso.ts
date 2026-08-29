@@ -585,6 +585,97 @@ async function main(): Promise<void> {
   }
 
 
+  console.log("\na bare 73 closes the contact from either side");
+  {
+    // Measured against the live decode log: of 142 incomplete exchanges, three had a
+    // plain 73 addressed to us that arrived while the sequence was still running and was
+    // discarded, because 73 only completed from the answerer's rr73-sent state.
+    //
+    //     K9XYZ EA3ISZ 73      K9XYZ AK6TB 73      K9XYZ AA1HR 73
+    //
+    // Not every operator sends RR73, and some software closes with 73 by default.
+    const q = new QsoSequencer({
+      myCall: "K9XYZ",
+      myGrid: "EN61",
+      theirCall: "EA3ISZ",
+      theirSnr: -16,
+      role: "caller",
+      startedAt: 1000,
+    });
+    q.tick(15_000);
+    q.onDecode("K9XYZ EA3ISZ -08", 22_000);
+    eq(q.currentState, "rreport-sent", "their report leaves us owing the R-report");
+    q.tick(30_000);
+    q.onDecode("K9XYZ EA3ISZ 73", 37_000);
+    ok(q.isDone, "their bare 73 completes the contact");
+    const t = q.tick(45_000);
+    ok(t.log !== undefined, "and it is logged");
+    // They have already signed off. Sending 73 back burns a cycle on a finished contact,
+    // which is why completeAt distinguishes a 73 from an RR73 rather than reading state.
+    eq(t.send, null, "we do NOT send a courtesy 73 back at somebody who just sent one");
+  }
+
+  console.log("\nan RR73 still owes the courtesy 73");
+  {
+    const q = new QsoSequencer({
+      myCall: "K9XYZ",
+      myGrid: "EN61",
+      theirCall: "K1DEF",
+      theirSnr: -14,
+      role: "caller",
+      startedAt: 1000,
+    });
+    q.tick(15_000);
+    q.onDecode("K9XYZ K1DEF -10", 22_000);
+    q.tick(30_000);
+    q.onDecode("K9XYZ K1DEF RR73", 37_000);
+    eq(q.tick(45_000).send, "K1DEF K9XYZ 73", "RR73 leaves us owing a sign-off, as before");
+  }
+
+
+  console.log("\nall three acknowledgements close a contact, from either side");
+  {
+    // RRR, RR73 and 73. Each was previously accepted from only one side of the sequence,
+    // and the live decode log shows all three arriving and being discarded.
+    const mk = (role: "caller" | "answerer") =>
+      new QsoSequencer({
+        myCall: "K9XYZ",
+        myGrid: "EN61",
+        theirCall: "K1DEF",
+        theirSnr: -14,
+        role,
+        startedAt: 1000,
+      });
+
+    // Answerer: we sent the report, they rogered it, we sent RR73 and are waiting.
+    for (const token of ["RRR", "RR73", "73"]) {
+      const q = mk("answerer");
+      q.tick(15_000);
+      q.onDecode("K9XYZ K1DEF R-10", 22_000);
+      eq(q.currentState, "rr73-sent", `answerer reaches rr73-sent before ${token}`);
+      q.tick(30_000);
+      q.onDecode(`K9XYZ K1DEF ${token}`, 37_000);
+      ok(q.isDone, `answerer: ${token} closes the contact`);
+      const t = q.tick(45_000);
+      ok(t.log !== undefined, `answerer: ${token} is logged`);
+      eq(t.send, null, `answerer: nothing more is sent after ${token}`);
+    }
+
+    // Caller: they rogered our call with a report, we sent the R-report.
+    for (const token of ["RRR", "RR73"]) {
+      const q = mk("caller");
+      q.tick(15_000);
+      q.onDecode("K9XYZ K1DEF -10", 22_000);
+      q.tick(30_000);
+      q.onDecode(`K9XYZ K1DEF ${token}`, 37_000);
+      ok(q.isDone, `caller: ${token} closes the contact`);
+      // The caller still owes a sign-off after RRR/RR73 — that has always been true and
+      // must stay true; only the answerer's side changed.
+      eq(q.tick(45_000).send, "K1DEF K9XYZ 73", `caller: ${token} still owes the 73`);
+    }
+  }
+
+
   console.log(`\n${pass} passed, ${fail} failed\n`);
   if (fail > 0) process.exit(1);
 }
