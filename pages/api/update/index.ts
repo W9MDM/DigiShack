@@ -6,6 +6,7 @@ import type { AuthContext } from "@/lib/auth/session";
 import {
   checkForUpdate,
   isRunning,
+  runningVersion,
   performUpdate,
   readState,
 } from "@/lib/update/runner";
@@ -21,6 +22,13 @@ async function get(_req: NextApiRequest, res: NextApiResponse) {
   sendJson(res, 200, {
     state: readState(),
     running: isRunning(),
+    // The version THIS process is serving, so the page can notice it has been replaced.
+    //
+    // `pm2 reload` swaps the process under the browser: the API starts answering from the
+    // new build while the tab is still running the old bundle and still displaying the old
+    // version number. Nothing told it to reload, so an operator watched a finished update
+    // report the version it had just replaced.
+    version: runningVersion(),
   });
 }
 

@@ -151,6 +151,15 @@ interface RigStatus {
    * it off and get no indication of that anywhere.
    */
   allowTransmit: boolean;
+  /**
+   * WHY the gate is shut, when it is. Null when transmit is armed.
+   *
+   * The badge said "TX off" and nothing else, which is two very different situations
+   * wearing one label: the operator's own setting is off, or voice mode is holding the
+   * gate. The second survives a restart if voice mode does, and looks exactly like a
+   * setting that failed to persist — which is how it was reported.
+   */
+  transmitOffReason: string | null;
   txMessage: string | null;
   rxDF: number | null;
   txDF: number | null;
@@ -245,6 +254,7 @@ const status: RigStatus = {
   decoding: false,
   txEnabled: false,
   allowTransmit: false,
+  transmitOffReason: null,
   txMessage: null,
   rxDF: null,
   txDF: null,
@@ -3841,9 +3851,13 @@ async function main(): Promise<void> {
   const gateTick = async () => {
     try {
       const on = await transmitArmed();
-      if (on !== status.allowTransmit) {
+      const why = on ? null : transmitRefusal();
+      if (on !== status.allowTransmit || why !== status.transmitOffReason) {
         status.allowTransmit = on;
-        console.log(`[radio] transmit gate is now ${on ? "ARMED" : "OFF"}`);
+        status.transmitOffReason = why;
+        console.log(
+          `[radio] transmit gate is now ${on ? "ARMED" : `OFF — ${why}`}`,
+        );
         broadcast({ kind: "status", status });
       }
     } catch {

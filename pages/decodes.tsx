@@ -45,6 +45,8 @@ interface RigStatus {
   txEnabled: boolean;
   /** flex.allowTransmit — the master gate. See services/radio/index.ts. */
   allowTransmit?: boolean;
+  /** Why the gate is shut, when it is. "TX off" alone covered two different causes. */
+  transmitOffReason?: string | null;
   rxDF: number | null;
   txDF: number | null;
   rfPower: number | null;
@@ -656,11 +658,31 @@ export default function DigitalPage({ wsUrl }: Props) {
                 flag and nothing sets it on the native Flex path, so a badge on it
                 would read "off" permanently while the station transmitted. */}
             {status && (
-              <Badge
-                tone={status.allowTransmit ? "ok" : "warn"}
+              // WHY it is off, not just that it is.
+              //
+              // "TX off" covered two situations needing opposite responses: the operator's
+              // own setting is off, or voice mode is holding the gate. The second survives
+              // a restart and looks exactly like a setting that failed to persist, which
+              // is how it was reported — "allow transmit doesn't seem to be persisting
+              // through updates".
+              //
+              // The cause is in the label, not only the tooltip: a station that will not
+              // key is not something to discover by hovering.
+              <span
+                title={
+                  status.allowTransmit
+                    ? "Transmit is armed."
+                    : (status.transmitOffReason ?? "Transmit is off.")
+                }
               >
-                {status.allowTransmit ? "TX armed" : "TX off"}
-              </Badge>
+                <Badge tone={status.allowTransmit ? "ok" : "warn"}>
+                  {status.allowTransmit
+                    ? "TX armed"
+                    : /voice/i.test(status.transmitOffReason ?? "")
+                      ? "TX off · voice"
+                      : "TX off"}
+                </Badge>
+              </span>
             )}
             {connected ? (
               <Badge tone="ok">Live</Badge>

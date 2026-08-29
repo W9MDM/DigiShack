@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.140.0 - public release
+## 1.141.0 - public release
 
 Development happens in a private repository; this is where the public history starts.
 Earlier entries are not reproduced - they quote real operators by callsign, include
@@ -22,6 +22,7 @@ Notes for anyone running this:
 
 ## Release history
 
+- **1.141.0** — The Updates page said "Updating…" for ever, and would not reload itself
 - **1.140.0** — Reconciling the incomplete list against evidence outside it
 - **1.139.1** — The late transmissions are not why those contacts failed
 - **1.139.0** — Three messages close a contact, and only one was accepted from each side

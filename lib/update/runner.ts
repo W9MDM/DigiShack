@@ -262,6 +262,25 @@ export interface UpdateCheck {
   changes: { version: string; summary: string }[];
 }
 
+/**
+ * The version this PROCESS is serving, read synchronously.
+ *
+ * Separate from `currentVersion()` only because the status endpoint is synchronous and
+ * this is one file read. It is what lets the Updates page notice that `pm2 reload` has
+ * swapped the process underneath it and reload the tab, instead of sitting there showing
+ * the version it just replaced along with a stale JavaScript bundle.
+ */
+export function runningVersion(): string {
+  try {
+    const pkg = JSON.parse(
+      readFileSync(path.join(ROOT, "package.json"), "utf8"),
+    ) as { version?: string };
+    return pkg.version ?? "?";
+  } catch {
+    return "?";
+  }
+}
+
 async function currentVersion(): Promise<string> {
   try {
     const pkg = JSON.parse(

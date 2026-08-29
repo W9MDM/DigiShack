@@ -68,14 +68,54 @@ export default function UpdatePage() {
   const [state, setState] = useState<UpdateState | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<ApiError | null>(null);
+  /** Whether the SERVER says an update is in flight. See `running` below. */
+  const [serverRunning, setServerRunning] = useState(false);
   const logRef = useRef<HTMLPreElement>(null);
+  /** The version that was serving this tab when it first polled. See `refresh`. */
+  const bootVersion = useRef<string | null>(null);
 
-  const running = state?.phase === "running" || state?.phase === "reloading";
+  /**
+   * Is an update actually in flight?
+   *
+   * THE SERVER'S ANSWER, not a second opinion derived from the phase. This line used to be
+   *
+   *     state?.phase === "running" || state?.phase === "reloading"
+   *
+   * and `reloading` is the phase EVERY successful update leaves behind: the process is
+   * replaced by the pm2 reload before it can ever write `done`, so the state file says
+   * "reloading" for ever afterwards. The button was then disabled and labelled "Updating…"
+   * permanently, with no way out but editing logs/update-state.json by hand.
+   *
+   * `lib/update/runner.ts` learned exactly this and fixed it — `isRunning()` returns false
+   * for `reloading`, with a comment saying why — and the page went on deriving the opposite
+   * answer one layer up. Reported after it stranded another operator three times, showing
+   * "Updating…" beside a LAST RUN that had finished fourteen hours earlier and a version
+   * number nine releases newer than the run it was describing.
+   */
+  const running = serverRunning;
 
   const refresh = useCallback(async () => {
     try {
-      const res = await apiGet<{ state: UpdateState }>("/api/update");
+      const res = await apiGet<{ state: UpdateState; running: boolean; version?: string }>(
+        "/api/update",
+      );
       setState(res.state);
+      setServerRunning(Boolean(res.running));
+
+      // THE PROCESS HAS BEEN REPLACED — reload the tab.
+      //
+      // `pm2 reload` swaps the server mid-update. The API immediately answers from the new
+      // build while this tab is still running the old JavaScript and still showing the old
+      // version, so a finished update sat there reporting the version it had just
+      // replaced. Nothing was wrong; nothing had told the page to look again.
+      //
+      // The first poll records what is serving us; any later change means a new process,
+      // and the only correct response is a real reload — a re-render would keep the stale
+      // bundle.
+      if (res.version) {
+        if (bootVersion.current === null) bootVersion.current = res.version;
+        else if (bootVersion.current !== res.version) window.location.reload();
+      }
     } catch {
       // A poll failing mid-reload is expected — the server is restarting.
     }
@@ -383,7 +423,11 @@ export default function UpdatePage() {
 
               {state.error && <ErrorBanner>{state.error}</ErrorBanner>}
 
-              {state.phase === "reloading" && (
+              {/* Only while it IS reloading. `reloading` is the phase left behind by every
+                  successful update — the process is replaced before it can write `done` —
+                  so on its own it says nothing about now. Paired with the server's answer
+                  it means what it looks like. */}
+              {state.phase === "reloading" && running && (
                 <p className="text-sm text-info">
                   The app is reloading. This page may briefly fail to load — that
                   is the update being applied.
