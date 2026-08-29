@@ -656,6 +656,7 @@ export default function DigitalPage({ wsUrl }: Props) {
       <WorkStationPanel
         target={target}
         qso={qso}
+        auto={auto}
         lastTx={lastTx}
         myCall={myCall}
         myGrid={status?.deGrid ?? null}
@@ -1179,6 +1180,7 @@ function ManualCall({
 function WorkStationPanel({
   target,
   qso,
+  auto,
   lastTx,
   myCall,
   myGrid,
@@ -1186,6 +1188,8 @@ function WorkStationPanel({
 }: {
   target: DecodeEvent | null;
   qso: QsoState | null;
+  /** Needed to know whether a queued call would ever actually be made. */
+  auto: AutoState | null;
   lastTx: string | null;
   myCall: string | null;
   myGrid: string | null;
@@ -1193,8 +1197,16 @@ function WorkStationPanel({
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** A successful-but-different outcome, e.g. "queued behind the current contact". */
+  const [notice, setNotice] = useState<string | null>(null);
 
   const active = qso?.active ?? false;
+  const autoRunning = (auto?.mode ?? "off") !== "off";
+  /** Someone selected who is NOT the station currently being worked. */
+  const other =
+    target?.callsign && (!active || target.callsign !== qso?.theirCall)
+      ? target.callsign
+      : null;
   // Prefer the live QSO for display; fall back to the clicked target.
   const call = active ? qso!.theirCall : (target?.callsign ?? null);
 
@@ -1209,12 +1221,17 @@ function WorkStationPanel({
      * click and no way to call them at all.
      */
     manual?: { theirCall: string; theirOffsetHz: number },
+    /** Halt the contact in flight and call this one immediately. */
+    takeOver?: boolean,
   ) {
     setBusy(true);
     setError(null);
     try {
-      await apiPost("/api/bridge/control", {
+      const reply = await apiPost<{ queued?: boolean; reason?: string }>(
+        "/api/bridge/control",
+        {
         action,
+        ...(takeOver ? { takeOver: true } : {}),
         ...(action === "call" && manual
           ? {
               theirCall: manual.theirCall,
@@ -1248,7 +1265,13 @@ function WorkStationPanel({
               message: target.message,
             }
           : {}),
-      });
+        },
+      );
+      // A queued call is a SUCCESS with a different outcome, and the operator has to be
+      // told which they got — "queued behind KC1YTV" and "calling now" look identical
+      // otherwise, which is the whole complaint that produced this.
+      if (reply?.queued && reply.reason) setNotice(reply.reason);
+      else setNotice(null);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Control request failed");
     } finally {
@@ -1317,6 +1340,43 @@ function WorkStationPanel({
             >
               {busy ? "…" : `Call ${target.callsign}`}
             </Button>
+          )}
+          {/* A station was picked while another contact is in flight.
+              
+              This is what pressing Call during an automatic mode used to do: nothing
+              visible. The controller refuses a second QSO, and the refusal landed in a
+              panel busy rendering the contact already running. Two honest answers, and
+              the operator picks — queue them, or drop what is running and call now. */}
+          {active && other && (
+            <>
+              {autoRunning ? (
+                <Button
+                  variant="primary"
+                  disabled={busy}
+                  onClick={() => void act("call")}
+                  title={`Work ${other} as soon as the contact with ${qso?.theirCall ?? "the current station"} finishes. Nothing on the air is disturbed.`}
+                >
+                  {busy ? "…" : `Queue ${other}`}
+                </Button>
+              ) : (
+                // With auto off nothing drains the queue, so offering "queue" would be
+                // a promise the station never keeps.
+                <span
+                  className="text-[11px] text-fg-subtle"
+                  title="The call-back queue is worked by the automatic modes. With auto off, finish or halt this contact first."
+                >
+                  auto is off — no queue
+                </span>
+              )}
+              <Button
+                variant="danger"
+                disabled={busy}
+                onClick={() => void act("call", undefined, true)}
+                title={`Halt the contact with ${qso?.theirCall ?? "the current station"} and call ${other} immediately. They are mid-exchange, so this leaves them hanging.`}
+              >
+                {busy ? "…" : `Call ${other} now`}
+              </Button>
+            </>
           )}
           {active && (
             <>
@@ -1389,6 +1449,16 @@ function WorkStationPanel({
           <div className="text-warn text-xs">⚠ {qso.pausedReason}</div>
         )}
         {error && <div className="text-danger text-xs">{error}</div>}
+        {notice && <div className="text-accent-bright text-xs">{notice}</div>}
+        {/* Who is waiting, so a queued call is visible as a fact rather than only as a
+            message that scrolls away. Includes stations that called US mid-QSO — the
+            same queue, which is why an operator request goes to the front of it. */}
+        {(auto?.waiting?.length ?? 0) > 0 && (
+          <div className="text-xs text-fg-subtle">
+            Waiting to be called:{" "}
+            <span className="text-fg-muted tnum">{auto!.waiting!.join(", ")}</span>
+          </div>
+        )}
       </div>
     </Card>
   );

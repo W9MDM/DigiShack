@@ -3160,6 +3160,59 @@ async function main(): Promise<void> {
               });
               return;
             }
+            // A QSO is already running. The controller will refuse a second one — it
+            // owns the transmitter — and that refusal is what made pressing Call during
+            // an automatic mode look like a dead button. There are only two honest
+            // answers, and the operator gets to pick which:
+            //
+            //   * QUEUE (the default). Work them next, when the contact in flight
+            //     finishes. Nothing on the air is disturbed.
+            //   * TAKE OVER (`takeOver: true`). Halt what is running and call them now.
+            //     Explicit, because the station mid-exchange is a real person who is
+            //     waiting for the next message in a sequence they can see.
+            //
+            // Queueing is only offered when an automatic mode is running, because the
+            // queue is drained from the auto loop — with auto off nothing would ever
+            // call them and "queued" would be a lie.
+            const auto = activeAuto();
+            if (qso.state.active) {
+              const theirCall = String(body.theirCall ?? "").toUpperCase();
+              if (body.takeOver) {
+                await qso.halt();
+              } else if (auto && auto.state.mode !== "off") {
+                const { moved } = auto.queueOperatorCall({
+                  call: theirCall,
+                  grid: body.theirGrid ? String(body.theirGrid) : null,
+                  snr: Number(body.theirSnr ?? 0),
+                  offsetHz: Number(body.theirOffsetHz ?? 1500),
+                  // The window THEY were heard in fixes whose parity is whose, exactly
+                  // as it does for a station that called us. A manual call with no
+                  // decode behind it sends `now`, which puts us on the next window.
+                  windowStart: Number(body.theirWindowStart ?? Date.now()),
+                  message: body.message ? String(body.message).slice(0, 128) : "",
+                });
+                sendJson(res, 200, {
+                  ok: true,
+                  queued: true,
+                  reason:
+                    `Working ${qso.state.theirCall ?? "someone"} — ${theirCall} is ` +
+                    `${moved ? "moved to the front of" : "next in"} the queue.`,
+                  qso: qso.state,
+                  auto: auto.state,
+                });
+                return;
+              } else {
+                sendJson(res, 409, {
+                  ok: false,
+                  reason:
+                    `Already working ${qso.state.theirCall ?? "someone"}. Halt that ` +
+                    `contact first, or turn on an automatic mode so ${theirCall} can be queued.`,
+                  qso: qso.state,
+                });
+                return;
+              }
+            }
+
             const result = await qso.startCall({
               theirCall: String(body.theirCall ?? "").toUpperCase(),
               theirGrid: body.theirGrid ? String(body.theirGrid) : null,

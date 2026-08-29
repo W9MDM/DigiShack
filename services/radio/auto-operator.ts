@@ -344,6 +344,39 @@ export class AutoOperator {
     };
   }
 
+  /**
+   * Put a station the OPERATOR named at the FRONT of the callback queue.
+   *
+   * Pressing Call on a decode while an automatic mode was running did nothing an
+   * operator could see. The controller refuses a second QSO — correctly, it owns the
+   * transmitter — and the refusal went into a panel that was busy rendering the QSO
+   * already in progress. So the button looked broken, and the only way to work someone
+   * the radio had not chosen was to halt everything and lose the contact in flight.
+   *
+   * The queue this joins already existed for stations that call US mid-QSO. An operator
+   * naming a station is the same situation with a better reason, so it goes to the FRONT
+   * rather than the back: the machine picked the others, a person picked this one.
+   *
+   * Returns how many are ahead of it — 0 means next.
+   */
+  queueOperatorCall(entry: Omit<PendingCallback, "at">): { position: number; moved: boolean } {
+    // Already queued: move it to the front rather than adding a duplicate, so pressing
+    // Call twice promotes rather than queueing the same station behind itself.
+    const existing = this.callbacks.findIndex((c) => c.call === entry.call);
+    const moved = existing >= 0;
+    if (moved) this.callbacks.splice(existing, 1);
+
+    this.callbacks.unshift({ ...entry, at: Date.now() });
+    // The cap still applies, but it drops from the BACK now — the entries the operator
+    // did not ask for are the ones to lose.
+    if (this.callbacks.length > MAX_CALLBACKS) this.callbacks.length = MAX_CALLBACKS;
+
+    this.lastAction = `${entry.call} queued by the operator — calling them next`;
+    this.o.log(`[auto] ${this.lastAction}`);
+    this.broadcastState();
+    return { position: 0, moved };
+  }
+
   setMode(mode: AutoMode): void {
     this.mode = mode;
     this.warmup = mode === "off" ? 0 : WARMUP_WINDOWS;

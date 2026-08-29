@@ -63,6 +63,14 @@ const bodySchema = z.object({
   theirWindowStart: z.number().optional(),
   /** The decoded message being answered, verbatim — it opens the QSO's transcript. */
   message: z.string().max(128).optional(),
+  /**
+   * Call this station NOW, halting the contact in progress.
+   *
+   * Default (absent) queues them behind the running QSO instead. Explicit because the
+   * station mid-exchange is a real person waiting on the next message of a sequence they
+   * can see, and dropping them silently is not something a click should do by accident.
+   */
+  takeOver: z.boolean().optional(),
   /** FT-0: true stops everything, false brings the radio back. */
   engage: z.boolean().optional(),
   /**

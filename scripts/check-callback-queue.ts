@@ -97,6 +97,13 @@ function harness(): Harness {
     identity: { myCall: "K9XYZ", myGrid: "EN61" },
     getBandMode: () => ({ band: "20M", mode: "FT8" as DigitalMode, dialHz: null }),
     wasWorked: async () => false,
+    // Required by the operator, and absent here — which the `as unknown as
+    // AutoOperatorOptions` cast at the end of this literal hid from the compiler. The
+    // result was a check that passed its first three assertions and then died with
+    // "this.o.callChecks is not a function" the moment it reached callBackWaiting, i.e.
+    // the moment it tested the thing it is named after. Every field of MayCallChecks is
+    // optional, so an empty object is a complete stub.
+    callChecks: () => ({}),
     retune: async () => true,
     tuneHz: async () => true,
     bandHop: async () => ({ enabled: false, bands: [], toBusiest: false, whenBetterRatio: 0 }),
@@ -250,6 +257,55 @@ async function main() {
     // waiting for operating that has now ended.
     h.auto.setMode("off");
     eqArr(h.auto.state.waiting, [], "switching mode drops them rather than calling later");
+  }
+
+  console.log("\nthe operator names a station while a contact is running");
+  {
+    const h = harness();
+    await h.settle(900_000);
+    h.setActive(true);
+    h.setWorking("K1AAA");
+
+    // Two tail-enders arrive on their own; the machine picked both.
+    await h.window([dm("K9XYZ K2BBB EN61"), dm("K9XYZ K3CCC EN61")], 1_000_000);
+    eqArr(h.auto.state.waiting, ["K2BBB", "K3CCC"], "both queued in the order they called");
+
+    // The operator presses Call on a decode. A person chose this one, so it goes to the
+    // FRONT — ahead of stations that arrived unbidden. This is the whole difference
+    // between the queue and what the button used to do, which was nothing.
+    h.auto.queueOperatorCall({
+      call: "K9WANT",
+      grid: "EN52",
+      snr: -8,
+      offsetHz: 1200,
+      windowStart: 1_000_000,
+      message: "CQ K9WANT EN52",
+    });
+    eqArr(
+      h.auto.state.waiting,
+      ["K9WANT", "K2BBB", "K3CCC"],
+      "the operator's choice goes to the front, not the back",
+    );
+    eqArr(h.called, [], "and nothing is transmitted while the contact is still running");
+
+    // Pressing Call twice promotes rather than queueing them behind themselves.
+    h.auto.queueOperatorCall({
+      call: "K3CCC",
+      grid: null,
+      snr: -8,
+      offsetHz: 1200,
+      windowStart: 1_000_000,
+      message: "",
+    });
+    eqArr(
+      h.auto.state.waiting,
+      ["K3CCC", "K9WANT", "K2BBB"],
+      "a second request promotes rather than duplicating",
+    );
+
+    h.setActive(false);
+    await h.window([], 1_015_000);
+    eqArr(h.called, ["K3CCC"], "the operator's station is worked first when the air is free");
   }
 
   console.log(`\n${pass} passed, ${fail} failed\n`);
