@@ -217,6 +217,50 @@ export default function DigitalPage({ wsUrl }: Props) {
    * a band re-reads itself every cycle, and a suggestion computed on mount would be
    * stale by the time anyone pressed the button.
    */
+  /**
+   * Feedback for a call started straight from a decode row.
+   *
+   * The panel at the top owns its own errors, but a row button that fires without going
+   * through the panel needs somewhere to put a refusal — "transmit is off" arriving
+   * nowhere is the same silent-button problem in a new place.
+   */
+  const [rowCallNote, setRowCallNote] = useState<string | null>(null);
+
+  /**
+   * Call the station in this row, now.
+   *
+   * The button said "Call" and only SELECTED the station — the actual call needed a second
+   * press in the panel above, which is two clicks and a label that lied about the first
+   * one. Asked directly: "do i need to click call on the decode and at the top". Clicking
+   * the ROW still just selects, which is the non-committal gesture; the button labelled
+   * Call now does what it says.
+   */
+  const callFromRow = useCallback(
+    async (d: DecodeEvent) => {
+      if (!d.callsign) return;
+      setTarget(d);
+      setRowCallNote(null);
+      try {
+        const r = await apiPost<{ queued?: boolean; reason?: string }>(
+          "/api/bridge/control",
+          {
+            action: "call",
+            theirCall: d.callsign,
+            theirGrid: gridFromMessage(d.message),
+            theirSnr: d.snr,
+            theirOffsetHz: d.freqOffset,
+            theirWindowStart: new Date(d.timestamp).getTime(),
+            message: d.message,
+          },
+        );
+        if (r?.queued && r.reason) setRowCallNote(r.reason);
+      } catch (err) {
+        setRowCallNote(err instanceof ApiError ? err.message : "Could not start the call");
+      }
+    },
+    [],
+  );
+
   const suggestSlot = useCallback(
     (): ClearSlot => pickClearSlot(occupiedFrom(rows, Date.now())),
     [rows],
@@ -939,6 +983,9 @@ export default function DigitalPage({ wsUrl }: Props) {
                 </div>
               }
             >
+              {rowCallNote && (
+                <p className="mb-2 text-xs text-accent-bright">{rowCallNote}</p>
+              )}
               {visible.length === 0 ? (
                 // "Nothing heard" and "nothing MATCHED" are different problems, and
                 // the narrow filters (CQ POTA especially) are legitimately empty on a
@@ -1079,9 +1126,10 @@ export default function DigitalPage({ wsUrl }: Props) {
                               {d.callsign && (
                                 <button
                                   type="button"
+                                  title={`Call ${d.callsign} now. Click the row instead to select without transmitting.`}
                                   onClick={(e) => {
                                     e.stopPropagation();
-                                    setTarget(d);
+                                    void callFromRow(d);
                                   }}
                                   className={cn(
                                     "ml-2 rounded-sm border px-1.5 py-0.5 align-middle",

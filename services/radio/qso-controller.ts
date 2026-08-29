@@ -1,4 +1,17 @@
 import { nowMs } from "@/lib/time/clock";
+import { transmitStartAt } from "@/lib/radio/timing";
+import type { TxMode } from "@/lib/radio/waveform";
+
+/**
+ * How much of a head start the first transmission of a call needs, ms.
+ *
+ * The waveform is generated before anything keys and the key command has to cross the
+ * network to the radio — measured at 11-40 ms one way to this station's FlexRadio. 400 ms
+ * is comfortably more than both while still catching a window that has only just opened,
+ * which is the case worth catching: it is the difference between answering a CQ in the
+ * next window and answering it 30 seconds later.
+ */
+const FIRST_TX_LEAD_MS = 400;
 import type { FlexDaxSource } from "@/lib/flex/dax";
 import type { DigitalSource, DigitalTransmitter } from "@/lib/radio/types";
 import type { DigitalMode } from "@/lib/ham/digital-freqs";
@@ -140,6 +153,14 @@ export class QsoController {
   private lastSent: string | null = null;
   private seenWindows = new Set<number>();
   /**
+   * The transmit window `runTick` has already advanced the sequencer for.
+   *
+   * Needed once a call can schedule its OWN first transmission instead of waiting for the
+   * next window event: both paths can arrive at the same target window, and ticking a
+   * sequencer twice for one window would send the next message a cycle early.
+   */
+  private lastTickWindow: number | null = null;
+  /**
    * Special activity for the contact in progress.
    *
    * Set when the call is started and cleared by the next one, so it can never
@@ -272,10 +293,25 @@ export class QsoController {
       });
     }
     this.lastSent = null;
+    this.lastTickWindow = null;
     this.o.guards.operatorTouched();
     this.o.log(
       `[qso] calling ${req.theirCall} at ${this.txOffsetHz} Hz, our parity ${this.txParity}`,
     );
+
+    // TRANSMIT IN THE NEXT WINDOW OF OUR PARITY, rather than waiting for the next window
+    // event to notice there is a sequencer now.
+    //
+    // Setting up the sequencer and returning is what made every call wait an extra cycle:
+    // by the time the decode that prompted the call has been decoded, `afterWindow` has
+    // already run for that window and found nothing to do, and the window after it belongs
+    // to the station we are answering. See firstTxWindow.
+    const first = this.firstTxWindow();
+    if (first !== null) {
+      this.o.log(`[qso] first transmission in ${((first - nowMs()) / 1000).toFixed(1)}s`);
+      this.runTick(first);
+    }
+
     this.broadcastState();
     return { ok: true };
   }
@@ -330,7 +366,13 @@ export class QsoController {
       });
     }
     this.lastSent = null;
+    this.lastTickWindow = null;
     this.o.log(`[qso] answering ${req.theirCall} (they called us)`);
+    // Same reasoning as startCall: someone who has just called us is waiting through the
+    // next window, and answering two periods later is how a tail-ender gives up and works
+    // somebody else.
+    const first = this.firstTxWindow();
+    if (first !== null) this.runTick(first);
     this.broadcastState();
     return true;
   }
@@ -339,6 +381,7 @@ export class QsoController {
   async halt(): Promise<void> {
     this.seq = null;
     this.txParity = null;
+    this.lastTickWindow = null;
     this.o.guards.operatorTouched();
     await this.o.tx.unkey();
     this.o.log("[qso] halted by operator");
@@ -358,6 +401,7 @@ export class QsoController {
     const call = this.seq?.theirCall ?? null;
     this.seq = null;
     this.txParity = null;
+    this.lastTickWindow = null;
     this.o.guards.operatorTouched();
     if (call) this.o.guards.recordFailure(call, Date.now());
     await this.o.tx.unkey();
@@ -390,6 +434,49 @@ export class QsoController {
     const period = this.o.source.periodMs;
     const next = windowStartMs + period;
     if (Math.floor(next / period) % 2 !== this.txParity) return;
+
+    this.runTick(next);
+  }
+
+  /**
+   * The next window of OUR parity that there is still time to key.
+   *
+   * Exists because `startCall` used to set up a sequencer and return, leaving the first
+   * transmission to whenever the next window event happened to fire — and on the automatic
+   * path that is always too late. The decision to call is made inside the `decodes`
+   * handler, which fires roughly a decode-time (2 s here) after the `window` event that
+   * drives `afterWindow`. So the window we should have answered in had already been
+   * skipped for want of a sequencer, and the one after it is THEIR parity, so the first
+   * message went out two periods late — one whole missed transmit opportunity, which is
+   * exactly what an operator sees as "waiting an extra cycle before transmitting".
+   *
+   * Returns null when there is no usable window soon, which leaves the old behaviour
+   * (wait for the next window event) rather than keying at a moment already gone.
+   */
+  private firstTxWindow(): number | null {
+    if (this.txParity === null) return null;
+    const period = this.o.source.periodMs;
+    const { mode } = this.o.getBandMode();
+    const now = nowMs();
+    // Two periods of candidates is enough: our parity comes round every other window.
+    for (let i = 0; i < 3; i++) {
+      const w = Math.ceil(now / period) * period + i * period;
+      if (Math.floor(w / period) % 2 !== this.txParity) continue;
+      // Enough time left to build the waveform and get the key command to the radio. A
+      // window whose start instant has effectively passed is skipped rather than keyed
+      // late — FT8 tolerates about 1.5 s and being early is not an option.
+      if (transmitStartAt(mode as TxMode, w) - now >= FIRST_TX_LEAD_MS) return w;
+    }
+    return null;
+  }
+
+  /** Advance the sequencer for `next` and send whatever it produces. */
+  private runTick(next: number): void {
+    const seq = this.seq;
+    if (!seq || this.txParity === null) return;
+    // One tick per transmit window, whichever path got here first.
+    if (this.lastTickWindow === next) return;
+    this.lastTickWindow = next;
 
     const tick = seq.tick(next);
 
@@ -492,6 +579,7 @@ export class QsoController {
     if (seq.isDone && this.seq === seq) {
       // Leave the record visible in state until the next call replaces it.
       this.txParity = null;
+    this.lastTickWindow = null;
     }
     this.broadcastState();
   }

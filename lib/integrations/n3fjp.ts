@@ -30,8 +30,10 @@ import { getSetting } from "@/lib/settings";
 // NOT mean Amateur Contact Log accepted the record. That distinction is why `detail`
 // says so out loud rather than reporting a confident success.
 //
-// NOT VERIFIED AGAINST THE PROGRAM. Everything here follows the published specification;
-// it has not yet been run against a live Amateur Contact Log.
+// VERIFIED AGAINST THE PROGRAM on 29 August 2026 — contacts sent from here appear in a
+// live Amateur Contact Log. That settles the format, and it does NOT settle the
+// acknowledgement: the API still returns nothing for this command, so a failure after the
+// bytes leave here would still look exactly like a success. The caveat below stands.
 
 /** The port N3FJP's API server listens on by default. */
 export const N3FJP_DEFAULT_PORT = 1100;
