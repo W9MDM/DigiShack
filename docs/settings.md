@@ -35,7 +35,7 @@ be read: `DATABASE_URL`, `SETTINGS_KEY` and `PORT`.
 - [Software updates](#software-updates) — 1 setting
 - [Outgoing email](#outgoing-email) — 7 settings
 - [Automatic operating limits](#automatic-operating-limits) — 18 settings
-- [Automatic uploading](#automatic-uploading) — 12 settings
+- [Automatic uploading](#automatic-uploading) — 15 settings
 - [POTA chasing](#pota-chasing) — 7 settings
 - [QSL card and email](#qsl-card-and-email) — 30 settings
 
@@ -298,6 +298,9 @@ Pushing contacts to the log-hosting services as they are made. Off by default, a
 | Setting | Key | Type | Default | What it does |
 |---|---|---|---|---|
 | Upload to Cloudlog / Wavelog | `uploads.cloudlog` | on/off | `false` | Push each contact to your own Cloudlog or Wavelog installation. Needs the URL, API key and station profile id under Cloudlog / Wavelog. |
+| Log to N3FJP Amateur Contact Log | `uploads.n3fjp` | on/off | `false` | Push each contact to N3FJP Amateur Contact Log over its TCP API. Unlike the other targets this is a program on your own desk rather than a web service: enable its listener first, under Settings -> Application Program Interface (API) -> "TCP API Enabled (Server)". Contacts made while the program is closed are not lost — they stay flagged unsent and go out on the next sweep after it comes back. |
+| N3FJP address | `n3fjp.host` | text | `127.0.0.1` | Where Amateur Contact Log is running. 127.0.0.1 is right only when DigiShack is on the SAME machine — a container or a separate server needs the desktop PC's own LAN address, and this is the setting that catches people out. The API has no password of any kind, so point it only at a machine on your own network and never expose port 1100 to the internet. |
+| N3FJP API port | `n3fjp.port` | number | `1100` | The port shown in that API window. 1100 is the default and rarely changed. |
 | Upload contacts automatically | `uploads.enabled` | on/off | `false` | Master switch. When on, each new contact is uploaded shortly after it is logged, and a sweep catches anything missed. Nothing already in the log is touched — see the cutoff below. |
 | Upload to QRZ Logbook | `uploads.qrz` | on/off | `true` | Needs the QRZ logbook API key (a separate subscription from an ordinary QRZ account). A contact QRZ reports as a duplicate is marked as sent rather than retried — it is already there, which is the outcome wanted. |
 | Only send eQSLs to operators who sent us one | `uploads.eqslReciprocalOnly` | on/off | `true` | On eQSL the upload IS the card — it is a card-exchange service with no log-only mode, so there is no way to record a contact there without creating an outgoing eQSL. With this on, one is only created for a contact where THEY have already sent us an eQSL, which is returning a card rather than initiating one, and is the etiquette of QSLing anyway. It also cuts the backlog by two thirds, and eQSL takes one request per contact. |

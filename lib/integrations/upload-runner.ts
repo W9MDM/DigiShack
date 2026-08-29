@@ -21,6 +21,7 @@ import { QSO_INCLUDE, toAdifInput } from "@/lib/adif/from-row";
 import { prisma } from "@/lib/db/prisma";
 import { uploadAdifToClubLog } from "@/lib/integrations/clublog";
 import { uploadToCloudlog } from "@/lib/integrations/cloudlog";
+import { N3FJP_DEFAULT_PORT, sendToN3fjp } from "@/lib/integrations/n3fjp";
 import { insertQrzQso } from "@/lib/integrations/qrz-logbook";
 import { markUploaded, type UploadService } from "@/lib/integrations/upload-state";
 import { getEqslCredentials, uploadEqslQso } from "@/lib/integrations/eqsl";
@@ -35,7 +36,7 @@ import { tq8Filename, uploadTq8 } from "@/lib/integrations/lotw-upload";
 import { getBooleanSetting, getNumberSetting, getSetting } from "@/lib/settings";
 
 /** Services this can actually push to today. */
-export const UPLOADABLE = ["qrz", "clublog", "cloudlog", "eqsl", "lotw"] as const;
+export const UPLOADABLE = ["qrz", "clublog", "cloudlog", "eqsl", "lotw", "n3fjp"] as const;
 export type UploadableService = (typeof UPLOADABLE)[number];
 
 /**
@@ -78,6 +79,14 @@ export interface UploadPrefs {
   qrz: boolean;
   clublog: boolean;
   cloudlog: boolean;
+  /**
+   * N3FJP Amateur Contact Log, over TCP on the operator's own network.
+   *
+   * Off by default like every other target: it pushes to a program that may not be
+   * running, and an operator who has not asked for it should not have contacts appearing
+   * in a second log.
+   */
+  n3fjp: boolean;
   /** Only contacts at or after this instant are uploaded automatically. */
   since: Date | null;
   maxPerRun: number;
@@ -118,6 +127,7 @@ export async function getUploadPrefs(): Promise<UploadPrefs> {
     qrz: await getBooleanSetting("uploads.qrz", true),
     clublog: await getBooleanSetting("uploads.clublog", false),
     cloudlog: await getBooleanSetting("uploads.cloudlog", false),
+    n3fjp: await getBooleanSetting("uploads.n3fjp", false),
     since: since && !Number.isNaN(since.getTime()) ? since : null,
     maxPerRun: await getNumberSetting("uploads.maxPerRun", 25),
     lotwBatch: await getNumberSetting("uploads.lotwBatch", 500),
@@ -128,13 +138,14 @@ export async function getUploadPrefs(): Promise<UploadPrefs> {
 
 const SENT_FIELD: Record<
   UploadableService,
-  "qrzSent" | "clublogSent" | "cloudlogSent" | "eqslSent" | "lotwSent"
+  "qrzSent" | "clublogSent" | "cloudlogSent" | "eqslSent" | "lotwSent" | "n3fjpSent"
 > = {
   qrz: "qrzSent",
   clublog: "clublogSent",
   cloudlog: "cloudlogSent",
   eqsl: "eqslSent",
   lotw: "lotwSent",
+  n3fjp: "n3fjpSent",
 };
 
 /**
@@ -279,6 +290,7 @@ export async function runUploads(
         ...(prefs.cloudlog ? (["cloudlog"] as const) : []),
         ...(prefs.eqsl ? (["eqsl"] as const) : []),
         ...(prefs.lotw ? (["lotw"] as const) : []),
+        ...(prefs.n3fjp ? (["n3fjp"] as const) : []),
       ];
 
   const services: ServiceResult[] = [];
@@ -479,6 +491,36 @@ export async function runUploads(
         // that is working for everything else.
         resetBreaker(service);
       }
+    } else if (service === "n3fjp") {
+      // One connection for the whole batch — this is a program on a desk on the same
+      // network, not somebody else's API, so there is no rate limit to respect and no
+      // reason to reconnect per contact.
+      const res = await sendToN3fjp(rows.map(toAdifInput), {
+        host: (await getSetting("n3fjp.host")) ?? "",
+        port: await getNumberSetting("n3fjp.port", N3FJP_DEFAULT_PORT),
+      });
+      r.uploaded = res.sent;
+      r.detail = res.detail;
+      // BY INDEX, like Cloudlog above: a connection that dies halfway through has
+      // genuinely written the records before it, and marking `rows.slice(0, sent)` would
+      // be assuming an ordering that the partial-failure path does not guarantee.
+      if (res.doneIndexes.length > 0) {
+        await markUploaded(
+          service as UploadService,
+          res.doneIndexes.map((i) => rows[i]!.id),
+        );
+      }
+      r.failed = rows.length - res.sent;
+      for (const e of res.errors.slice(0, 5)) r.errors.push(e);
+      if (res.ok) {
+        resetBreaker(service);
+      } else {
+        r.errors.push(res.detail);
+        // A closed logging program is the ordinary case rather than a fault, but it still
+        // trips the breaker: three sweeps of ECONNREFUSED is enough, and the contacts are
+        // still flagged unsent so they go out whenever the program next comes up.
+        noteFailure(service, res.detail);
+      }
     } else {
       // Club Log takes the whole batch in one request, and builds the ADIF itself.
       const res = await uploadAdifToClubLog(rows.map(toAdifInput));
@@ -541,6 +583,12 @@ export async function uploadCounts(): Promise<PendingCounts[]> {
         break;
       case "clublog":
         configured = Boolean(await getSetting("clublog.email"));
+        break;
+      case "n3fjp":
+        // A host is the whole configuration — the port has a documented default and the
+        // API has no credential at all, which is why it must only ever be pointed at a
+        // machine on the operator's own network.
+        configured = Boolean(await getSetting("n3fjp.host"));
         break;
     }
     out.push({ service, pending, backlog, configured });

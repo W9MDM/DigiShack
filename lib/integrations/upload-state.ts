@@ -14,13 +14,21 @@
 import { prisma } from "@/lib/db/prisma";
 
 /** Services that accept uploads and never confirm. */
-export type UploadService = "qrz" | "clublog" | "cloudlog" | "hrdlog" | "eqsl" | "lotw";
+export type UploadService =
+  | "qrz"
+  | "clublog"
+  | "cloudlog"
+  | "hrdlog"
+  | "eqsl"
+  | "lotw"
+  | "n3fjp";
 
 const SENT_FIELD = {
   qrz: "qrzSent",
   clublog: "clublogSent",
   cloudlog: "cloudlogSent",
   hrdlog: "hrdlogSent",
+  n3fjp: "n3fjpSent",
   eqsl: "eqslSent",
   lotw: "lotwSent",
 } as const satisfies Record<UploadService, string>;
@@ -31,6 +39,7 @@ export const SERVICE_LABEL: Record<UploadService, string> = {
   clublog: "Club Log",
   cloudlog: "Cloudlog / Wavelog",
   hrdlog: "HRDLOG",
+  n3fjp: "N3FJP Amateur Contact Log",
   eqsl: "eQSL",
   lotw: "LoTW",
 };

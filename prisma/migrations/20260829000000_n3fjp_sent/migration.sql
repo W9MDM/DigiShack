@@ -1,0 +1,16 @@
+-- Contacts pushed to N3FJP Amateur Contact Log over its TCP API.
+--
+-- The same shape as `qrzSent`, `clublogSent` and the rest, so the existing upload sweep
+-- can track and retry it without a second mechanism: unsent rows are selected, sent, and
+-- flagged, and a program that was closed at the time is simply picked up on the next run.
+--
+-- It means slightly LESS than its neighbours, and that is worth knowing when reading it
+-- back. N3FJP's API documents no acknowledgement for ADDADIFRECORD — it documents one only
+-- for the ENTER action — so this records that the record was written to a healthy
+-- connection, not that Amateur Contact Log accepted it. See lib/integrations/n3fjp.ts.
+--
+-- Defaults FALSE, which means every existing contact is a candidate. An operator adopting
+-- this on a log that already lives in ACLog should baseline it rather than replay years of
+-- contacts at a desktop program: Settings -> Uploads has the "treat everything up to now
+-- as already uploaded" control, which is `baselineAsUploaded()` in upload-runner.ts.
+ALTER TABLE `Qso` ADD COLUMN `n3fjpSent` BOOLEAN NOT NULL DEFAULT false;

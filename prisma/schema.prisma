@@ -369,6 +369,12 @@ model Qso {
   /// the related QslEmail row.
   emailQslSent   Boolean              @default(false)
   emailQslSentAt DateTime?
+  /// Sent to N3FJP Amateur Contact Log over its TCP API.
+  ///
+  /// A flag like the others, and it means slightly less than they do: the API has no
+  /// acknowledgement for ADDADIFRECORD, so this records that the record was WRITTEN to
+  /// a healthy connection, not that the program accepted it. See lib/integrations/n3fjp.ts.
+  n3fjpSent      Boolean              @default(false)
   qrzSent        Boolean              @default(false)
   /// QRZ shows this contact as confirmed — both operators logged it.
   ///

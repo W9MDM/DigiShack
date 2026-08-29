@@ -501,6 +501,41 @@ export const SETTINGS: SettingDef[] = [
     default: "false",
   },
   {
+    key: "uploads.n3fjp",
+    label: "Log to N3FJP Amateur Contact Log",
+    type: "boolean",
+    group: "uploads",
+    help:
+      "Push each contact to N3FJP Amateur Contact Log over its TCP API. Unlike the other " +
+      "targets this is a program on your own desk rather than a web service: enable its " +
+      "listener first, under Settings -> Application Program Interface (API) -> \"TCP API " +
+      "Enabled (Server)\". Contacts made while the program is closed are not lost — they " +
+      "stay flagged unsent and go out on the next sweep after it comes back.",
+    default: "false",
+  },
+  {
+    key: "n3fjp.host",
+    label: "N3FJP address",
+    type: "string",
+    group: "uploads",
+    help:
+      "Where Amateur Contact Log is running. 127.0.0.1 is right only when DigiShack is on " +
+      "the SAME machine — a container or a separate server needs the desktop PC's own LAN " +
+      "address, and this is the setting that catches people out. The API has no password " +
+      "of any kind, so point it only at a machine on your own network and never expose " +
+      "port 1100 to the internet.",
+    placeholder: "127.0.0.1",
+    default: "127.0.0.1",
+  },
+  {
+    key: "n3fjp.port",
+    label: "N3FJP API port",
+    type: "number",
+    group: "uploads",
+    help: "The port shown in that API window. 1100 is the default and rarely changed.",
+    default: "1100",
+  },
+  {
     key: "hrdlog.callsign",
     label: "HRDLOG callsign",
     type: "string",
