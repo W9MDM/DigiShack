@@ -5,7 +5,7 @@ import { sendError, sendJson } from "@/lib/api/respond";
 import { authedRoute } from "@/lib/auth/guard";
 import type { AuthContext } from "@/lib/auth/session";
 import { prisma } from "@/lib/db/prisma";
-import { resolveDxcc } from "@/lib/dxcc/resolve";
+import { promoteIncomplete } from "@/lib/qso/promote-incomplete";
 
 // Promote an incomplete exchange to a contact, or dismiss it.
 //
@@ -52,59 +52,20 @@ async function post(req: NextApiRequest, res: NextApiResponse, auth: AuthContext
     return;
   }
 
-  if (x.promotedQsoId) {
-    // Idempotent rather than an error: a double-click must not create a second contact.
-    sendJson(res, 200, { ok: true, qsoId: x.promotedQsoId, alreadyPromoted: true });
+  const result = await promoteIncomplete(id, {
+    because: parsed.data.because,
+    by: auth.user.email,
+  });
+  if (!result) {
+    sendError(res, 404, "No such exchange");
     return;
   }
-
-  // The entity is resolved here, not left for a backfill. Every contact this station logged
-  // itself was once missing dxcc, cqZone and continent, and none of them counted toward an
-  // award — see the note in services/radio/operating.ts.
-  let entity: { adif: number; cqZone: number | null; continent: string | null } | null = null;
-  try {
-    const r = await resolveDxcc(x.callsign, x.startedAt);
-    if (r.status === "found") {
-      entity = { adif: r.match.adif, cqZone: r.match.cqZone, continent: r.match.continent };
-    }
-  } catch {
-    /* no cty data loaded — the contact is still worth having */
+  if (result.alreadyPromoted) {
+    // Idempotent rather than an error: a double-click must not create a second contact.
+    sendJson(res, 200, { ok: true, qsoId: result.qsoId, alreadyPromoted: true });
+    return;
   }
-
-  const why = parsed.data.because?.trim();
-  const created = await prisma.qso.create({
-    data: {
-      callsign: x.callsign,
-      band: x.band,
-      mode: x.mode,
-      freqHz: x.freqHz ?? BigInt(0),
-      startTime: x.startedAt,
-      endTime: x.endedAt,
-      rstSent: x.reportSent,
-      rstRcvd: x.reportRcvd,
-      gridSquare: x.gridSquare,
-      dxcc: entity?.adif ?? null,
-      cqZone: entity?.cqZone ?? null,
-      continent: entity?.continent ?? null,
-      stationId: x.stationId,
-      // The provenance travels WITH the contact, not only on the row it came from. A reader
-      // looking at this QSO in a year needs to know it was promoted from an unacknowledged
-      // exchange rather than logged live, and by whom.
-      notes:
-        `Promoted from an incomplete exchange: reports exchanged both ways, no acknowledgement ` +
-        `decoded (${x.stage}). Promoted by ${auth.user.email}` +
-        (why ? ` — ${why}` : "") +
-        (x.transcript ? `\n\n${x.transcript}` : ""),
-    },
-    select: { id: true },
-  });
-
-  await prisma.incompleteExchange.update({
-    where: { id },
-    data: { promotedQsoId: created.id },
-  });
-
-  sendJson(res, 200, { ok: true, qsoId: created.id });
+  sendJson(res, 200, { ok: true, qsoId: result.qsoId });
 }
 
 export default authedRoute({ POST: { role: "ADMIN", handler: post } });
