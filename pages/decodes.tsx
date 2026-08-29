@@ -236,6 +236,20 @@ export default function DigitalPage({ wsUrl }: Props) {
   const [rowCallNote, setRowCallNote] = useState<string | null>(null);
 
   /**
+   * Stations whose contact COMPLETED, so their later decodes read differently.
+   *
+   * A finished station keeps transmitting — the RR73 and 73 at the end of an exchange
+   * arrive after the contact is logged, and on a busy band they sit in the list looking
+   * exactly like somebody who still wants working. That was read as a dropped contact,
+   * which is a fair reading of an interface that gives no sign either way.
+   *
+   * Session-scoped rather than the worked index: this answers "did I just work them",
+   * which is a different and more immediate question than "have I ever worked them" —
+   * the NEVER WORKED badge already covers that one.
+   */
+  const [workedNow, setWorkedNow] = useState<Set<string>>(new Set());
+
+  /**
    * Call the station in this row, now.
    *
    * The button said "Call" and only SELECTED the station — the actual call needed a second
@@ -421,6 +435,10 @@ export default function DigitalPage({ wsUrl }: Props) {
           } else if (msg.kind === "qso-logged") {
             playDing();
             void reloadToday();
+            const call = (msg.log as { theirCall?: string } | undefined)?.theirCall;
+            if (call) {
+              setWorkedNow((prev) => new Set(prev).add(call.toUpperCase()));
+            }
           } else if (msg.kind === "qso-tx") {
             setLastTx(
               msg.sent ? (msg.message as string) : `refused: ${msg.reason}`,
@@ -1057,6 +1075,8 @@ export default function DigitalPage({ wsUrl }: Props) {
                       {visible.map((d, i) => {
                         const isCq = /^CQ\b/i.test(d.message);
                         const mine = mentionsMe(d.message);
+                        const done =
+                          d.callsign !== null && workedNow.has(d.callsign.toUpperCase());
                         return (
                           <tr
                             key={`${d.timestamp}-${d.freqOffset}-${d.message}`}
@@ -1070,9 +1090,15 @@ export default function DigitalPage({ wsUrl }: Props) {
                               "hover:bg-surface-2",
                               d.callsign && "cursor-pointer",
                               mine && "bg-accent/10",
+                              // Worked and logged this session: dimmed, so the eye skips
+                              // them. Applied AFTER `mine` so the tail of our own finished
+                              // exchange reads as finished rather than as a station still
+                              // calling us — which is the confusion this fixes.
+                              done && "opacity-55",
+                              // The station being worked right now outranks both.
                               qso?.active &&
                                 d.callsign === qso.theirCall &&
-                                "bg-ok/10",
+                                "bg-ok/10 opacity-100",
                             )}
                           >
                             <td className="px-3 py-1 tnum text-fg-subtle whitespace-nowrap">
@@ -1132,6 +1158,18 @@ export default function DigitalPage({ wsUrl }: Props) {
                                     {worth.get(d.callsign)![0]}
                                   </span>
                                 )}
+                              {/* Named, not only dimmed. Opacity alone is ambiguous — it
+                                  could be any kind of de-emphasis — and this is a fact
+                                  worth stating: the contact finished, so their RR73 and 73
+                                  are the end of it rather than someone still calling. */}
+                              {done && (
+                                <span
+                                  className="ml-2 rounded-sm border border-ok/40 bg-ok/12 px-1 py-0.5 text-[10px] uppercase tracking-wide text-ok align-middle"
+                                  title="Contact completed and logged this session."
+                                >
+                                  worked
+                                </span>
+                              )}
                               {d.callsign && (
                                 <button
                                   type="button"

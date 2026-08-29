@@ -523,6 +523,68 @@ async function main(): Promise<void> {
   }
 
 
+  console.log("\nclicking Call on a message mid-exchange resumes it");
+  {
+    // The reported fault: "if i click call on their rr73 it restarts the call ... it
+    // should pick back up where it was". A sequencer is built in the "calling" state and
+    // then handed the message that prompted the call, exactly as the controller now does.
+
+    // They already sent us a REPORT — we owe an R-report, not an opening grid message.
+    const a = new QsoSequencer({
+      myCall: "K9XYZ",
+      myGrid: "EN61",
+      theirCall: "XE1JVO",
+      theirSnr: -6,
+      role: "caller",
+      startedAt: 1000,
+    });
+    a.onDecode("K9XYZ XE1JVO -02", 15_000);
+    eq(a.currentState, "rreport-sent", "their report moves us straight to owing Tx3");
+    eq(a.tick(30_000).send, "XE1JVO K9XYZ R-06", "so we answer with the R-report");
+
+    // They already sent RR73 — the contact is over bar the courtesy 73, and it must be
+    // LOGGED rather than started again from the top.
+    const b = new QsoSequencer({
+      myCall: "K9XYZ",
+      myGrid: "EN61",
+      theirCall: "XE1JVO",
+      theirSnr: -6,
+      role: "caller",
+      startedAt: 1000,
+    });
+    b.onDecode("K9XYZ XE1JVO RR73", 15_000);
+    ok(b.isDone, "their RR73 completes it immediately");
+    const t = b.tick(30_000);
+    eq(t.send, "XE1JVO K9XYZ 73", "we owe only the courtesy 73");
+    ok(t.log !== undefined, "and the contact is logged, not restarted");
+
+    // A CQ carries no state, so clicking it must still open normally.
+    const c = new QsoSequencer({
+      myCall: "K9XYZ",
+      myGrid: "EN61",
+      theirCall: "DL2MIJ",
+      theirSnr: -9,
+      role: "caller",
+      startedAt: 1000,
+    });
+    c.onDecode("CQ DX DL2MIJ JN58", 15_000);
+    eq(c.currentState, "calling", "a CQ leaves us at the beginning");
+    eq(c.tick(30_000).send, "DL2MIJ K9XYZ EN61", "and we open with Tx1");
+
+    // Somebody else's exchange must not move our machine at all.
+    const d = new QsoSequencer({
+      myCall: "K9XYZ",
+      myGrid: "EN61",
+      theirCall: "XE1JVO",
+      theirSnr: -6,
+      role: "caller",
+      startedAt: 1000,
+    });
+    d.onDecode("K4ANC F5LOW RR73", 15_000);
+    eq(d.currentState, "calling", "a message between two other stations is ignored");
+  }
+
+
   console.log(`\n${pass} passed, ${fail} failed\n`);
   if (fail > 0) process.exit(1);
 }

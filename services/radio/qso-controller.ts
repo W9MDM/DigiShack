@@ -335,6 +335,30 @@ export class QsoController {
         offsetHz: req.theirOffsetHz,
       });
     }
+    // RESUME THE EXCHANGE, rather than starting it again.
+    //
+    // Pressing Call on a decode built a fresh sequencer in the "calling" state, so a
+    // station that had already sent us a report — or RR73 — was answered with an opening
+    // grid message as though nothing had happened. Reported as "if i click call on their
+    // rr73 it restarts the call ... it should pick back up where it was".
+    //
+    // The machine already knows how to do this: `onDecode` is what advances it during a
+    // contact, and it advances the same way whether the message arrives live or is handed
+    // over now. So the message that prompted the call is fed straight in. Their report
+    // moves us to owing an R-report; their RR73 completes the contact and leaves the
+    // courtesy 73 owed, which the next tick sends and logs.
+    //
+    // Only messages addressed to us by them move it — `onDecode` checks that itself — so
+    // clicking Call on a CQ still opens normally.
+    if (req.theirMessage) {
+      this.seq.onDecode(req.theirMessage, req.theirWindowStart);
+      if (this.seq.currentState !== "calling") {
+        this.o.log(
+          `[qso] resuming with ${req.theirCall} at "${this.seq.currentState}" — they had already sent "${req.theirMessage}"`,
+        );
+      }
+    }
+
     this.lastSent = null;
     this.lastTickWindow = null;
     this.o.guards.operatorTouched();
