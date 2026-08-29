@@ -121,7 +121,10 @@ export const SETTING_GROUPS: SettingGroup[] = [
     id: "dxcc",
     title: "DXCC reference data",
     blurb:
-      "Callsign-to-entity mapping comes from Club Log's cty.xml, which is not bundled with DigiShack — it is maintained upstream and changes regularly. Club Log issues an API key on request; without one you can still upload the file by hand from the DXCC page. Manage the data itself there, not here.",
+      "Callsign-to-entity mapping. The DXCC page downloads it in one click from " +
+      "country-files.com (AD1C's Big CTY) and needs NOTHING configured here — no account, " +
+      "no key. The setting below is only for operators who happen to hold a Club Log cty " +
+      "API key and would rather use their cty.xml. Manage the data itself on the DXCC page.",
   },
   {
     id: "pskreporter",
@@ -566,7 +569,13 @@ export const SETTINGS: SettingDef[] = [
     label: "Club Log cty API key",
     type: "secret",
     group: "dxcc",
-    help: "Enables one-click download of cty.xml, the callsign-to-entity data. This is DXCC reference data only and nothing to do with uploading contacts. Without it you can still upload the file by hand from the DXCC page.",
+    help:
+      "OPTIONAL, and most operators should leave it blank. DXCC data downloads from " +
+      "country-files.com with no credential at all, which is the button the DXCC page " +
+      "leads with. Club Log does not issue these keys to everyone, and requiring one is " +
+      "why installations sat with 9 DXCC entities against 160 actually worked. Fill this " +
+      "in only if you already have a key and prefer Club Log's cty.xml, which carries " +
+      "dated exception records the CSV does not. Nothing to do with uploading contacts.",
   },
   {
     key: "dxcc.autoFill",

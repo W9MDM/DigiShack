@@ -79,12 +79,23 @@ export default function DxccPage() {
     );
   }
 
-  async function doFetch() {
-    setBusy("fetch");
+  /**
+   * Download the country file.
+   *
+   * `ad1c` is the default and needs NO credential of any kind. The endpoint has
+   * supported it since it was written — only this page never offered it, so an operator
+   * without a Club Log key saw a disabled button and a note telling them to go and ask
+   * for one.
+   */
+  async function doFetch(source: "ad1c" | "clublog" = "ad1c") {
+    setBusy(source === "clublog" ? "fetch" : "fetch-ad1c");
     setActionError(null);
     setReport(null);
     try {
-      const res = await apiPost<{ report: ImportReport }>("/api/dxcc?fetch=1", {});
+      const res = await apiPost<{ report: ImportReport }>(
+        `/api/dxcc?fetch=1&source=${source}`,
+        {},
+      );
       setReport(res.report);
       reload();
     } catch (err) {
@@ -201,44 +212,70 @@ export default function DxccPage() {
         <Card title="Load data">
           <div className="flex flex-col gap-4">
             <p className="text-sm text-fg-muted">
-              cty.xml is maintained by Club Log and changes regularly, so it is
-              not bundled with DigiShack. Refresh it every month or two.
+              The country file maps callsigns to DXCC entities. It is maintained
+              upstream and changes regularly, so it is not bundled with DigiShack —
+              refresh it every month or two.
             </p>
 
             <div>
+              {/* THE KEYLESS SOURCE IS THE PRIMARY BUTTON.
+                  
+                  This page used to lead with "Fetch from Club Log", disabled, above a
+                  note telling the operator to go and request an API key. Club Log does
+                  not issue those to everyone, so for most people the only working route
+                  to DXCC data was to find cty.xml themselves and upload it by hand — and
+                  without it the award denominators are nonsense and most entities have no
+                  name at all.
+                  
+                  AD1C's Big CTY is the file every contest logger uses, it is freely
+                  downloadable, and it carries the ADIF entity numbers that plain cty.dat
+                  lacks. The parser and the endpoint for it already existed; only the
+                  button was missing. */}
               <Button
                 variant="primary"
-                disabled={busy !== null || !status?.canFetch}
-                onClick={() => void doFetch()}
-                title={
-                  status?.canFetch
-                    ? undefined
-                    : "Add a Club Log cty API key under Settings first"
-                }
+                disabled={busy !== null}
+                onClick={() => void doFetch("ad1c")}
+                title="Downloads the Big CTY country file from country-files.com. No account, no API key."
               >
-                {busy === "fetch" ? "Downloading…" : "Fetch from Club Log"}
+                {busy === "fetch-ad1c" ? "Downloading…" : "Fetch country file"}
               </Button>
-              {!status?.canFetch && (
-                <p className="text-xs text-fg-subtle mt-1.5">
-                  Needs a cty API key —{" "}
-                  <Link href="/settings" className="text-accent-bright underline">
-                    Settings → DXCC reference data
-                  </Link>
-                  . Club Log issues one on request.
-                </p>
-              )}
+              <p className="text-xs text-fg-subtle mt-1.5">
+                From{" "}
+                <span className="text-fg-muted">country-files.com</span> (AD1C&apos;s Big
+                CTY) — no account and no API key needed. This is the same data every
+                contest logger uses.
+              </p>
             </div>
 
+            {/* Club Log stays available for anyone who does have a key, and is a
+                genuinely different file rather than a mirror of the same one — but it is
+                now the alternative, not the gate. */}
+            {status?.canFetch && (
+              <div>
+                <Button
+                  disabled={busy !== null}
+                  onClick={() => void doFetch("clublog")}
+                  title="Uses the cty API key configured under Settings."
+                >
+                  {busy === "fetch" ? "Downloading…" : "Fetch from Club Log instead"}
+                </Button>
+                <p className="text-xs text-fg-subtle mt-1.5">
+                  Uses your cty API key. Club Log&apos;s cty.xml carries dated exception
+                  records the CSV does not.
+                </p>
+              </div>
+            )}
+
             <Field
-              label="Or upload cty.xml"
+              label="Or upload a country file"
               htmlFor="cty-file"
-              hint="Accepts cty.xml or cty.xml.gz — for a shack with no outbound internet"
+              hint="Accepts cty.csv, cty.xml or cty.xml.gz — for a shack with no outbound internet"
             >
               <input
                 ref={fileRef}
                 id="cty-file"
                 type="file"
-                accept=".xml,.gz,application/gzip,text/xml"
+                accept=".csv,.xml,.gz,application/gzip,text/xml,text/csv"
                 disabled={busy !== null}
                 onChange={(e) => {
                   const f = e.target.files?.[0];
