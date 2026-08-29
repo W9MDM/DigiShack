@@ -124,6 +124,15 @@ interface QsoState {
   theirCall: string | null;
   state: string | null;
   lastSent: string | null;
+  /** The whole exchange so far, both directions. */
+  transcript?: {
+    at: number;
+    dir: "tx" | "rx";
+    message: string;
+    snr?: number | null;
+    offsetHz?: number | null;
+    refused?: string | null;
+  }[];
   txParity: 0 | 1 | null;
   txOffsetHz: number | null;
   pausedReason: string | null;
@@ -1548,11 +1557,63 @@ function WorkStationPanel({
             {stateLabel[qso.state] ?? qso.state}
           </div>
         )}
-        {qso?.lastSent && (
-          <div className="font-mono text-xs text-accent-bright">sent: {qso.lastSent}</div>
-        )}
-        {lastTx && lastTx !== qso?.lastSent && (
-          <div className="font-mono text-xs text-fg-subtle">tx: {lastTx}</div>
+        {/* THE WHOLE EXCHANGE, not just our last line.
+            
+            This was `sent: <one message>` — our side only, one message deep — so an
+            operator watching a contact could see what we had just transmitted and nothing
+            of what came back. The controller has recorded both directions all along; it
+            was only written to the log at completion, which is the one moment it is no
+            longer needed on screen.
+            
+            Laid out ACROSS rather than down: the messages are thirteen characters, the
+            panel is the full width of the page, and a contact reads as a conversation
+            left to right. It wraps when a long exchange needs it. */}
+        {(qso?.transcript?.length ?? 0) > 0 ? (
+          <div className="flex flex-wrap items-stretch gap-1.5">
+            {qso!.transcript!.map((t, i) => (
+              <div
+                key={`${t.at}-${i}-${t.message}`}
+                className={cn(
+                  "rounded-sm border px-2 py-1 font-mono text-xs leading-tight",
+                  t.refused
+                    ? "border-danger/50 bg-danger/10 text-danger"
+                    : t.dir === "tx"
+                      ? "border-accent/40 bg-accent/10 text-accent-bright"
+                      : "border-line text-fg",
+                )}
+                title={
+                  (t.refused ? `REFUSED: ${t.refused}
+` : "") +
+                  `${new Date(t.at).toISOString().slice(11, 19)}Z` +
+                  (t.snr != null ? ` · ${t.snr > 0 ? "+" : ""}${t.snr} dB` : "") +
+                  (t.offsetHz != null ? ` · ${t.offsetHz} Hz` : "")
+                }
+              >
+                <div className="flex items-center gap-1">
+                  {/* Direction as a glyph rather than a word: at this size "tx"/"rx" is
+                      the same width as the arrow and reads slower. */}
+                  <span className={t.dir === "tx" ? "text-accent-bright" : "text-fg-subtle"}>
+                    {t.dir === "tx" ? "▲" : "▼"}
+                  </span>
+                  <span>{t.message}</span>
+                </div>
+                <div className="text-[10px] text-fg-subtle tnum">
+                  {new Date(t.at).toISOString().slice(14, 19)}
+                  {t.snr != null && ` ${t.snr > 0 ? "+" : ""}${t.snr}`}
+                  {t.refused && " refused"}
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <>
+            {qso?.lastSent && (
+              <div className="font-mono text-xs text-accent-bright">sent: {qso.lastSent}</div>
+            )}
+            {lastTx && lastTx !== qso?.lastSent && (
+              <div className="font-mono text-xs text-fg-subtle">tx: {lastTx}</div>
+            )}
+          </>
         )}
         {qso?.pausedReason && (
           <div className="text-warn text-xs">⚠ {qso.pausedReason}</div>

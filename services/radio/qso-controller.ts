@@ -126,6 +126,19 @@ export interface QsoPublicState {
   txOffsetHz: number | null;
   pausedReason: string | null;
   messages: ReturnType<typeof standardMessages> | null;
+  /**
+   * The exchange so far, both directions, live.
+   *
+   * The panel showed `lastSent` — one line, our side only — so an operator watching a
+   * contact could see what we had just transmitted and nothing of what came back. The
+   * controller has recorded the whole thing all along; it was only written to the log at
+   * completion, which is the one moment it is no longer needed on screen.
+   *
+   * Sent on every state broadcast. A whole FT8 exchange is six or so thirteen-character
+   * messages, so this costs nothing next to the decode stream already going down the
+   * same socket.
+   */
+  transcript: TranscriptEntry[];
 }
 
 /**
@@ -202,6 +215,10 @@ export class QsoController {
       txParity: this.txParity,
       txOffsetHz: this.seq ? this.txOffsetHz : null,
       pausedReason: this.o.guards.pausedReason,
+      // Copied, not handed out by reference: `record()` mutates this array in place and a
+      // consumer holding the live one would see entries appear inside a message it had
+      // already serialised.
+      transcript: [...this.transcript],
       messages: this.seq
         ? standardMessages({
             myCall: this.o.identity.myCall,
@@ -623,6 +640,9 @@ export class QsoController {
       snr: d.snr,
       offsetHz: d.freqOffset,
     });
+    // Their reply is half the exchange, and until the transcript reached the UI nothing
+    // needed redrawing when one arrived. It does now.
+    this.broadcastState();
   }
 
   private broadcastState(): void {
