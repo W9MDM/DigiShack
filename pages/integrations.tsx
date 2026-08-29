@@ -24,6 +24,24 @@ import { formatUtc } from "@/lib/time";
 // The status a service reports is READ-ONLY. Nothing here uploads or modifies a
 // remote logbook, which is what makes it safe to press against a live account.
 
+interface PendingCounts {
+  service: string;
+  /** Awaiting upload AND newer than the cutoff — what an automatic sweep will send. */
+  pending: number;
+  /** Everything unsent, cutoff ignored — the back catalogue. */
+  backlog: number;
+  configured: boolean;
+}
+
+interface UploadsResponse {
+  enabled: boolean;
+  since: string | null;
+  intervalMinutes: number;
+  counts: PendingCounts[];
+  /** Whether anything is actually going to run a sweep. See the card below. */
+  sweeper: { running: boolean; detail: string };
+}
+
 interface ServiceStatus {
   id: string;
   label: string;
@@ -52,6 +70,49 @@ interface SyncReport {
 
 export default function IntegrationsPage() {
   const { data, error, reload } = useApi<StatusResponse>("/api/integrations/status");
+  const { data: uploads, reload: reloadUploads } = useApi<UploadsResponse>("/api/uploads");
+  const [uploadBusy, setUploadBusy] = useState<string | null>(null);
+  const [uploadNote, setUploadNote] = useState<string | null>(null);
+
+  /**
+   * Send what is waiting, now, from the browser.
+   *
+   * The only other thing that ever calls `runUploads` is the radio service, so an
+   * installation not running it had no way to upload at all — the reported symptom was
+   * "turned uploads on and the log still is not uploading at the sweep", with nothing on
+   * any page to explain why.
+   */
+  async function uploadNow(ignoreCutoff: boolean) {
+    setUploadBusy(ignoreCutoff ? "backlog" : "now");
+    setUploadNote(null);
+    try {
+      const r = await apiPost<{
+        ran: boolean;
+        reason: string | null;
+        services: { service: string; uploaded: number; failed: number; skipped: string | null; errors: string[] }[];
+      }>("/api/uploads", { ignoreCutoff });
+      if (!r.ran) {
+        setUploadNote(r.reason ?? "Nothing ran");
+      } else {
+        const sent = r.services.reduce((n, x) => n + x.uploaded, 0);
+        const skipped = r.services.filter((x) => x.skipped);
+        setUploadNote(
+          `${sent} contact${sent === 1 ? "" : "s"} sent` +
+            (skipped.length
+              ? ` — skipped: ${skipped.map((x) => `${x.service} (${x.skipped})`).join(", ")}`
+              : "") +
+            (r.services.some((x) => x.errors.length)
+              ? ` — ${r.services.flatMap((x) => x.errors).slice(0, 2).join("; ")}`
+              : ""),
+        );
+      }
+      reloadUploads();
+    } catch (err) {
+      setUploadNote(err instanceof ApiError ? err.message : "Upload failed");
+    } finally {
+      setUploadBusy(null);
+    }
+  }
   const [busy, setBusy] = useState<string | null>(null);
   const [report, setReport] = useState<SyncReport | null>(null);
   const [syncError, setSyncError] = useState<string | null>(null);
@@ -207,6 +268,100 @@ export default function IntegrationsPage() {
               </p>
             )}
           </div>
+        </Card>
+
+        {/* WHAT IS WAITING, AND WHETHER ANYTHING WILL SEND IT.
+            
+            Two separate facts, and conflating them is the whole bug this card exists for.
+            "Automatic uploading" being ON only means the sweep is ALLOWED — something
+            still has to run it, and the only thing that ever does is the radio service.
+            An installation using DigiShack as a logbook without the bridge running had
+            uploads switched on, a growing backlog, and nothing anywhere saying why the
+            number never moved. */}
+        <Card
+          title="Uploads"
+          className="lg:col-span-2"
+          actions={
+            <div className="flex items-center gap-2">
+              <Button
+                variant="primary"
+                disabled={uploadBusy !== null}
+                onClick={() => void uploadNow(false)}
+                title="Send everything waiting that is newer than the cutoff, right now, without waiting for a sweep."
+              >
+                {uploadBusy === "now" ? "Uploading…" : "Upload now"}
+              </Button>
+              {(uploads?.counts.some((c) => c.backlog > c.pending) ?? false) && (
+                <Button
+                  disabled={uploadBusy !== null}
+                  onClick={() => void uploadNow(true)}
+                  title="Also send contacts older than the cutoff date — the back catalogue."
+                >
+                  {uploadBusy === "backlog" ? "Uploading…" : "Include back catalogue"}
+                </Button>
+              )}
+            </div>
+          }
+        >
+          {uploads ? (
+            <div className="flex flex-col gap-3">
+              {!uploads.enabled && (
+                <p className="text-sm text-warn">
+                  Automatic uploading is off — nothing is sent on a sweep.{" "}
+                  <Link href="/settings" className="text-accent-bright underline">
+                    Settings → Uploads
+                  </Link>
+                  . “Upload now” still works.
+                </p>
+              )}
+              {uploads.enabled && !uploads.sweeper.running && (
+                // The message that was missing entirely.
+                <p className="text-sm text-danger">{uploads.sweeper.detail}</p>
+              )}
+              {uploads.enabled && uploads.sweeper.running && (
+                <p className="text-sm text-fg-muted">{uploads.sweeper.detail}</p>
+              )}
+              {uploads.since && (
+                <p className="text-xs text-fg-subtle">
+                  Automatic sweeps only send contacts made after{" "}
+                  <span className="text-fg-muted tnum">{uploads.since}</span>. Anything
+                  older is the back catalogue and needs the button above.
+                </p>
+              )}
+
+              <ul className="flex flex-col gap-1.5">
+                {uploads.counts.map((c) => (
+                  <li
+                    key={c.service}
+                    className="flex items-center justify-between gap-3 border-b border-line pb-1.5 last:border-0"
+                  >
+                    <span className="text-sm text-fg">{c.service}</span>
+                    <span className="text-xs tnum text-fg-muted">
+                      {!c.configured ? (
+                        <span className="text-fg-subtle">not set up</span>
+                      ) : c.pending === 0 && c.backlog === 0 ? (
+                        <span className="text-ok">up to date</span>
+                      ) : (
+                        <>
+                          {c.pending} waiting
+                          {c.backlog > c.pending && (
+                            <span className="text-fg-subtle">
+                              {" "}
+                              · {c.backlog - c.pending} older than the cutoff
+                            </span>
+                          )}
+                        </>
+                      )}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+
+              {uploadNote && <p className="text-xs text-accent-bright">{uploadNote}</p>}
+            </div>
+          ) : (
+            <p className="text-sm text-fg-subtle">Checking…</p>
+          )}
         </Card>
 
         <Card title="Services">
