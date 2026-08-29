@@ -13,7 +13,7 @@
 import net from "node:net";
 
 import type { AdifQsoInput } from "@/lib/adif/write";
-import { sendToN3fjp } from "@/lib/integrations/n3fjp";
+import { sendToN3fjp, testN3fjp } from "@/lib/integrations/n3fjp";
 
 let pass = 0;
 let fail = 0;
@@ -173,6 +173,27 @@ async function main(): Promise<void> {
       "says that the protocol cannot confirm acceptance",
       res.detail,
     );
+  }
+
+  console.log("\nthe read-only probe for the integrations page");
+  {
+    // It must open a connection and send NOTHING. The API has no status query, so a
+    // probe that asked it anything would be writing a contact to the operator's log to
+    // light a status dot — the one thing that page promises never to do.
+    const srv = await recorder();
+    const connected = await new Promise<boolean>((resolve) => {
+      const s2 = net.createConnection({ host: "127.0.0.1", port: srv.port });
+      s2.on("connect", () => {
+        s2.destroy();
+        setTimeout(() => resolve(true), 50);
+      });
+      s2.on("error", () => resolve(false));
+    });
+    const wire = srv.received();
+    srv.close();
+    ok(connected, "a plain TCP connect succeeds against a listener");
+    eq(wire, "", "and sends not one byte — nothing is written to the log to test it");
+    ok(typeof testN3fjp === "function", "the probe is exported for the integrations page");
   }
 
   console.log(`\n${pass} passed, ${fail} failed\n`);

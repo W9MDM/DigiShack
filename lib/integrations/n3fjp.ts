@@ -1,6 +1,7 @@
 import net from "node:net";
 
 import { adifRecord, type AdifQsoInput } from "@/lib/adif/write";
+import { getSetting } from "@/lib/settings";
 
 // N3FJP Amateur Contact Log, over its TCP API.
 //
@@ -132,6 +133,54 @@ export async function sendToN3fjp(
             (replies.trim() ? ` — it replied: ${replies.trim().slice(0, 200)}` : ""),
         );
       }, 400);
+    });
+  });
+}
+
+/**
+ * Is Amateur Contact Log actually listening?
+ *
+ * Opens a connection, sends NOTHING, and closes it. That is the whole probe, and it is
+ * the most useful one available: the API has no read-only query and no status command, so
+ * the only honest question is whether something accepts a connection on that port. Sending
+ * a command to find out would mean writing a contact to somebody's log to satisfy a status
+ * dot — exactly what the integrations page refuses to do for every other service.
+ *
+ * It cannot tell N3FJP from any other program that happens to be listening there. Said in
+ * the detail text rather than papered over.
+ */
+export async function testN3fjp(): Promise<{ ok: boolean; detail: string }> {
+  const host = (await getSetting("n3fjp.host"))?.trim();
+  const port = Number((await getSetting("n3fjp.port")) ?? N3FJP_DEFAULT_PORT) || N3FJP_DEFAULT_PORT;
+  if (!host) return { ok: false, detail: "No address configured" };
+
+  return await new Promise((resolve) => {
+    let settled = false;
+    const done = (ok: boolean, detail: string): void => {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      resolve({ ok, detail });
+    };
+    const socket = net.createConnection({ host, port });
+    socket.setTimeout(4_000, () =>
+      done(false, `${host}:${port} did not answer within 4 s`),
+    );
+    socket.on("connect", () =>
+      done(
+        true,
+        `Something is listening on ${host}:${port}. The API has no status command, so this ` +
+          `confirms the port is open, not that it is Amateur Contact Log.`,
+      ),
+    );
+    socket.on("error", (err) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      done(
+        false,
+        /ECONNREFUSED/.test(msg)
+          ? `Nothing is listening on ${host}:${port} — is Amateur Contact Log running with its TCP API server enabled?`
+          : msg,
+      );
     });
   });
 }
