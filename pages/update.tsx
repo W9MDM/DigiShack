@@ -16,7 +16,6 @@ import { formatUtc } from "@/lib/time";
 
 interface UpdateCheck {
   allowed: boolean;
-  hasToken: boolean;
   branch: string | null;
   localSha: string | null;
   remoteSha: string | null;
@@ -27,6 +26,10 @@ interface UpdateCheck {
   version: string;
   incoming: string[];
   error: string | null;
+  /** Host `origin` points at, so nothing here has to name a particular forge. */
+  remoteHost: string;
+  /** The fetch got through with no credential — a public repository needs none. */
+  anonymousOk: boolean;
 }
 
 interface UpdateStep {
@@ -61,8 +64,6 @@ export default function UpdatePage() {
   const [state, setState] = useState<UpdateState | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<ApiError | null>(null);
-  const [tokenDraft, setTokenDraft] = useState("");
-  const [userDraft, setUserDraft] = useState("");
   const logRef = useRef<HTMLPreElement>(null);
 
   const running = state?.phase === "running" || state?.phase === "reloading";
@@ -124,26 +125,6 @@ export default function UpdatePage() {
     }
   }
 
-  async function saveGitAccess() {
-    const updates: { key: string; value: string }[] = [];
-    if (tokenDraft.trim()) updates.push({ key: "update.gitToken", value: tokenDraft.trim() });
-    if (userDraft.trim()) updates.push({ key: "update.gitUsername", value: userDraft.trim() });
-    if (updates.length === 0) return;
-
-    setBusy("git");
-    setError(null);
-    try {
-      await apiPatch("/api/settings", { updates });
-      setTokenDraft("");
-      // The check runs a real `git fetch`, so a bad token fails right here in
-      // the Status card instead of at the next update attempt.
-      await doCheck();
-    } catch (err) {
-      setError(err instanceof ApiError ? err : new ApiError(0, "Could not save"));
-    } finally {
-      setBusy(null);
-    }
-  }
 
   async function runUpdate() {
     if (!check) return;
@@ -242,14 +223,29 @@ export default function UpdatePage() {
                 </p>
               )}
 
-              {!check.hasToken && (
+              {/* The fetch failed. There is no token box to send anyone to any more —
+                  DigiShack fetches a PUBLIC repository anonymously, and a fork that needs
+                  authentication configures a git credential helper on the server, where
+                  a secret belongs. So this says what happened and gets out of the way;
+                  the error itself is printed above. */}
+              {check.error && !check.anonymousOk && (
                 <p className="text-sm text-fg-muted">
-                  No git token configured — add one under{" "}
-                  <span className="text-fg">Git access</span> below.
+                  The fetch did not get through. This repository is public and needs no
+                  credential — if you are running a private fork, configure a git
+                  credential helper for{" "}
+                  <span className="text-fg tnum">{check.remoteHost || "the remote"}</span>{" "}
+                  on the server.
                 </p>
               )}
 
-              {check.hasToken && !check.allowed && (
+              {/* NOT gated on a token any more.
+                  
+                  This box is the only way to turn UI updating on, and requiring a token
+                  first meant a public install — which needs no token — could never enable
+                  it, so the Update button below could never appear. Reported as "the auto
+                  update is supposed to be hitting the public repo and have an update
+                  button if it sees an update"; it could not, by construction. */}
+              {!check.allowed && (
                 <div className="border border-line rounded-sm p-3">
                   <p className="text-sm text-fg-muted">
                     Updating from the UI is turned off. Enabling it means an admin
@@ -302,46 +298,6 @@ export default function UpdatePage() {
           )}
         </Card>
 
-        {/* Right here rather than only on the Settings page, because this is the
-            page showing the "Failed to authenticate" error when a token expires —
-            the fix should not require knowing which settings tab hides the field. */}
-        <Card title="Git access" className="lg:col-span-2">
-          <div className="flex flex-col gap-3">
-            <p className="text-sm text-fg-muted">
-              {check?.hasToken
-                ? "A token is on file. Enter a new one to replace it — saving re-runs the check, so a bad token shows up immediately above."
-                : "A Gitea personal access token with read access to the repository. Stored encrypted; never placed in a URL or command line."}
-              {" "}Mint one in Gitea under your avatar → Settings → Applications →
-              Generate token.
-            </p>
-            <div className="grid gap-3 sm:grid-cols-[1fr_12rem_auto] sm:items-end">
-              <Field label="Access token" hint="Leave blank to keep the current one.">
-                <Input
-                  type="password"
-                  autoComplete="off"
-                  value={tokenDraft}
-                  placeholder="gto_…"
-                  onChange={(e) => setTokenDraft(e.target.value)}
-                />
-              </Field>
-              <Field label="Username" hint="Gitea accepts any name with a token.">
-                <Input
-                  value={userDraft}
-                  placeholder="oauth"
-                  onChange={(e) => setUserDraft(e.target.value)}
-                />
-              </Field>
-              <Button
-                variant="primary"
-                className="mb-5"
-                disabled={busy !== null || (!tokenDraft.trim() && !userDraft.trim())}
-                onClick={() => void saveGitAccess()}
-              >
-                {busy === "git" ? "Saving…" : "Save & re-check"}
-              </Button>
-            </div>
-          </div>
-        </Card>
 
         {state && state.phase !== "idle" && (
           <Card

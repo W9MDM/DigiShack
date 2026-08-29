@@ -182,67 +182,26 @@ function remoteHostname(): string {
 }
 
 /**
- * No credential at all, in the same shape `withCredentials` returns.
+ * Git, with no credential of any kind.
  *
- * A public remote needs nothing, and returning the same shape keeps one code path through the
- * fetch rather than two — the alternative was a nullable `creds` and an optional-chain at
- * every use, which is where a missed one would silently drop the credential for a private
- * remote and report "check the token".
+ * DigiShack fetches its own PUBLIC repository, which anyone can clone anonymously. There
+ * used to be a `withCredentials()` beside this that wrote an operator-supplied token into
+ * a temporary file and pointed git's credential store at it — and a backslash-escaping
+ * bug in that config value made git resolve the path against the REPOSITORY ROOT and
+ * write a live token, in a plaintext URL, into the working tree. Five of them reached
+ * origin/main.
+ *
+ * The token settings are gone with it. A private fork that genuinely needs auth
+ * configures a git credential helper on the server, where secrets belong, rather than
+ * handing one to the application to look after.
  */
-function anonymous() {
-  return { env: {} as Record<string, string>, cleanup: () => {} };
-}
-
-function withCredentials(token: string, username: string) {
-  const file = path.join(
-    tmpdir(),
-    `digishack-git-${randomBytes(8).toString("hex")}`,
-  );
-
-  // The host comes from the REMOTE, not from a constant.
-  //
-  // It was hardcoded to the private Gitea host, which was wrong twice over: the credential
-  // entry did not match a checkout cloned from anywhere else, so self-update silently could
-  // not authenticate; and the private hostname was copied verbatim into the public mirror,
-  // where it also told every reader where the private repository lives.
-  const remoteHost = remoteHostname();
-  writeFileSync(
-    file,
-    `https://${encodeURIComponent(username)}:${encodeURIComponent(token)}@${remoteHost}\n`,
-    { mode: 0o600 },
-  );
-
+function gitEnv() {
   return {
-    // Config passed through the environment rather than `-c` on the command
-    // line. Two reasons: a `-c` value is visible in the process list to every
-    // user on the machine, and an argv value containing a space is fragile
-    // across platforms. GIT_CONFIG_* is exact and invisible to `ps`.
-    env: {
-      GIT_CONFIG_COUNT: "1",
-      GIT_CONFIG_KEY_0: "credential.helper",
-      // FORWARD slashes, and quoted.
-      //
-      // Git parses a config VALUE with backslash escapes, so an interpolated
-      // Windows path lost every separator: C:\Users\MATTME~1\AppData\... became
-      // the drive-relative "C:UsersMATTME~1AppData...", which git resolved against
-      // the repository root. It then wrote the credential store — a live token in
-      // a plaintext URL — into the repo as a file named
-      // UsersMATTME~1AppDataLocalTempdigishack-git-<hex>, and cleanup() below
-      // unlinked the real tmpdir path git had never touched. Five of them reached
-      // origin/main before a reviewer found them.
-      //
-      // Git accepts forward slashes on Windows, which sidesteps config escaping
-      // entirely; the quotes cover a tmpdir containing a space.
-      GIT_CONFIG_VALUE_0: `store --file="${file.split("\\").join("/")}"`,
-    } as Record<string, string>,
-    cleanup: () => {
-      try {
-        unlinkSync(file);
-      } catch {
-        /* already gone */
-      }
-    },
-  };
+    // Never prompt. Without this a private remote hangs the fetch forever on a terminal
+    // that nobody is watching, which is indistinguishable from a slow network and times
+    // out at 120 s with nothing useful to say.
+    GIT_TERMINAL_PROMPT: "0",
+  } as Record<string, string>;
 }
 
 // ---------------------------------------------------------------------------
@@ -251,7 +210,6 @@ function withCredentials(token: string, username: string) {
 
 export interface UpdateCheck {
   allowed: boolean;
-  hasToken: boolean;
   branch: string | null;
   localSha: string | null;
   remoteSha: string | null;
@@ -263,6 +221,26 @@ export interface UpdateCheck {
   /** Subject lines of the commits that would be pulled in. */
   incoming: string[];
   error: string | null;
+  /**
+   * The host `origin` points at — `github.com` on a public install, the private forge on
+   * the operator's own.
+   *
+   * Reported so the UI can stop naming a specific forge. The Git access panel said "Mint
+   * one in Gitea under your avatar" to every reader of the PUBLIC build, which is both
+   * wrong instructions for a GitHub checkout and a description of infrastructure the
+   * public has no business knowing about.
+   */
+  remoteHost: string;
+  /**
+   * Did the fetch get through?
+   *
+   * The public mirror is a public repository: anyone can fetch it anonymously and no
+   * token exists to be configured. The page nonetheless said "No git token configured"
+   * and — much worse — gated the box that ENABLES updating on a token being present, so
+   * on a public install the Update button could never appear at all. This is the fact
+   * that replaces both guesses: the fetch either worked or it did not.
+   */
+  anonymousOk: boolean;
 }
 
 async function currentVersion(): Promise<string> {
@@ -278,13 +256,10 @@ async function currentVersion(): Promise<string> {
 
 export async function checkForUpdate(): Promise<UpdateCheck> {
   const allowed = await getBooleanSetting("update.allowFromUi", false);
-  const token = await getSetting("update.gitToken");
-  const username = (await getSetting("update.gitUsername")) ?? "oauth";
   const version = await currentVersion();
 
   const base: UpdateCheck = {
     allowed,
-    hasToken: Boolean(token),
     branch: null,
     localSha: null,
     remoteSha: null,
@@ -295,6 +270,9 @@ export async function checkForUpdate(): Promise<UpdateCheck> {
     version,
     incoming: [],
     error: null,
+    remoteHost: remoteHostname(),
+    // Assumed false until a fetch actually succeeds with no token in hand.
+    anonymousOk: false,
   };
 
   const branchRes = await run("git", ["rev-parse", "--abbrev-ref", "HEAD"]);
@@ -328,12 +306,10 @@ export async function checkForUpdate(): Promise<UpdateCheck> {
   // So an absent token means an ANONYMOUS fetch. If the remote turns out to be private, git
   // says so and that error is reported as it comes back, which is a better message than
   // refusing up front on a guess about whether a credential is required.
-  redactions = token ? [token] : [];
-  const creds = token ? withCredentials(token, username) : anonymous();
 
   try {
     const fetchRes = await run("git", ["fetch", "origin", branch], {
-      env: creds.env,
+      env: gitEnv(),
       timeoutMs: 120_000,
     });
     if (fetchRes.code !== 0) {
@@ -345,6 +321,10 @@ export async function checkForUpdate(): Promise<UpdateCheck> {
         error: `git fetch failed: ${redact(fetchRes.output).trim().slice(-400)}`,
       };
     }
+    // It got through. If we had no token, this repository does not need one — which is
+    // the whole answer for a public install, and is measured rather than assumed from
+    // the hostname.
+    base.anonymousOk = true;
 
     const local = (await run("git", ["rev-parse", "HEAD"])).output.trim();
     const remote = (
@@ -389,8 +369,6 @@ export async function checkForUpdate(): Promise<UpdateCheck> {
       incoming,
     };
   } finally {
-    creds.cleanup();
-    redactions = [];
   }
 }
 
@@ -475,12 +453,8 @@ export async function performUpdate(triggeredBy: string): Promise<UpdateState> {
     return state;
   }
 
-  const token = await getSetting("update.gitToken");
-  const username = (await getSetting("update.gitUsername")) ?? "oauth";
   // Same reasoning as the check above: a public remote needs no credential, so an absent
   // token means an anonymous fetch rather than a refusal.
-  redactions = token ? [token] : [];
-  const creds = token ? withCredentials(token, username) : anonymous();
 
   const step = async (
     name: string,
@@ -531,7 +505,7 @@ export async function performUpdate(triggeredBy: string): Promise<UpdateState> {
     // the merge below must act on current refs.
     if (
       !(await step("git fetch", "git", ["fetch", "origin", branch], {
-        env: creds.env,
+        env: gitEnv(),
         timeoutMs: 120_000,
       }))
     ) {
@@ -661,7 +635,5 @@ export async function performUpdate(triggeredBy: string): Promise<UpdateState> {
     writeState(state);
     return state;
   } finally {
-    creds.cleanup();
-    redactions = [];
   }
 }

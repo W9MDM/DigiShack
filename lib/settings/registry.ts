@@ -1103,21 +1103,22 @@ export const SETTINGS: SettingDef[] = [
     help: "Off by default on purpose — enabling it means an admin account can deploy new code to this server.",
     default: "false",
   },
-  {
-    key: "update.gitToken",
-    label: "Git access token",
-    type: "secret",
-    group: "update",
-    help: "Gitea personal access token with read access to the repo. Stored encrypted, written to a temporary 0600 file only for the duration of a fetch, and never placed in a URL or a command line.",
-  },
-  {
-    key: "update.gitUsername",
-    label: "Git username",
-    type: "string",
-    group: "update",
-    help: "Gitea accepts any username when the password is a token.",
-    default: "oauth",
-  },
+  // `update.gitToken` and `update.gitUsername` were here and are deliberately gone.
+  //
+  // DigiShack updates itself from its own PUBLIC repository, which anyone can fetch with
+  // no credential whatsoever. The settings asked every operator to mint a token — naming
+  // a private forge they have no account on — to reach something that needs nothing.
+  //
+  // And the mechanism had already cost real damage. To use a token, `withCredentials()`
+  // wrote it into a temporary credential file and pointed git at it via config; a
+  // backslash-escaping bug in that config value made git resolve the path against the
+  // REPOSITORY ROOT and write a live token, in a plaintext URL, into the working tree.
+  // Five of those reached origin/main before a reviewer found them. The code carried a
+  // long comment explaining the fix; the better fix is not to hold the token at all.
+  //
+  // A private fork that genuinely needs authentication configures a git credential
+  // helper on the server, which is ordinary operations and keeps the secret out of the
+  // application entirely.
 
   // --- SMTP ---
   {

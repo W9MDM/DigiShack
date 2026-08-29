@@ -1,5 +1,6 @@
 import type { GetServerSidePropsContext } from "next";
 import { parseMessage } from "@/lib/digital/qso";
+import { occupiedFrom, pickClearSlot, type ClearSlot } from "@/lib/digital/slot";
 import { assessClock } from "@/lib/digital/clock-offset";
 import { formatUtcTime } from "@/lib/time";
 import { BandConditions } from "@/components/digital/BandConditions";
@@ -209,6 +210,18 @@ export default function DigitalPage({ wsUrl }: Props) {
    * one screenful per cycle, and Ctrl-F only ever finds what is currently mounted.
    */
   const [search, setSearch] = useState("");
+  /**
+   * Where to transmit so as not to sit on somebody.
+   *
+   * A closure rather than a value because it must be evaluated when the operator ASKS —
+   * a band re-reads itself every cycle, and a suggestion computed on mount would be
+   * stale by the time anyone pressed the button.
+   */
+  const suggestSlot = useCallback(
+    (): ClearSlot => pickClearSlot(occupiedFrom(rows, Date.now())),
+    [rows],
+  );
+
   const [gain, setGain] = useState(1);
   const [lastAt, setLastAt] = useState<number | null>(null);
   const [now, setNow] = useState(() => Date.now());
@@ -657,6 +670,7 @@ export default function DigitalPage({ wsUrl }: Props) {
         target={target}
         qso={qso}
         auto={auto}
+        suggestSlot={suggestSlot}
         lastTx={lastTx}
         myCall={myCall}
         myGrid={status?.deGrid ?? null}
@@ -1112,12 +1126,29 @@ export default function DigitalPage({ wsUrl }: Props) {
 function ManualCall({
   busy,
   onCall,
+  suggestSlot,
 }: {
   busy: boolean;
   onCall: (call: string, offsetHz: number) => void;
+  suggestSlot: () => ClearSlot;
 }) {
   const [call, setCall] = useState("");
-  const [offset, setOffset] = useState("1500");
+  /**
+   * Opened on a clear slot, not on 1500.
+   *
+   * 1500 Hz is the middle of the passband and therefore the most contested frequency on
+   * the band — a default that put every manual call on top of somebody. Computed once
+   * when the form mounts, and re-computable from the button below, because the band
+   * moves.
+   */
+  const [slot, setSlot] = useState<ClearSlot>(() => suggestSlot());
+  const [offset, setOffset] = useState(() => String(slot.hz));
+
+  function findClear() {
+    const next = suggestSlot();
+    setSlot(next);
+    setOffset(String(next.hz));
+  }
 
   const trimmed = call.trim().toUpperCase();
   // Loose on purpose: portable and special-event calls are full of slashes and digits,
@@ -1153,9 +1184,35 @@ function ManualCall({
         />
         Hz
       </label>
+      <Button
+        type="button"
+        onClick={findClear}
+        disabled={busy}
+        title="Pick the middle of the widest gap between the stations heard in the last two minutes."
+      >
+        Find clear slot
+      </Button>
       <Button type="submit" variant="primary" disabled={busy || !valid || !offsetOk}>
         {busy ? "…" : "Call"}
       </Button>
+      {/* What the number MEANS, since a bare offset says nothing about whether it is a
+          good one. A crowded band is reported rather than hidden: there is sometimes no
+          clear slot, and a picker that returns the least-bad one while looking confident
+          is worse than one that admits it. */}
+      {String(slot.hz) === offset.trim() && (
+        <span
+          className={cn("text-xs", slot.crowded ? "text-warn" : "text-fg-subtle")}
+          title={
+            slot.crowded
+              ? "Every gap is narrower than an FT8 signal — expect to share the frequency."
+              : "Distance to the nearest station heard recently."
+          }
+        >
+          {slot.crowded
+            ? `band is full — only ${slot.clearanceHz} Hz clear`
+            : `${slot.clearanceHz} Hz clear either side`}
+        </span>
+      )}
       {call !== "" && !valid && (
         <span className="text-xs text-danger">Not a callsign</span>
       )}
@@ -1181,6 +1238,7 @@ function WorkStationPanel({
   target,
   qso,
   auto,
+  suggestSlot,
   lastTx,
   myCall,
   myGrid,
@@ -1190,6 +1248,8 @@ function WorkStationPanel({
   qso: QsoState | null;
   /** Needed to know whether a queued call would ever actually be made. */
   auto: AutoState | null;
+  /** Finds an unoccupied audio offset from what has been heard recently. */
+  suggestSlot: () => ClearSlot;
   lastTx: string | null;
   myCall: string | null;
   myGrid: string | null;
@@ -1299,6 +1359,7 @@ function WorkStationPanel({
           </p>
           <ManualCall
             busy={busy}
+            suggestSlot={suggestSlot}
             onCall={(c, hz) => void act("call", { theirCall: c, theirOffsetHz: hz })}
           />
         </div>

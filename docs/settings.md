@@ -32,7 +32,7 @@ be read: `DATABASE_URL`, `SETTINGS_KEY` and `PORT`.
 - [Bridge watchdog](#bridge-watchdog) — 2 settings
 - [Icom (network)](#icom-network) — 13 settings
 - [Issue alerts](#issue-alerts) — 4 settings
-- [Software updates](#software-updates) — 3 settings
+- [Software updates](#software-updates) — 1 setting
 - [Outgoing email](#outgoing-email) — 7 settings
 - [Automatic operating limits](#automatic-operating-limits) — 18 settings
 - [Automatic uploading](#automatic-uploading) — 12 settings
@@ -251,8 +251,6 @@ Lets an admin pull and deploy a new version from the Updates page. This runs cod
 | Setting | Key | Type | Default | What it does |
 |---|---|---|---|---|
 | Allow updating from the UI | `update.allowFromUi` | on/off | `false` | Off by default on purpose — enabling it means an admin account can deploy new code to this server. |
-| Git access token | `update.gitToken` | secret | — | Gitea personal access token with read access to the repo. Stored encrypted, written to a temporary 0600 file only for the duration of a fetch, and never placed in a URL or a command line. |
-| Git username | `update.gitUsername` | text | `oauth` | Gitea accepts any username when the password is a token. |
 
 ## Outgoing email
 
@@ -448,6 +446,5 @@ page shows whether one is set, not what it is.
 - `dxcc.ctyApiKey` — Club Log cty API key
 - `icom.password` — Network password
 - `bridge.token` — Bridge shared secret
-- `update.gitToken` — Git access token
 - `smtp.password` — SMTP password
 - `pota.userToken` — POTA session token (for importing your log)
