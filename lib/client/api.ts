@@ -65,10 +65,21 @@ async function request<T>(
   }
 
   if (!res.ok) {
-    const payload = parsed as { error?: string; details?: unknown } | undefined;
+    // `reason` as well as `error`, because the radio service uses the former and its
+    // messages are the useful ones.
+    //
+    // Refusing a call answers 409 with `{ ok: false, reason: "Already working K1ABC —
+    // halt first" }`, and this only ever looked for `error` — so the operator saw
+    // "Request failed (409)" and the sentence explaining exactly what to do was thrown
+    // away by the layer that received it. Every guard refusal, every dupe, every "that
+    // offset is above what the transmitter can place" reached the browser and was
+    // discarded here.
+    const payload = parsed as
+      | { error?: string; reason?: string; details?: unknown }
+      | undefined;
     throw new ApiError(
       res.status,
-      payload?.error ?? `Request failed (${res.status})`,
+      payload?.error ?? payload?.reason ?? `Request failed (${res.status})`,
       isFieldErrors(payload?.details) ? payload.details : undefined,
     );
   }

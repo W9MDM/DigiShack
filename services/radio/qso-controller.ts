@@ -12,6 +12,32 @@ import type { TxMode } from "@/lib/radio/waveform";
  * next window and answering it 30 seconds later.
  */
 const FIRST_TX_LEAD_MS = 400;
+
+/**
+ * How late the FIRST transmission of a call may start, per mode, and still be worth sending.
+ *
+ * This is the number that actually decides whether answering a CQ costs one cycle or two,
+ * and it exists because DECODING IS NOT FREE. A station transmits in window W; W's audio
+ * is only complete at its end, and this installation then spends 2.0-2.4 s decoding it. So
+ * by the time there is a callsign to answer, the ideal start of W+1 — half a second past
+ * its boundary — is already about 1.6 s gone. Requiring a head start therefore skips W+1
+ * entirely and lands on W+3, which is the 28-second wait an operator sees.
+ *
+ * Starting late instead is viable, and the arithmetic says by how much. FT8 is 79 symbols
+ * at 6.25 baud = 12.64 s inside a 15 s window; beginning at +0.5 s it ends at 13.14 s,
+ * leaving 1.86 s of slack. FT4 is 105 symbols at 20.83 baud = 5.04 s in 7.5 s, ending at
+ * 5.54 s with 1.96 s spare. So a start up to ~1.5 s late still finishes inside its own
+ * window, and the receiving decoder searches a DT range wide enough to find it.
+ *
+ * FT2 IS ZERO, and that is not caution. Its DT search spans only 0.5 s — see
+ * lib/radio/timing.ts — so an FT2 signal sent late does not decode at all. Transmitting it
+ * would be worse than waiting: it costs a cycle AND puts an unreadable signal on the air.
+ */
+const LATE_TX_TOLERANCE_MS: Record<TxMode, number> = {
+  FT8: 1_500,
+  FT4: 800,
+  FT2: 0,
+};
 import type { FlexDaxSource } from "@/lib/flex/dax";
 import type { DigitalSource, DigitalTransmitter } from "@/lib/radio/types";
 import type { DigitalMode } from "@/lib/ham/digital-freqs";
@@ -475,14 +501,22 @@ export class QsoController {
     const period = this.o.source.periodMs;
     const { mode } = this.o.getBandMode();
     const now = nowMs();
-    // Two periods of candidates is enough: our parity comes round every other window.
-    for (let i = 0; i < 3; i++) {
-      const w = Math.ceil(now / period) * period + i * period;
+    const late = LATE_TX_TOLERANCE_MS[mode as TxMode] ?? 0;
+    // Start at the window we are CURRENTLY IN, not the next one. That window is the whole
+    // point: it is the one immediately after the station we are answering, and we are
+    // inside it by a decode time rather than ahead of it.
+    const current = Math.floor(now / period) * period;
+    for (let i = 0; i < 4; i++) {
+      const w = current + i * period;
       if (Math.floor(w / period) % 2 !== this.txParity) continue;
-      // Enough time left to build the waveform and get the key command to the radio. A
-      // window whose start instant has effectively passed is skipped rather than keyed
-      // late — FT8 tolerates about 1.5 s and being early is not an option.
-      if (transmitStartAt(mode as TxMode, w) - now >= FIRST_TX_LEAD_MS) return w;
+      const startAt = transmitStartAt(mode as TxMode, w);
+      const lead = startAt - now;
+      // Ahead of it with time to build the waveform and get the key across the network.
+      if (lead >= FIRST_TX_LEAD_MS) return w;
+      // Or behind it, but not so far that the transmission would run past its own window
+      // or land outside the receiver's DT search. Being late is a real cost and it is
+      // still far cheaper than waiting another 30 seconds.
+      if (lead < 0 && -lead <= late) return w;
     }
     return null;
   }
