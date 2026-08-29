@@ -217,6 +217,12 @@ export interface UpdateCheck {
   ahead: number;
   dirty: boolean;
   dirtyFiles: string[];
+  /**
+   * Modified files that npm rewrites by itself, which the update reclaims rather
+   * than refusing over. Reported so the page can say it happened instead of
+   * appearing to ignore a dirty tree.
+   */
+  npmManagedDirty: string[];
   version: string;
   /** Subject lines of the commits that would be pulled in. */
   incoming: string[];
@@ -280,6 +286,7 @@ export async function checkForUpdate(): Promise<UpdateCheck> {
     ahead: 0,
     dirty: false,
     dirtyFiles: [],
+    npmManagedDirty: [],
     version,
     incoming: [],
     error: null,
@@ -302,12 +309,34 @@ export async function checkForUpdate(): Promise<UpdateCheck> {
   // merge itself if an incoming commit would overwrite one. Observed live: a
   // leftover scripts/_backlog.tmp.ts held up every update until someone shelled
   // into the container to delete it.
-  const dirtyFiles = statusRes.output
+  const allDirty = statusRes.output
     .split("\n")
     .map((l) => l.trim())
     .filter(Boolean)
-    .filter((l) => !l.startsWith("??"))
-    .slice(0, 20);
+    .filter((l) => !l.startsWith("??"));
+
+  // `package.json` and `package-lock.json` are NOT operator configuration, and treating
+  // them as edits worth protecting stopped other people updating at all:
+  //
+  //     Uncommitted changes in the working tree
+  //     M package-lock.json
+  //     M package.json
+  //
+  // npm rewrites both as a matter of course — `npm install` during first-time setup
+  // resolves and rewrites the lockfile, and a different npm version normalises
+  // package.json — so an untouched installation goes dirty simply by being installed,
+  // and then refuses every update forever with no way out but a shell.
+  //
+  // They are build inputs owned by the repository. Nobody hand-edits them on a deployed
+  // install and the incoming version is authoritative, so the update RECLAIMS them
+  // rather than refusing. Everything else still blocks: a modified source file is an
+  // edit worth protecting, which is what this guard was written for.
+  const NPM_MANAGED = ["package.json", "package-lock.json"];
+  const isNpmManaged = (line: string): boolean =>
+    NPM_MANAGED.some((f) => line.endsWith(" " + f) || line.endsWith("/" + f));
+
+  const npmManagedDirty = allDirty.filter(isNpmManaged);
+  const dirtyFiles = allDirty.filter((l) => !isNpmManaged(l)).slice(0, 20);
 
   // NO TOKEN IS NOT AN ERROR ANY MORE.
   //
@@ -332,6 +361,7 @@ export async function checkForUpdate(): Promise<UpdateCheck> {
         branch,
         dirty: dirtyFiles.length > 0,
         dirtyFiles,
+        npmManagedDirty,
         error: `git fetch failed: ${redact(fetchRes.output).trim().slice(-400)}`,
       };
     }
@@ -405,6 +435,7 @@ export async function checkForUpdate(): Promise<UpdateCheck> {
       behind: Number(behindRaw) || 0,
       dirty: dirtyFiles.length > 0,
       dirtyFiles,
+      npmManagedDirty,
       incoming,
       changes,
     };
@@ -555,6 +586,20 @@ export async function performUpdate(triggeredBy: string): Promise<UpdateState> {
     // --ff-only: never create a merge commit, never rewrite history, and fail
     // loudly if the branch has diverged rather than trying to reconcile it.
     // No credentials needed — this operates on refs already fetched locally.
+    // Reclaim the files npm rewrites, so a fast-forward is not blocked by them.
+    //
+    // `git merge --ff-only` refuses outright when a tracked file it would touch has
+    // local modifications, so discarding these is not tidiness — without it the merge
+    // below fails and the operator is told their branch has diverged, which is not what
+    // happened and points them nowhere useful.
+    if (check.npmManagedDirty.length > 0) {
+      await step(
+        "restore package files",
+        "git",
+        ["checkout", "--", "package.json", "package-lock.json"],
+      );
+    }
+
     if (
       !(await step("git merge --ff-only", "git", [
         "merge",

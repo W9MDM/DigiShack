@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.130.0 - public release
+## 1.131.0 - public release
 
 Development happens in a private repository; this is where the public history starts.
 Earlier entries are not reproduced - they quote real operators by callsign, include
@@ -22,6 +22,7 @@ Notes for anyone running this:
 
 ## Release history
 
+- **1.131.0** — Installing DigiShack made it refuse to update
 - **1.130.0** — The Updates page now says what the update does
 - **1.129.0** — Answer in this window, late, rather than the next one in thirty seconds
 - **1.128.0** — The whole exchange on screen, not just our last line

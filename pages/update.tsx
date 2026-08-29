@@ -23,6 +23,8 @@ interface UpdateCheck {
   ahead: number;
   dirty: boolean;
   dirtyFiles: string[];
+  /** Files npm rewrites by itself; the update reclaims these instead of refusing. */
+  npmManagedDirty?: string[];
   version: string;
   incoming: string[];
   error: string | null;
@@ -215,6 +217,25 @@ export default function UpdatePage() {
                     ))}
                   </ul>
                 </div>
+              )}
+
+              {/* Said plainly rather than shown as a problem.
+                  
+                  npm rewrites package.json and package-lock.json by itself — first-time
+                  setup runs `npm install`, which resolves and rewrites the lockfile — so
+                  an untouched installation went dirty just by being installed and then
+                  refused every update, permanently, with no way out but a shell. They are
+                  build inputs owned by the repository, so the update reclaims them. Still
+                  LISTED, because silently discarding a modified file is its own surprise. */}
+              {(check.npmManagedDirty?.length ?? 0) > 0 && (
+                <p className="text-xs text-fg-subtle">
+                  npm has rewritten{" "}
+                  <span className="font-mono">
+                    {check.npmManagedDirty!.map((f) => f.replace(/^\S+\s+/, "")).join(", ")}
+                  </span>
+                  , which it does on any install. These belong to the repository rather
+                  than to you, so updating restores them instead of refusing.
+                </p>
               )}
 
               {check.ahead > 0 && (
