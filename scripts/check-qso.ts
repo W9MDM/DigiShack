@@ -11,6 +11,7 @@ import {
   QsoSequencer,
   formatReport,
   parseMessage,
+  parseMessages,
   standardMessages,
 } from "@/lib/digital/qso";
 import { MAX_TX_OFFSET_HZ, resolveMaxTxOffset } from "@/services/radio/qso-controller";
@@ -707,6 +708,106 @@ async function main(): Promise<void> {
     eq(resolveMaxTxOffset(1500), MAX_TX_OFFSET_HZ, "an implausibly narrow filter cannot shrink it");
     eq(resolveMaxTxOffset(0), MAX_TX_OFFSET_HZ, "nor can a zero");
     eq(resolveMaxTxOffset(-1), MAX_TX_OFFSET_HZ, "nor a negative");
+  }
+
+  // ---------------------------------------------------------------------------------
+  // Fox/hound compound messages.
+  //
+  //     K9XYZ RR73; DL2HIR <3D2USU> -20
+  //
+  // A DXpedition acknowledging one station and reporting to another in ONE transmission.
+  // That is a genuine RR73 to K9XYZ and a genuine report to DL2HIR at the same time, and
+  // the single-value parse could represent neither, so it returned `other` and the
+  // sequencer ignored it. The contact behind this - Fiji - was recovered by hand.
+  console.log("");
+  console.log("Fox/hound compound messages");
+  {
+    const both = parseMessages("K9XYZ RR73; DL2HIR <3D2USU> -20");
+    eq(both.length, 2, "carries two statements");
+
+    const ack = both[0]!;
+    ok(ack.kind === "directed", "the first is directed");
+    if (ack.kind === "directed") {
+      eq(ack.to, "K9XYZ", "acknowledges K9XYZ");
+      // The fox's call appears only in the RIGHT half, so the left one has to borrow it.
+      // Parsing each side independently would leave this null and lose the contact.
+      eq(ack.from, "3D2USU", "from the fox, whose call is only in the other half");
+      eq(ack.payload.type, "rr73", "and it is an RR73");
+    }
+
+    const rep = both[1]!;
+    ok(rep.kind === "directed", "the second is directed");
+    if (rep.kind === "directed") {
+      eq(rep.to, "DL2HIR", "reports to DL2HIR");
+      eq(rep.from, "3D2USU", "from the same fox");
+      eq(rep.payload.type, "report", "and it is a report");
+      if (rep.payload.type === "report") eq(rep.payload.db, -20, "of -20 dB");
+    }
+
+    // parseMessage takes the head, so a station waiting on an acknowledgement still gets
+    // the meaning that matters most to it from the single-value call.
+    const head = parseMessage("K9XYZ RR73; DL2HIR <3D2USU> -20");
+    ok(head.kind === "directed" && head.payload.type === "rr73", "parseMessage yields the RR73");
+
+    // RRR and 73 close a contact from either side, so a fox using them says the same thing.
+    for (const token of ["RRR", "73"]) {
+      const r = parseMessages(`K9XYZ ${token}; DL2HIR <3D2USU> -20`)[0]!;
+      ok(
+        r.kind === "directed" && r.payload.type === token.toLowerCase(),
+        `a fox closing with ${token} is heard`,
+      );
+    }
+
+    // A malformed right-hand side must not cost the acknowledgement, which is the half
+    // that closes a contact.
+    const salvaged = parseMessages("K9XYZ RR73; DL2HIR <3D2USU> WHAT");
+    eq(salvaged.length, 1, "a broken report half is dropped, not the whole message");
+    ok(salvaged[0]!.kind === "directed", "and the acknowledgement survives it");
+
+    // A message that merely contains a semicolon is still parsed normally rather than
+    // being swallowed by the compound path.
+    const plain = parseMessages("K9XYZ K1DEF RR73");
+    eq(plain.length, 1, "an ordinary message yields one statement");
+  }
+
+  console.log("");
+  console.log("Hashed callsigns");
+  {
+    // FT8 sends a 22-bit hash for a callsign too long for the 28-bit field once both ends
+    // have heard it in full; WSJT-X renders it back in angle brackets when it knows it.
+    const p = parseMessage("K9XYZ <3D2USU> RR73");
+    ok(p.kind === "directed", "a resolved hash is a workable callsign");
+    if (p.kind === "directed") eq(p.from, "3D2USU", "and the brackets come off");
+
+    // "<...>" is a hash the decoder could NOT resolve. That call really is unknown, and
+    // answering it would send a message the other end may not decode.
+    const unknown = parseMessage("K9XYZ <...> RR73");
+    eq(unknown.kind, "other", "an unresolved hash stays unworkable");
+
+    const foxUnknown = parseMessages("K9XYZ RR73; DL2HIR <...> -20");
+    eq(foxUnknown.length, 1, "a compound from an unresolved fox yields nothing usable");
+    eq(foxUnknown[0]!.kind, "other", "and is not mistaken for a directed message");
+  }
+
+  // The whole point, end to end: the sequencer must now close on the compound form.
+  console.log("");
+  console.log("The Fiji case");
+  {
+    const q = new QsoSequencer({
+      myCall: "K9XYZ",
+      myGrid: "EN61",
+      theirCall: "3D2USU",
+      // A DXpedition on a bad path, which is exactly the situation fox/hound exists for.
+      theirSnr: -20,
+      role: "caller",
+      startedAt: 0,
+    });
+    q.tick(15_000);
+    q.onDecode("K9XYZ 3D2USU -12", 22_000);
+    q.tick(30_000);
+    // Exactly the transmission that was ignored.
+    q.onDecode("K9XYZ RR73; DL2HIR <3D2USU> -20", 37_000);
+    ok(q.isDone, "a fox/hound RR73 closes the contact");
   }
 
   console.log(`\n${pass} passed, ${fail} failed\n`);

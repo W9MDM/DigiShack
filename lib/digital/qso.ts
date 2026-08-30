@@ -51,9 +51,133 @@ function isCall(tok: string): boolean {
   return CALL_RE.test(tok) && /\d/.test(tok) && !GRID_RE.test(tok);
 }
 
-/** Parse one decoded message into its structural form. */
-export function parseMessage(raw: string): ParsedMessage {
+/**
+ * A callsign, accepting the HASHED form that FT8 uses for long calls.
+ *
+ * FT8's 28-bit callsign field cannot hold every callsign, so once both ends have heard a
+ * long one in full the protocol sends a 22-bit hash of it instead. WSJT-X renders that
+ * hash back to the callsign in angle brackets — `<3D2USU>` — when it recognises it, and as
+ * a bare `<...>` when it does not.
+ *
+ * The distinction is the whole reason this exists. The note on CALL_RE is right that an
+ * automated mode must not try to work a reference whose call is unknown, but `<3D2USU>` is
+ * not unknown: the decoder has already resolved it and is telling us what it is. Refusing
+ * it cost a Fiji contact, which had to be recovered by hand.
+ *
+ * Returns the bare callsign, or null for a token that is neither.
+ */
+function unhash(tok: string): string | null {
+  const m = /^<(.+)>$/.exec(tok);
+  if (!m) return isCall(tok) ? tok : null;
+  // "<...>" — the decoder saw a hash it could not resolve. Genuinely unknown, and
+  // genuinely not workable.
+  const inner = m[1]!;
+  return isCall(inner) ? inner : null;
+}
+
+/**
+ * Parse one decoded message into EVERY directed statement it carries.
+ *
+ * Usually one. A fox/hound transmission carries two:
+ *
+ *     K9XYZ RR73; DL2HIR <3D2USU> -20
+ *
+ * A DXpedition acknowledging one station and reporting to another in a single
+ * transmission — that is a genuine RR73 to K9XYZ *and* a genuine report to DL2HIR, and the
+ * single-value parse could represent neither, so it returned `other` and the sequencer
+ * ignored it. The Fiji contact behind that had to be recovered by hand.
+ *
+ * Returning a list rather than picking a half is what makes it correct for both stations
+ * at once: every caller already filters on "is this from my partner, addressed to me", so
+ * each one finds its own half and ignores the other.
+ *
+ * The acknowledgement comes first, so `parseMessage` — which takes the head — keeps the
+ * meaning that matters most to a station waiting on one.
+ */
+export function parseMessages(raw: string): ParsedMessage[] {
   const msg = raw.trim().toUpperCase().replace(/\s+/g, " ");
+
+  // Fox/hound compound. The semicolon is the marker and it is not used for anything else
+  // in the protocol, so its presence alone identifies the form.
+  if (msg.includes(";")) {
+    const out = compound(msg);
+    if (out.length > 0) return out;
+    // Not a form we know. Fall through rather than returning `other` here, so a message
+    // that merely contains a semicolon is still parsed normally.
+  }
+
+  return [parseOne(msg)];
+}
+
+/**
+ * The two halves of a fox/hound transmission: `<hound> RR73; <hound> <fox> <report>`.
+ *
+ * The fox's own callsign appears ONCE, in the right-hand half, and it is the sender of
+ * both statements — the left half names only who is being acknowledged. So the left half
+ * has to borrow the fox's call from the right, which is why this cannot be done by parsing
+ * each side independently.
+ *
+ * Returns an empty list if it does not fit, so the caller can fall back.
+ */
+function compound(msg: string): ParsedMessage[] {
+  const halves = msg.split(";");
+  if (halves.length !== 2) return [];
+
+  const lt = halves[0]!.trim().split(" ").filter(Boolean);
+  const rt = halves[1]!.trim().split(" ").filter(Boolean);
+
+  // Left: "<hound> RR73". RRR and 73 are accepted too — the form is documented with RR73
+  // and that is what has been observed, but a fox closing with either is saying the same
+  // thing and there is no reason to hear only one of them.
+  if (lt.length !== 2) return [];
+  const acked = unhash(lt[0]!);
+  const closing = lt[1]!;
+  if (!acked) return [];
+  const payload: DirectedPayload | null =
+    closing === "RR73"
+      ? { type: "rr73" }
+      : closing === "RRR"
+        ? { type: "rrr" }
+        : closing === "73"
+          ? { type: "73" }
+          : null;
+  if (!payload) return [];
+
+  // Right: "<hound> <fox> <report>". The fox is the middle token and is the sender of
+  // both halves.
+  if (rt.length !== 3) return [];
+  const called = unhash(rt[0]!);
+  const fox = unhash(rt[1]!);
+  const report = rt[2]!;
+  if (!fox) return [];
+
+  const out: ParsedMessage[] = [{ kind: "directed", to: acked, from: fox, payload }];
+
+  // The report half only exists if it IS a report. A malformed right-hand side must not
+  // cost us the acknowledgement, which is the half that closes a contact.
+  if (called && REPORT_RE.test(report)) {
+    out.push({
+      kind: "directed",
+      to: called,
+      from: fox,
+      payload: { type: "report", db: Number(report) },
+    });
+  }
+  return out;
+}
+
+/**
+ * Parse one decoded message into its structural form.
+ *
+ * The head of `parseMessages`. Kept because most callers want exactly one answer and a
+ * compound message is rare; anything that must not miss the second half — the QSO
+ * sequencer above all — should call `parseMessages` instead.
+ */
+export function parseMessage(raw: string): ParsedMessage {
+  return parseMessages(raw)[0]!;
+}
+
+function parseOne(msg: string): ParsedMessage {
   const tok = msg.split(" ");
 
   if (tok[0] === "CQ" && tok.length >= 2) {
@@ -78,8 +202,12 @@ export function parseMessage(raw: string): ParsedMessage {
     return { kind: "other", raw: msg };
   }
 
-  if (tok.length >= 3 && isCall(tok[0]!) && isCall(tok[1]!)) {
-    const [to, from] = [tok[0]!, tok[1]!];
+  // `unhash` rather than `isCall`: an ordinary directed message can carry a resolved hash
+  // on either side once both ends have exchanged full calls — "K9XYZ <3D2USU> RR73".
+  const toTok = tok[0] ? unhash(tok[0]) : null;
+  const fromTok = tok[1] ? unhash(tok[1]) : null;
+  if (tok.length >= 3 && toTok && fromTok) {
+    const [to, from] = [toTok, fromTok];
     const p = tok[2]!;
 
     let payload: DirectedPayload | null = null;
@@ -280,8 +408,16 @@ export class QsoSequencer {
    */
   onDecode(raw: string, at: number): void {
     if (this.isDone) return;
-    const p = parseMessage(raw);
+    // Every statement in the transmission, not just the first. A fox/hound message carries
+    // two — "K9XYZ RR73; DL2HIR <3D2USU> -20" acknowledges one station and reports to
+    // another — and ours can be either half.
+    for (const p of parseMessages(raw)) {
+      this.applyOne(p, at);
+      if (this.isDone) return;
+    }
+  }
 
+  private applyOne(p: ParsedMessage, at: number): void {
     if (p.kind === "cq" && p.from === this.theirCall && p.grid) {
       this.theirGrid = this.theirGrid ?? p.grid;
       return;
