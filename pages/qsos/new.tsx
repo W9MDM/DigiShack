@@ -1,20 +1,27 @@
 import Link from "next/link";
 import { useRouter } from "next/router";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import {
   QsoForm,
   type QsoFormValues,
+  activationFromValues,
+  applyActivation,
+  carrySession,
+  clearActivation,
   clearDraft,
   draftFailureMessage,
   emptyValues,
   hasContactContent,
   newClientId,
+  readActivation,
   readDraft,
   toRequestBody,
+  writeActivation,
   writeDraft,
 } from "@/components/qso/QsoForm";
 import {
+  Badge,
   Button,
   Card,
   EmptyState,
@@ -23,8 +30,15 @@ import {
 } from "@/components/ui/primitives";
 import { withPageAuth } from "@/lib/auth/guard";
 import { ApiError, apiPost, isNetworkFailure, useApi } from "@/lib/client/api";
+import {
+  ACTIVATION_MINIMUM,
+  activationCountQuery,
+  activationProgress,
+  utcDayKey,
+} from "@/lib/pota/activation";
 import { formatUtc } from "@/lib/time";
 import type { ListResponse, Qso, Station } from "@/lib/types";
+import { cn } from "@/lib/utils";
 
 export default function NewQsoPage() {
   const router = useRouter();
@@ -59,7 +73,50 @@ export default function NewQsoPage() {
   /** `savedAt` of a draft recovered on this mount, so the page can say what it did. */
   const [restoredAt, setRestoredAt] = useState<string | null>(null);
 
+  /**
+   * Bumped on every successful save, purely to re-ask the server for the activation
+   * count. It is not rendered.
+   *
+   * A counter for an activation IN PROGRESS is only interesting at one moment — just
+   * after logging a contact — so this is the whole refresh policy. No polling: the
+   * number cannot change unless this page changes it, and a timer would be an LTE
+   * wake-up a minute from a phone in a park for a value that is already correct.
+   */
+  const [savedTick, setSavedTick] = useState(0);
+
   const stations = stationsData?.rows ?? [];
+
+  /** The activation in progress, or "". The form is the live copy; storage is the backup. */
+  const activationRef = values.mySigInfo.trim().toUpperCase();
+
+  /**
+   * The count query, held stable across renders.
+   *
+   * `new Date()` sits INSIDE the memo deliberately. `useApi` re-fetches whenever its path
+   * changes, so computing the UTC day bounds during render would produce a new path every
+   * render and a request loop — the day bounds must be pinned to something that only
+   * moves when the answer can. That is the reference changing, or a contact being logged.
+   *
+   * The consequence, stated rather than hidden: an activation running across UTC midnight
+   * shows the previous day's window until the next contact is logged, at which point the
+   * query is rebuilt and the count correctly restarts near zero. That is the right moment
+   * to notice, and `activationCountQuery` bounds BOTH ends of the day so the stale window
+   * is a window on the old day rather than a running total across two.
+   */
+  const activationPath = useMemo(
+    () =>
+      activationRef
+        ? `/api/qsos?${activationCountQuery(activationRef, new Date())}`
+        : null,
+    // `savedTick` is the refresh trigger and is deliberately not read in the body.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [activationRef, savedTick],
+  );
+
+  // `total` is the whole answer — the endpoint returns the count beside the rows, and
+  // `take=1` keeps the page it does not need down to one contact.
+  const { data: activationData } = useApi<ListResponse<Qso>>(activationPath);
+  const activation = activationProgress(activationData?.total ?? 0);
 
   // Preselect when there's only one station — the common single-op case.
   useEffect(() => {
@@ -87,10 +144,62 @@ export default function NewQsoPage() {
       setRestoredAt(draft.savedAt || null);
       setDraftSaved(true);
     }
+
+    // The activation, restored on top of whatever the draft brought back.
+    //
+    // Applied UNCONDITIONALLY, unlike the draft, and the asymmetry is the point. The
+    // draft is one contact and must never overwrite typed work; the activation is where
+    // the operator IS, it is not typed per contact, and the form has just mounted with it
+    // blank. The stored session is the authority — it survives the saves that clear
+    // drafts, so a draft carrying an older reference must not win over it.
+    //
+    // THE CASE THIS IS FOR: Android discards the tab mid-activation, the operator reopens
+    // the app, and without this the rest of the activation logs as ordinary contacts with
+    // nothing on the page looking wrong.
+    //
+    // With NO stored session, a recovered draft keeps whatever reference it carries and
+    // the persist effect below writes it back. That is deliberate: the only way to hold a
+    // draft after ending an activation is for the last contact of that activation to have
+    // failed to save, and that contact really was made in the park. Recovering it and
+    // being back in the session is the right end state, not an accident.
+    const session = readActivation();
+    if (session) setValues((v) => applyActivation(v, session));
+
     setDraftReady(true);
     // Mount only. `values` is read deliberately as its mount-time snapshot.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Persist the activation whenever it changes.
+  //
+  // Separate from the draft effect below because the two have opposite lifetimes: the
+  // draft is cleared by every successful save, and the activation has to outlive forty of
+  // them. Clearing the reference clears the stored session, so "end the activation" needs
+  // no second path — emptying the field is ending it.
+  //
+  // Gated on `draftReady` for the same reason the draft effect is: running before the
+  // restore attempt would write a blank over the session it is about to read.
+  useEffect(() => {
+    if (!draftReady) return;
+    const session = activationFromValues(values);
+    if (!session) {
+      clearActivation();
+      return;
+    }
+    // Keep the original start time while the reference is unchanged. `activationFromValues`
+    // stamps `startedAt` as now, and writing that back on every keystroke would make an
+    // activation started four hours ago claim to have started this second — the one thing
+    // the field is there to say. A NEW reference is a new activation and does restart it.
+    const existing = readActivation();
+    writeActivation(
+      existing && existing.ref === session.ref
+        ? { ...session, startedAt: existing.startedAt || session.startedAt }
+        : session,
+    );
+    // Only the three activation fields. Deliberately not `values`: this has no business
+    // running on every keystroke in the callsign box.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draftReady, values.mySig, values.mySigInfo, values.myGridSquare]);
 
   // Persist on every change.
   //
@@ -139,17 +248,14 @@ export default function NewQsoPage() {
       // it straight back to storage under the key just minted — so the next visit to this
       // page would offer an already-logged contact for recovery, under a key that would
       // not stop it being logged a second time.
-      setValues((v) => ({
-        ...emptyValues(),
-        stationId: v.stationId,
-        operatorId: v.operatorId,
-        freqMHz: v.freqMHz,
-        band: v.band,
-        mode: v.mode,
-        // rstSent/rstRcvd deliberately NOT carried over. Station, band and mode are
-        // properties of the session; a signal report belongs to one contact, and
-        // inheriting the last one is how a log quietly fills with wrong numbers.
-      }));
+      // Keep station, operator, band, freq, mode and the activation; clear the
+      // per-contact fields. `carrySession` owns that list — see the note on it for why
+      // the reports are excluded and why this is one function rather than two copies.
+      setValues(carrySession);
+
+      // Re-ask the log how many contacts this activation now has. After the save, so the
+      // contact just logged is counted.
+      setSavedTick((t) => t + 1);
 
       if (thenGoToLog) {
         await router.push("/qsos");
@@ -188,18 +294,24 @@ export default function NewQsoPage() {
   /** Throw away a recovered draft and start clean, keeping the operating session. */
   function discardDraft() {
     clearDraft();
-    setValues((v) => ({
-      ...emptyValues(),
-      stationId: v.stationId,
-      operatorId: v.operatorId,
-      freqMHz: v.freqMHz,
-      band: v.band,
-      mode: v.mode,
-    }));
+    // The activation survives this: discarding one caller's half-typed record is not
+    // leaving the park.
+    setValues(carrySession);
     setClientId(newClientId());
     setRestoredAt(null);
     setDraftSaved(false);
     setError(null);
+  }
+
+  /**
+   * Leave the park. Clears the three activation fields, which the persist effect above
+   * turns into a cleared session — one path, so the form and storage cannot disagree.
+   *
+   * Contacts already logged keep their MY_SIG_INFO. This ends the session, it does not
+   * retract an activation.
+   */
+  function endActivation() {
+    setValues((v) => ({ ...v, mySig: "", mySigInfo: "", myGridSquare: "" }));
   }
 
   if (stationsError) {
@@ -246,6 +358,43 @@ export default function NewQsoPage() {
           </Link>
         }
       />
+
+      {/* The activation in progress, and the only number an activator is tracking.
+          POTA credits an activation at ten contacts from one reference in one UTC day;
+          below ten it is an attempt, and the whole point of showing it live is that the
+          operator can still do something about it while the radio is on.
+
+          Rendered only once a reference is set, which is after the mount effect — so it
+          is client-only and carries no hydration risk from the clock read below. */}
+      {activationRef && (
+        <div
+          className={cn(
+            "mb-4 flex flex-wrap items-center gap-2 border text-sm px-3 py-2 rounded-sm",
+            activation.qualifies
+              ? "border-ok/40 bg-ok/10 text-ok"
+              : "border-accent/40 bg-accent/10 text-accent-bright",
+          )}
+        >
+          <Badge tone={activation.qualifies ? "ok" : "accent"}>
+            {activation.count}/{ACTIVATION_MINIMUM}
+          </Badge>
+          <span>
+            Activating <span className="tnum font-medium">{activationRef}</span>
+            {" — "}
+            {activation.qualifies
+              ? `${activation.count} contacts, this activation counts.`
+              : `${activation.remaining} more contact${activation.remaining === 1 ? "" : "s"} for a valid activation.`}
+          </span>
+          {/* The day is named, not implied. POTA's boundary is UTC midnight, which in the
+              US falls in the EVENING — mid-activation — and an operator who does not know
+              which day they are being counted for cannot make sense of a total that
+              restarts at what feels like teatime. */}
+          <span className="text-fg-subtle text-xs tnum">
+            UTC day {utcDayKey(new Date())}
+          </span>
+          <Button onClick={endActivation}>End activation</Button>
+        </div>
+      )}
 
       {lastLogged && (
         <div className="mb-4 flex items-center gap-2 border border-ok/40 bg-ok/10 text-ok text-sm px-3 py-2 rounded-sm">

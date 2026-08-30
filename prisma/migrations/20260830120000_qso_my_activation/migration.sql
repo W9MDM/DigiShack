@@ -1,0 +1,65 @@
+-- OUR OWN activation: MY_SIG, MY_SIG_INFO and MY_GRIDSQUARE.
+--
+-- THE FAULT. `Qso.sig` / `Qso.sigInfo` record the park the OTHER station is in — the
+-- hunter's half of a park contact, and the only half this schema had. When the operator
+-- is the ACTIVATOR at US-4567 working forty hunters, there was nowhere to record that
+-- they were at US-4567. The schema said so itself, in the comment above `sig`: "an
+-- activation of our own would be MY_SIG / MY_SIG_INFO, which is a separate pair and not
+-- yet stored."
+--
+-- The consequence is not cosmetic. POTA's activation upload requires MY_SIG and
+-- MY_SIG_INFO on every record, alongside STATION_CALLSIGN and OPERATOR; a file without
+-- them is a hunter log, and POTA credits the contacts to the wrong side of the exchange
+-- or refuses them. So an activation logged perfectly well in this application could not
+-- be submitted as one, and the activation count on /pota came from pota.app — somebody
+-- else's number describing work this software could not produce.
+--
+-- ALL THREE NULLABLE, and that is load-bearing rather than incidental.
+--
+--   * 29,800 existing contacts backfill as NULL and are untouched. Nothing reads these
+--     columns except the activation path, and no query anywhere gains a NULL case it did
+--     not already have — `sigInfo` next door has been nullable since 20260801200726.
+--   * NULL is not "unknown" here, it is a MEANING: "this was not our activation", which
+--     is the truth about every one of those 29,800 rows and about every ordinary contact
+--     made from now on. A NOT NULL DEFAULT '' would make the same claim in a value that
+--     then has to be special-cased at every read.
+--   * For `myGridSquare` specifically, NULL means "the station's grid was correct" and
+--     the ADIF writer falls back to `Station.grid` exactly as it did before this column
+--     existed. That is what keeps the export byte-identical for the existing log.
+--
+-- NO DEFAULT and NO BACKFILL. There is deliberately no UPDATE statement here. It is
+-- tempting to backfill `myGridSquare` from `Station.grid` and be rid of the fallback —
+-- and it would be wrong: the station's grid is the HOME grid, so that UPDATE would
+-- assert about tens of thousands of contacts that the operator was at home, including
+-- for any that were not. An empty column that falls back is honest; a filled one that
+-- guesses is a false record, and unpickable afterwards because nothing would distinguish
+-- a backfilled value from a typed one.
+--
+-- VARCHAR WIDTHS match the columns these mirror — VarChar(32) for the programme and the
+-- reference, as `sig`/`sigInfo`, and VarChar(12) for the grid, as `gridSquare`. Twelve
+-- covers an 8-character Maidenhead locator with room to spare, and matching the existing
+-- widths means the validation already written for the "their side" fields transfers
+-- unchanged.
+--
+-- THE INDEX is the ten-contact rule. An activation counts for POTA at ten contacts, and
+-- the operator needs that number live, after every QSO — "how many at THIS reference on
+-- THIS UTC day". That is an equality on `mySigInfo` and a range on `startTime`, so the
+-- composite in that order lets MySQL match the leading column and range-scan the second.
+-- Reversed, or as two single-column indexes, it degenerates into scanning every contact
+-- ever made at the park. NOT unique: an activation is many contacts at one reference,
+-- which is the entire point.
+--
+-- WRITTEN BY HAND and to be applied with `migrate deploy` — the same route as the
+-- 20260805021500, 20260823150000 and 20260829120000 migrations. There is no database on
+-- the development machine (127.0.0.1:3306 is not listening), so `migrate dev` could not
+-- have generated it, and THIS SQL HAS NOT BEEN EXECUTED ANYWHERE. It needs running
+-- against the live schema before any part of this release is believed. `npx prisma
+-- generate` has been run, so the types resolve — that proves the client matches the
+-- schema file and proves nothing at all about the database.
+ALTER TABLE `Qso` ADD COLUMN `mySig` VARCHAR(32) NULL,
+    ADD COLUMN `mySigInfo` VARCHAR(32) NULL,
+    ADD COLUMN `myGridSquare` VARCHAR(12) NULL;
+
+-- The name Prisma generates for `@@index([mySigInfo, startTime])`, so a later
+-- `migrate diff` sees the index it expects rather than proposing to drop and recreate it.
+CREATE INDEX `Qso_mySigInfo_startTime_idx` ON `Qso`(`mySigInfo`, `startTime`);

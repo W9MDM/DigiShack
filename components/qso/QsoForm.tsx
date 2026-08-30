@@ -11,6 +11,7 @@ import {
   Textarea,
 } from "@/components/ui/primitives";
 import { formatRefList, parseRefList } from "@/lib/pota/ref-list";
+import { utcDayStart } from "@/lib/pota/activation";
 import { ApiError, apiGet } from "@/lib/client/api";
 import {
   BAND_NAMES,
@@ -41,6 +42,12 @@ export interface QsoFormValues {
   iota: string;
   sig: string;
   sigInfo: string;
+  /** ADIF MY_SIG — the programme WE are activating. Belongs to the SESSION. */
+  mySig: string;
+  /** ADIF MY_SIG_INFO — the reference WE are activating. Belongs to the SESSION. */
+  mySigInfo: string;
+  /** ADIF MY_GRIDSQUARE — where WE are. Blank means the station's grid. SESSION. */
+  myGridSquare: string;
   continent: string;
   notes: string;
   stationId: string;
@@ -75,6 +82,9 @@ export function emptyValues(): QsoFormValues {
     iota: "",
     sig: "",
     sigInfo: "",
+    mySig: "",
+    mySigInfo: "",
+    myGridSquare: "",
     continent: "",
     notes: "",
     stationId: "",
@@ -118,6 +128,9 @@ export function valuesFromQso(qso: Qso): QsoFormValues {
           ? [qso.sigInfo]
           : [],
     ),
+    mySig: qso.mySig ?? "",
+    mySigInfo: qso.mySigInfo ?? "",
+    myGridSquare: qso.myGridSquare ?? "",
     continent: qso.continent ?? "",
     notes: qso.notes ?? "",
     stationId: qso.stationId,
@@ -161,6 +174,12 @@ export function toRequestBody(v: QsoFormValues) {
     // The field holds a list; the primary is its first entry.
     sigRefs: parseRefList(v.sigInfo),
     sigInfo: parseRefList(v.sigInfo)[0] ?? null,
+    // OUR OWN activation. One reference, not a list — an n-fer activation is one POTA
+    // upload per reference rather than one record carrying several, so `parseRefList` is
+    // deliberately not used here.
+    mySig: v.mySig.trim().toUpperCase() || null,
+    mySigInfo: v.mySigInfo.trim().toUpperCase() || null,
+    myGridSquare: v.myGridSquare.trim().toUpperCase() || null,
     continent: v.continent.trim() || null,
     notes: v.notes.trim() || null,
     stationId: v.stationId,
@@ -248,14 +267,63 @@ export interface QsoDraft {
  * differs from a freshly built `emptyValues()` within a second of mounting and would
  * make every untouched form look edited.
  */
-const SESSION_FIELDS: readonly string[] = [
+export const SESSION_FIELDS: readonly string[] = [
   "stationId",
   "operatorId",
   "freqMHz",
   "band",
   "mode",
   "startTime",
+  // OUR OWN activation. "I am at US-4567" is set once and is true for every contact of
+  // the sitting — the same kind of fact as the station and the band, and emphatically
+  // not the same kind as a signal report.
+  //
+  // Listed here for the reason the list exists at all: without it, a form holding
+  // nothing but "I am activating US-4567" would count as a contact in progress, and
+  // merely arriving at the page with an activation set would put a draft on disk and
+  // then offer it back as an unlogged contact.
+  "mySig",
+  "mySigInfo",
+  "myGridSquare",
 ];
+
+/**
+ * The fields that CARRY to the next contact after a save.
+ *
+ * Nearly `SESSION_FIELDS`, and the one difference is deliberate: `startTime` is a session
+ * field for the purpose of deciding whether a form has been typed into, and is NOT
+ * carried — the next contact happens at the next contact's time, and inheriting the last
+ * one would backdate every QSO of a run to whenever the run began.
+ */
+const CARRIED_FIELDS = [
+  "stationId",
+  "operatorId",
+  "freqMHz",
+  "band",
+  "mode",
+  "mySig",
+  "mySigInfo",
+  "myGridSquare",
+] as const satisfies readonly (keyof QsoFormValues)[];
+
+/**
+ * Clear the contact, keep the sitting. The behaviour that makes this usable during a run.
+ *
+ * ONE DEFINITION, used by the post-save reset and by discarding a recovered draft. It was
+ * two copies of a field list, which is the shape where a field added to one and not the
+ * other produces a logger that quietly forgets the park on every fortieth contact and
+ * nowhere else.
+ *
+ * WHAT IS NOT CARRIED, and this is the load-bearing half: `rstSent` and `rstRcvd`. Station,
+ * band, mode and the activation describe where the operator is sitting; a signal report
+ * describes one contact, and inheriting the last one is how a log quietly fills with wrong
+ * numbers. They fall back to the mode's default via `emptyValues()`.
+ */
+export function carrySession(v: QsoFormValues): QsoFormValues {
+  const next = emptyValues();
+  for (const key of CARRIED_FIELDS) next[key] = v[key];
+  return next;
+}
 
 /**
  * Is there a contact in progress worth keeping?
@@ -498,6 +566,167 @@ export function clearDraft(): void {
   }
 }
 
+// ---------------------------------------------------------------------------
+// The activation session
+// ---------------------------------------------------------------------------
+//
+// "I am activating US-4567" is set once and inherited by every contact of the sitting.
+// The draft above cannot carry it, and the reason is structural rather than a matter of
+// taste: THE DRAFT DIES WITH THE CONTACT. It is cleared on every successful save, and it
+// has to be — a draft that outlived its save would be offered back as an unlogged
+// contact and logged twice. An activation has to outlive forty saves.
+//
+// So this is a second key, and NOT a second storage layer. It goes through the same
+// `storage()` above, which is the piece that survives Safari's private mode, Firefox
+// with site data blocked and a full quota. Every access below is wrapped for the same
+// reasons written out there, and every failure degrades to "no activation" rather than
+// to an exception on the logging page.
+//
+// STORED SEPARATELY FROM THE FORM, not derived from it, so the reference survives the
+// case this exists for: Android discards the tab mid-activation, the operator reopens
+// the app, and the form comes back empty. An empty form with the activation still set is
+// ready for the next caller; an empty form without it silently logs the rest of the
+// activation as ordinary contacts, and nothing about the page would look wrong.
+
+/** Namespaced and versioned, like the draft key, and read the same way. */
+export const ACTIVATION_KEY = "digishack:activation:v1";
+
+/** Bumped only when a stored session can no longer be read. A mismatch is DISCARDED. */
+export const ACTIVATION_VERSION = 1;
+
+export interface ActivationSession {
+  v: number;
+  /** ADIF MY_SIG — "POTA". */
+  sig: string;
+  /** ADIF MY_SIG_INFO — "US-4567". Empty is not a session; see `writeActivation`. */
+  ref: string;
+  /** ADIF MY_GRIDSQUARE. Empty means the station's grid was right. */
+  grid: string;
+  /** ISO-8601, so the page can say since when. */
+  startedAt: string;
+}
+
+/** Encode a session. Pure and round-trippable. */
+export function serialiseActivation(s: ActivationSession): string {
+  return JSON.stringify({ ...s, v: ACTIVATION_VERSION });
+}
+
+/**
+ * Decode a stored session. NEVER THROWS, for any input — same contract as `parseDraft`,
+ * and for the same reason: this runs inside a mount effect on the logging page.
+ *
+ * A session without a reference is not a session. `mySig` and `myGridSquare` are
+ * meaningless on their own — a programme name with no park, or a grid that is simply the
+ * operator's location — and treating either as an activation would light the counter for
+ * an activation of nothing.
+ */
+export function parseActivation(raw: string | null | undefined): ActivationSession | null {
+  if (!raw) return null;
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+
+  const d = parsed as { v?: unknown; sig?: unknown; ref?: unknown; grid?: unknown; startedAt?: unknown };
+  if (d.v !== ACTIVATION_VERSION) return null;
+
+  const ref = typeof d.ref === "string" ? d.ref.trim().toUpperCase() : "";
+  if (!ref) return null;
+
+  return {
+    v: ACTIVATION_VERSION,
+    // Defaulted rather than rejected: a session that lost its programme name is still an
+    // activation of a park, and POTA is what every reference in this application means
+    // unless something says otherwise.
+    sig: typeof d.sig === "string" && d.sig.trim() ? d.sig.trim().toUpperCase() : "POTA",
+    ref,
+    grid: typeof d.grid === "string" ? d.grid.trim().toUpperCase() : "",
+    startedAt: typeof d.startedAt === "string" ? d.startedAt : "",
+  };
+}
+
+/** The stored activation, or null. */
+export function readActivation(): ActivationSession | null {
+  const s = storage();
+  if (!s) return null;
+
+  let raw: string | null;
+  try {
+    raw = s.getItem(ACTIVATION_KEY);
+  } catch {
+    return null;
+  }
+
+  const session = parseActivation(raw);
+  // A session we cannot read is one that will never be read. Drop it rather than hand it
+  // to `parseActivation` on every mount for the life of the profile.
+  if (!session && raw !== null) clearActivation();
+  return session;
+}
+
+/**
+ * Persist an activation. Returns whether it landed.
+ *
+ * An empty reference CLEARS rather than storing a blank, so "end the activation" and
+ * "clear the field" are the same act and cannot leave a half-session behind that the
+ * counter would then try to count.
+ */
+export function writeActivation(session: ActivationSession): boolean {
+  const ref = session.ref.trim().toUpperCase();
+  if (!ref) {
+    clearActivation();
+    return false;
+  }
+  const s = storage();
+  if (!s) return false;
+  try {
+    s.setItem(ACTIVATION_KEY, serialiseActivation({ ...session, ref }));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function clearActivation(): void {
+  const s = storage();
+  if (!s) return;
+  try {
+    s.removeItem(ACTIVATION_KEY);
+  } catch {
+    // Degrades to a stale activation being offered on the next visit, which the banner
+    // on /qsos/new names explicitly and offers a way out of.
+  }
+}
+
+/** The session a form's values describe, or null when no reference is set. */
+export function activationFromValues(
+  v: QsoFormValues,
+  startedAt: Date = new Date(),
+): ActivationSession | null {
+  const ref = v.mySigInfo.trim().toUpperCase();
+  if (!ref) return null;
+  return {
+    v: ACTIVATION_VERSION,
+    sig: v.mySig.trim().toUpperCase() || "POTA",
+    ref,
+    grid: v.myGridSquare.trim().toUpperCase(),
+    startedAt: startedAt.toISOString(),
+  };
+}
+
+/** Put a stored session back into a form. */
+export function applyActivation(
+  v: QsoFormValues,
+  session: ActivationSession | null,
+): QsoFormValues {
+  if (!session) return { ...v, mySig: "", mySigInfo: "", myGridSquare: "" };
+  return { ...v, mySig: session.sig, mySigInfo: session.ref, myGridSquare: session.grid };
+}
+
 /**
  * What to say when the save never reached the server.
  *
@@ -619,6 +848,21 @@ export function QsoForm({
         band: values.band,
         mode: values.mode,
       });
+      // SCOPED TO THE ACTIVATION when there is one.
+      //
+      // THE FAULT. The check is all-time, so on a busy activation it fires on people
+      // worked last year at another park on another continent. That is true and useless:
+      // the badge ends up lit for a large share of callers, and a warning that is
+      // usually on is a warning nobody reads — including on the one occasion it means
+      // the caller is a repeat inside THIS activation, which is the only dupe an
+      // activation cares about, because a second contact does not count toward the ten.
+      //
+      // The UTC day is the boundary, matching POTA's own, so this asks exactly the
+      // question the counter beside it is answering. Still advisory: the catch below
+      // swallows every failure, and nothing here can stop a save.
+      if (values.mySigInfo.trim()) {
+        params.set("since", utcDayStart(new Date()).toISOString());
+      }
       if (qsoId) params.set("excludeId", qsoId);
       setDupe(await apiGet<DupeCheckResponse>(`/api/qsos/dupe-check?${params}`));
     } catch {
@@ -783,9 +1027,14 @@ export function QsoForm({
       {dupe?.duplicate && dupe.previous && (
         <div className="flex items-center gap-2 text-sm border border-warn/40 bg-warn/10 text-warn px-3 py-2 rounded-sm">
           <Badge tone="warn">Dupe</Badge>
+          {/* Two different findings, worded differently on purpose. A repeat inside this
+              activation is a caller who does not count again and is worth a second's
+              pause; a contact from 2024 is a note, and dressing it up in the same words
+              is how the badge became something to ignore. */}
           <span>
-            Already worked on {values.band} {values.mode} at{" "}
-            {formatUtc(dupe.previous.startTime)} — logging anyway is fine.
+            {dupe.scope === "session"
+              ? `Already worked at this activation on ${values.band} ${values.mode} at ${formatUtc(dupe.previous.startTime)} — it will not count again, but logging it is fine.`
+              : `Already worked on ${values.band} ${values.mode} at ${formatUtc(dupe.previous.startTime)} — logging anyway is fine.`}
           </span>
         </div>
       )}
@@ -1024,6 +1273,76 @@ export function QsoForm({
             spellCheck={false}
             className="tnum"
             aria-invalid={Boolean(fieldErrors("sigInfo"))}
+          />
+        </Field>
+
+        {/* ---- OUR activation, the mirror of the two fields above ----
+
+            The two pairs sit next to each other because on a park-to-park contact all
+            four are set and true at once, and because the thing they are most often
+            confused for is each other. The labels say whose park each one is rather
+            than repeating the ADIF tag, which is what the hints are for. */}
+        <Field
+          label="My activity (MY_SIG)"
+          htmlFor="mySig"
+          errors={fieldErrors("mySig")}
+          hint="The programme YOU are activating"
+        >
+          <Input
+            id="mySig"
+            value={values.mySig}
+            onChange={(e) => set("mySig", e.target.value.toUpperCase())}
+            placeholder="POTA"
+            spellCheck={false}
+            aria-invalid={Boolean(fieldErrors("mySig"))}
+          />
+        </Field>
+
+        <Field
+          label="My reference (MY_SIG_INFO)"
+          htmlFor="mySigInfo"
+          errors={fieldErrors("mySigInfo")}
+          hint="The park YOU are in. Carries to the next contact — set it once for the activation."
+        >
+          <Input
+            id="mySigInfo"
+            value={values.mySigInfo}
+            onChange={(e) => {
+              const ref = e.target.value.toUpperCase();
+              // The programme comes along free. An operator who types a park number and
+              // leaves MY_SIG empty has produced a record POTA cannot read, and POTA is
+              // what every reference in this application means unless told otherwise.
+              onChange({
+                ...values,
+                mySigInfo: ref,
+                mySig: values.mySig.trim() || (ref.trim() ? "POTA" : ""),
+              });
+            }}
+            placeholder="US-4567"
+            spellCheck={false}
+            className="tnum"
+            aria-invalid={Boolean(fieldErrors("mySigInfo"))}
+          />
+        </Field>
+
+        <Field
+          label="My grid"
+          htmlFor="myGridSquare"
+          errors={fieldErrors("myGridSquare")}
+          hint={
+            station
+              ? `Where YOU were. Blank exports the station's ${station.grid}.`
+              : "Where YOU were. Blank exports the station's grid."
+          }
+        >
+          <Input
+            id="myGridSquare"
+            value={values.myGridSquare}
+            onChange={(e) => set("myGridSquare", e.target.value.toUpperCase())}
+            placeholder={station?.grid ?? "EN61"}
+            spellCheck={false}
+            className="tnum"
+            aria-invalid={Boolean(fieldErrors("myGridSquare"))}
           />
         </Field>
 

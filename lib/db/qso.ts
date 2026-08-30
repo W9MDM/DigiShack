@@ -29,6 +29,10 @@ export function buildQsoWhere(q: QsoListQuery): Prisma.QsoWhereInput {
   if (q.mode) where.mode = q.mode;
   if (q.stationId) where.stationId = q.stationId;
   if (q.operatorId) where.operatorId = q.operatorId;
+  // OUR activation, not theirs. `mySigInfo`, never `sigInfo` — see the note on the query
+  // schema. This is the clause the ten-contact activation counter is built on, and
+  // reading the wrong column would count a day of chasing as an activation.
+  if (q.mySigInfo) where.mySigInfo = q.mySigInfo;
 
   if (q.from || q.to) {
     where.startTime = {};
@@ -89,18 +93,33 @@ export async function listQsos(q: QsoListQuery) {
 /**
  * Has this callsign been worked on this band+mode before? Used by the entry
  * form to warn on a likely duplicate. `excludeId` lets an edit skip itself.
+ *
+ * `since` NARROWS IT TO ONE SESSION, and it is why this grew an argument.
+ *
+ * THE FAULT. The check is all-time, so during an activation it fires on people worked
+ * last year, on a different continent, at a different park. That is a true statement and
+ * a useless one: on a busy activation the badge is lit for a large share of callers, and
+ * a warning that is usually on is a warning nobody reads — including on the one occasion
+ * it means the caller is genuinely a repeat inside this activation, which is the only
+ * dupe a POTA activation cares about, because a second contact does not count again.
+ *
+ * ADVISORY EITHER WAY. Neither form of this ever blocks a save, and the caller swallows
+ * its failures — a dupe check that cannot answer must not stop a contact being logged.
  */
 export async function findDuplicate(args: {
   callsign: string;
   band: string;
   mode: string;
   excludeId?: string;
+  /** Only consider contacts at or after this instant. */
+  since?: Date;
 }) {
   return prisma.qso.findFirst({
     where: {
       callsign: args.callsign,
       band: args.band,
       mode: args.mode,
+      ...(args.since ? { startTime: { gte: args.since } } : {}),
       ...(args.excludeId ? { id: { not: args.excludeId } } : {}),
     },
     orderBy: { startTime: "desc" },

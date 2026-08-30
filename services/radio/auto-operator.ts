@@ -7,6 +7,7 @@ import { parseMessage, standardMessages, type MayCallChecks } from "@/lib/digita
 import { rankCandidates, type Candidate, type WorkedIndex } from "@/lib/digital/worth";
 import type { QsoController } from "./qso-controller";
 import {
+  bandHasNobodyToCall,
   bandIsUnproductive,
   pickBandForSwr,
   pickBusiestBand,
@@ -155,6 +156,29 @@ interface HuntCandidate {
 }
 
 /**
+ * What a hunted window OFFERED, as opposed to what it produced.
+ *
+ * Returned by `huntWindow` rather than accumulated inside it, and that is deliberate:
+ * `huntPotaAudible` borrows `huntWindow` from chase mode, and a chase window that finds
+ * no audible "CQ POTA" is the normal condition of chase mode rather than evidence about
+ * the band. The caller decides whether the answer counts; the chase path drops it.
+ */
+interface HuntOutcome {
+  /** At least one station here cleared `mayCall`. Breaks the streak. */
+  callable: boolean;
+  /**
+   * Distinct callsigns that called CQ in this window, BEFORE `newOnly` and the SNR
+   * floor took their cut.
+   *
+   * From the memo `rankWindow` already writes, so this is the same parse and the same
+   * list — there is no second notion of who was heard.
+   */
+  cqs: readonly string[];
+  /** Ranked candidates the guards refused: dupe, cooldown, do-not-call. */
+  refused: number;
+}
+
+/**
  * How long a callsign's DXCC entity is remembered, ms.
  *
  * Half an hour, because the thing being cached does not change on a shorter timescale
@@ -235,6 +259,47 @@ const UNPRODUCTIVE_DECAY = 0.4;
 const UNPRODUCTIVE_MIN_ATTEMPTS = 8;
 const UNPRODUCTIVE_MIN_SUCCESS = 0.34;
 
+/**
+ * Consecutive listening windows with NOBODY WORTH CALLING before the band is left.
+ *
+ * THE FAULT this closes, observed live on 30 Aug at 09:08: settled on 17 m at 09:03
+ * with 3 decodes in the window and 17 in the rolling buffer, and 0 calls, 0 contacts
+ * and 0 abandoned since arriving. "Band too quiet" wants literally 0 decodes and 3 is
+ * not 0. "Not paying" wants UNPRODUCTIVE_MIN_ATTEMPTS attempts before a ratio means
+ * anything, and the attempt count was 0 and could not grow. A band with a trickle and
+ * nobody to work satisfies neither, so the station sits on it indefinitely. See
+ * `bandHasNobodyToCall`.
+ *
+ * WHY 20 AND NOT 40. UNPRODUCTIVE_MIN_WINDOWS is 40 because the tests it gates are
+ * INFERENCES from a decode rate — comparing one half of a stay against the other
+ * needs a long enough baseline that a lull is not read as a fade. This is not an
+ * inference, it is a COUNT: twenty consecutive windows in which the hunt's own
+ * ranking and its own `mayCall` produced not one station to call. Ten of those
+ * windows were each parity, so a station that only ever calls CQ on one of them had
+ * ten chances to be heard. There is nothing further to learn by waiting.
+ *
+ * WHY IT HAS NO WALL-CLOCK TIMER, unlike PRODUCTIVITY_CHECK_MS. That timer exists so
+ * a rate test is not re-asked of the same means every 15 seconds. This evidence
+ * accumulates one window at a time and is complete the moment the streak reaches the
+ * bar, so it is simply checked every window and fires once. At 15 s that is five
+ * minutes, which is exactly how long the observed 17 m stay had produced nothing when
+ * it was caught by eye.
+ *
+ * WINDOWS AND NOT MINUTES so it scales: 5 minutes on FT8, 2.5 on FT4, 75 s on FT2.
+ * The unit of evidence is a window — one complete transmission from everyone on
+ * frequency — and a faster mode genuinely does deliver its evidence faster.
+ */
+const NOBODY_TO_CALL_WINDOWS = 20;
+
+/**
+ * Callsigns remembered per streak, for the log line's "N stations called CQ here".
+ *
+ * Bounded because a streak has no upper length: once every band on the hop list has
+ * been tried and marked poor there is nowhere to go, the hop declines, and the streak
+ * keeps counting until something changes.
+ */
+const NOBODY_CQ_TALLY_MAX = 500;
+
 /** Someone who called us while the transmitter was busy with another contact. */
 interface PendingCallback {
   call: string;
@@ -309,6 +374,20 @@ export class AutoOperator {
   /** Noise floor measured on each band, for a relative idea of "noisy". */
   private bandNoise = new Map<string, number>();
   private lastProductivityCheck = 0;
+  /**
+   * The "nobody to call" streak: consecutive hunted windows here that offered nobody.
+   *
+   * Only windows that actually reached the hunt count. Warm-up, a paused guard and a
+   * contact in progress all return from `onWindow` before the hunt runs, so a live QSO
+   * suppresses this exactly as it suppresses the other two band checks — and it must,
+   * since a window spent working somebody is the strongest possible evidence AGAINST
+   * the conclusion this draws.
+   */
+  private nobodyWindows = 0;
+  /** Distinct callsigns heard calling CQ during the streak, for the log line. */
+  private nobodyCqs = new Set<string>();
+  /** Guard refusals during the streak — see BandOffering.refused. */
+  private nobodyRefused = 0;
   private hopping = false;
   /** POTA chase: who we retuned for, and when to give up on them. */
   private chasing: { activator: string; since: number; reference: string } | null = null;
@@ -360,7 +439,20 @@ export class AutoOperator {
    * calling CQ", which is why `rankWindow` writes one rather than leaving the field
    * alone. Without it a quiet window would silently reuse a list from a minute earlier.
    */
-  private candidates: { at: number; heardCq: boolean; list: HuntCandidate[] } | null = null;
+  private candidates: {
+    at: number;
+    heardCq: boolean;
+    list: HuntCandidate[];
+    /**
+     * Everyone who called CQ in that window, ranked or not.
+     *
+     * `list` is post-filter: with `huntNewOnly` on, or a station under the SNR floor, a
+     * window where twenty stations called can rank to nothing. The streak's log line has
+     * to be able to say which of those two happened, and re-parsing the decodes to find
+     * out would be a second answer to a question already answered here.
+     */
+    cqCalls: string[];
+  } | null = null;
   /** The window a candidate call has already been attempted for. One attempt per window. */
   private lastCandidateWindow: number | null = null;
   /** See `callPending`. */
@@ -437,6 +529,7 @@ export class AutoOperator {
     this.lastBetterCheck = Date.now();
     this.windowsOnBand = 0;
     this.decodesOnBand = 0;
+    this.resetNobodyStreak();
     this.returnIfWorse = null;
     // Anyone waiting was waiting for the operating this mode change just ended.
     // Carrying them across a switch to Off — or to another band via chase — would
@@ -847,6 +940,16 @@ export class AutoOperator {
       return;
     }
 
+    // ...and is it offering anybody to CALL? A band can be decoding perfectly well and
+    // still have nothing on it for us, which neither of the checks above can see:
+    // one wants zero decodes, the other wants attempts that a band with nobody to
+    // attempt will never produce. Placed after them so that when both are ready the
+    // longer-baseline rate and noise reasoning wins the log line.
+    if (await this.maybeLeaveBandWithNobodyToCall()) {
+      this.broadcastState();
+      return;
+    }
+
     // The band we are on may simply have been overtaken. Checked here, between
     // contacts, so this can never interrupt one.
     if (await this.maybeHopToBetterBand()) {
@@ -857,7 +960,7 @@ export class AutoOperator {
     if (this.mode === "pota-chase") {
       await this.potaChaseWindow(windowStartMs, decodes);
     } else if (this.mode === "hunt" || this.mode === "hunt-pota") {
-      await this.huntWindow(windowStartMs, decodes);
+      this.noteHuntOutcome(await this.huntWindow(windowStartMs, decodes));
     } else if (this.mode === "cq") {
       await this.cqWindow(windowStartMs);
     }
@@ -874,19 +977,28 @@ export class AutoOperator {
   private async huntWindow(
     windowStartMs: number,
     decodes: { message: string; snr: number; freqOffset: number }[],
-  ): Promise<void> {
+  ): Promise<HuntOutcome> {
     const { band, mode } = this.o.getBandMode();
     const ranked = await this.rankWindow(windowStartMs, decodes);
+    // Who called CQ here at all. Read from the memo `rankWindow` just wrote, so it is the
+    // same parse of the same decodes — see HuntOutcome.cqs.
+    const cqs =
+      this.candidates?.at === windowStartMs ? this.candidates.cqCalls : ([] as string[]);
     if (ranked === null) {
       this.lastAction = "no CQs heard this window";
-      return;
+      return { callable: false, cqs, refused: 0 };
     }
     if (ranked.length === 0) {
       const prefs = await this.o.huntPrefs();
       this.lastAction = prefs.newOnly ? "nothing new on frequency" : "nothing above the SNR floor";
-      return;
+      return { callable: false, cqs, refused: 0 };
     }
 
+    // Counted from the `mayCall` this loop was already going to run. No extra query, and
+    // no second opinion about who is callable: the answer that decides whether we call
+    // somebody is the same answer that decides whether this band is offering anybody.
+    let refused = 0;
+    let callable = false;
     for (const c of ranked) {
       const may = await this.o.guards.mayCall(
         c.call,
@@ -896,7 +1008,14 @@ export class AutoOperator {
         this.o.wasWorked,
         this.o.callChecks(),
       );
-      if (!may.allowed) continue;
+      if (!may.allowed) {
+        refused++;
+        continue;
+      }
+      // The band offered somebody, whatever happens next. A transmitter that will not
+      // take the contact is a fact about US, and must never be read as the band having
+      // nothing on it.
+      callable = true;
 
       const result = await this.o.controller.startCall({
         theirCall: c.call,
@@ -912,13 +1031,14 @@ export class AutoOperator {
         const why = c.reasons.length ? ` — ${c.reasons.join(", ")}` : "";
         this.lastAction = `hunting ${c.call} (${c.snr} dB)${why}`;
         this.o.log(`[auto] ${this.lastAction}`);
-        return;
+        return { callable: true, cqs, refused };
       }
     }
     const prefs = await this.o.huntPrefs();
     this.lastAction = prefs.newOnly
       ? "nothing new on frequency"
       : "no callable CQs (dupes / cooling down)";
+    return { callable, cqs, refused };
   }
 
   /**
@@ -966,7 +1086,7 @@ export class AutoOperator {
       // tell "this parity had nobody" from "this parity was never listened to". Without
       // that distinction a quiet window would silently reuse the offsets from a minute
       // ago and search where nobody is.
-      this.candidates = { at: windowStartMs, heardCq: false, list: [] };
+      this.candidates = { at: windowStartMs, heardCq: false, list: [], cqCalls: [] };
       return null;
     }
 
@@ -1028,7 +1148,11 @@ export class AutoOperator {
       if (!heard) continue;
       list.push({ call: c.call, grid: c.grid, reasons: c.reasons, ...heard });
     }
-    this.candidates = { at: windowStartMs, heardCq: true, list };
+    // `byCall` is keyed by callsign and built from every CQ in the window, BEFORE
+    // `rankCandidates` applied `newOnly` and the SNR floor. That is the honest answer to
+    // "was anybody calling here", which is a different question from "was anybody worth
+    // calling" and the streak's log line has to tell them apart.
+    this.candidates = { at: windowStartMs, heardCq: true, list, cqCalls: [...byCall.keys()] };
     return list;
   }
 
@@ -1250,6 +1374,10 @@ export class AutoOperator {
     const saved = this.mode;
     this.mode = "hunt-pota";
     try {
+      // The outcome is DELIBERATELY DROPPED. A chase window with no audible "CQ POTA" is
+      // the ordinary condition of chase mode — the activators are somewhere else on the
+      // dial, which is why the mode retunes — and feeding it to the "nobody to call"
+      // streak would have chase mode hop bands out from under its own chase.
       await this.huntWindow(windowStartMs, decodes);
     } finally {
       this.mode = saved;
@@ -1657,6 +1785,10 @@ export class AutoOperator {
   noteContactOutcome(result: "made" | "lost"): void {
     if (result === "made") this.madeOnBand++;
     else this.lostOnBand++;
+    // Made or lost, somebody here was callable — we called them. This is the reset the
+    // candidate fast path needs: `callCandidate` starts a contact without `huntWindow`
+    // ever running, so the streak would otherwise survive a contact untouched.
+    this.resetNobodyStreak();
   }
 
   /**
@@ -1704,9 +1836,42 @@ export class AutoOperator {
     });
     if (!verdict) return false;
 
+    return this.leaveBandFor(cfg, current, mode, verdict.reason);
+  }
+
+  /**
+   * Leave the band we are on, for a reason already decided, and file it as poor.
+   *
+   * Shared by the two "this band is not worth sitting on" rules. It was a verbatim copy
+   * in the second one first, and the copy is what this exists to prevent: the departure
+   * is twenty lines of bookkeeping — poor-band marking, the return intent, the counters,
+   * warm-up, the CQ state, the callback queue and the hop cursor — and a rule that
+   * forgets one of them leaves the station in a state no reader would predict.
+   *
+   * MARKED POOR, and that is deliberate for BOTH callers. `poorBands` is named for the
+   * receiver being deaf, but the job it does is "we have been and there was nothing here
+   * for us, so the network figures must not walk us straight back in five minutes". A
+   * band we left because nobody on it was callable qualifies for exactly that. It also
+   * makes the touring self-limiting: once every band on the list is marked there is no
+   * target left, this declines, and the station settles until the marks expire.
+   */
+  private async leaveBandFor(
+    cfg: { bands: string[]; toBusiest: boolean },
+    current: string,
+    mode: DigitalMode,
+    reason: string,
+  ): Promise<boolean> {
     // Somewhere else to go, chosen the same way any other hop chooses.
+    //
+    // The emptiness test comes FIRST, before the band-activity lookup. With every band
+    // on the list marked poor there is no answer the network could give that would be
+    // used, and this path can be reached on consecutive windows — see the caller.
+    const usable = this.hearableBands(cfg.bands).filter(
+      (b) => b.toUpperCase() !== current.toUpperCase(),
+    );
+    if (usable.length === 0) return false;
+
     let target: string | null = null;
-    const usable = this.hearableBands(cfg.bands);
     if (cfg.toBusiest && this.o.bandActivity) {
       try {
         target = pickBusiestBand(usable, current, await this.o.bandActivity());
@@ -1719,7 +1884,7 @@ export class AutoOperator {
     }
     if (!target) return false;
 
-    this.o.log(`[auto] leaving ${current}: ${verdict.reason} — trying ${target}`);
+    this.o.log(`[auto] leaving ${current}: ${reason} — trying ${target}`);
     if (!(await this.o.retune(target, mode))) {
       this.lastAction = `could not leave ${current}`;
       return false;
@@ -1729,7 +1894,7 @@ export class AutoOperator {
     this.poorBands.set(current.toUpperCase(), Date.now() + POOR_BAND_MS);
     this.returnIfWorse = null;
     this.resetBandCounters(current);
-    this.lastAction = `left ${current} — ${verdict.reason}`;
+    this.lastAction = `left ${current} — ${reason}`;
     this.hopping = true;
     this.hopDecodeCount = 0;
     this.warmup = WARMUP_WINDOWS;
@@ -1740,6 +1905,120 @@ export class AutoOperator {
     const at = cfg.bands.indexOf(target);
     if (at >= 0) this.hopIndex = at;
     return true;
+  }
+
+  /**
+   * Leave a band that is decoding perfectly well and has NOBODY ON IT TO CALL.
+   *
+   * THE FAULT, observed live on 30 Aug at 09:08: settled on 17 m at 09:03 with 3 decodes
+   * in the window and 17 in the rolling buffer, and 0 calls, 0 contacts, 0 abandoned
+   * since arriving. Neither existing escape could fire, and neither was broken —
+   * "band too quiet" wants literally 0 decodes and had fired correctly twice that same
+   * morning, and "not paying" wants UNPRODUCTIVE_MIN_ATTEMPTS contact attempts before a
+   * success rate means anything, which a band offering nobody to attempt will never
+   * supply. Between them those two measure "we hear nothing" and "we hear plenty and
+   * convert none of it", and the gap is this: a dead band with two beacons on it, a band
+   * where everything audible is already in the log, or one where every station heard is
+   * already busy with somebody else.
+   *
+   * WHERE "CALLABLE" COMES FROM. The hunt's own answer and nothing else. Every window
+   * `rankWindow` ranks the CQs with `rankCandidates`, and `huntWindow` puts that ranked
+   * list through `guards.mayCall` — both run anyway, and the second is where the
+   * do-not-call list, the dupe window and the band-slot rules live. A window counts as
+   * empty when that pass produced nobody it would have called. No second notion of worth
+   * and no second database read: `HuntOutcome` is the existing pass reporting what it
+   * already saw. See `noteHuntOutcome`.
+   *
+   * A LIVE QSO SUPPRESSES IT, as the other two band checks do. `onWindow` returns before
+   * the hunt while `controller.hasActive` or `startingCall` is set, so those windows
+   * never enter the streak, and `noteContactOutcome` clears it outright when the contact
+   * ends — a contact is proof the band had somebody on it.
+   *
+   * NOT THE DEAF-BAND CASE. While `returnIfWorse` is armed, a move made on network
+   * figures is still waiting to be judged against what this receiver hears, and
+   * `maybeReturnFromDeafBand` — which runs first, every window — owns that decision. It
+   * needs four windows before it has a rate at all, so this stands down until then
+   * rather than reaching a similar-looking conclusion from a different premise about our
+   * own aerial.
+   *
+   * "NOTHING HERE" vs "NOTHING HERE FOR ME" — the deliberate decision. With
+   * `auto.skipWorkedOnBandMode` on, or `auto.huntNewOnly`, a band packed with stations
+   * this log has already worked produces exactly the same silence, and it FIRES ANYWAY.
+   * The argument for staying is that those are real stations and the band is genuinely
+   * open. The argument that wins is that an automatic operator exists to make contacts,
+   * and a band it may call nobody on produces zero of them an hour whatever the reason.
+   * Exempting the case would be worse than the fault it avoids: the operator's own dupe
+   * setting would create a band the station could never leave, which is precisely the
+   * observed fault with a different cause. What replaces the exemption is HONESTY IN THE
+   * LOG — the reason line says whether nobody called at all, whether the guards refused
+   * everybody, or whether nothing scored, so an operator can see when it is their own
+   * filter talking. And the band is only marked poor for POOR_BAND_MS, so it is
+   * reconsidered half an hour later, by which time both propagation and who is calling
+   * have moved on.
+   */
+  private async maybeLeaveBandWithNobodyToCall(): Promise<boolean> {
+    // Only the hunting modes have an opinion here. CQ mode calls nobody by design, and
+    // chase mode's silence is about which frequency the dial is on. Cheap gates first:
+    // the settings read below should not happen every window for a streak that has not
+    // reached the bar.
+    if (this.mode !== "hunt" && this.mode !== "hunt-pota") return false;
+    if (this.hopping || this.warmup > 0) return false;
+    if (this.o.controller.hasActive || this.startingCall) return false;
+    if (this.returnIfWorse) return false;
+    if (this.nobodyWindows < NOBODY_TO_CALL_WINDOWS) return false;
+
+    const cfg = await this.o.bandHop();
+    if (!cfg.enabled || cfg.bands.length === 0) return false;
+
+    const { band: current, mode } = this.o.getBandMode();
+    if (!current) return false;
+
+    const verdict = bandHasNobodyToCall({
+      here: {
+        windowsWithNobody: this.nobodyWindows,
+        cqsHeard: this.nobodyCqs.size,
+        refused: this.nobodyRefused,
+        windows: this.windowDecodes,
+      },
+      minWindows: NOBODY_TO_CALL_WINDOWS,
+    });
+    if (!verdict) return false;
+
+    const left = await this.leaveBandFor(cfg, current, mode, verdict.reason);
+    // Nowhere left to go, or the radio would not retune. Either way the evidence is
+    // SPENT: without this the streak stays over the bar and the question is re-asked on
+    // every window from now on, which puts a settings read — and, with hop-to-busiest
+    // on, a band-activity lookup — behind every decode window for as long as the
+    // station is stuck. Resetting asks again in another NOBODY_TO_CALL_WINDOWS, which
+    // is also when the answer could next have changed.
+    if (!left) this.resetNobodyStreak();
+    return left;
+  }
+
+  /**
+   * Fold one hunted window into the "nobody to call" streak.
+   *
+   * Called only from the hunt dispatch in `onWindow`, never from `huntPotaAudible` —
+   * see the note there.
+   */
+  private noteHuntOutcome(outcome: HuntOutcome): void {
+    if (outcome.callable) {
+      this.resetNobodyStreak();
+      return;
+    }
+    this.nobodyWindows++;
+    this.nobodyRefused += outcome.refused;
+    for (const call of outcome.cqs) {
+      if (this.nobodyCqs.size >= NOBODY_CQ_TALLY_MAX) break;
+      this.nobodyCqs.add(call);
+    }
+  }
+
+  /** Somebody here was callable, or the band changed. The streak starts again. */
+  private resetNobodyStreak(): void {
+    this.nobodyWindows = 0;
+    this.nobodyRefused = 0;
+    this.nobodyCqs.clear();
   }
 
   /** Decodes per cycle on the band we are on, or null if too early to say. */
@@ -1763,6 +2042,9 @@ export class AutoOperator {
     this.madeOnBand = 0;
     this.lostOnBand = 0;
     this.lastProductivityCheck = Date.now();
+    // A streak is a claim about ONE band. Carrying it across a hop would judge the new
+    // band on windows spent listening to the old one.
+    this.resetNobodyStreak();
   }
 
   /**

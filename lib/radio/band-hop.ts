@@ -262,6 +262,127 @@ export function bandIsUnproductive(opts: {
   return null;
 }
 
+/** What a band actually OFFERED while we listened to it. */
+export interface BandOffering {
+  /**
+   * Consecutive listening windows here in which nothing was callable.
+   *
+   * Windows, not minutes, and that is the whole reason this is not a duration. A
+   * window is one complete transmission from everybody on frequency, which is the
+   * unit of evidence — and it is 15 s on FT8, 7.5 s on FT4 and 3.75 s on FT2. Twenty
+   * windows is twenty complete looks at the band in every one of them; twenty
+   * MINUTES is eighty looks in one mode and three hundred and twenty in another,
+   * which would make the same rule mean four different things.
+   */
+  windowsWithNobody: number;
+  /** Distinct stations heard calling CQ during that streak. */
+  cqsHeard: number;
+  /**
+   * Ranked candidates the operating guards refused during the streak.
+   *
+   * Counted per refusal, not per station, so it is NOT comparable with `cqsHeard` —
+   * the same dupe refused in ten windows is ten. It is only ever asked whether it is
+   * zero, which separates "the guards said no to everyone" from "nothing here scored
+   * highly enough to try".
+   */
+  refused: number;
+  /** Decode counts per window, oldest first, for this stay on this band. */
+  windows: readonly number[];
+}
+
+/**
+ * Is there simply NOBODY TO CALL here?
+ *
+ * THE FAULT. Observed live on 30 Aug at 09:08. The station had settled on 17 m at
+ * 09:03 with 3 decodes in the window, 17 in the rolling buffer, and 0 calls, 0
+ * contacts and 0 abandoned attempts since arriving. Both existing escapes were mute
+ * and neither could ever have fired:
+ *
+ *   * "band too quiet" wants LITERALLY ZERO decodes. It works — it fired twice that
+ *     same morning, at 07:56 and 08:40 — but 3 decodes is not 0, so it had nothing
+ *     to say about a band that is decoding a little.
+ *   * "not paying" wants `minAttempts` contact attempts before a success rate means
+ *     anything, and 8 is the right number for a ratio. But the attempt count here
+ *     was ZERO and could not grow, because there was nobody to attempt. A rule that
+ *     divides by attempts can never fire on a band that offers none.
+ *
+ * So the two triggers between them cover "we hear nothing" and "we hear plenty and
+ * convert none of it", and the gap between those is a real and common condition: a
+ * dead band with two beacons on it, a band where everything audible is already in
+ * the log, or one where every station heard is mid-QSO with somebody else. The
+ * decode count says the band is alive. The contact count says nothing at all,
+ * forever.
+ *
+ * WHAT IS MEASURED IS WORKABLE STATIONS — not decodes, and not attempts. The count
+ * comes from the hunt's own ranking and its own `mayCall`, which run every window
+ * anyway; nothing here re-derives worth and nothing here costs a query. See
+ * `AutoOperator.noteHuntOutcome`.
+ *
+ * REJECTED: a decode-rate floor ("under N a cycle, leave"). That is the flat
+ * threshold `bandIsUnproductive` exists to avoid — 3 decodes a cycle is a dead 20 m
+ * afternoon and a busy 160 m night — and it would have fired on the 17 m case for
+ * the wrong reason, then fired again on a band that was quiet but full of new ones.
+ *
+ * REJECTED: requiring some decodes before this may fire. A band with genuinely
+ * nothing on it that we merely SAT DOWN on — after a restart, or because the network
+ * never showed anything better — is never reached by the quiet trigger at all, since
+ * that only runs at the end of a hop's warm-up. Silence gets its own wording rather
+ * than its own exemption.
+ *
+ * Returns null when the streak is too short to mean anything, and when `minWindows`
+ * is zero or less, which is the off switch.
+ */
+export function bandHasNobodyToCall(opts: {
+  here: BandOffering;
+  /** Consecutive empty windows before this means anything. <= 0 disables. */
+  minWindows: number;
+}): UnproductiveVerdict | null {
+  const { here, minWindows } = opts;
+  if (minWindows <= 0) return null;
+  if (here.windowsWithNobody < minWindows) return null;
+
+  const rate =
+    here.windows.length === 0
+      ? 0
+      : here.windows.reduce((a, b) => a + b, 0) / here.windows.length;
+  const w = here.windowsWithNobody;
+  const one = here.cqsHeard === 1;
+  const s = one ? "" : "s";
+  const every = one ? "it was refused" : "every one was refused";
+
+  // Nobody called CQ at all. Said separately because it is a different fact about
+  // the band from "they called and we could not work them", and an operator reading
+  // the log needs to know which one they are looking at.
+  if (here.cqsHeard === 0) {
+    return {
+      reason:
+        `${w} windows here without a single CQ to answer, at ${rate.toFixed(1)} decodes a cycle`,
+    };
+  }
+
+  // They were there and the guards said no to every one of them: already worked,
+  // cooling down after a failed attempt, or on the do-not-call list. The band is
+  // being heard perfectly well and has nothing on it FOR US, which is the same
+  // number of contacts an hour as a dead one.
+  if (here.refused > 0) {
+    return {
+      reason:
+        `${here.cqsHeard} station${s} called CQ here in ${w} windows and ${every} ` +
+        `as a dupe, a cooldown or a do-not-call, while ${rate.toFixed(1)} ` +
+        `decodes a cycle are being heard`,
+    };
+  }
+
+  // They were there and none of them scored: below the SNR floor, or nothing new on
+  // a station running "new ones only". Also the operator's own settings, and also
+  // zero contacts an hour.
+  return {
+    reason:
+      `${here.cqsHeard} station${s} called CQ here in ${w} windows and not one was worth ` +
+      `calling, at ${rate.toFixed(1)} decodes a cycle`,
+  };
+}
+
 export function pickBandForSwr(opts: {
   bands: readonly string[];
   current: string | null;

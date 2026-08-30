@@ -336,8 +336,9 @@ model Qso {
   // — the question the whole activity is built on — cannot be answered locally
   // at all.
   //
-  // These are THEIR activity. An activation of our own would be MY_SIG /
-  // MY_SIG_INFO, which is a separate pair and not yet stored.
+  // These are THEIR activity. OUR OWN activation is the MY_SIG / MY_SIG_INFO pair
+  // below — a separate pair, because on a park-to-park contact both are true at
+  // once and folding them together loses one of them.
   //
   // This pair is the PRIMARY reference only. One contact can genuinely be several
   // parks at once — nested and overlapping parks are common, and a "two-fer" or
@@ -352,6 +353,45 @@ model Qso {
   sigInfo        String?              @db.VarChar(32)
   /// Every special-activity reference for this contact, primary included.
   sigRefs        QsoSigRef[]
+
+  // OUR OWN activation. The other half of the pair above, and the reason this log
+  // could not produce a POTA activation at all.
+  //
+  // THE FAULT. `sig`/`sigInfo` record the park the OTHER station is in, which is what
+  // a hunter needs. When the operator is the ACTIVATOR at US-4567 working forty
+  // hunters, nothing in the schema recorded that they were at US-4567 — so the ADIF
+  // export carried no MY_SIG/MY_SIG_INFO, POTA rejects such a file as an activation,
+  // and the activation count on /pota was pota.app's number about work this
+  // application could not produce. Forty contacts, correctly logged, and no activation.
+  //
+  /// ADIF MY_SIG — the programme WE were activating, e.g. "POTA".
+  mySig          String?              @db.VarChar(32)
+  /// ADIF MY_SIG_INFO — the reference WE were activating, e.g. "US-4567".
+  ///
+  /// ONE reference, not a set, and that is deliberate rather than an oversight.
+  /// `sigRefs` is a set because a hunter's single contact is genuinely several parks
+  /// at once and ADIF must still export one. An n-fer ACTIVATION is the same contact
+  /// counted for several references, but POTA's activation upload takes one log per
+  /// reference — so an n-fer is n files, not one file with n values, and a set here
+  /// would model something the destination cannot accept. If that changes, it becomes
+  /// a `QsoMySigRef` table shaped like `QsoSigRef`, not a comma list in this column.
+  mySigInfo      String?              @db.VarChar(32)
+  /// ADIF MY_GRIDSQUARE — where the OPERATOR ACTUALLY WAS for this contact.
+  ///
+  /// Denormalised onto the contact on purpose, and it is the one field here that
+  /// could not be derived. `Station.grid` is the HOME grid; a portable activation is
+  /// by definition somewhere else, and exporting the home grid for a contact made in
+  /// a park is not a rounding error — it is a false statement about where the signal
+  /// came from, which is exactly what MY_GRIDSQUARE exists to answer.
+  ///
+  /// NULL means "the station's grid was right", and the ADIF writer falls back to it.
+  /// So 29,800 existing contacts export precisely as they did before this column.
+  ///
+  /// STATION_CALLSIGN and OPERATOR are deliberately NOT copied here alongside it.
+  /// Those are identity, not location: the station row already carries the callsign
+  /// and the operator row the person, neither changes because a chair moved, and
+  /// `toAdifInput` already derives both. Only the grid genuinely differs per contact.
+  myGridSquare   String?              @db.VarChar(12)
   qslSent        QslStatus            @default(NONE)
   qslRcvd        QslStatus            @default(NONE)
   qslSentAt      DateTime?
@@ -482,6 +522,12 @@ model Qso {
   @@index([iota]) // IOTA
   @@index([continent]) // WAC
   @@index([sigInfo]) // "have I worked this park?"
+  // "How many contacts have I made at THIS park TODAY?" — the ten-contact activation
+  // threshold, asked after every single QSO of an activation. Composite and in this
+  // order because the query is an equality on the reference and a range on the time;
+  // MySQL can use the leading column for the match and the second for the range, so
+  // it is an index scan of one day rather than of every contact ever made at the park.
+  @@index([mySigInfo, startTime])
   @@index([radio]) // "everything worked on the Icom"
 }
 

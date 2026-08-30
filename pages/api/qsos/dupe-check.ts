@@ -10,6 +10,18 @@ const querySchema = z.object({
   band: z.string().trim().toUpperCase().min(1),
   mode: z.string().trim().toUpperCase().min(1),
   excludeId: z.string().optional(),
+  /**
+   * Narrow the search to contacts at or after this instant.
+   *
+   * Sent by the entry form while an activation is in progress, set to the UTC day
+   * boundary — because during an activation the only dupe that means anything is a
+   * repeat inside THIS activation, and the all-time answer fires on a large share of
+   * callers and is therefore read by nobody.
+   *
+   * OPTIONAL, and an unparseable value is dropped rather than rejected: the whole check
+   * is advisory, and answering 400 would turn a hint into an outage on the logging page.
+   */
+  since: z.coerce.date().optional().catch(undefined),
 });
 
 // Called from the entry form as the operator leaves the callsign field. A "dupe"
@@ -22,6 +34,9 @@ async function get(req: NextApiRequest, res: NextApiResponse) {
   sendJson(res, 200, {
     duplicate: previous !== null,
     previous,
+    // What was actually searched, so the form can word the badge honestly instead of
+    // claiming an all-time answer it did not ask for.
+    scope: q.since ? "session" : "all-time",
   });
 }
 

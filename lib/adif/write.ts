@@ -60,6 +60,17 @@ export interface AdifQsoInput {
    * the primary goes in the standard field and the full set in an APP_ field.
    */
   sigRefs?: string[];
+  /** ADIF MY_SIG — the programme WE were activating, e.g. "POTA". */
+  mySig?: string | null;
+  /** ADIF MY_SIG_INFO — the reference WE were activating, e.g. "US-4567". */
+  mySigInfo?: string | null;
+  /**
+   * ADIF MY_GRIDSQUARE — where the operator ACTUALLY WAS.
+   *
+   * Null falls back to `station.grid`, which is the home grid and is right for every
+   * contact made from home. A portable activation is by definition not one of those.
+   */
+  myGridSquare?: string | null;
   qslSent: QslStatus;
   /** ADIF QSL_SENT_VIA — BUREAU | DIRECT | ELECTRONIC | MANAGER. */
   qslSentVia?: string | null;
@@ -151,6 +162,19 @@ export function adifRecord(q: AdifQsoInput): string {
     (q.sigRefs?.length ?? 0) > 1
       ? field("APP_DIGISHACK_SIGREFS", q.sigRefs!.join(","))
       : "",
+    // OUR OWN activation. The mirror image of SIG/SIG_INFO above, and the pair that
+    // makes this file an ACTIVATION log rather than a hunter log.
+    //
+    // POTA's activation upload requires both, on every record, alongside
+    // STATION_CALLSIGN and OPERATOR (written below). Without them the file is a list of
+    // contacts POTA credits to the other side of the exchange — which is what every
+    // export from this program was until these existed, so an activation logged here
+    // perfectly well could not be submitted as one.
+    //
+    // Both fields are emitted only when set, so the 29,800 contacts that predate the
+    // columns export byte-for-byte as before.
+    field("MY_SIG", q.mySig ?? null),
+    field("MY_SIG_INFO", q.mySigInfo ?? null),
     field("QSL_SENT", qslSentToAdif(q.qslSent)),
     field("QSL_RCVD", qslRcvdToAdif(q.qslRcvd)),
     q.qslSentAt ? field("QSLSDATE", toAdifDate(q.qslSentAt)) : "",
@@ -171,7 +195,16 @@ export function adifRecord(q: AdifQsoInput): string {
     // in this schema — see the note on Qso.radio.
     field("MY_RIG", q.radio ?? null),
     field("STATION_CALLSIGN", q.station.callsign),
-    field("MY_GRIDSQUARE", q.station.grid),
+    // The contact's own grid wins over the station's, and this precedence is the point
+    // of storing it. `station.grid` is the HOME grid — correct for the overwhelming
+    // majority of contacts and wrong for exactly the ones that matter here, because a
+    // portable activation is somewhere else by definition. Exporting the home grid for
+    // a contact made in a park is not an approximation, it is a false statement about
+    // where the signal came from, and POTA and LoTW both read this field.
+    //
+    // Null falls THROUGH to the station rather than emitting nothing: every existing
+    // contact keeps the grid it has always exported.
+    field("MY_GRIDSQUARE", q.myGridSquare ?? q.station.grid),
     // ADIF OPERATOR is the person at the key, which is exactly what
     // Qso.operator records.
     q.operator ? field("OPERATOR", q.operator.callsign) : "",

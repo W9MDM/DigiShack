@@ -150,6 +150,16 @@ export async function importAdifDocument(
           continent: q.continent,
           sig: q.sig,
           sigInfo: q.sigInfo,
+          // OUR OWN activation, from MY_SIG / MY_SIG_INFO / MY_GRIDSQUARE.
+          //
+          // Stored on import as well as on export, or the round trip is a half-truth: a
+          // log exported from here and restored from that file — the backup path, and
+          // the one that gets exercised on the worst day — would come back with every
+          // activation reduced to an ordinary contact, and no way to tell which
+          // contacts had been an activation.
+          mySig: q.mySig,
+          mySigInfo: q.mySigInfo,
+          myGridSquare: q.myGridSquare,
           radio: q.radio,
           qslSent: q.qslSent,
           qslRcvd: q.qslRcvd,

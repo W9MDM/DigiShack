@@ -42,6 +42,9 @@ export interface QsoRowForAdif {
   sig: string | null;
   sigInfo: string | null;
   sigRefs: { sigInfo: string; primary: boolean }[];
+  mySig: string | null;
+  mySigInfo: string | null;
+  myGridSquare: string | null;
   qslSent: string;
   qslRcvd: string;
   qslSentAt: Date | null;
@@ -85,6 +88,13 @@ export function toAdifInput(q: QsoRowForAdif): AdifQsoInput {
     sigRefs: [...q.sigRefs]
       .sort((a, b) => Number(b.primary) - Number(a.primary))
       .map((r) => r.sigInfo),
+    // OUR OWN activation — MY_SIG / MY_SIG_INFO / MY_GRIDSQUARE. Passed straight
+    // through; the writer decides the MY_GRIDSQUARE fallback to the station's grid,
+    // because that is a rendering decision about one output format rather than a fact
+    // about the contact, and the CSV writer wants the raw value.
+    mySig: q.mySig,
+    mySigInfo: q.mySigInfo,
+    myGridSquare: q.myGridSquare,
     qslSent: q.qslSent as AdifQsoInput["qslSent"],
     qslRcvd: q.qslRcvd as AdifQsoInput["qslRcvd"],
     qslSentAt: q.qslSentAt,

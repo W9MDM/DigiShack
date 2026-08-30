@@ -10,10 +10,21 @@ import {
   Input,
   PageHeader,
 } from "@/components/ui/primitives";
+import {
+  type ActivationSession,
+  readActivation,
+} from "@/components/qso/QsoForm";
 import { withPageAuth } from "@/lib/auth/guard";
 import { ApiError, apiPost, useApi } from "@/lib/client/api";
+import {
+  ACTIVATION_MINIMUM,
+  activationCountQuery,
+  activationProgress,
+  utcDayKey,
+} from "@/lib/pota/activation";
 import type { PotaReport } from "@/pages/api/pota";
 import { formatAgo, formatUtc, formatUtcDate } from "@/lib/time";
+import type { ListResponse, Qso } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 import { useVisibleInterval } from "@/lib/client/use-visible-interval";
@@ -58,6 +69,91 @@ function Stat({
       </div>
       {hint && <div className="text-[10px] text-fg-subtle mt-0.5">{hint}</div>}
     </div>
+  );
+}
+
+/**
+ * The activation happening RIGHT NOW, counted from this log.
+ *
+ * THE FAULT THIS ANSWERS. Everything else on this page marked "from pota.app" is
+ * somebody else's record of work already finished — including the activation count,
+ * which until now described activations this application could not produce, because
+ * nothing here stored MY_SIG_INFO. The number an activator actually needs is the one for
+ * the activation in progress, and POTA cannot supply it: their totals arrive after the
+ * log is uploaded, which is after the operator has packed up and driven home.
+ *
+ * Counted from the LOG, and labelled as such. It is not a correction of POTA's totals
+ * above and must never be added to them — it is the same distinction this page is built
+ * around, applied to the one row where the local log is the only possible source.
+ *
+ * The reference comes from the activation session in localStorage, which /qsos/new
+ * writes. So this card appears on the phone that is doing the logging and not on a
+ * different device — true, and the honest limit of a session that lives in a browser
+ * rather than in the database. Said out loud rather than papered over.
+ */
+function ActivationInProgress() {
+  const [session, setSession] = useState<ActivationSession | null>(null);
+  /** Re-read storage and re-ask for the count. Bumped by the poll below. */
+  const [tick, setTick] = useState(0);
+
+  // localStorage is not readable during the server render, so this cannot be a lazy
+  // initialiser — same reason the logging page gives.
+  useEffect(() => {
+    setSession(readActivation());
+  }, [tick]);
+
+  // The contacts are being logged in ANOTHER TAB (or another window), so nothing in this
+  // page's own state changes when the count does. Polling is the only way this page can
+  // see it, and it rides the same interval and the same visibility gate as the spot list
+  // rather than adding a second timer to a phone in a park.
+  useVisibleInterval(() => setTick((t) => t + 1), REFRESH_MS);
+
+  const ref = session?.ref ?? "";
+  const path = useMemo(
+    () => (ref ? `/api/qsos?${activationCountQuery(ref, new Date())}` : null),
+    // `tick` re-pins the UTC day bounds as well as refreshing the count, so an activation
+    // running across UTC midnight lands on the new day within one poll.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [ref, tick],
+  );
+  const { data } = useApi<ListResponse<Qso>>(path);
+  const progress = activationProgress(data?.total ?? 0);
+
+  if (!session) return null;
+
+  return (
+    <Card
+      title="Activation in progress"
+      className="mb-4"
+      actions={<span className="text-[10px] text-fg-subtle">from your log</span>}
+    >
+      <div className="flex flex-wrap items-center gap-3">
+        <Badge tone={progress.qualifies ? "ok" : "accent"}>
+          {progress.count}/{ACTIVATION_MINIMUM}
+        </Badge>
+        <span className="font-display text-lg tracking-wide tnum">{session.ref}</span>
+        <span className="text-sm text-fg-muted">
+          {progress.qualifies
+            ? "This activation counts."
+            : `${progress.remaining} more contact${progress.remaining === 1 ? "" : "s"} needed.`}
+        </span>
+        <span className="text-xs text-fg-subtle tnum">
+          {session.sig} · UTC day {utcDayKey(new Date())}
+          {session.startedAt ? ` · started ${formatAgo(session.startedAt)} ago` : ""}
+        </span>
+        <Link href="/qsos/new" className="ml-auto">
+          <Button variant="primary">Log a contact</Button>
+        </Link>
+      </div>
+      {/* The grid is the field POTA and LoTW read to place the activation, and it is the
+          one an operator forgets, because the station's home grid is right every other
+          day of the year. Named here while it can still be fixed. */}
+      <p className="mt-3 text-xs text-fg-subtle">
+        {session.grid
+          ? `Exporting MY_GRIDSQUARE ${session.grid}.`
+          : "No portable grid set — the export will use the station's home grid. Set “My grid” on the QSO form if you are not at home."}
+      </p>
+    </Card>
   );
 }
 
@@ -356,6 +452,10 @@ export default function PotaPage() {
           only has a profile once you have logged something with them.
         </div>
       )}
+
+      {/* First on the page, above POTA's own totals, because it is the only thing here
+          the operator can still act on. */}
+      <ActivationInProgress />
 
       {p && (
         <div className="grid gap-4 lg:grid-cols-2 mb-4">

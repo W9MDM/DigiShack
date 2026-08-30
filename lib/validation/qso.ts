@@ -110,6 +110,19 @@ const baseQso = z.object({
    * given the list wins and the primary is its first entry.
    */
   sigRefs: z.array(z.string().trim().toUpperCase().max(32)).max(16).optional(),
+  // ADIF MY_SIG / MY_SIG_INFO — OUR OWN activation, the other side of the pair above.
+  // Same permissiveness and for the same reason: the operator may be activating a SOTA
+  // summit or a WWFF reserve, and a regex tuned to POTA's US-1234 would refuse them.
+  mySig: z.string().trim().toUpperCase().max(32).nullish(),
+  mySigInfo: z.string().trim().toUpperCase().max(32).nullish(),
+  // ADIF MY_GRIDSQUARE — where the operator ACTUALLY WAS.
+  //
+  // Validated with the same GRID rule as the other station's locator rather than a
+  // looser one. A malformed MY_GRIDSQUARE is not a cosmetic problem: POTA and LoTW both
+  // read it, and a grid that is wrong by one character places the activation in the
+  // wrong square as confidently as a right one. Null is allowed and means "the station's
+  // grid was correct" — the ADIF writer falls back to it.
+  myGridSquare: GRID.nullish(),
   qslSent: QSL_STATUS.default("NONE"),
   qslRcvd: QSL_STATUS.default("NONE"),
   qslSentAt: z.coerce.date().nullish(),
@@ -210,6 +223,16 @@ export const qsoListQuerySchema = z.object({
   mode: z.string().trim().toUpperCase().optional(),
   stationId: z.string().optional(),
   operatorId: z.string().optional(),
+  /**
+   * OUR OWN activation reference — contacts made while activating this park.
+   *
+   * Deliberately NOT folded into a single "reference" filter alongside `sigInfo`. They
+   * are one character apart and mean opposite things: `sigInfo` is the park the other
+   * station was in, `mySigInfo` the park we were in. A shared filter would answer "ten
+   * contacts at US-4567" for a day spent chasing US-4567 from the sofa, and that answer
+   * is what the activation counter is built on.
+   */
+  mySigInfo: z.string().trim().toUpperCase().max(32).optional(),
   /** Free-text across callsign, grid and notes. */
   q: z.string().trim().max(64).optional(),
   from: z.coerce.date().optional(),

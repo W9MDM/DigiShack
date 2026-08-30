@@ -151,6 +151,12 @@ export interface ParsedQso {
   /** ADIF MY_RIG — which radio the contact was made on. */
   radio: string | null;
   sigRefs: string[];
+  /** ADIF MY_SIG — the programme the OTHER operator's file says WE were activating. */
+  mySig: string | null;
+  /** ADIF MY_SIG_INFO — the reference WE were activating. */
+  mySigInfo: string | null;
+  /** ADIF MY_GRIDSQUARE — where the operator was for this contact. */
+  myGridSquare: string | null;
   qslSent: QslStatus;
   /** ADIF QSL_SENT_VIA — BUREAU | DIRECT | ELECTRONIC | MANAGER. */
   qslSentVia?: string | null;
@@ -283,6 +289,7 @@ export function recordsToQsos(records: AdifFields[]): ParseResult {
       dxccRaw && Number.isInteger(Number(dxccRaw)) ? Number(dxccRaw) : null;
 
     const grid = (r.GRIDSQUARE ?? "").trim().toUpperCase() || null;
+    const myGrid = (r.MY_GRIDSQUARE ?? "").trim().toUpperCase() || null;
     const txPowerRaw = (r.TX_PWR ?? "").trim();
     const txPowerW = txPowerRaw === "" ? null : Number(txPowerRaw);
 
@@ -327,6 +334,16 @@ export function recordsToQsos(records: AdifFields[]): ParseResult {
       sigRefs: [(r.SIG_INFO ?? ""), ...(r.APP_DIGISHACK_SIGREFS ?? "").split(",")]
         .map((s) => s.trim().toUpperCase())
         .filter((s, i, a) => s.length > 0 && a.indexOf(s) === i),
+      // OUR OWN activation, read back. Without these three an activation exported from
+      // here and imported anywhere — including back into this log, after a restore —
+      // returns as an ordinary contact, and the file that proved the activation would
+      // no longer prove it.
+      mySig: (r.MY_SIG ?? "").trim().toUpperCase() || null,
+      mySigInfo: (r.MY_SIG_INFO ?? "").trim().toUpperCase() || null,
+      // Validated exactly as GRIDSQUARE is, and dropped rather than kept when it fails.
+      // A malformed locator places the activation in no square at all, and storing it
+      // would export it onward as fact.
+      myGridSquare: myGrid && /^[A-R]{2}(\d{2}([A-X]{2}(\d{2})?)?)?$/.test(myGrid) ? myGrid : null,
       qslSent: adifToQslSent(r.QSL_SENT ?? ""),
       qslSentVia: adifToQslRoute(r.QSL_SENT_VIA),
       qslRcvdVia: adifToQslRoute(r.QSL_RCVD_VIA),

@@ -49,6 +49,24 @@ export interface Qso {
   sigInfo: string | null;
   /** Every reference on this contact — a nested-park contact has several. */
   sigRefs?: { sigInfo: string; primary: boolean }[];
+  /**
+   * ADIF MY_SIG — the programme WE were activating, e.g. "POTA".
+   *
+   * The other half of the pair. `sig`/`sigInfo` are the park THEY were in, which is what
+   * a hunter records; these are the park WE were in, which is what makes the export an
+   * activation POTA will accept. On a park-to-park contact all four are set.
+   */
+  mySig: string | null;
+  /** ADIF MY_SIG_INFO — the reference WE were activating, e.g. "US-4567". */
+  mySigInfo: string | null;
+  /**
+   * ADIF MY_GRIDSQUARE — where the operator ACTUALLY WAS for this contact.
+   *
+   * Null means the station's own grid was correct, and the ADIF export falls back to it.
+   * Set when it was not — a portable activation is not the home grid, which is the whole
+   * reason this is on the contact rather than derived from the station.
+   */
+  myGridSquare: string | null;
   qslSent: QslStatus;
   qslRcvd: QslStatus;
   qslSentAt: string | null;
@@ -209,4 +227,15 @@ export interface DupeCheckResponse {
     rstSent: string | null;
     rstRcvd: string | null;
   } | null;
+  /**
+   * What was actually searched.
+   *
+   * `session` when the form narrowed the search to the current activation's UTC day,
+   * `all-time` otherwise. Present so the badge can say which question it answered: "you
+   * worked them at this activation" and "you worked them once in 2024" call for
+   * different reactions, and one wording for both makes the badge worth ignoring.
+   *
+   * Optional so a response from an older deployment still typechecks.
+   */
+  scope?: "session" | "all-time";
 }

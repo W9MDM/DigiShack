@@ -63,6 +63,7 @@ import {
   toFlexMode,
 } from "@/lib/radio/modes";
 import { spectrumMessage } from "@/lib/radio/spectrum";
+import { broadcastAction } from "@/lib/radio/broadcast-policy";
 import { panadapterMessage } from "@/lib/radio/panadapter";
 import { AUDIO_STALL_MS } from "@/lib/flex/panadapter";
 import {
@@ -610,9 +611,31 @@ function broadcast(event: unknown): void {
   // at the one door status messages go through, rather than at each of the dozen call
   // sites that broadcast a status — one forgotten site would show a link stuck at
   // whatever it was when that code path last ran.
-  if ((event as { kind?: string })?.kind === "status") refreshLinkStatus();
+  const kind = (event as { kind?: string })?.kind;
+  if (kind === "status") refreshLinkStatus();
   const payload = JSON.stringify(event);
+
   for (const ws of clients) {
+    // See lib/radio/broadcast-policy.ts for what each outcome means and the measurements
+    // behind the thresholds. The decision lives there so it can be asserted without
+    // importing this module, which starts a radio.
+    const action = broadcastAction({
+      kind,
+      bufferedAmount: ws.bufferedAmount,
+      isOpen: ws.readyState === ws.OPEN,
+    });
+    if (action === "skip") continue;
+    if (action === "terminate") {
+      // Terminated, not merely forgotten: dropping the reference would leave the queue
+      // attached to a live socket and reclaim nothing, which is the fault itself.
+      clients.delete(ws);
+      try {
+        ws.terminate();
+      } catch {
+        /* already gone */
+      }
+      continue;
+    }
     try {
       ws.send(payload);
     } catch {

@@ -150,6 +150,17 @@ async function post(req: NextApiRequest, res: NextApiResponse) {
         // The primary. `sigRefs` below carries the whole set — a contact can be
         // several parks at once.
         sigInfo: input.sigRefs?.[0] ?? input.sigInfo ?? null,
+        // OUR OWN activation, and the reason a POTA activation could not be logged here
+        // at all. Stored on every contact rather than on a session row: an ADIF record
+        // has to carry MY_SIG/MY_SIG_INFO itself, POTA reads them per record, and a
+        // contact whose activation lived somewhere else would export as an ordinary QSO.
+        mySig: input.mySig ?? null,
+        mySigInfo: input.mySigInfo ?? null,
+        // Null means "the station's grid was right" — the ADIF writer falls back to it.
+        // Not defaulted from the station here, deliberately: writing the home grid onto
+        // a contact made in a park would be a false record rather than a helpful one,
+        // and once written it is indistinguishable from a typed value.
+        myGridSquare: input.myGridSquare ?? null,
         qslSent: input.qslSent,
         qslRcvd: input.qslRcvd,
         qslSentAt: input.qslSentAt ?? null,

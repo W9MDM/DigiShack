@@ -153,6 +153,14 @@ async function patch(req: NextApiRequest, res: NextApiResponse) {
         : input.sigInfo !== undefined
           ? { sigInfo: input.sigInfo }
           : {}),
+      // OUR OWN activation. Editable, and it has to be: an activation reference is set
+      // once for a session, so a mistyped one is on every contact of that session and
+      // the correction is made in this form. Without these three lines an edit to any
+      // other field would silently write the activation away, which is the worst shape
+      // this could take — the operator would fix a callsign and lose the activation.
+      ...(input.mySig !== undefined && { mySig: input.mySig }),
+      ...(input.mySigInfo !== undefined && { mySigInfo: input.mySigInfo }),
+      ...(input.myGridSquare !== undefined && { myGridSquare: input.myGridSquare }),
       ...(input.qslSent !== undefined && { qslSent: input.qslSent }),
       ...(input.qslRcvd !== undefined && { qslRcvd: input.qslRcvd }),
       ...(input.qslSentAt !== undefined && { qslSentAt: input.qslSentAt }),
