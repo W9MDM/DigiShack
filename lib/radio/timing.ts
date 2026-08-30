@@ -58,7 +58,20 @@ export const TRANSMISSION_MS: Record<TxMode, number> = {
 };
 
 /** A late transmission may never eat more of the window's margin than it leaves behind. */
-const LATE_TX_SLACK_FRACTION = 0.5;
+// MEASURED IN SERVICE 2026-08-30, and 0.5 was wrong — wrong enough to cost contacts.
+//
+// At 0.5 the FT8 limit came out at 930 ms, and the live station's first calls land later
+// than that as a matter of course: 72 refusals in one morning, lateness p50 1,359 ms,
+// p90 1,673 ms, while the sends that did go out averaged ~400 ms. Every refusal wastes a
+// whole cycle, and the operator watched the station pick a CQ and sit through three of
+// them. The previous hardcoded limit of 1,500 ms had operated for months without a
+// decode complaint, which is field evidence 0.5 threw away.
+//
+// 0.8 puts FT8 at 1,488 ms - the proven number - while the physical bound stays intact:
+// a send 1,488 ms late still ends 372 ms before the window closes. FT4 and FT2 are
+// unchanged either way, because their DECODABLE_LATE_MS entries (800 and 0, both
+// measured against the real decoder) bind before the fraction does.
+const LATE_TX_SLACK_FRACTION = 0.8;
 
 /**
  * The measured DT cliff per mode, ms — the last lateness that still decoded, less a step.

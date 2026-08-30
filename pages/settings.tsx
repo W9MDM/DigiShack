@@ -125,6 +125,19 @@ export default function SettingsPage() {
         })
       : false);
 
+  /**
+   * A save the server refused until the operator agrees to the consequence.
+   *
+   * Holds the exact updates that were refused, so accepting re-sends THOSE rather than
+   * whatever the form happens to contain by then. The page stays interactive while this is
+   * open, and a field edited in the meantime would otherwise be written under an
+   * acknowledgement given for something else.
+   */
+  const [confirming, setConfirming] = useState<{
+    updates: { key: string; value: string | null }[];
+    items: { key: string; message: string }[];
+  } | null>(null);
+
   async function save() {
     if (!data) return;
     setSaving(true);
@@ -155,11 +168,43 @@ export default function SettingsPage() {
       return;
     }
 
+    await send(updates);
+  }
+
+  /**
+   * The PATCH itself, shared by the ordinary save and the confirmed one.
+   *
+   * `acknowledge` names the keys whose consequence has been accepted. It is sent per key
+   * rather than as a blanket flag so that agreeing to one dangerous setting cannot carry
+   * consent to another that happened to be in the same save.
+   */
+  async function send(
+    updates: { key: string; value: string | null }[],
+    acknowledge?: string[],
+  ): Promise<void> {
+    setSaving(true);
     try {
-      const res = await apiPatch<PatchResponse>("/api/settings", { updates });
+      const res = await apiPatch<PatchResponse>("/api/settings", {
+        updates,
+        ...(acknowledge ? { acknowledge } : {}),
+      });
+      setConfirming(null);
       setReport(res);
       reload();
     } catch (err) {
+      // 409 with per-key details is the server asking rather than refusing. Nothing was
+      // written — see the route — so there is no half-applied save to reconcile.
+      if (err instanceof ApiError && err.status === 409 && err.details) {
+        setConfirming({
+          updates,
+          items: Object.entries(err.details).map(([key, msgs]) => ({
+            key,
+            message: msgs.join(" "),
+          })),
+        });
+        setSaving(false);
+        return;
+      }
       setSaveError(
         err instanceof ApiError ? err : new ApiError(0, "Could not save settings"),
       );
@@ -379,6 +424,69 @@ export default function SettingsPage() {
           </div>
         </>
       )}
+
+      {/*
+        THE CONFIRMATION, for the handful of settings whose off position removes a
+        protection rather than changing a preference.
+
+        The server decides this, not the page — see the PATCH route. Nothing was written
+        when it answered, so dismissing this leaves the stored settings exactly as they
+        were and there is no half-applied save to explain.
+
+        It re-sends the SAME updates the server refused, held in `confirming`, rather than
+        rebuilding them from the form. The page stays interactive underneath, and a field
+        edited while this is open would otherwise be written under an acknowledgement the
+        operator gave for something else.
+      */}
+      {confirming && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="confirm-title"
+          onClick={() => setConfirming(null)}
+        >
+          <div
+            className="bg-surface border border-line rounded-md shadow-panel max-w-lg w-full p-5"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 id="confirm-title" className="font-display text-base text-fg mb-3">
+              {confirming.items.length === 1
+                ? "This turns off a protection"
+                : "These turn off protections"}
+            </h2>
+            <div className="flex flex-col gap-3 mb-5">
+              {confirming.items.map((c) => (
+                <p key={c.key} className="text-sm text-muted leading-relaxed">
+                  {c.message}
+                </p>
+              ))}
+            </div>
+            <div className="flex items-center justify-end gap-2">
+              <Button variant="secondary" onClick={() => setConfirming(null)} disabled={saving}>
+                Cancel
+              </Button>
+              {/*
+                The label says what it does, not "OK". An operator reading only the buttons
+                should still learn the consequence.
+              */}
+              <Button
+                variant="danger"
+                disabled={saving}
+                onClick={() =>
+                  void send(
+                    confirming.updates,
+                    confirming.items.map((c) => c.key),
+                  )
+                }
+              >
+                {saving ? "Saving…" : "Turn it off anyway"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
     </>
   );
 }

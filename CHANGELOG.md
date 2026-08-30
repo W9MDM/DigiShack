@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.156.1 - public release
+## 1.158.2 - public release
 
 Development happens in a private repository; this is where the public history starts.
 Earlier entries are not reproduced - they quote real operators by callsign, include
@@ -22,6 +22,10 @@ Notes for anyone running this:
 
 ## Release history
 
+- **1.158.2** — A contest the sequencer could not hear, and decodes stuck behind the waterfall
+- **1.158.1** — Two of my numbers were wasting your cycles
+- **1.158.0** — Worked three times in three minutes, and the switch that allowed it
+- **1.157.0** — Every response carried no security headers at all
 - **1.156.1** — A leak the scrub could see but not fix
 - **1.156.0** — Club Log, one contact at a time, and a month-long wrong answer
 - **1.155.1** — A Club Log API key field, and what the 403 actually is

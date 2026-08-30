@@ -8,6 +8,7 @@
 import {
   DEFAULT_GUARDS,
   OperatingGuards,
+  dupeBoundaryMs,
   QsoSequencer,
   formatReport,
   parseMessage,
@@ -704,10 +705,17 @@ async function main(): Promise<void> {
   {
     eq(resolveMaxTxOffset(null), MAX_TX_OFFSET_HZ, "a radio that says nothing keeps 2800");
     eq(resolveMaxTxOffset(NaN), MAX_TX_OFFSET_HZ, "so does a garbled reading");
-    // MEASURED on a FLEX-6400: `sub tx all` delivers lo=100 hi=3100 at subscribe, so this
-    // is the number a Flex install actually resolves to.
-    eq(resolveMaxTxOffset(3100), 3000, "a Flex reporting hi=3100 answers up to 3000");
-    ok(resolveMaxTxOffset(3100) > 2903, "which is above the KF6FIR decode that started this");
+    // MEASURED on a FLEX-6400: `sub tx all` delivers lo=100 hi=3100 at subscribe. The
+    // 1.143.0 answer here was 3,000 — and IT NEVER WORKED. `buildWaveform` refuses any
+    // offset past 2,800 unconditionally, so the 2,800–3,000 strip this ceiling promised
+    // was a set of stations the controller committed to and generation then refused every
+    // window: observed live 2026-08-30 as "calling AA1SU" at 2,995 Hz with three
+    // consecutive refusals and nothing ever on the air. The decision gate is now capped at
+    // the generation gate, so a station up there is refused at DECISION time and the hunt
+    // moves to the next candidate instead of hanging. Actually answering that strip means
+    // teaching waveform generation the radio's real filter — filed, not smuggled in here.
+    eq(resolveMaxTxOffset(3100), 2800, "a Flex reporting hi=3100 answers up to 2800 — the generation gate binds");
+    ok(resolveMaxTxOffset(3100) <= 2800, "never above what buildWaveform will accept — the KF6FIR raise never worked");
     // 100 Hz of guard, because an offset names where a transmission STARTS and FT8 puts
     // eight tones about 90 Hz above it. Answering at the edge puts most of them outside.
     eq(resolveMaxTxOffset(2900), MAX_TX_OFFSET_HZ, "the guard is 100 Hz below the edge");
@@ -1118,6 +1126,137 @@ async function main(): Promise<void> {
       q.onDecode("W9ABC N0CALL -05", 22_000);
       q.onDecode("W9ABC KM4SXE +07", 22_000);
       eq(q.tick(45_000).send, "KM4SXE W9ABC R-07", "a different message in the same window still lands");
+    }
+  }
+
+  console.log("");
+  console.log("duplicates: once per UTC day per band and mode");
+  {
+    // REPORTED FROM A LIVE STATION: the same callsign logged three times inside three
+    // minutes, one band, one mode, three different signal reports each way - three real
+    // exchanges rather than one record written three times.
+    //
+    // A FIXED `now`, never the wall clock. Two faults in this project have been a hidden
+    // clock read in a check: `firstTxWindow`, and `check:schedule` failing for four hours
+    // a day. A rule about UTC days is exactly the shape that hides one.
+    const NOW = Date.UTC(2026, 7, 30, 18, 0, 0); // 2026-08-30 18:00 UTC
+    const H = 3_600_000;
+
+    // 24 h back is earlier than this morning's midnight, so the window is the boundary.
+    eq(dupeBoundaryMs(NOW, 24 * H), NOW - 24 * H, "a 24 h window reaches back 24 h");
+    ok(dupeBoundaryMs(NOW, 24 * H)! < Date.UTC(2026, 7, 30), "which is before today began");
+
+    // THE HALF THAT LOOKS REDUNDANT. Shortened to two hours, the UTC day becomes the
+    // earlier boundary and still covers everything worked today.
+    eq(
+      dupeBoundaryMs(NOW, 2 * H),
+      Date.UTC(2026, 7, 30),
+      "a short window still reaches back to midnight UTC",
+    );
+
+    // The explicit opt-out, and it has to be typed in.
+    eq(dupeBoundaryMs(NOW, 0), null, "a zero window turns the guard off");
+    eq(dupeBoundaryMs(NOW, -1), null, "and so does a negative one");
+    ok(DEFAULT_GUARDS.dupeWindowMs === 24 * H, "the DEFAULT is 24 h, so the guard ships on");
+
+    // `wasWorked` as the database answers it: is there a contact with this call, on this
+    // band and mode, at or after the boundary.
+    const workedAt =
+      (whenMs: number, band = "20M", mode = "FT8") =>
+      async (_call: string, b: string, m: string, sinceMs: number) =>
+        b === band && m === mode && whenMs >= sinceMs;
+
+    const guards = new OperatingGuards({ ...DEFAULT_GUARDS });
+    const may = (whenMs: number, band = "20M", mode = "FT8") =>
+      guards.mayCall("KJ5MDT", "20M", "FT8", NOW, workedAt(whenMs, band, mode));
+
+    ok(!(await may(NOW - 2 * 60_000)).allowed, "THE FAULT: worked two minutes ago is refused");
+    ok(!(await may(NOW - 23 * H)).allowed, "worked 23 h ago is refused");
+    ok(!(await may(Date.UTC(2026, 7, 30, 9, 0))).allowed, "worked earlier today is refused");
+    ok(
+      !(await may(Date.UTC(2026, 7, 30, 0, 0))).allowed,
+      "worked at midnight UTC - the first instant of today - is refused",
+    );
+
+    // 25 h ago AND a different UTC day: both halves satisfied, so it is a fresh contact.
+    ok((await may(NOW - 25 * H)).allowed, "worked 25 h ago on the previous day is allowed");
+
+    // Per band and per mode, and mode means FT8/FT4/FT2.
+    ok((await may(NOW - 2 * 60_000, "40M")).allowed, "the same station on another band is allowed");
+    ok(
+      (await may(NOW - 2 * 60_000, "20M", "FT4")).allowed,
+      "the same station on the same band in another mode is allowed",
+    );
+
+    const refused = await may(NOW - 2 * 60_000);
+    ok(
+      /UTC day/.test(refused.reason ?? ""),
+      "the refusal names the rule rather than 'the dupe window'",
+      refused.reason,
+    );
+  }
+
+  console.log("");
+  console.log("contest exchange: R + grid (WW Digi DX)");
+  {
+    // VERBATIM FROM THE AIR, 2026-08-30, during the WW Digi DX Contest. We called K0E
+    // four times while K0E answered "K9XYZ K0E R EM18" twice; the sequencer did not know
+    // the shape and abandoned a contact whose reply was on the screen the whole time.
+    const p = parseMessage("K9XYZ K0E R EM18");
+    ok(p.kind === "directed", "R + grid parses as a directed message");
+    if (p.kind === "directed") {
+      eq(p.payload.type, "rgrid", "as the contest acknowledgement");
+      ok(p.payload.type === "rgrid" && p.payload.grid === "EM18", "carrying their grid");
+    }
+    // The traps around it: "R-05" is ONE token and stays an rreport; "R RR73" is
+    // nonsense, and RR73 matching the grid pattern is the documented smuggling trick.
+    const rr = parseMessage("K9XYZ K0E R-05");
+    ok(rr.kind === "directed" && rr.payload.type === "rreport", "R-05 is still an R-report");
+    const junk = parseMessage("K9XYZ K0E R RR73");
+    ok(!(junk.kind === "directed" && (junk.payload as { type: string }).type === "rgrid"),
+      "R RR73 is not read as a grid");
+
+    // The whole exchange, replayed against the machine.
+    const q = new QsoSequencer({
+      myCall: "K9XYZ", myGrid: "EN61", theirCall: "K0E",
+      theirGrid: null, theirSnr: -17, role: "caller", startedAt: 0,
+    });
+    eq(q.tick(15_000).send, "K0E K9XYZ EN61", "we call with our grid");
+    q.onDecode("K9XYZ K0E R EM18", 22_000);
+    const closing = q.tick(45_000);
+    eq(closing.send, "K0E K9XYZ RR73", "their R+grid is answered with RR73 — the contest close, not a bare 73");
+    ok(closing.log !== undefined && closing.log !== null, "and the contact is logged NOW, not held for a courtesy 73");
+    ok(closing.log?.theirGrid === "EM18", "with their grid");
+    ok(q.isDone, "the exchange is finished");
+    // Contest operators mostly QSY on receipt of RR73. Silence after this must not
+    // un-log anything or transmit again.
+    eq(q.tick(75_000).send, null, "and nothing more is transmitted into the silence");
+
+    // THE OTHER THREE SHAPES WSJT-X SENDS AFTER AN R. One type, one machine path,
+    // because the obligation is identical: they have our half, here is theirs, they are
+    // waiting for RR73.
+    const ack = (msg: string, label: string) => {
+      const seq = new QsoSequencer({
+        myCall: "K9XYZ", myGrid: "EN61", theirCall: msg.split(" ")[1]!,
+        theirGrid: null, theirSnr: -10, role: "caller", startedAt: 0,
+      });
+      seq.tick(15_000);
+      seq.onDecode(msg, 22_000);
+      const t = seq.tick(45_000);
+      ok(t.send !== null && / RR73$/.test(t.send ?? ""), label + " is answered with RR73", t.send ?? undefined);
+      ok(t.log !== undefined && t.log !== null, "and logged", t.state);
+    };
+    ack("K9XYZ K1ABC R 2B EMA", "Field Day \"R 2B EMA\"");
+    ack("K9XYZ N5XYZ R 579 WI", "RTTY Roundup \"R 579 WI\"");
+    ack("K9XYZ G4ABC R 570123 IO91NP", "EU VHF \"R 570123 IO91NP\"");
+
+    // And the shapes that must NOT be read as a contest: free text after an R.
+    for (const junkMsg of ["K9XYZ K1ABC R HELLO THERE", "K9XYZ K1ABC R PSE QSL VIA BURO"]) {
+      const parsed = parseMessage(junkMsg);
+      ok(
+        !(parsed.kind === "directed" && (parsed.payload as { type: string }).type === "rexchange"),
+        `"${junkMsg.slice(11)}" is not a contest exchange`,
+      );
     }
   }
 

@@ -28,11 +28,46 @@ export type ParsedMessage =
 
 export type DirectedPayload =
   | { type: "grid"; grid: string }
+  /**
+   * Contest-style acknowledgement: "K9XYZ K0E R EM18" - roger, and my grid.
+   *
+   * WSJT-X's grid-exchange operating modes (the WW Digi DX Contest, NA VHF) send this in
+   * place of an R-report. Observed live during the 2026 WW Digi running, 2026-08-30: K0E
+   * answered a call with it TWICE and the sequencer, not knowing the shape, repeated its
+   * own call four times over the top and abandoned the contact as "No reply" - a reply
+   * was on the screen the whole time.
+   */
+  | { type: "rgrid"; grid: string }
+  /**
+   * Any OTHER contest acknowledgement: "R 2B EMA" (Field Day, class and section),
+   * "R 579 WI" (RTTY Roundup, report and state), "R 570123 IO91NP" (EU VHF, serial and
+   * six-character locator).
+   *
+   * One type for the three because the sequencer's obligation is identical in all of
+   * them - the far station has our half, is handing over theirs, and is waiting for
+   * RR73 - and because parsing the exchange APART is contest-specific work this station
+   * cannot use until it can also SEND those exchanges, which is a feature, not this fix.
+   * The raw text is kept: the transcript stores it with the QSO either way.
+   */
+  | { type: "rexchange"; exchange: string }
   | { type: "report"; db: number }
   | { type: "rreport"; db: number }
   | { type: "rrr" }
   | { type: "rr73" }
   | { type: "73" };
+
+/**
+ * The exchanges WSJT-X's contest modes send after an R, one or two groups: Field Day
+ * class+section ("2B EMA"), RTTY Roundup report+state ("579 WI"), EU VHF serial+locator
+ * ("570123 IO91NP"). Three shapes a group can take: digit-led alphanumerics (serials,
+ * reports, "2B"), two-or-three plain letters (sections, states), or a six-character
+ * locator - which starts with LETTERS, so the letters-only cap of three cannot admit it
+ * and it needs naming. Words stay excluded: "HELLO" is five letters, "BURO" is four.
+ */
+const CONTEST_EXCHANGE_GROUP = /(?:[0-9][0-9A-Z]{1,5}|[A-Z]{2,3}|[A-R]{2}[0-9]{2}[A-X]{2})/;
+const CONTEST_EXCHANGE_RE = new RegExp(
+  `^${CONTEST_EXCHANGE_GROUP.source}(?: ${CONTEST_EXCHANGE_GROUP.source})?$`,
+);
 
 const GRID_RE = /^[A-R]{2}\d{2}$/;
 const REPORT_RE = /^([+-]\d{2})$/;
@@ -221,6 +256,17 @@ function parseOne(msg: string): ParsedMessage {
     else if (REPORT_RE.test(p)) payload = { type: "report", db: Number(p) };
     else if (R_REPORT_RE.exec(p)) {
       payload = { type: "rreport", db: Number(p.slice(1)) };
+    } else if (p === "R" && tok[3] && GRID_RE.test(tok[3]) && tok[3] !== "RR73") {
+      // A bare "R" followed by a grid is two TOKENS, unlike "R-05" which is one - so it
+      // cannot ride the R_REPORT_RE branch. The RR73-as-grid exclusion is the same trap
+      // documented above: RR73 deliberately matches the grid pattern.
+      payload = { type: "rgrid", grid: tok[3] };
+    } else if (p === "R" && tok[3] && CONTEST_EXCHANGE_RE.test(tok.slice(3).join(" "))) {
+      // Every other contest acknowledgement - Field Day "R 2B EMA", RTTY Roundup
+      // "R 579 WI", EU VHF "R 570123 IO91NP". The shape test is deliberately narrow:
+      // one or two short alphanumeric groups, so free text after an R does not get
+      // mistaken for a contest that does not exist.
+      payload = { type: "rexchange", exchange: tok.slice(3).join(" ") };
     } else if (GRID_RE.test(p)) payload = { type: "grid", grid: p };
 
     if (payload) return { kind: "directed", to, from, payload };
@@ -565,6 +611,23 @@ export class QsoSequencer {
       case "grid":
         this.theirGrid = p.payload.grid;
         break;
+      case "rexchange":
+      case "rgrid":
+        // THE CONTEST CLOSE. Their "R <grid>" says they have our grid and here is
+        // theirs - the contest counterpart of an R-report, after which they are waiting
+        // for one thing: our RR73. WSJT-X logs the contact at this point and so do we;
+        // holding out for a courtesy 73 that contest operators mostly do not send would
+        // abandon a contact the other side has already logged.
+        // The grid variant carries a grid worth keeping; the others keep their text in
+        // the transcript, which is stored with the QSO.
+        if (p.payload.type === "rgrid") this.theirGrid = p.payload.grid;
+        if (this.state === "calling") {
+          // Sign off with RR73 rather than 73: it is the message their sequence is
+          // parked waiting for, and a bare 73 leaves contest software expecting more.
+          this.closeWithRR73 = true;
+          this.completeAt(at, false);
+        }
+        break;
       case "report":
         this.reportRcvd = formatReport(p.payload.db);
         if (this.state === "calling") this.state = "rreport-sent";
@@ -674,6 +737,8 @@ export class QsoSequencer {
   }
   private completedAtMs = 0;
   private owes73 = false;
+  /** The sign-off is RR73 rather than 73 - a contest exchange. See the rgrid case. */
+  private closeWithRR73 = false;
 
   /**
    * What to transmit this window.
@@ -714,8 +779,13 @@ export class QsoSequencer {
       const tickResult: QsoTick = { send: null, state: this.state };
       if (!this.logged) {
         this.logged = true;
-        tickResult.send =
-          this.owes73 && this.lastSent !== this.msgs.tx5 ? this.msgs.tx5 : null;
+        tickResult.send = !this.owes73
+          ? null
+          : this.closeWithRR73
+            ? this.msgs.tx4
+            : this.lastSent !== this.msgs.tx5
+              ? this.msgs.tx5
+              : null;
         tickResult.log = {
           theirCall: this.theirCall,
           theirGrid: this.theirGrid,
@@ -936,6 +1006,37 @@ export const DEFAULT_GUARDS: GuardConfig = {
   maxQsosPerRun: 100,
 };
 
+/**
+ * The instant before which an earlier contact stops counting as a duplicate.
+ *
+ * TWO RULES, ONE QUERY. The rule operators state is "once per band and mode per UTC day,
+ * and never sooner than the dupe window". A previous contact therefore disqualifies a new
+ * one if it happened within the window OR today, and that is the same question as "did it
+ * happen at or after the EARLIER of the two boundaries". Taking the earlier of them asks it
+ * once; a second query would only be a second place to get the answer wrong.
+ *
+ * THE UTC-DAY HALF LOOKS REDUNDANT AND IS NOT. Twenty-four hours from any instant already
+ * lands on another UTC day, except at exactly midnight. What it buys is that SHORTENING the
+ * window cannot reintroduce same-day duplicates - an operator who drops it to two hours to
+ * chase an opening still works each station once per day per slot - and that the reason
+ * text reads the way the operator asked for it.
+ *
+ * A WINDOW OF ZERO TURNS THE GUARD OFF, deliberately and only when typed in. That is the
+ * opt-out for anyone who genuinely wants duplicates; every path that does not set it gets
+ * the default of 24 hours and the floor with it.
+ *
+ * Exported so it can be asserted directly. The fault that prompted it was reported from a
+ * live station as three contacts with one callsign inside three minutes, on one band and
+ * one mode, with three different signal reports each way - three real exchanges, not one
+ * record written three times.
+ */
+export function dupeBoundaryMs(now: number, windowMs: number): number | null {
+  if (windowMs <= 0) return null;
+  const d = new Date(now);
+  const midnightUtc = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+  return Math.min(now - windowMs, midnightUtc);
+}
+
 export interface GuardDecision {
   allowed: boolean;
   reason?: string;
@@ -1127,10 +1228,14 @@ export class OperatingGuards {
       };
     }
 
-    if (await wasWorked(call, band, mode, now - this.cfg.dupeWindowMs)) {
+    // Once per UTC day per band and mode, and never sooner than the window. See
+    // `dupeBoundaryMs` for why both rules resolve to a single boundary.
+    const dupeSince = dupeBoundaryMs(now, this.cfg.dupeWindowMs);
+    if (dupeSince !== null && (await wasWorked(call, band, mode, dupeSince))) {
+      const hours = Math.round(this.cfg.dupeWindowMs / 3_600_000);
       return {
         allowed: false,
-        reason: `${call} already worked on ${band} ${mode} within the dupe window`,
+        reason: `${call} already worked on ${band} ${mode} — once per UTC day, and no sooner than ${hours} h`,
       };
     }
 

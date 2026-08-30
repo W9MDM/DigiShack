@@ -198,11 +198,17 @@ async function main(): Promise<void> {
   eq(slack.FT4, 1_960, "FT4 leaves 1,960 ms (7,500 - 500 - 5,040)");
   eq(slack.FT2, 1_803, "FT2 leaves 1,803 ms (3,750 - 0 - 1,947)");
 
-  // THE TOLERANCE IS DERIVED FROM THOSE, not chosen. Half the slack, so a late
-  // transmission never consumes more of the window's margin than it leaves behind — and
-  // then capped by what the far end can actually decode, which is a different limit and
-  // binds first on FT4 and FT2.
-  eq(lateTxToleranceMs("FT8"), 930, "FT8 tolerance is half its slack — the timing limit binds");
+  // THE TOLERANCE IS DERIVED FROM THOSE, not chosen. 0.8 of the slack, capped by what the
+  // far end can actually decode — a different limit, and the one that binds on FT4 and FT2.
+  //
+  // THE FRACTION WAS 0.5, AND 0.5 WAS MEASURED WRONG IN SERVICE. At 0.5 the FT8 limit came
+  // out at 930 ms, and on 2026-08-30 the live station refused 72 first calls in a morning
+  // (lateness p50 1,359 ms, p90 1,673 ms) while the sends that did go out averaged ~400 ms.
+  // Every refusal wastes a full cycle; the operator watched a picked CQ sit through three.
+  // The hardcoded 1,500 ms this replaced had operated for months without a decode
+  // complaint — field evidence the halving threw away. 0.8 restores that number (1,488)
+  // while still ending 372 ms before the window closes.
+  eq(lateTxToleranceMs("FT8"), 1_488, "FT8 tolerance is 0.8 of its slack — the field-proven 1,500, rederived");
   eq(lateTxToleranceMs("FT4"), 800, "FT4 tolerance is 800 — the DECODER binds, well under half of 1,960");
   eq(lateTxToleranceMs("FT2"), 0, "FT2 tolerance is zero, and no arithmetic gets a vote");
   for (const mode of ["FT8", "FT4", "FT2"] as TxMode[]) {
@@ -242,7 +248,7 @@ async function main(): Promise<void> {
   }
   const TARGET = "K5AAA W6BBB R-09";
 
-  ok(readsAt("FT8", lateTxToleranceMs("FT8"), TARGET), "FT8 at its tolerance (930 ms late) decodes");
+  ok(readsAt("FT8", lateTxToleranceMs("FT8"), TARGET), "FT8 at its tolerance (1,488 ms late) decodes");
   ok(readsAt("FT8", slack.FT8, TARGET), "FT8 at its FULL slack (1,860 ms) still decodes — no cliff inside the window");
   ok(readsAt("FT4", lateTxToleranceMs("FT4"), TARGET), "FT4 at its tolerance (800 ms late) decodes");
   ok(!readsAt("FT4", 1_000, TARGET), "FT4 at 1,000 ms does NOT — the cliff is real and 800 sits inside it");
@@ -333,12 +339,12 @@ async function main(): Promise<void> {
   // The new rule still refuses what it should. Past the tolerance the transmission would
   // not finish inside its own window, and a 30 s wait is the lesser evil.
   eq(
-    await scheduleFirstCall(OUR_WINDOW + 1_900),
+    await scheduleFirstCall(OUR_WINDOW + 2_200),
     OUR_WINDOW + 2 * P,
-    "1,400 ms late is now past the tolerance and waits — the trade Task 2 makes, in the open",
+    "1,700 ms late is past the tolerance and waits — the trade made in the open",
   );
   {
-    // The exact edge: lateBy = KEY_PREP_MS - lead, accepted while <= 930.
+    // The exact edge: lateBy = KEY_PREP_MS - lead, accepted while <= the FT8 tolerance.
     const edge = OUR_WINDOW + TX_START_OFFSET_MS.FT8 + (lateTxToleranceMs("FT8") - 100);
     eq(await scheduleFirstCall(edge), OUR_WINDOW, "the last instant inside the tolerance transmits");
     eq(await scheduleFirstCall(edge + 20), OUR_WINDOW + 2 * P, "and the first one outside it does not");
@@ -842,7 +848,7 @@ async function autoOperatorChecks(): Promise<void> {
   {
     console.log("        db work   lead     old rule     new rule");
     const rows: { extra: number; lead: number; oldW: string; newW: string }[] = [];
-    for (const extra of [0, 800, 1_200, 1_560, 1_600, 2_390, 2_400]) {
+    for (const extra of [0, 800, 1_200, 1_560, 1_600, 2_390, 2_400, 2_940, 2_960]) {
       const source = new FakeSource();
       const tx = new FakeTx();
       const op = await makeOperating(source, tx);
@@ -889,13 +895,16 @@ async function autoOperatorChecks(): Promise<void> {
       inDeadZone.map(() => "next window"),
       "NEW: every one of them transmits in the window it belongs to",
     );
+    // The edge moved with the tolerance: 930 ms put it at 2,390 ms of database work,
+    // 1,488 ms puts it at ~2,948. The rows that used to be the edge are now comfortably
+    // inside, which is the point of the change — those were real refusals on the air.
     eq(
-      rows.filter((r) => r.extra <= 2_390).map((r) => r.newW),
-      rows.filter((r) => r.extra <= 2_390).map(() => "next window"),
-      "the whole chain up to the tolerance edge survives — 2.39 s of database work and still on the air",
+      rows.filter((r) => r.extra <= 2_940).map((r) => r.newW),
+      rows.filter((r) => r.extra <= 2_940).map(() => "next window"),
+      "the whole chain up to the tolerance edge survives — 2.94 s of database work and still on the air",
     );
     eq(
-      rows.find((r) => r.extra === 2_400)?.newW,
+      rows.find((r) => r.extra === 2_960)?.newW,
       "+30s",
       "and past it the call waits rather than transmitting where it cannot finish",
     );

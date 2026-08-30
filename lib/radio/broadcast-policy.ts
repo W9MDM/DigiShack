@@ -34,8 +34,25 @@ export const DROPPABLE_KINDS: ReadonlySet<string> = new Set([
   "telemetry",
 ]);
 
-/** Bytes already queued on a socket past which it is not keeping up. */
-export const SLOW_CLIENT_BYTES = 400_000;
+/**
+ * Bytes already queued on a socket past which it is not keeping up.
+ *
+ * WAS 400,000, COPIED FROM THE AUDIO GUARD, AND THAT WAS WRONG BY MEASUREMENT. The decode
+ * socket carries ~423 kbps (measured 2026-08-30 on the live station: 3,095 KB/min, 93% of
+ * it panadapter frames at ~8.7/s and ~5.5 KB each). At that rate 400 KB of backlog is 7.5
+ * SECONDS of queue a viewer is allowed to build before a single frame is dropped — and
+ * below the mark everything queues IN ORDER, so decodes sat in line behind megabytes of
+ * waterfall. Observed from the operator's chair as "the decode list is behind" and
+ * "decodes only on the exact minute" on a link the tunnel had squeezed. 400 KB suits the
+ * audio guard it was copied from because audio is the payload there; here it let the
+ * decor delay the data.
+ *
+ * 64 KB is ~1.2 s of panadapter at the measured rate. A LAN client drains to zero between
+ * frames and never touches it; a squeezed client loses waterfall rows — each worthless
+ * 120 ms later anyway — and keeps decodes near-live, which is the entire point of
+ * having droppable kinds at all.
+ */
+export const SLOW_CLIENT_BYTES = 64_000;
 
 /**
  * Hopelessly behind.

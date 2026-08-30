@@ -84,6 +84,27 @@ export interface SettingDef {
    */
   legacyKeys?: string[];
   default?: string;
+  /**
+   * A value the operator has to acknowledge in so many words before it is written.
+   *
+   * For the small number of settings whose off position removes a protection rather than
+   * changing a preference. The check is enforced in the PATCH route, NOT only in the page,
+   * because a guard that a direct API call can step around is a guard for honest people.
+   *
+   * USE THIS SPARINGLY. A confirmation on something that is not actually dangerous is
+   * worse than none: it teaches the reader that these dialogues are noise, and the next
+   * one — the real one — gets the same reflexive click. If the message would have to
+   * overstate the consequence to justify the dialogue, there should be no dialogue.
+   *
+   * `when` receives the incoming value exactly as the request carried it. `null` and `""`
+   * both mean "clear it", which restores the default, so those are normally SAFE and the
+   * predicate should say so rather than firing on everything falsy.
+   */
+  confirm?: {
+    when: (value: string | null) => boolean;
+    /** What the operator is agreeing to. Written as a consequence, not a warning. */
+    message: string;
+  };
 }
 
 export interface SettingGroup {
@@ -1542,7 +1563,20 @@ export const SETTINGS: SettingDef[] = [
     label: "Skip stations already worked within (hours)",
     type: "limit",
     group: "auto",
-    help: "Same band and mode. Stops the automatic modes from re-working the same people all day.",
+    help:
+      "Same band and same mode, where mode means FT8, FT4 or FT2. A station is worked at most once per UTC day per slot as well, so shortening this cannot bring same-day duplicates back — set it to two hours to chase an opening and each station is still worked once today. Zero turns the guard off entirely, which is the only way to allow duplicates and has to be typed in deliberately.",
+    confirm: {
+      // ONLY zero. Clearing the box restores the 24 h default, and any positive number
+      // still carries the once-per-UTC-day floor, so neither can produce a duplicate. Zero
+      // is the single value that removes the guard, and it is the only one worth stopping.
+      when: (v) => v !== null && v.trim() !== "" && Number(v) <= 0,
+      message:
+        "Setting this to zero removes the only thing stopping the automatic modes from " +
+        "working the same station over and over. A live station logged one callsign three " +
+        "times in three minutes with this guard absent. Every other value — including a " +
+        "very short one — still works each station at most once per UTC day per band and " +
+        "mode. Turn it off only if you actually want duplicate contacts.",
+    },
     default: "24",
   },
   {

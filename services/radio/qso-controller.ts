@@ -1,7 +1,7 @@
 import { nowMs } from "@/lib/time/clock";
 import { PERIOD_MS, transmitStartAt, TX_START_OFFSET_MS } from "@/lib/radio/timing";
 import { TRANSMISSION_MS } from "@/lib/radio/decode-pipeline";
-import type { TxMode } from "@/lib/radio/waveform";
+import { MAX_OFFSET_HZ as WAVEFORM_MAX_OFFSET_HZ, type TxMode } from "@/lib/radio/waveform";
 
 /**
  * How long it takes to get from "transmit this" to RF, ms.
@@ -287,7 +287,19 @@ export function resolveMaxTxOffset(reported: number | null): number {
   if (reported === null || !Number.isFinite(reported)) return MAX_TX_OFFSET_HZ;
   // Never BELOW the conservative default: a radio reporting something implausibly narrow
   // must not silently shrink what we will answer.
-  return Math.max(MAX_TX_OFFSET_HZ, Math.round(reported) - TX_EDGE_GUARD_HZ);
+  //
+  // AND NEVER ABOVE WHAT WAVEFORM GENERATION WILL ACCEPT. `buildWaveform` refuses any
+  // offset past `waveform.MAX_OFFSET_HZ` (2,800) unconditionally - that gate is about the
+  // SSB crystal filter, not this radio's reported passband. With the FLEX reporting
+  // hi=3100 this function used to answer 3,000, so the controller would commit to a
+  // station at 2,995 Hz that generation then refused EVERY window: observed live as
+  // "calling AA1SU" with three consecutive refusals and nothing ever on the air. Two
+  // ceilings that disagree are worse than either, because the gap between them is a set
+  // of stations the radio promises to answer and physically never will.
+  return Math.min(
+    WAVEFORM_MAX_OFFSET_HZ,
+    Math.max(MAX_TX_OFFSET_HZ, Math.round(reported) - TX_EDGE_GUARD_HZ),
+  );
 }
 
 export class QsoController {
