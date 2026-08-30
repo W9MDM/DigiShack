@@ -188,6 +188,121 @@ function decodeBins(b64: string): Uint8Array {
   return out;
 }
 
+/**
+ * True below Tailwind's `lg` — the phone and small-tablet layout.
+ *
+ * Everything else on this page that changes with width changes in CSS, which is the
+ * right way to do it: no listener, no re-render, and one source of truth for where the
+ * breakpoint is. Exactly two things on this page genuinely cannot be done that way, and
+ * both are why this exists rather than a third responsive stylesheet:
+ *
+ *   1. The waterfall's height is a NUMBER handed to a <canvas>. The element's `height`
+ *      attribute sizes the bitmap; a CSS height would stretch those pixels vertically
+ *      instead of drawing fewer rows, which is a different picture, not a smaller one.
+ *   2. A <details> has to be forced open on desktop. The UA hides a closed details'
+ *      content from inside its own shadow tree, and `display: contents` on the element
+ *      does not reach in there to stop it — so `lg:contents` alone would leave the
+ *      Radio card's readouts collapsed on a 27" monitor.
+ *
+ * 1024px is `lg`, duplicated here because a breakpoint cannot be read back out of the
+ * stylesheet at runtime. If the theme's `lg` moves, this moves with it.
+ *
+ * Starts `false` — the DESKTOP answer — so the server render and the first client
+ * render agree and hydration stays clean. On a phone that costs one extra render
+ * straight after mount: a flash of the wide layout, not a wrong layout. Initialising
+ * from matchMedia in the useState initialiser would be one render shorter and would
+ * mismatch on every server-rendered load.
+ */
+function useCompactLayout(): boolean {
+  const [compact, setCompact] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia("(max-width: 1023.98px)");
+    const apply = () => setCompact(mq.matches);
+    apply();
+    mq.addEventListener("change", apply);
+    return () => mq.removeEventListener("change", apply);
+  }, []);
+  return compact;
+}
+
+/**
+ * How loudly a "worth working" reason deserves to be said.
+ *
+ * THE FAULT: every one of these was rendered with the same class string —
+ * `text-[10px] uppercase … text-ok` — and so was the "worked" badge on a station whose
+ * contact had already been logged, character for character. *NEW DXCC: BOUVET* and
+ * *worked him already, ignore* were the same 10-pixel green chip. CQ messages are green
+ * too. So the one thing on this screen that is genuinely rare looked exactly like the
+ * two things that are not, and lib/digital/worth.ts — which knows the difference, and
+ * scores a new entity at 100 points against a grid band-slot at 3 — was throwing that
+ * knowledge away at the last step.
+ *
+ * Five treatments now, and none of them share a colour:
+ *
+ *   entity   gold, 12px, full row  a new DXCC or a new continent. Unmissable on purpose.
+ *   award    blue, 11px            a real slot: park, state, zone, entity-on-this-band.
+ *   minor    grey, 10px            a new grid, or simply never worked before.
+ *   CQ       green (unchanged)     "this station is callable", which is not the same claim.
+ *   worked   dim grey (was green)  finished this session — the row the eye should skip.
+ *
+ * Gold rather than a brighter green because green is already spoken for twice over, and
+ * because a new one IS the gold on this screen. `accent-bright` is spoken for as well —
+ * it means "this message names me".
+ */
+type WorthTier = "entity" | "award" | "minor";
+
+const WORTH_RANK: Record<WorthTier, number> = { minor: 0, award: 1, entity: 2 };
+
+/**
+ * Which tier a reason string belongs to.
+ *
+ * Matched against the exact strings lib/digital/worth.ts builds, which is a real
+ * coupling and the deliberate one: the alternative is a second scoring model living on
+ * the client, and a second model is how the badges an operator reads and the choices
+ * Auto Hunt makes come to disagree. scripts/check-worth.ts asserts every literal below,
+ * so changing the wording there fails a check rather than silently demoting a new
+ * entity to a grey chip nobody looks at.
+ */
+function worthTier(reason: string): WorthTier {
+  if (reason.startsWith("NEW DXCC:") || reason.startsWith("new continent ")) {
+    return "entity";
+  }
+  // A GRID band-slot and an ENTITY band-slot both read "<thing> new on this band" and
+  // are worth 3 points and 30 respectively. They are told apart by the shape of
+  // <thing>: worth.ts upper-cases the grid, so it is always AA00, and no DXCC name or
+  // two-letter state ever is. Checked before the general case for that reason.
+  if (/^[A-R]{2}\d{2} new on this band$/.test(reason)) return "minor";
+  if (/ new on this band$/.test(reason)) return "award";
+  if (/^new (park|state|CQ zone) /.test(reason)) return "award";
+  if (reason === "POTA activator") return "award";
+  // "new grid EN61" and "never worked" — the latter fires across most of a busy band,
+  // which is exactly why worth.ts does not count it as an award either.
+  return "minor";
+}
+
+const WORTH_CHIP: Record<WorthTier, string> = {
+  // Not `text-[10px] uppercase`: the entity NAME is the payload — "Bouvet", "Palestine"
+  // — and it has to be readable as a word, at a size a glance can resolve, with its own
+  // capitalisation intact.
+  entity:
+    "rounded-sm border border-warn/60 bg-warn/15 px-1.5 py-0.5 text-xs font-semibold text-warn align-middle",
+  award:
+    "rounded-sm border border-info/40 bg-info/12 px-1 py-0.5 text-[11px] uppercase tracking-wide text-info align-middle",
+  minor:
+    "rounded-sm border border-line-strong bg-surface-2 px-1 py-0.5 text-[10px] uppercase tracking-wide text-fg-muted align-middle",
+};
+
+/**
+ * How many reasons to show on a row.
+ *
+ * Was ONE, with the rest hidden in a `title=` attribute — and `title` never fires on a
+ * touch screen, so on a phone the other reasons did not exist. scoreCandidate routinely
+ * returns three or four (a new entity is usually also a new zone, a new grid and never
+ * worked), the message column has room to spare, and "new entity AND new zone" is a
+ * different decision from "new entity". Three keeps the widest row inside the column.
+ */
+const MAX_REASONS_SHOWN = 3;
+
 export default function DigitalPage({ wsUrl }: Props) {
   const [status, setStatus] = useState<RigStatus | null>(null);
   const [rows, setRows] = useState<DecodeEvent[]>([]);
@@ -307,6 +422,18 @@ export default function DigitalPage({ wsUrl }: Props) {
   const [telemetry, setTelemetry] = useState<Telemetry | null>(null);
   const [clockSync, setClockSync] = useState<ClockSync | null>(null);
   const [syncing, setSyncing] = useState(false);
+
+  /** Phone/small-tablet layout. See useCompactLayout — CSS handles everything it can. */
+  const compact = useCompactLayout();
+
+  /**
+   * What the Escape key just did, said out loud.
+   *
+   * A keyboard shortcut whose only feedback is the radio going quiet is a shortcut an
+   * operator presses twice, then a third time, because nothing on screen changed within
+   * the second it takes the bridge to answer and broadcast new state.
+   */
+  const [haltNote, setHaltNote] = useState<string | null>(null);
 
   const pausedRef = useRef(paused);
   pausedRef.current = paused;
@@ -624,6 +751,107 @@ export default function DigitalPage({ wsUrl }: Props) {
   const tuneMode: DigitalMode =
     decodingAs === "FT4" ? "FT4" : decodingAs === "FT2" ? "FT2" : "FT8";
 
+  /**
+   * Is there anything to halt? Transmitting now, a contact in flight, or an automatic
+   * mode that will key the radio on the next cycle whether or not it is keying it this
+   * one. All three are stopped by the same `qso-halt`.
+   */
+  const haltable =
+    (status?.transmitting ?? false) ||
+    (qso?.active ?? false) ||
+    (auto?.mode ?? "off") !== "off";
+
+  // Latest values for the keydown handler, which is registered once and would otherwise
+  // close over the first render's state forever. Same device as pages/rig.tsx.
+  const keyStateRef = useRef({ haltable });
+  keyStateRef.current = { haltable };
+
+  /**
+   * The keyboard. Escape halts the transmitter; `/` jumps to the decode search.
+   *
+   * THE FAULT: this page had no keyboard operation whatsoever. Grepping the whole
+   * application for keydown found three Escape-to-close-a-drawer handlers and the
+   * arrow-key VFO nudging on /rig, and nothing else — so the most safety-critical
+   * control in the software, the one that stops an unattended transmitter mid-cycle,
+   * could only be reached by locating a mouse and hitting a 90-pixel button.
+   *
+   * Escape fires ONLY when there is something to stop. That is not timidity about
+   * sending a harmless no-op to the bridge: Escape is already taken on this page by the
+   * mobile navigation drawer (components/layout/Shell.tsx), and an operator dismissing a
+   * menu must not discover they have also ended a QSO. When the station IS transmitting,
+   * stopping wins over dismissing and both happen — which is the right way round.
+   *
+   * Escape does not fire from inside a text field either; it blurs the field instead, so
+   * two presses get you out of the search box and off the air. `/rig` simply ignores
+   * keys while typing, and here that would leave the halt unreachable at exactly the
+   * moment someone had a callsign half-entered.
+   *
+   * DUPLICATION, DELIBERATE, FOR NOW: the typing guard below is the same one as
+   * pages/rig.tsx (the ArrowKey handler). It is copied rather than shared because this
+   * change owns one file; a `lib/client/keys.ts` holding the guard and a small
+   * registration helper is the obvious cleanup once both pages can be touched together.
+   * If a third page grows a shortcut before that happens, do the extraction then.
+   */
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      // Leave browser and OS shortcuts alone.
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+
+      const t = e.target as HTMLElement | null;
+      const tag = t?.tagName;
+      const typing =
+        tag === "INPUT" ||
+        tag === "TEXTAREA" ||
+        tag === "SELECT" ||
+        (t?.isContentEditable ?? false);
+
+      if (typing) {
+        // One press leaves the field, the next one halts. Escape in a text input does
+        // nothing useful in any browser, so borrowing it costs nothing and it is the
+        // gesture everybody already makes to get out of a box.
+        if (e.key === "Escape") t?.blur();
+        return;
+      }
+
+      if (e.key === "Escape") {
+        if (!keyStateRef.current.haltable) return;
+        e.preventDefault();
+        setHaltNote("HALT sent — stopping transmit and any automatic mode.");
+        void apiPost("/api/bridge/control", { action: "qso-halt" }).catch((err) => {
+          // A halt that failed is the one refusal that must never be silent.
+          setHaltNote(
+            err instanceof ApiError
+              ? `HALT FAILED: ${err.message} — use the HALT TX button.`
+              : "HALT FAILED — use the HALT TX button.",
+          );
+        });
+        return;
+      }
+
+      if (e.key === "/") {
+        // `Input` does not forward a ref and components/ui/primitives.tsx belongs to
+        // another change in flight; an id is the smaller coupling of the two and does
+        // not need the primitive to grow an API for one call site.
+        const el = document.getElementById("decode-search");
+        if (!(el instanceof HTMLInputElement)) return;
+        e.preventDefault(); // or the "/" lands in the box we just focused
+        el.focus();
+        el.select();
+      }
+    }
+
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  // The halt notice is an event, not a state: it says what a keypress just did, and it
+  // has to go away on its own or it reads as a condition the station is still in.
+  useEffect(() => {
+    if (haltNote === null) return;
+    const id = setTimeout(() => setHaltNote(null), 6_000);
+    return () => clearTimeout(id);
+  }, [haltNote]);
+
   return (
     <>
       <PageHeader
@@ -650,7 +878,20 @@ export default function DigitalPage({ wsUrl }: Props) {
                 space. A prediction panel would need solar indices and a propagation
                 model; this needs neither, and knows things a model cannot — that
                 THIS antenna heard 302 stations on 40 m in the last day. */}
-            <BandConditions currentBand={status?.band ?? null} mode={decodingAs} />
+            {/* Desktop only, and `lg:contents` rather than `lg:block` so that above the
+                breakpoint this span generates no box whatsoever: BandConditions stays
+                the direct flex child of the actions row it has always been, and that row
+                is unchanged to the pixel.
+
+                Below it, the strip is a horizontally-scrolling rank of band tiles plus a
+                three-line legend, and it was the biggest single contributor to a header
+                that wrapped to FOUR rows at 390px — on a page where the decode list, the
+                actual product, did not begin until roughly 1,900px of scrolling. Band
+                conditions are reference material consulted once a session. This is the
+                one class to delete if they should come back on a phone. */}
+            <span className="hidden lg:contents">
+              <BandConditions currentBand={status?.band ?? null} mode={decodingAs} />
+            </span>
             {status?.transmitting && <Badge tone="danger">TX</Badge>}
             {/* The master transmit gate, which was visible nowhere.
 
@@ -700,6 +941,24 @@ export default function DigitalPage({ wsUrl }: Props) {
           </>
         }
       />
+
+      {/* What Escape just did.
+          role="alert" because nobody is looking for this line when it appears, and a
+          halt that was refused is the single refusal on this page that must interrupt
+          rather than wait to be noticed. */}
+      {haltNote && (
+        <div
+          role="alert"
+          className={cn(
+            "mb-4 rounded-sm border px-3 py-2 text-sm",
+            haltNote.startsWith("HALT FAILED")
+              ? "border-danger/60 bg-danger/15 text-danger"
+              : "border-warn/50 bg-warn/10 text-warn",
+          )}
+        >
+          {haltNote}
+        </div>
+      )}
 
       {fallback && !fallback.running && !connected && (
         <div className="mb-4">
@@ -779,12 +1038,24 @@ export default function DigitalPage({ wsUrl }: Props) {
           been; the count for the cycle just finished is what tells you whether the
           band is open *now*, which is the number you actually watch. */}
       <div className="mb-4 flex flex-wrap items-end justify-between gap-4">
-        <div className="flex items-end gap-6">
+        {/* flex-wrap, which was missing.
+            This inner row is a flex ITEM of the wrapping row above it, so `min-width:
+            auto` meant it could not shrink below its own min-content — five readouts and
+            a sparkline, about 436px of them, inside a 390px viewport. A non-wrapping
+            cluster inside a wrapping one is exactly the fault that once made every page
+            on the site scroll sideways from one class missing on PageHeader; this is the
+            same shape of it, unmeasured until now and now unmeasurable, because at
+            desktop widths this row has never come close to wrapping.
+
+            Numbers at text-xl, down from text-3xl. Thirty-pixel digits for four figures
+            that are read once and then watched out of the corner of an eye, on a screen
+            whose actual content could not fit one FT8 cycle. */}
+        <div className="flex flex-wrap items-end gap-x-6 gap-y-2">
           <div>
             <div className="text-[10px] uppercase tracking-wide text-fg-muted">
               This cycle
             </div>
-            <div className="font-display text-3xl leading-none tnum text-accent-bright">
+            <div className="font-display text-xl leading-none tnum text-accent-bright">
               {latestCycleCount}
             </div>
           </div>
@@ -792,7 +1063,7 @@ export default function DigitalPage({ wsUrl }: Props) {
             <div className="text-[10px] uppercase tracking-wide text-fg-muted">
               Total decodes
             </div>
-            <div className="font-display text-3xl leading-none tnum">
+            <div className="font-display text-xl leading-none tnum">
               {rows.length}
             </div>
           </div>
@@ -800,7 +1071,7 @@ export default function DigitalPage({ wsUrl }: Props) {
             <div className="text-[10px] uppercase tracking-wide text-fg-muted">
               Last decode
             </div>
-            <div className="font-display text-3xl leading-none tnum">
+            <div className="font-display text-xl leading-none tnum">
               {staleSeconds === null ? "—" : `${staleSeconds}s`}
             </div>
           </div>
@@ -818,7 +1089,7 @@ export default function DigitalPage({ wsUrl }: Props) {
             </div>
             <div
               className={cn(
-                "font-display text-3xl leading-none tnum",
+                "font-display text-xl leading-none tnum",
                 (todayStats?.today ?? 0) > 0 ? "text-ok" : "text-fg-muted",
               )}
             >
@@ -830,7 +1101,7 @@ export default function DigitalPage({ wsUrl }: Props) {
               <div className="text-[10px] uppercase tracking-wide text-fg-muted">
                 Recent cycles
               </div>
-              <div className="flex items-end gap-1 h-[30px]">
+              <div className="flex items-end gap-1 h-5">
                 {/* Newest on the right, so it reads left-to-right in time order. */}
                 {recentCycles
                   .slice()
@@ -840,7 +1111,7 @@ export default function DigitalPage({ wsUrl }: Props) {
                       key={c.at}
                       className="w-2 bg-accent/50 rounded-sm"
                       style={{
-                        height: `${Math.max(3, (c.count / cyclePeak) * 30)}px`,
+                        height: `${Math.max(3, (c.count / cyclePeak) * 20)}px`,
                       }}
                       title={`${c.count} decode${c.count === 1 ? "" : "s"} at ${formatUtcTime(c.at)}`}
                     />
@@ -875,17 +1146,40 @@ export default function DigitalPage({ wsUrl }: Props) {
       </div>
 
       <div className="flex flex-col gap-4">
-        <Waterfall
-          row={spectrum}
-          binHz={scale.binHz}
-          maxHz={scale.maxHz}
-          markers={markers}
-          txHz={status?.txDF ?? null}
-          gain={gain}
-          height={300}
-        />
+        {/* THE WATERFALL GOES LAST ON A PHONE.
+            This column is already a flex column, so `order-last` costs nothing and
+            changes nothing above `lg`, where `order-none` restores source order exactly.
+            Below it, 300px of waterfall plus its gain row stood between the operator and
+            the decode list — and the waterfall was the fourth of seven blocks doing that.
+            The wrapper div exists only to carry the class; Waterfall takes no className,
+            and a bare div in a column flex adds no box of its own. */}
+        <div className="order-last lg:order-none">
+          <Waterfall
+            row={spectrum}
+            binHz={scale.binHz}
+            maxHz={scale.maxHz}
+            markers={markers}
+            txHz={status?.txDF ?? null}
+            gain={gain}
+            // 300px of an 844px phone screen for a display that, at 390px wide showing
+            // 0-2500 Hz, is 6.4 Hz per pixel against 2px-wide markers — it cannot
+            // resolve two stations 40 Hz apart, which is most of a busy band. Shrunk
+            // rather than hidden: it is still the fastest confirmation that audio is
+            // arriving at all, and that reading survives at 120px.
+            //
+            // A number, not a CSS class, because the <canvas> height attribute sizes the
+            // bitmap; see useCompactLayout. Crossing the breakpoint reallocates the
+            // canvas and so wipes the scroll history, which is correct — the rows would
+            // be the wrong height otherwise — and happens only on a rotate or a resize.
+            height={compact ? 120 : 300}
+          />
+        </div>
 
-        <div className="flex items-center gap-4 text-xs text-fg-subtle">
+        {/* flex-wrap added with the reorder: at 390px this row is a slider, a passband
+            legend and a TX-offset readout on one unwrapping line, which is how a page
+            comes to scroll sideways. It never wraps at desktop widths, so nothing above
+            lg moves. */}
+        <div className="order-last lg:order-none flex flex-wrap items-center gap-4 text-xs text-fg-subtle">
           <label className="flex items-center gap-2">
             Gain
             <input
@@ -909,58 +1203,96 @@ export default function DigitalPage({ wsUrl }: Props) {
         {/* One row, not two: Radio and Heard-by are narrow fixed columns and the decode
             list takes everything else. As equal quarters of a lg:grid-cols-4 the decode
             card spanned 3 and wrapped to a second row, leaving half the width under the
-            waterfall blank while the decodes sat below the fold. */}
+            waterfall blank while the decodes sat below the fold.
+
+            THE DECODE LIST WAS THE SEVENTH THING ON A PHONE. Below `lg` this grid
+            collapses to a single column in SOURCE ORDER, which put the Radio card — an
+            S-meter, a power slider and ten rows of dial/band/mode/grid — and then the
+            whole Heard-by panel between the operator and the decodes. Measured at
+            roughly 1,900-2,200px of scrolling before the first decode row. Everything
+            above it is reference material read once a session; the list is the product.
+
+            Fixed with `order-*` and nothing else, so that above `lg` — where the grid has
+            three explicit columns and order is meaningless anyway — `lg:order-none`
+            restores the original DOM order and the desktop layout is byte-identical. */}
         <div className="grid gap-4 lg:grid-cols-[320px_260px_minmax(0,1fr)]">
-          <Card title="Radio">
+          <Card title="Radio" className="order-last lg:order-none">
             <SMeter reading={smeter} now={now} />
             <PowerSlider current={status?.rfPower ?? null} />
             <RadioHealth telemetry={telemetry} transmitting={status?.transmitting ?? false} />
             {status ? (
-              <dl className="text-sm flex flex-col gap-1.5">
-                {/* Which radio this actually is. Two are supported and both can be
-                    configured at once, so "the radio" is not self-evident — and on a
-                    remote station it is the first thing worth confirming. */}
-                <Row
-                  label="Radio"
-                  value={
-                    status.radio
-                      ? `${status.radio.model} · ${status.radio.host}`
-                      : status.source === "wsjtx"
-                        ? "external decoder"
-                        : "not connected"
-                  }
-                />
-                <Row
-                  label="Dial"
-                  value={
-                    status.dialFrequency
-                      ? `${formatFreqMHz(status.dialFrequency)} MHz`
-                      : "—"
-                  }
-                  tnum
-                />
-                <Row label="Band" value={status.band ?? "—"} />
-                <Row label="Slice mode" value={status.mode ?? "—"} />
-                <Row label="Decoding as" value={decodingAs} />
-                <Row label="My call" value={status.deCall ?? "—"} />
-                <Row label="Grid" value={status.deGrid ?? "—"} />
-                <Row
-                  label="RX offset"
-                  value={status.rxDF !== null ? `${status.rxDF} Hz` : "—"}
-                  tnum
-                />
-                {status.link && (
-                  <Row
-                    label="Radio link"
-                    value={
-                      status.link.oneWayMs > 0
-                        ? `${status.link.rttMs} ms · corrected`
-                        : `${status.link.rttMs} ms`
-                    }
-                    tnum
-                  />
-                )}
-                <div className="flex gap-1.5 mt-1 flex-wrap">
+              <>
+                {/* Ten rows of dial, band, mode, call, grid and offset — every one of them
+                    settled once and then true for the rest of the session — sat between a
+                    phone and the decode list. Folded into a disclosure below `lg`.
+
+                    `lg:contents` makes the <details> generate no box above the breakpoint,
+                    so the <dl> is the Card's own child exactly as before. `open={!compact}`
+                    is the other half and is not optional: a closed <details> hides its
+                    content from inside the UA's shadow tree, which `display: contents` on
+                    the element does not reach into — with the class alone these readouts
+                    would be collapsed on a 27" monitor with no way to open them, because
+                    the summary is hidden up there.
+
+                    The status BADGES below are deliberately left outside it. "No rig
+                    control" and "Transmitting" are not reference material; they are the
+                    reason someone looks at this card at all, and a fact you have to expand
+                    a panel to discover is a fact that goes undiscovered. */}
+                <details className="lg:contents" open={!compact}>
+                  <summary className="lg:hidden cursor-pointer select-none text-xs uppercase tracking-wide text-fg-muted">
+                    Radio detail — dial, band, mode, grid
+                  </summary>
+                  <dl className="text-sm flex flex-col gap-1.5 mt-1.5 lg:mt-0">
+                    {/* Which radio this actually is. Two are supported and both can be
+                        configured at once, so "the radio" is not self-evident — and on a
+                        remote station it is the first thing worth confirming. */}
+                    <Row
+                      label="Radio"
+                      value={
+                        status.radio
+                          ? `${status.radio.model} · ${status.radio.host}`
+                          : status.source === "wsjtx"
+                            ? "external decoder"
+                            : "not connected"
+                      }
+                    />
+                    <Row
+                      label="Dial"
+                      value={
+                        status.dialFrequency
+                          ? `${formatFreqMHz(status.dialFrequency)} MHz`
+                          : "—"
+                      }
+                      tnum
+                    />
+                    <Row label="Band" value={status.band ?? "—"} />
+                    <Row label="Slice mode" value={status.mode ?? "—"} />
+                    <Row label="Decoding as" value={decodingAs} />
+                    <Row label="My call" value={status.deCall ?? "—"} />
+                    <Row label="Grid" value={status.deGrid ?? "—"} />
+                    <Row
+                      label="RX offset"
+                      value={status.rxDF !== null ? `${status.rxDF} Hz` : "—"}
+                      tnum
+                    />
+                    {status.link && (
+                      <Row
+                        label="Radio link"
+                        value={
+                          status.link.oneWayMs > 0
+                            ? `${status.link.rttMs} ms · corrected`
+                            : `${status.link.rttMs} ms`
+                        }
+                        tnum
+                      />
+                    )}
+                  </dl>
+                </details>
+                {/* Lifted out of the <dl> — which it was never valid content of anyway —
+                    so it stays visible when the readouts above it are folded away. The
+                    10px it used to inherit from the list's gap-1.5 plus its own mt-1 is
+                    spelled out as mt-2.5 here, so nothing moves on desktop. */}
+                <div className="flex gap-1.5 mt-2.5 flex-wrap">
                   {status.connected ? (
                     <Badge tone="ok">Radio up</Badge>
                   ) : (
@@ -974,7 +1306,7 @@ export default function DigitalPage({ wsUrl }: Props) {
                     <Badge tone="warn">No rig control</Badge>
                   )}
                 </div>
-              </dl>
+              </>
             ) : (
               <p className="text-sm text-fg-subtle">Waiting for the bridge…</p>
             )}
@@ -988,9 +1320,11 @@ export default function DigitalPage({ wsUrl }: Props) {
             </p>
           </Card>
 
-          <HeardBy />
+          <HeardBy className="order-last lg:order-none" />
 
-          <div className="min-w-0">
+          {/* order-1, not order-first, so that if anything else in this grid ever needs
+              to sit above the decodes it can take order-first without a fight. */}
+          <div className="order-1 lg:order-none min-w-0">
             <Card
               title={`Decodes (${visible.length})`}
               actions={
@@ -999,9 +1333,12 @@ export default function DigitalPage({ wsUrl }: Props) {
                       decode is written, and a lowercase search matching nothing would
                       read as "they are not on the air". */}
                   <Input
+                    // The `/` shortcut focuses this by id. See the keydown handler for
+                    // why an id rather than a ref.
+                    id="decode-search"
                     value={search}
                     onChange={(e) => setSearch(e.target.value.toUpperCase())}
-                    placeholder="Find a callsign…"
+                    placeholder="Find a callsign…  (/)"
                     aria-label="Search decodes"
                     className="w-40 tnum"
                   />
@@ -1010,7 +1347,11 @@ export default function DigitalPage({ wsUrl }: Props) {
                       type="button"
                       onClick={() => setSearch("")}
                       title="Clear the search"
-                      className="text-xs text-fg-muted hover:text-fg"
+                      // `tap-inline`: bare text sitting inline beside the search box.
+                      // The coarse-pointer minimum would make it a 44px-tall word next
+                      // to a control it is an adjunct of, pushing the card header onto
+                      // a second row on the screen with the least of it.
+                      className="tap-inline text-xs text-fg-muted hover:text-fg"
                     >
                       clear
                     </button>
@@ -1078,15 +1419,37 @@ export default function DigitalPage({ wsUrl }: Props) {
               ) : (
                 // Tall enough to fill the column it now shares with the Radio card —
                 // at 26rem it left the same blank space below that moving it up here
-                // was meant to remove.
-                <div className="overflow-auto -mx-4 max-h-[42rem]">
+                // was meant to remove. Raised from 42rem now that ~200px of chrome has
+                // come off the top of the page: 52rem is about 43 rows at the tightened
+                // row height, against 30 before, and a busy 20m FT8 cycle produces
+                // 40-90 decodes. It does leave more empty column beside the Radio and
+                // Heard-by cards on a short monitor; that is the trade, and it is the
+                // right way round for a list that could not show one cycle.
+                //
+                // THE HEIGHT CAP AND THE INNER SCROLLER ARE DESKTOP-ONLY.
+                // A 672px scroller inside a page that also scrolls is a trap on iOS: a
+                // touch that begins over the table scrolls the table, one that begins a
+                // few pixels outside it scrolls the page, and neither hands off to the
+                // other at its end. On a phone the list is simply as long as it is and
+                // the page scrolls, which is the behaviour a phone already has.
+                //
+                // `overflow-x-auto` stays at every width, and not only because a table
+                // cannot be made to fit 360px: scripts/check-pwa.ts asserts that every
+                // <table> in the tree has a horizontal scroll container within six lines
+                // above it, because one unwrapped table sets the width of the whole
+                // document and every page then scrolls sideways.
+                <div className="-mx-4 overflow-x-auto lg:overflow-auto lg:max-h-[52rem]">
                   <table className="w-full text-sm border-collapse">
-                    <thead className="sticky top-0 bg-surface-2">
+                    {/* Sticky only where there is an inner scroller to stick to. Below
+                        `lg` this header was pinned to the top of a container that had
+                        itself scrolled off the top of the screen, so the column labels
+                        were reliably somewhere above the viewport. */}
+                    <thead className="bg-surface-2 lg:sticky lg:top-0">
                       <tr className="text-left">
                         {["UTC", "dB", "Hz", "dt", "Mode", "Message"].map((h) => (
                           <th
                             key={h}
-                            className="px-3 py-1.5 font-medium text-fg-muted text-xs uppercase tracking-wide"
+                            className="px-2.5 py-1 font-medium text-fg-muted text-xs uppercase tracking-wide"
                           >
                             {h}
                           </th>
@@ -1094,11 +1457,31 @@ export default function DigitalPage({ wsUrl }: Props) {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-line font-mono text-xs">
-                      {visible.map((d, i) => {
+                      {visible.map((d) => {
                         const isCq = /^CQ\b/i.test(d.message);
                         const mine = mentionsMe(d.message);
                         const done =
                           d.callsign !== null && workedNow.has(d.callsign.toUpperCase());
+                        const reasons = d.callsign ? (worth.get(d.callsign) ?? []) : [];
+                        /**
+                         * The loudest thing this station is worth — what the ROW is
+                         * allowed to shout, as opposed to what its chips say.
+                         *
+                         * Null once the contact is logged this session. A station just
+                         * worked is not a new entity any more; the scoring re-reads the
+                         * log and will agree on its next pass, but until then a gold
+                         * full-row NEW DXCC on a finished contact is exactly the "is
+                         * this done or not" confusion the dimming exists to remove.
+                         */
+                        const tiers = reasons.map((r) => worthTier(r));
+                        const tier: WorthTier | null =
+                          done || tiers.length === 0
+                            ? null
+                            : tiers.reduce(
+                                (best, t) =>
+                                  WORTH_RANK[t] > WORTH_RANK[best] ? t : best,
+                                "minor" as WorthTier,
+                              );
                         return (
                           <tr
                             key={`${d.timestamp}-${d.freqOffset}-${d.message}`}
@@ -1111,24 +1494,47 @@ export default function DigitalPage({ wsUrl }: Props) {
                             className={cn(
                               "hover:bg-surface-2",
                               d.callsign && "cursor-pointer",
+                              // A NEW ENTITY GETS THE WHOLE ROW. It is the rarest thing
+                              // that appears on this screen — a 47-year DXer may see one
+                              // in a month — and it was a ten-pixel chip in the same
+                              // green as "already worked, ignore".
+                              tier === "entity" && "bg-warn/10",
+                              // Ranked below the entity tint on purpose: a message that
+                              // names this station is about to become a QSO, which
+                              // outranks a station that merely could be one.
                               mine && "bg-accent/10",
                               // Worked and logged this session: dimmed, so the eye skips
                               // them. Applied AFTER `mine` so the tail of our own finished
                               // exchange reads as finished rather than as a station still
                               // calling us — which is the confusion this fixes.
                               done && "opacity-55",
-                              // The station being worked right now outranks both.
+                              // The station being worked right now outranks all of them.
                               qso?.active &&
                                 d.callsign === qso.theirCall &&
                                 "bg-ok/10 opacity-100",
                             )}
                           >
-                            <td className="px-3 py-1 tnum text-fg-subtle whitespace-nowrap">
+                            {/* The left edge carries the award tier, and every row
+                                carries the border so the columns cannot shift by 2px
+                                between a new entity and its neighbours. It lives on the
+                                first <td> rather than the <tr> because a row border under
+                                border-collapse is at the mercy of the cell borders it is
+                                collapsing against; a cell border simply draws. */}
+                            <td
+                              className={cn(
+                                "px-2.5 py-1.5 lg:py-0.5 tnum text-fg-subtle whitespace-nowrap border-l-2",
+                                tier === "entity"
+                                  ? "border-l-warn"
+                                  : tier === "award"
+                                    ? "border-l-info/60"
+                                    : "border-l-transparent",
+                              )}
+                            >
                               {formatUtcTime(d.timestamp)}
                             </td>
                             <td
                               className={cn(
-                                "px-3 py-1 tnum text-right whitespace-nowrap",
+                                "px-2.5 py-1.5 lg:py-0.5 tnum text-right whitespace-nowrap",
                                 d.snr >= 0
                                   ? "text-ok"
                                   : d.snr > -15
@@ -1138,14 +1544,21 @@ export default function DigitalPage({ wsUrl }: Props) {
                             >
                               {d.snr > 0 ? `+${d.snr}` : d.snr}
                             </td>
-                            <td className="px-3 py-1 tnum text-right text-fg-muted">
+                            <td className="px-2.5 py-1.5 lg:py-0.5 tnum text-right text-fg-muted">
                               {d.freqOffset}
                             </td>
-                            <td className="px-3 py-1 tnum text-right text-fg-subtle">
+                            <td className="px-2.5 py-1.5 lg:py-0.5 tnum text-right text-fg-subtle">
                               {d.deltaTime.toFixed(1)}
                             </td>
-                            <td className="px-3 py-1 text-fg-subtle">{d.mode}</td>
-                            <td className="px-3 py-1">
+                            <td className="px-2.5 py-1.5 lg:py-0.5 text-fg-subtle">{d.mode}</td>
+                            {/* py-1.5 below lg, py-0.5 above it.
+                                Tighter on the desktop because ~989px of chrome above the
+                                first row left twelve visible decodes where WSJT-X shows
+                                45-60, and 4px a row is three more rows on screen. LOOSER
+                                on a phone, not tighter: the row is itself a tap target —
+                                tapping it selects the station — and a 20px row is not
+                                one. */}
+                            <td className="px-2.5 py-1.5 lg:py-0.5">
                               <span
                                 className={cn(
                                   mine && "text-accent-bright font-semibold",
@@ -1157,6 +1570,54 @@ export default function DigitalPage({ wsUrl }: Props) {
                               {d.lowConfidence && (
                                 <span className="ml-2 text-fg-subtle">(low conf)</span>
                               )}
+                              {/* Award value, from the same scoring the auto-operator
+                                  uses. Thirty rows of identical-looking text is where
+                                  a new entity hides; this is the whole reason the
+                                  scoring existed and nobody could see it.
+
+                                  UP TO THREE REASONS, each at its own weight. It was
+                                  ONE, with the remainder in a `title=` — and `title`
+                                  never fires on a touch screen, so on a phone the rest
+                                  did not exist at all. scoreCandidate routinely returns
+                                  three or four, and "new entity AND new zone" is a
+                                  different decision from "new entity". The tooltip keeps
+                                  the full list for the overflow case. */}
+                              {reasons.slice(0, MAX_REASONS_SHOWN).map((r) => (
+                                <span
+                                  key={r}
+                                  className={cn("ml-2", WORTH_CHIP[worthTier(r)])}
+                                  title={reasons.join(" · ")}
+                                >
+                                  {r}
+                                </span>
+                              ))}
+                              {reasons.length > MAX_REASONS_SHOWN && (
+                                <span
+                                  className="ml-1 align-middle text-[10px] text-fg-subtle"
+                                  title={reasons.join(" · ")}
+                                >
+                                  +{reasons.length - MAX_REASONS_SHOWN}
+                                </span>
+                              )}
+                              {/* Named, not only dimmed. Opacity alone is ambiguous — it
+                                  could be any kind of de-emphasis — and this is a fact
+                                  worth stating: the contact finished, so their RR73 and 73
+                                  are the end of it rather than someone still calling.
+
+                                  GREY, NOT GREEN. This chip and the needed-entity chip
+                                  above it used to carry the same class string character
+                                  for character, so "new one, call it" and "worked him,
+                                  skip" were the same green rectangle. It is the one label
+                                  here that means "nothing to do", and it now reads that
+                                  way at a glance. */}
+                              {done && (
+                                <span
+                                  className="ml-2 rounded-sm border border-line bg-surface-2 px-1 py-0.5 text-[10px] uppercase tracking-wide text-fg-subtle align-middle"
+                                  title="Contact completed and logged this session."
+                                >
+                                  worked
+                                </span>
+                              )}
                               {/* The primary action of the whole application.
 
                                   It used to be a bare onClick on the <tr>: no
@@ -1167,31 +1628,6 @@ export default function DigitalPage({ wsUrl }: Props) {
 
                                   stopPropagation because the row handler does the
                                   same thing — without it the click runs twice. */}
-                              {/* Award value, from the same scoring the auto-operator
-                                  uses. Thirty rows of identical-looking text is where
-                                  a new entity hides; this is the whole reason the
-                                  scoring existed and nobody could see it. */}
-                              {d.callsign &&
-                                (worth.get(d.callsign)?.length ?? 0) > 0 && (
-                                  <span
-                                    className="ml-2 rounded-sm border border-ok/40 bg-ok/12 px-1 py-0.5 text-[10px] uppercase tracking-wide text-ok align-middle"
-                                    title={worth.get(d.callsign)!.join(" · ")}
-                                  >
-                                    {worth.get(d.callsign)![0]}
-                                  </span>
-                                )}
-                              {/* Named, not only dimmed. Opacity alone is ambiguous — it
-                                  could be any kind of de-emphasis — and this is a fact
-                                  worth stating: the contact finished, so their RR73 and 73
-                                  are the end of it rather than someone still calling. */}
-                              {done && (
-                                <span
-                                  className="ml-2 rounded-sm border border-ok/40 bg-ok/12 px-1 py-0.5 text-[10px] uppercase tracking-wide text-ok align-middle"
-                                  title="Contact completed and logged this session."
-                                >
-                                  worked
-                                </span>
-                              )}
                               {d.callsign && (
                                 <button
                                   type="button"
@@ -1201,7 +1637,14 @@ export default function DigitalPage({ wsUrl }: Props) {
                                     void callFromRow(d);
                                   }}
                                   className={cn(
-                                    "ml-2 rounded-sm border px-1.5 py-0.5 align-middle",
+                                    // `tap-inline` opts out of the 44px coarse-pointer
+                                    // minimum from globals.css. The decode ROW is the
+                                    // touch target here — tapping it selects the station
+                                    // — so this is a secondary action inside an already
+                                    // large target, and inflating it to 44px tall would
+                                    // triple the row height on the device with the least
+                                    // vertical space to spare.
+                                    "tap-inline ml-2 rounded-sm border px-1.5 py-0.5 align-middle",
                                     "text-[10px] uppercase tracking-wide transition-colors",
                                     "border-line-strong text-fg-muted",
                                     "hover:border-accent-bright hover:text-accent-bright",
@@ -1463,23 +1906,55 @@ function WorkStationPanel({
   // how you make your first contact; the interface said nothing at all.
   if (!target && !active && !qso?.pausedReason) {
     return (
-      <div className="mb-4 rounded-sm border border-dashed border-line-strong bg-surface px-3 py-2 text-sm text-fg-muted">
-        <p>
-          Pick a station to work — press <span className="text-fg">Call</span> on any
-          decode below, or click its row. The exchange then runs itself: report,
-          roger-report, RR73, logged.
-        </p>
-        <div className="mt-2 border-t border-line pt-2">
-          <p className="mb-1.5 text-xs text-fg-subtle">
-            Or call someone who has not decoded here — a sked, or a station you have been
-            told is on. We transmit in the next cycle, so they answer in the one after.
-          </p>
-          <ManualCall
-            busy={busy}
-            suggestSlot={suggestSlot}
-            onCall={(c, hz) => void act("call", { theirCall: c, theirOffsetHz: hz })}
-          />
-        </div>
+      // MEASURED AT ROUGHLY 170px of tutorial, permanently, at the top of an operating
+      // screen — three lines of prose, a rule, two more lines and a five-control form,
+      // all of it rendered in the state the station spends most of its time in. On a
+      // 27" monitor there was ~989px of chrome above the first decode row and twelve
+      // decode rows below it, against the 45-60 WSJT-X shows; a busy 20m FT8 cycle
+      // produces 40-90 decodes, so the page could not display one cycle.
+      //
+      // COLLAPSED, NOT DELETED, and the split is the point. The sentence naming the
+      // click stays on screen unconditionally — it exists because this panel used to
+      // render NOTHING at all until after the click nobody knew to make, and hiding it
+      // behind a disclosure would recreate that fault exactly. What goes away is the
+      // manual-call form, which answers "work a station that has not decoded here": a
+      // sked, a net, someone on the phone. That is a real need and a rare one, and it is
+      // no part of anybody's first five minutes.
+      <div className="mb-4 rounded-sm border border-dashed border-line-strong bg-surface px-3 py-1.5 text-sm text-fg-muted">
+        <details>
+          {/* The native disclosure triangle is kept deliberately. It is the only thing
+              that says this line opens, and a sentence that reveals a form on click with
+              no marker is the same mistake as a table row you had to know was clickable
+              — which is a fault this file has already fixed once. */}
+          <summary className="cursor-pointer select-none">
+            Pick a station to work — press <span className="text-fg">Call</span> on any
+            decode below, or click its row.
+            <span className="ml-1.5 text-xs text-fg-subtle">
+              Sked, or a station that has not decoded? Open this.
+            </span>
+          </summary>
+          <div className="mt-2 border-t border-line pt-2">
+            <p className="mb-1.5 text-xs text-fg-subtle">
+              The exchange then runs itself: report, roger-report, RR73, logged. To call
+              someone who has not decoded here — a sked, or a station you have been told
+              is on — name them below. We transmit in the next cycle, so they answer in
+              the one after.
+            </p>
+            {/* Still MOUNTED while collapsed, which matters: ManualCall picks a clear
+                slot in its useState initialiser, so that pick happens at page load
+                exactly as it did before this became a disclosure, and is exactly as
+                liable to be stale by the time it is read. That is what "Find clear slot"
+                is for, and it was already true. */}
+            <ManualCall
+              busy={busy}
+              suggestSlot={suggestSlot}
+              onCall={(c, hz) => void act("call", { theirCall: c, theirOffsetHz: hz })}
+            />
+          </div>
+        </details>
+        {/* Outside the <details>: everything inside a closed one is hidden, and a refused
+            call must never be. The panel is open whenever this can fire today — but "is
+            open today" is precisely how a button comes to fail silently tomorrow. */}
         {error && <p className="mt-2 text-xs text-danger">{error}</p>}
       </div>
     );
@@ -1560,11 +2035,18 @@ function WorkStationPanel({
           )}
           {active && (
             <>
+              {/* THE QUIETEST BUTTON ON THE PAGE, AND THE MOST IMPORTANT.
+                  `variant="danger"` is a transparent outline — literally less
+                  emphasised than "Log a QSO" — on the one control that stops an
+                  unattended transmitter. `danger-solid` fills it, which is the only
+                  filled red on the screen, and Escape now does the same thing without a
+                  mouse at all. The take-over button a few lines up stays an outline
+                  deliberately: two solid reds and neither is the emergency one. */}
               <Button
-                variant="danger"
+                variant="danger-solid"
                 disabled={busy}
                 onClick={() => void act("qso-halt")}
-                title="Stop transmitting immediately — this QSO AND any automatic mode"
+                title="Stop transmitting immediately — this QSO AND any automatic mode. Escape does the same."
               >
                 HALT TX
               </Button>
@@ -1771,10 +2253,14 @@ function AutoPanel({
       </span>
 
       {(mode !== "off" || qso?.active) && (
+        // Solid, like the one in the Work station panel and for the same reason: this
+        // is the control that stops an automatic mode keying the radio on its own, and
+        // it was drawn as a transparent outline in a row of outlines.
         <Button
-          variant="danger"
+          variant="danger-solid"
           disabled={busy}
           onClick={() => void act({ action: "qso-halt" })}
+          title="Stop everything — this contact and the automatic mode. Escape does the same."
         >
           HALT
         </Button>
@@ -2261,7 +2747,11 @@ function SyncNowButton({ busy, onSync }: { busy: boolean; onSync: () => void | P
  * exactly why they are worth showing. A CQ heard 6,000 km away says the station is working
  * whether or not anybody came back.
  */
-function HeardBy() {
+// `className` reaches the Card so the caller can order this panel within the grid. It
+// is passed rather than applied to a wrapper because the Card is the grid ITEM and
+// stretches to the row height; a wrapper div would take that stretch and leave the card
+// at its natural height, which is a visible desktop change for a mobile fix.
+function HeardBy({ className }: { className?: string }) {
   const { data, error, loading, reload } = useApi<{
     since: string;
     receivers: {
@@ -2287,7 +2777,7 @@ function HeardBy() {
   }>("/api/psk-spots?minutes=60&limit=12");
 
   return (
-    <Card title="Heard by">
+    <Card title="Heard by" className={className}>
       {/* A PANEL THAT COULD NOT LOAD MUST NOT LOOK LIKE A QUIET BAND.
           These three states were one: `!data` rendered "Nobody yet, in the last hour"
           whether the answer was genuinely nobody or the request had failed — so a station

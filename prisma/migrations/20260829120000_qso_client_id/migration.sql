@@ -1,0 +1,37 @@
+-- An idempotency key chosen by the browser before the contact was submitted.
+--
+-- THE FAULT. `POST /api/qsos` is not intercepted by the service worker: sw.js returns
+-- true from `isLive()` for every non-GET and the fetch handler then returns without
+-- `respondWith`, which is the right call for a radio — a replayed mutation is worse than
+-- a failed one — but it leaves a submit on a dead link with nowhere to go. It throws,
+-- the operator sees nothing happen, and when signal comes back they tap Log QSO again.
+-- Nothing in the request distinguished that second attempt from a genuinely new contact,
+-- so the log gained a duplicate.
+--
+-- The slow-link case is worse than the dead-link case and is the one this column is
+-- really for: the first request can arrive and have only its RESPONSE lost, so the
+-- contact is already stored and the retry is a guaranteed duplicate rather than a
+-- possible one.
+--
+-- NULLABLE, and that is load-bearing. MySQL allows any number of NULLs in a unique
+-- index, so this backfills as NULL across the whole existing log and constrains nothing.
+-- Every contact from an ADIF import, from the digital path and from the bridge stays
+-- NULL too: none of them comes from a form that can be double-tapped, and requiring them
+-- to invent a key would be a schema change dressed up as a bug fix. Only the browser
+-- form sets it.
+--
+-- VARCHAR(64) rather than CHAR(36). The client generates a UUID, but the API route
+-- treats the value as an opaque token and never parses it, so the column is deliberately
+-- not pinned to that format. 64 characters of utf8mb4 is 256 bytes, well inside InnoDB's
+-- 3072-byte key limit, so the unique index below is legal.
+--
+-- WRITTEN BY HAND and applied with `migrate deploy` — the same route as the 20260805021500
+-- and 20260823150000 migrations. There is no database on the development machine
+-- (127.0.0.1:3306 is not listening), so `migrate dev` could not have generated it and this
+-- SQL has NOT been executed anywhere. It needs running against the live schema before the
+-- release is believed.
+ALTER TABLE `Qso` ADD COLUMN `clientId` VARCHAR(64) NULL;
+
+-- The name Prisma generates for a field-level `@unique`, so a later `migrate diff` sees
+-- the index it expects rather than proposing to drop and recreate it.
+CREATE UNIQUE INDEX `Qso_clientId_key` ON `Qso`(`clientId`);

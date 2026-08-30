@@ -26,6 +26,25 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * The request never reached the server, so nothing on the server changed.
+ *
+ * `status === 0` is already the sentinel the api* helpers use for this — a real HTTP
+ * response always carries a real status — but it was only ever written, never read, and
+ * every caller rendered `err.message` verbatim. That is how a POST that died in the radio
+ * came out on screen as `Failed to fetch`, a sentence which tells the operator nothing about
+ * the thing they care about: whether the contact survived.
+ *
+ * The distinction is worth a named predicate because the two sides need OPPOSITE handling.
+ * A server rejection (400, 409, 503) is final and the request must not be repeated as-is.
+ * A status-0 failure is not final and the right offer is Retry — the request may well have
+ * arrived and had its response lost, which is exactly why `POST /api/qsos` carries an
+ * idempotency key.
+ */
+export function isNetworkFailure(err: unknown): err is ApiError {
+  return err instanceof ApiError && err.status === 0;
+}
+
 async function request<T>(
   method: string,
   path: string,

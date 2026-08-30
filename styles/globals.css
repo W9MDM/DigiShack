@@ -12,26 +12,55 @@
    * Two reds, because one cannot do both jobs.
    *
    * #c21807 is the brand colour and it is excellent as a FILL: white on it measures
-   * 6.13:1. As TEXT on these surfaces it measures 2.45–3.23:1, which fails WCAG AA
+   * 6.13:1. As TEXT on these surfaces it measures 2.19–3.23:1, which fails WCAG AA
    * (4.5:1) and fails even the large-text floor (3:1) on surface-2 and surface-3. It
    * was being used for both, in 39 places.
    *
    * So `accent` is for backgrounds, borders and rules; `accent-bright` is the one to
-   * put text in. Worst case across all four surfaces: 4.90:1.
+   * put text in. Worst case across all four surfaces: 4.65:1.
    *
    * Verified by measurement, not by eye — a red on near-black looks fine to anyone
    * with ordinary vision and is genuinely hard to read for anyone without. */
   --color-accent: #c21807;
-  --color-accent-bright: #ff5c3d;
+  /* Was #ff5c3d, which measured 4.90:1 at worst against the OLD surface ramp. The ramp
+   * below was re-spaced and every surface got lighter; on the new surface-3 this same
+   * colour fell to 4.38:1 — under AA, and this is also the focus-ring colour, so the
+   * indicator would have gone with it. 4.65:1 now. */
+  --color-accent-bright: #ff6744;
   --color-accent-hover: #e01d09;
   --color-accent-muted: #7d1005;
   --color-accent-fg: #ffffff;
 
-  /* --- surfaces, darkest to lightest --- */
+  /* --- surfaces, darkest to lightest ---
+   *
+   * Re-spaced. The old ramp put bg → surface only 3.2 L* apart and the audit measured
+   * the perceived step at 2.9 — below the point where a step reads as a step at all.
+   * A Card was therefore not a lighter panel on a darker page; it was the same page
+   * with a 1px line drawn round it. That is how the interface ended up with 104
+   * borders and 2 shadows: the border was carrying the whole structure because
+   * nothing else was carrying any of it.
+   *
+   * Four roughly even steps of ~5.2–5.8 L* instead:
+   *
+   *     bg 2.76 → surface 7.94 → surface-2 13.54 → surface-3 19.31
+   *   (was 2.76 → 5.98      → 10.46          → 15.42)
+   *
+   * The cost is paid by the text on top: every surface got lighter, so fg-subtle,
+   * accent-bright and danger all had to be lifted to stay at AA on the new
+   * surface-3. `check:contrast` measures all of that from THIS FILE, so the ramp
+   * cannot be moved again without the text being made to follow it. */
   --color-bg: #0a0a0b;
-  --color-surface: #131316;
-  --color-surface-2: #1c1c21;
-  --color-surface-3: #26262d;
+  /* Recessed wells and inset areas — the file-input chip on the LoTW certificate
+     panel, the disabled/absent band cell on a callsign page. It has to sit BELOW
+     surface to read as recessed and ABOVE bg or it disappears into the page, so it
+     is the midpoint: L* 5.15, against bg 2.76 and surface 7.94.
+     `bg-bg-subtle` was written in 3 places before anything defined it, which in
+     Tailwind v4 means those elements had no background at all — see bg-raised
+     below for how that failure mode goes unnoticed. */
+  --color-bg-subtle: #111114;
+  --color-surface: #17171c;
+  --color-surface-2: #22222a;
+  --color-surface-3: #2e2e38;
   /* An ALIAS of --color-surface-2, and it exists because `bg-bg-raised` was already
      written in 19 places across 8 files before anything defined it.
      Tailwind v4 emits nothing for a token it cannot resolve — no error, no warning, no
@@ -42,26 +71,60 @@
      Defined rather than renamed at the 19 call sites because the name is the honest one:
      these are controls and panels raised off their container, and `bg-raised` says that
      where `bg-surface-2` only says how dark it is. Opacity modifiers (`bg-bg-raised/40`
-     on the panadapter and the setup page) need the token to exist too. */
-  --color-bg-raised: #1c1c21;
+     on the panadapter and the setup page) need the token to exist too.
+     Keep it equal to --color-surface-2; `check:tokens` will not catch it drifting. */
+  --color-bg-raised: #22222a;
 
   /* --- borders --- */
-  --color-line: #2e2e36;
-  --color-line-strong: #43434e;
+  --color-line: #34343f;
+  /* Was #43434e, and the reason it moved is WCAG 1.4.11, which asks 3:1 of a control's
+   * boundary against what is next to it. Every Input, Select, Textarea and secondary
+   * Button in the application is `bg-surface-2 border border-line-strong`, and that
+   * pair measured 1.74:1 — the field edge was decoration, not a boundary. An operator
+   * with age-related contrast loss reported the fields as "not obviously there".
+   *
+   * Re-spacing the ramp alone did not fix it: #4d4d5b on the new surface-2 reaches
+   * only 1.90:1, and even #6b6b7d only just clears 3:1 on surface-2 while failing on
+   * surface-3 — which is where a secondary button goes on hover, so the control would
+   * have lost its boundary at exactly the moment it was being pointed at.
+   *
+   * #787890 clears 3:1 against ALL FOUR surfaces — bg 4.61, surface 4.16, surface-2
+   * 3.67, surface-3 3.13 — so it is compliant wherever it lands, including states.
+   * It is deliberately much lighter than `line`: `line` draws card edges and table
+   * rules, which are decoration and carry no requirement; `line-strong` draws the
+   * edges of things you operate, which do. */
+  --color-line-strong: #787890;
 
   /* --- text --- */
   --color-fg: #f2f2f4;
-  --color-fg-muted: #a1a1ac;
-  /* Was #6e6e7a, which measured 2.99:1 on surface-3 — under the 3:1 floor. This is
-   * 4.76:1 at worst, so the quietest text in the interface is still readable. */
-  --color-fg-subtle: #90909c;
+  /* Moved up from #a1a1ac, and this is the "re-opening" the note below predicted.
+   *
+   * Lifting the surface ramp forced fg-subtle up to stay above AA, which left the two
+   * quiet greys 1.13:1 apart — near enough identical. That collapsed three text tiers
+   * into two, and thinning the hierarchy is the exact opposite of what this pass is for:
+   * the whole finding was that nothing on a page reads as more important than anything
+   * else. Fixing it by lowering fg-subtle would have put it back under AA, so fg-muted
+   * moves instead, as the note below says it should.
+   *
+   * The ladder is now roughly even — fg 1.72:1 above this, this 1.50:1 above fg-subtle —
+   * and the change also BUYS legibility rather than spending it: worst case across the
+   * four surfaces goes 5.25:1 -> 6.98:1. */
+  --color-fg-muted: #babac5;
+  /* Was #6e6e7a, which measured 2.99:1 on the old surface-3 — under the 3:1 floor.
+   * #90909c fixed that at 4.76:1, then the ramp above lifted surface-3 and took it
+   * back down to 4.26:1, under AA again. 4.65:1 now.
+   * It briefly sat 1.13:1 from fg-muted — the two quiet greys almost the same colour —
+   * and the fix was to move fg-muted up rather than this one down, since lowering this
+   * would put it back under AA. See the note on fg-muted above. */
+  --color-fg-subtle: #9797a4;
 
   /* --- semantic status (band/mode/QSL states) --- */
   --color-ok: #3fb950;
   --color-warn: #d29922;
-  /* Was #f85149, which measured 4.48:1 on surface-3 — two hundredths under AA, and
-   * this is the colour error messages are written in. */
-  --color-danger: #fa5e57;
+  /* Was #f85149, which measured 4.48:1 on the old surface-3 — two hundredths under AA,
+   * and this is the colour error messages are written in. #fa5e57 fixed that; the
+   * re-spaced ramp then put it at 4.35:1, so it moved again. 4.65:1 now. */
+  --color-danger: #ff655d;
   --color-info: #58a6ff;
 
   /* --- typography --- */
@@ -74,6 +137,28 @@
   --radius-sm: 2px;
   --radius-md: 3px;
   --radius-lg: 4px;
+
+  /* --- elevation ---
+   *
+   * The whole application has 104 borders and 2 shadows, which is what happens when
+   * the surface ramp is too flat to separate anything: the only tool left is a line.
+   *
+   * A drop shadow on its own barely works here. Against #0a0a0b there is almost
+   * nothing left to darken, so `0 10px 28px rgb(0 0 0 / .75)` over near-black moves
+   * the page by a couple of luminance points and reads as smudge rather than as
+   * height. The part that actually reads is the INSET TOP HIGHLIGHT — a 1px line of
+   * white at 5–7% along the top edge, which is the light-from-above cue, and it is
+   * what makes a panel look lit rather than outlined.
+   *
+   * So each of these is a highlight FIRST and a shadow second:
+   *   panel  — resting cards and toolbars; sits flat, just catches the light.
+   *   raised — popovers, menus, the HelpTip panel: things that float over content.
+   *   pop    — modals and anything that must sit above everything, with a hairline
+   *            ring standing in for a border so it still has an edge on any surface. */
+  --shadow-panel: inset 0 1px 0 0 rgb(255 255 255 / 0.05), 0 1px 2px rgb(0 0 0 / 0.5);
+  --shadow-raised: inset 0 1px 0 0 rgb(255 255 255 / 0.07),
+    0 10px 28px -10px rgb(0 0 0 / 0.75);
+  --shadow-pop: 0 20px 48px -12px rgb(0 0 0 / 0.85), 0 0 0 1px rgb(0 0 0 / 0.4);
 }
 
 @layer base {
@@ -114,7 +199,7 @@
   }
 
   /* The focus ring uses the bright accent: a focus indicator has to reach 3:1 against
-   * its background to be an indicator at all, and the brand red manages 2.45 on the
+   * its background to be an indicator at all, and the brand red manages 2.19 on the
    * lighter surfaces — where most focusable controls sit. */
   :focus-visible {
     outline: 2px solid var(--color-accent-bright);
@@ -124,6 +209,34 @@
   /* Dark scrollbars — the default light track is jarring against #0a0a0b. */
   * {
     scrollbar-color: var(--color-line-strong) transparent;
+  }
+
+  /* Respect a reduced-motion preference.
+   *
+   * There was no such block at all, and "there are no animations anyway" was not a
+   * defence: a count of the tree finds 0 keyframe animations but 20 `transition-*`
+   * utilities, one of which is `transition-transform` — something that MOVES. For
+   * a vestibular disorder that is the category that matters, and the operating
+   * system had been asked and was being ignored.
+   *
+   * Near-zero rather than `none` so that `transitionend` still fires: a handler
+   * waiting on it would otherwise hang forever, which is a worse bug than the one
+   * being fixed.
+   *
+   * This reaches CSS transitions and animations only. The panadapter waterfall is
+   * drawn frame by frame into a canvas from the bridge's FFT stream, and no
+   * stylesheet can slow that down — if reduced motion should stop the waterfall,
+   * that has to be read in JS at the draw loop. NOT DONE, and not something this
+   * file can do. */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
   }
 }
 
@@ -148,15 +261,54 @@
    * arthritis has the same trouble with a mouse. 44px is the usual floor.
    *
    * Deliberately NOT applied on fine pointers — this interface is meant to be dense
-   * on a desktop, and inflating every control there would cost more than it gains. */
+   * on a desktop, and inflating every control there would cost more than it gains.
+   *
+   * TWO FAULTS, both reported independently:
+   *
+   * 1. The selector listed buttons, links, checkboxes and radios and STOPPED. Text
+   *    inputs, selects and textareas — which is what a form mostly IS — were never
+   *    in it, so all 21 fields on the New QSO form stayed at their 34px padding
+   *    height on a tablet. The one form in the application that gets used with one
+   *    hand while holding a microphone was the one the rule missed.
+   *
+   * 2. `min-width: 44px` was applied to every button, and width is almost never the
+   *    failing dimension: a button with a label and horizontal padding is already
+   *    wider than 44px. What it caught instead were the controls with neither — the
+   *    `Call` chip inside every decode row (`px-1.5 py-0.5`, 10px type) and the
+   *    bare-text `clear` link next to the decode search. Both became 44x44 blobs,
+   *    and the decode table is 30 rows tall on the device with the least vertical
+   *    space to spare.
+   *
+   * So min-width is now applied ONLY to checkboxes and radios, which are the one
+   * case where width genuinely fails — a checkbox is ~16px square and has no label
+   * inside it to widen it. Everything else gets min-height and takes its width from
+   * its own content, which is what it was already doing correctly.
+   *
+   * `.tap-inline` opts out of the height too, for a control that is deliberately
+   * inline inside a line of text. Use it on the `Call` chip and the `clear` link:
+   * neither is stranded by it, because the decode ROW is itself the touch target
+   * (tapping it selects the station) and the chip is a secondary action within an
+   * already-large target. NOT YET APPLIED at those two call sites — decodes.tsx is
+   * owned elsewhere. */
   @media (pointer: coarse) {
     button,
     [role="button"],
     a.nav-target,
+    input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]),
+    select,
+    textarea {
+      min-height: 44px;
+    }
+
     input[type="checkbox"],
     input[type="radio"] {
       min-height: 44px;
       min-width: 44px;
+    }
+
+    .tap-inline {
+      min-height: 0;
+      min-width: 0;
     }
   }
 }

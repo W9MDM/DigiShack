@@ -243,6 +243,9 @@ console.log("\napplying the schedule to a radio");
     };
     const changes: AutoMode[] = [];
     const runner = startScheduleRunner({
+      // The fixture's clock. Without this the constructor's opening tick reads the real
+      // wall time, and these assertions pass or fail depending on the hour of the day.
+      now: () => inHours,
       cfg,
       errors: [],
       paDuty: { state: () => ({ resting: false, restUntil: null, txMinutes: 0 }) },
@@ -298,6 +301,9 @@ console.log("\napplying the schedule to a radio");
     const changes: AutoMode[] = [];
     let auto: { state: { mode: AutoMode }; setMode(m: AutoMode): void } | null = null;
     const runner = startScheduleRunner({
+      // The fixture's clock. Without this the constructor's opening tick reads the real
+      // wall time, and these assertions pass or fail depending on the hour of the day.
+      now: () => inHours,
       cfg,
       errors: [],
       paDuty: { state: () => ({ resting: false, restUntil: null, txMinutes: 0 }) },
@@ -329,6 +335,9 @@ console.log("\napplying the schedule to a radio");
     const decisions: { mode: AutoMode; reason: string }[] = [];
     let auto: { state: { mode: AutoMode }; setMode(m: AutoMode): void } | null = null;
     const runner = startScheduleRunner({
+      // The fixture's clock. Without this the constructor's opening tick reads the real
+      // wall time, and these assertions pass or fail depending on the hour of the day.
+      now: () => inHours,
       cfg,
       errors: [],
       paDuty: { state: () => ({ resting: false, restUntil: null, txMinutes: 0 }) },
@@ -368,6 +377,9 @@ console.log("\napplying the schedule to a radio");
     };
     const changes: AutoMode[] = [];
     const runner = startScheduleRunner({
+      // The fixture's clock. Without this the constructor's opening tick reads the real
+      // wall time, and these assertions pass or fail depending on the hour of the day.
+      now: () => inHours,
       cfg,
       errors: [],
       paDuty: { state: () => ({ resting: false, restUntil: null, txMinutes: 0 }) },
@@ -397,6 +409,9 @@ console.log("\napplying the schedule to a radio");
       },
     };
     const runner = startScheduleRunner({
+      // The fixture's clock. Without this the constructor's opening tick reads the real
+      // wall time, and these assertions pass or fail depending on the hour of the day.
+      now: () => inHours,
       cfg: { ...cfg, enabled: false },
       errors: [],
       paDuty: { state: () => ({ resting: false, restUntil: null, txMinutes: 0 }) },

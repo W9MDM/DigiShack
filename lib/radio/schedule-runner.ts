@@ -29,6 +29,12 @@ export interface SchedulableAuto {
 }
 
 export interface ScheduleRunnerOptions {
+  /**
+   * Override the clock. Tests only; production leaves it unset and gets `new Date()`.
+   * See the note on `clock` below for the four-hours-a-day failure this exists to stop.
+   */
+  now?: () => Date;
+
   cfg: ScheduleConfig;
   /** Problems found parsing `schedule.hours`, reported once at start. */
   errors: string[];
@@ -114,7 +120,26 @@ export function startScheduleRunner(opts: ScheduleRunnerOptions): ScheduleRunner
    */
   let lastScheduled: AutoMode | null = opts.initialLastScheduled ?? null;
 
-  const tick = (now: Date = new Date()): void => {
+  /**
+   * The clock this runner reads when nobody hands it a time.
+   *
+   * Injectable because it was NOT, and that made `check:schedule` fail for four hours a
+   * day. The constructor tick below runs with no argument, so it read the real clock —
+   * and a test that then ticks with fixed dates was really testing "does the machine's
+   * current wall time happen to fall in the same schedule block as the fixture". Inside
+   * `06:00-22:00` it passed; after 22:00 the opening tick decided `off`, stamped over the
+   * operator's mode, and three assertions failed with no code having changed.
+   *
+   * The same hidden-wall-clock shape as `firstTxWindow` in the QSO controller, found the
+   * same way: a check that fails on the clock rather than on the code.
+   *
+   * PRODUCTION BEHAVIOUR IS UNCHANGED — the default is the real clock, and the opening
+   * tick is deliberate: a boundary crossed while the bridge was down should be caught up
+   * on restart. Only the reading of it becomes something a test can supply.
+   */
+  const clock = opts.now ?? (() => new Date());
+
+  const tick = (now: Date = clock()): void => {
     // Decided (and reported) even while the source is being rebuilt: the decision
     // depends only on the clock and the PA, and the display should not blank out
     // for the seconds a reconnect takes.

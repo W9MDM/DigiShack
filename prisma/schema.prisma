@@ -263,6 +263,31 @@ model Operator {
 
 model Qso {
   id         String    @id @default(cuid())
+  /// Idempotency key chosen by the BROWSER before the contact was submitted.
+  ///
+  /// THE FAULT. `POST /api/qsos` is not intercepted by the service worker — sw.js
+  /// deliberately declines every non-GET, because a replayed mutation on a radio is worse
+  /// than a failed one — so a submit on a dead link simply throws. The operator sees
+  /// nothing happen, and when signal returns they tap Log QSO again. Nothing anywhere
+  /// could tell that second request from a genuinely new contact, so the log gained a
+  /// duplicate. Worse on a slow link than a dead one: the first request may have arrived
+  /// and had only its RESPONSE lost, so the contact is already stored and the retry is a
+  /// certain duplicate.
+  ///
+  /// Unique, so the second attempt cannot insert. The route returns the existing row
+  /// rather than a 409: from the operator standpoint the contact IS logged, and an error
+  /// would send them looking for a problem that does not exist.
+  ///
+  /// NULLABLE, and that is load-bearing. MySQL permits any number of NULLs in a unique
+  /// index, so every contact that predates this column, every ADIF import, every contact
+  /// logged by the digital path and everything the bridge writes stays unconstrained —
+  /// none of those come from a form that can be double-tapped, and none of them should
+  /// have to invent a key to be insertable.
+  ///
+  /// VarChar(64) rather than CHAR(36): the client generates a UUID, but the server treats
+  /// the value as an OPAQUE token and never parses it, so nothing here should be pinned to
+  /// one format. 64 x 4 bytes of utf8mb4 is well inside InnoDB’s 3072-byte key limit.
+  clientId   String?   @unique @db.VarChar(64)
   callsign   String    @db.VarChar(32)
   band       String    @db.VarChar(12)
   freqHz     BigInt
