@@ -30,6 +30,14 @@ export interface ClubLogCredentials {
 
   /** Station callsign the log belongs to. */
   callsign: string;
+  /**
+   * Club Log's optional `api` field, when the operator has one.
+   *
+   * Undefined rather than empty when unset, so the request omits the field entirely. An
+   * empty `api=` is not the same as no `api` at all, and a service that reads one as an
+   * invalid credential would refuse a request that succeeds without it.
+   */
+  apiKey?: string;
 }
 
 export async function getClubLogCredentials(): Promise<ClubLogCredentials | null> {
@@ -39,10 +47,12 @@ export async function getClubLogCredentials(): Promise<ClubLogCredentials | null
   const password =
     (await getSetting("clublog.appPassword")) ?? (await getSetting("clublog.password"));
   if (!email || !password) return null;
+  const apiKey = (await getSetting("clublog.apiKey"))?.trim();
   return {
     email,
     password,
     callsign: (await getSetting("clublog.callsign")) ?? "",
+    apiKey: apiKey ? apiKey : undefined,
   };
 }
 
@@ -96,6 +106,10 @@ export async function uploadAdifToClubLog(
   form.set("email", creds.email);
   form.set("password", creds.password);
   form.set("callsign", callsign.toUpperCase());
+  // Documented as optional and obtained from Club Log's helpdesk, so it is sent only when
+  // present. See clublog.apiKey in the settings registry for why an empty one is worse
+  // than none.
+  if (creds.apiKey) form.set("api", creds.apiKey);
   if (opts.clear) form.set("clear", "1");
   // Club Log expects a file part, not a plain field.
   form.set("file", new Blob([adif], { type: "text/plain" }), "digishack.adi");

@@ -19,7 +19,7 @@ be read: `DATABASE_URL`, `SETTINGS_KEY` and `PORT`.
 - [QRZ.com](#qrz-com) — 3 settings
 - [Logbook of the World](#logbook-of-the-world) — 12 settings
 - [eQSL.cc](#eqsl-cc) — 5 settings
-- [ClubLog](#clublog) — 4 settings
+- [ClubLog](#clublog) — 5 settings
 - [Cloudlog / Wavelog](#cloudlog-wavelog) — 3 settings
 - [HRDLOG.net](#hrdlog-net) — 2 settings
 - [N3FJP Amateur Contact Log](#n3fjp-amateur-contact-log) — 2 settings
@@ -102,6 +102,7 @@ DXCC statistics, an online log and the OQRS card service. Authenticates by REGIS
 | ClubLog password | `clublog.password` | secret | from `CLUBLOG_PASSWORD` | Your Club Log account password. The API endpoints prefer an application password (below); downloads work with either. |
 | Club Log station callsign | `clublog.callsign` | text | — | Which callsign's log to upload to. Leave blank to use the station on the QSO. |
 | ClubLog application password | `clublog.appPassword` | secret | — | Club Log's separate API credential, created under Settings -> Application Passwords on clublog.org. Uploads may require this rather than the account password; downloads work with either. |
+| ClubLog API key | `clublog.apiKey` | secret | — | Optional in Club Log's own documentation, and requested from their helpdesk rather than generated on the site. Sent as the `api` field when set, and omitted entirely when blank — an empty key is not the same as no key, and a service that reads one as an invalid credential would refuse a request that works without it. Worth setting if uploads are refused at the edge: measured from this station, getadif.php answers 200 while putlogs.php and realtime.php return a bare nginx 403 that never reaches the application, which no credential can affect but an allow-listed key might. |
 
 ## Cloudlog / Wavelog
 
@@ -459,6 +460,7 @@ page shows whether one is set, not what it is.
 - `eqsl.password` — eQSL password
 - `clublog.password` — ClubLog password
 - `clublog.appPassword` — ClubLog application password
+- `clublog.apiKey` — ClubLog API key
 - `cloudlog.apiKey` — Cloudlog API key
 - `hrdlog.code` — HRDLOG upload code
 - `dxcc.ctyApiKey` — Club Log cty API key

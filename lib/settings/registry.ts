@@ -583,6 +583,13 @@ export const SETTINGS: SettingDef[] = [
     group: "clublog",
     help: "Club Log's separate API credential, created under Settings -> Application Passwords on clublog.org. Uploads may require this rather than the account password; downloads work with either.",
   },
+  {
+    key: "clublog.apiKey",
+    label: "ClubLog API key",
+    type: "secret",
+    group: "clublog",
+    help: "Optional in Club Log's own documentation, and requested from their helpdesk rather than generated on the site. Sent as the `api` field when set, and omitted entirely when blank — an empty key is not the same as no key, and a service that reads one as an invalid credential would refuse a request that works without it. Worth setting if uploads are refused at the edge: measured from this station, getadif.php answers 200 while putlogs.php and realtime.php return a bare nginx 403 that never reaches the application, which no credential can affect but an allow-listed key might.",
+  },
 
   // --- HRDLOG ---
   {
