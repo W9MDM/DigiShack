@@ -1,6 +1,6 @@
 {
   "name": "digishack",
-  "version": "1.153.0",
+  "version": "1.153.1",
   "license": "GPL-3.0-or-later",
   "private": true,
   "description": "Web-based amateur radio logging platform — Cloudlog-level parity with native FT4/FT8 and FlexRadio support",

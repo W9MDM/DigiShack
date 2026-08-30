@@ -189,6 +189,20 @@ export class FlexDaxTransmitter {
   /** True between xmit 1 and xmit 0. */
   private keyed = false;
   private busy = false;
+  /**
+   * When `busy` was set, and for which window. Null whenever `busy` is false.
+   *
+   * Recorded because `TX refused: A transmission is already in progress` has been the most
+   * common refusal in the log by a wide margin - 831 occurrences, and the rate tripled from
+   * ~2% of attempts to ~10% the hour 1.129.0 landed - and the message cannot say WHICH of
+   * the two flags refused it, nor for how long it has been set. Diagnosing it from the log
+   * meant inferring intervals between unrelated lines, which produced a plausible theory
+   * about window slack that a measurement then disproved.
+   *
+   * A refusal is cheap; a refusal nobody can explain is not.
+   */
+  private busySince: number | null = null;
+  private busyForWindow: number | null = null;
   private watchdog: NodeJS.Timeout | null = null;
   private packetCount = 0;
 
@@ -653,7 +667,20 @@ export class FlexDaxTransmitter {
       return { ...base, reason: "Transmitter is not started" };
     }
     if (this.busy || this.keyed) {
-      return { ...base, reason: "A transmission is already in progress" };
+      // WHICH flag, and for how long. The two mean different things: `keyed` is the radio
+      // actually on the air, `busy` is this object holding the transmitter - including
+      // across the pre-transmission wait below, which can legitimately be tens of seconds
+      // and is the one case where "in progress" is not literally true.
+      const held = this.busySince === null ? null : Math.round(nowMs() - this.busySince);
+      const which = this.keyed && this.busy ? "keyed and busy" : this.keyed ? "keyed" : "busy";
+      const forWin =
+        this.busyForWindow === null ? "" : `, holding for window ${this.busyForWindow}`;
+      return {
+        ...base,
+        reason:
+          `A transmission is already in progress (${which}` +
+          `${held === null ? "" : ` for ${held}ms`}${forWin})`,
+      };
     }
 
     // Generate FIRST. If this throws we have not keyed, which is the whole point
@@ -696,8 +723,18 @@ export class FlexDaxTransmitter {
     }
 
     this.busy = true;
+    this.busySince = nowMs();
+    this.busyForWindow = Math.round(audioStartAt);
 
     try {
+      // HELD ACROSS THE WAIT, DELIBERATELY - two transmissions must not be scheduled at
+      // once - but that means `busy` is true for a transmission that has not started, for
+      // as long as `waitMs`. With `startCall` scheduling up to a period ahead, the log
+      // shows `first transmission in 27.9s` forty times in one day, and every tick in that
+      // window is refused with a message claiming a transmission is in progress when none
+      // is. Measured: only ~18% of refusals coincide with a far-ahead pending transmission,
+      // so this is a real defect and NOT the main cause. The rest is still open; the
+      // instrumentation above exists to find it rather than guess again.
       if (waitMs > 0) await new Promise((r) => setTimeout(r, waitMs));
 
       // Watchdog armed BEFORE keying, and deliberately not cleared by the send
@@ -750,6 +787,8 @@ export class FlexDaxTransmitter {
       };
     } finally {
       this.busy = false;
+      this.busySince = null;
+      this.busyForWindow = null;
     }
   }
 
