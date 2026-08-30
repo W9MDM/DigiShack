@@ -371,6 +371,79 @@ check(
   `unwrapped: ${unwrapped.join(", ")}`,
 );
 
+// ------------------------------------------------------------------ the install button
+//
+// > "can we add the install button somewhere? maybe at the bottom?"
+//
+// A button that silently does nothing is worse than no button, and there are four separate
+// reasons an install may be unavailable that are invisible from the page. These assert
+// that each is HANDLED rather than assumed away - the same rule as the "Heard by" panel,
+// where an empty answer was being reported as a fact about the world when it was a fact
+// about the setup.
+
+const install = read("components/layout/InstallButton.tsx");
+
+check(
+  "the install button is in the shell",
+  read("components/layout/Shell.tsx").includes("<InstallButton />"),
+  "nothing renders it, so it reaches nobody",
+);
+check(
+  "it sits in a footer",
+  /<footer[\s\S]{0,400}<InstallButton \/>/.test(read("components/layout/Shell.tsx")),
+  "asked for at the bottom of the page",
+);
+check(
+  "it keeps the beforeinstallprompt event",
+  install.includes("beforeinstallprompt") && /setPrompt\(/.test(install),
+  "after preventDefault this object is the ONLY way to open the dialog later",
+);
+check(
+  "it calls preventDefault, so the browser does not raise its own bar instead",
+  /preventDefault\(\)/.test(install),
+  "",
+);
+check(
+  "already-installed is detected and renders nothing",
+  install.includes("display-mode: standalone") && install.includes("standalone"),
+  "the prompt never fires again once installed, correctly",
+);
+check(
+  "a non-secure context is EXPLAINED rather than silently omitted",
+  install.includes("isSecureContext") && /https/i.test(install),
+  "reaching the app by LAN address is the likeliest reason no install appears",
+);
+check(
+  "iOS gets instructions, since it has no install event at all",
+  /iPad|iPhone/.test(install) && /Add to Home Screen/i.test(install),
+  "Safari installs from the Share menu and has never implemented beforeinstallprompt",
+);
+check(
+  "the iPad-as-Mac user agent is covered",
+  install.includes("maxTouchPoints"),
+  "a touch iPad reports itself as Macintosh, so the UA alone misses it",
+);
+check(
+  "the prompt is used once and dropped",
+  /setPrompt\(null\)/.test(install),
+  "firing a spent prompt throws",
+);
+check(
+  "appinstalled is observed, so the button leaves after a successful install",
+  install.includes("appinstalled"),
+  "",
+);
+check(
+  "listeners are removed on unmount",
+  /removeEventListener\("beforeinstallprompt"/.test(install),
+  "",
+);
+check(
+  "the safe-area inset moved to the footer with it",
+  /<footer[^>]*env\(safe-area-inset-bottom\)/.test(read("components/layout/Shell.tsx")),
+  "on a phone it is the bottom of the page that must clear the home indicator",
+);
+
 // ------------------------------------------------------------------ result
 
 console.log(

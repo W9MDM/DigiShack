@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { InstallButton } from "@/components/layout/InstallButton";
 import { Ft0Button } from "@/components/layout/Ft0Button";
 import { UtcClock } from "@/components/layout/UtcClock";
 import { useRouter } from "next/router";
@@ -395,10 +396,26 @@ export function Shell({
 
       <main
         id="main"
-        className="flex-1 mx-auto w-full max-w-[1600px] px-4 py-6 pb-[max(1.5rem,env(safe-area-inset-bottom))]"
+        className="flex-1 mx-auto w-full max-w-[1600px] px-4 py-6"
       >
         {children}
       </main>
+
+      {/*
+        The footer, which exists for one thing: somewhere to say the app can be installed.
+
+        The PWA has been complete since 1.118.0 and nothing on any page mentioned it, so
+        installing depended on the operator knowing their browser hides a menu item for
+        it. `InstallButton` renders nothing at all when there is nothing useful to say —
+        already installed, or the browser has not offered — so this row is usually empty
+        and costs a few pixels.
+
+        The safe-area padding moved here from `main`: on a phone it is the bottom of the
+        page that must clear the home indicator, and that is now this.
+      */}
+      <footer className="mx-auto w-full max-w-[1600px] px-4 pb-[max(1rem,env(safe-area-inset-bottom))] pt-2 flex items-center justify-center min-h-8">
+        <InstallButton />
+      </footer>
     </div>
   );
 }
