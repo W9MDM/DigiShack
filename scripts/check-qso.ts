@@ -208,7 +208,14 @@ async function main(): Promise<void> {
     ok(t2.state === "complete", "rr73-sent repeat limit completes rather than abandons");
     ok(t2.log !== undefined, "still produces the log entry");
 
-    // Messages from third parties must not advance the machine.
+    // Messages from third parties must not ADVANCE the machine.
+    //
+    // This assertion used to cover two cases with one claim — "third-party messages
+    // ignored" — and one of the two was the bug. `K1ABC K1DEF -09` is our target
+    // answering somebody else, which is not noise to be ignored: it is the plainest
+    // statement available that they are not listening for us, and ignoring it is what had
+    // this station transmitting into other people's exchanges. See "They are working
+    // somebody else" below. Split, because the two halves now have different answers.
     const q3 = new QsoSequencer({
       myCall: "K9XYZ",
       myGrid: "EN61",
@@ -217,9 +224,10 @@ async function main(): Promise<void> {
       role: "caller",
     });
     q3.tick(0);
-    q3.onDecode("K9XYZ N0CALL -05", 5_000); // different station calling us
+    q3.onDecode("K9XYZ N0CALL -05", 5_000); // a different station calling us
+    ok(q3.currentState === "calling", "a stranger calling us does not advance the machine");
     q3.onDecode("K1ABC K1DEF -09", 6_000); //  our target working someone else
-    ok(q3.currentState === "calling", "third-party messages ignored");
+    ok(q3.currentState === "abandoned", "our target answering somebody else ends the call");
   }
 
   console.log("\noperating guards");
@@ -808,6 +816,137 @@ async function main(): Promise<void> {
     // Exactly the transmission that was ignored.
     q.onDecode("K9XYZ RR73; DL2HIR <3D2USU> -20", 37_000);
     ok(q.isDone, "a fox/hound RR73 closes the contact");
+  }
+
+  // ---------------------------------------------------------------------------------
+  // Do not spend a window on a station that is not listening.
+  //
+  // > "on a decode if we are calling another station and you see that they are calling
+  // >  another station why do we continue to call"
+  //
+  // From the transcript that prompted it - W9ABC calling N5MIG/P:
+  //
+  //     37:45  CQ N5MIG/P EM64
+  //     38:15  KO4OIG N5MIG/P +03      <- they answered KO4OIG, not us
+  //     38:30  N5MIG/P W9ABC EN61       <- we called anyway
+  //     38:45  KO4OIG N5MIG/P RR73
+  //     39:00  N5MIG/P W9ABC EN61       <- and again
+  //     39:15  CE8VJG N5MIG/P EM64     <- now working CE8VJG
+  //     39:30  N5MIG/P W9ABC EN61       <- and again
+  //
+  // The information was in the decodes the whole time; `applyOne` discarded any message
+  // from them not addressed to us.
+  //
+  // THE FIX IS TO RELEASE THE TRANSMITTER, NOT TO GO QUIET. Those are different, and the
+  // difference is the whole point: while a sequencer is live the auto operator will not
+  // touch the transmitter, so holding silent costs exactly as many windows as calling into
+  // a conversation - it just wastes them quietly. Ending the call hands the window back to
+  // be spent on somebody who might answer.
+  console.log("");
+  console.log("They are working somebody else");
+  {
+    const mk = (): QsoSequencer =>
+      new QsoSequencer({
+        myCall: "W9ABC",
+        myGrid: "EN61",
+        theirCall: "N5MIG/P",
+        theirSnr: -3,
+        role: "caller",
+        startedAt: 0,
+      });
+
+    {
+      const q = mk();
+      eq(q.tick(15_000).send, "N5MIG/P W9ABC EN61", "we call once");
+      q.onDecode("KO4OIG N5MIG/P +03", 22_000);
+      ok(q.isDone, "seeing them answer somebody else ends the call at once");
+      const t = q.tick(45_000);
+      eq(t.send, null, "we do not transmit into their exchange");
+      eq(t.state, "abandoned", "the transmitter is free for the auto operator");
+      eq(t.abandonReason, "They are working KO4OIG", "and the reason names who, not 'no reply'");
+    }
+
+    {
+      // Decided at DECODE time, which is what makes it free. Their message lands in their
+      // window, so the release happens before our next transmit window comes round.
+      const q = mk();
+      q.tick(15_000);
+      q.onDecode("KO4OIG N5MIG/P +03", 22_000);
+      ok(q.isDone, "released on the decode, not deferred to the next tick");
+    }
+
+    {
+      // A CLOSING TOKEN IS THE OPPOSITE SIGNAL. Their RR73 to somebody else means they are
+      // free, and the next window is the one to be in - ahead of everyone else waiting.
+      const q = mk();
+      q.tick(15_000);
+      q.onDecode("KO4OIG N5MIG/P RR73", 22_000);
+      ok(!q.isDone, "their RR73 to another station does not end our call");
+      eq(q.tick(45_000).send, "N5MIG/P W9ABC EN61", "we call straight into the gap");
+    }
+
+    {
+      // Nor does a CQ, which is the same signal by another route.
+      const q = mk();
+      q.tick(15_000);
+      q.onDecode("CQ N5MIG/P", 22_000);
+      ok(!q.isDone, "a CQ from them means they are listening");
+    }
+
+    {
+      // Somebody else calling THEM is not evidence about them at all - it is evidence
+      // about the caller. Only a message FROM our partner counts.
+      const q = mk();
+      q.tick(15_000);
+      q.onDecode("N5MIG/P KO4OIG EM64", 22_000);
+      ok(!q.isDone, "another station calling them proves nothing; they may still pick us");
+    }
+
+    {
+      // Reports had gone BOTH ways before they wandered off, so the exchange is kept
+      // rather than discarded - the far station may well have logged it. Same rule as the
+      // no-reply abandon; thirteen contacts went missing before it existed.
+      const q = mk();
+      q.tick(15_000);
+      q.onDecode("W9ABC N5MIG/P -12", 22_000);
+      q.tick(45_000);
+      q.onDecode("KO4OIG N5MIG/P +03", 52_000);
+      const t = q.tick(75_000);
+      eq(t.state, "abandoned", "they moved on mid-exchange");
+      ok(t.abandoned !== undefined, "and the incomplete exchange is kept, not thrown away");
+      eq(t.abandoned?.reportRcvd, "-12", "with the report they gave us");
+    }
+
+    {
+      // Reported exactly once. A second tick must not re-announce it, or the controller
+      // would log the abandonment twice and record the incomplete exchange twice with it.
+      const q = mk();
+      q.tick(15_000);
+      q.onDecode("KO4OIG N5MIG/P +03", 22_000);
+      ok(q.tick(45_000).abandonReason !== undefined, "first tick carries the reason");
+      eq(q.tick(75_000).abandonReason, undefined, "the next one does not repeat it");
+    }
+
+    {
+      // The whole sequence from the report, end to end. Three transmissions into a
+      // conversation nobody was listening to; one now, and the rest of the airtime is the
+      // auto operator's to spend on somebody workable.
+      const q = mk();
+      const sent: string[] = [];
+      const push = (t: { send: string | null }): void => {
+        if (t.send) sent.push(t.send);
+      };
+      q.onDecode("CQ N5MIG/P EM64", 0);
+      push(q.tick(15_000));
+      q.onDecode("KO4OIG N5MIG/P +03", 20_000);
+      push(q.tick(45_000));
+      q.onDecode("KO4OIG N5MIG/P RR73", 50_000);
+      push(q.tick(75_000));
+      q.onDecode("CE8VJG N5MIG/P EM64", 80_000);
+      push(q.tick(105_000));
+      eq(sent.length, 1, "one call, not three");
+      eq(sent[0], "N5MIG/P W9ABC EN61", "and it is the one that had a chance");
+    }
   }
 
   console.log(`\n${pass} passed, ${fail} failed\n`);

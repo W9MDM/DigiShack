@@ -368,6 +368,39 @@ export class QsoSequencer {
   private theirGrid: string | null;
   private reportRcvd: string | null = null;
   private repeats = 0;
+  /**
+   * Who they are working, when it is not us. Null when they are free.
+   *
+   * > "on a decode if we are calling another station and you see that they are calling
+   * >  another station why do we continue to call"
+   *
+   * We always had this and threw it away: `applyOne` discarded any message from them that
+   * was not addressed to us, so a decode of them reporting to somebody else — the plainest
+   * possible statement that they are not listening for us — changed nothing, and we
+   * transmitted straight over their exchange. From a real transcript:
+   *
+   *     37:45  CQ N5MIG/P EM64
+   *     38:15  KO4OIG N5MIG/P +03      <- they answered KO4OIG, not us
+   *     38:30  N5MIG/P W9ABC EN61       <- we called anyway
+   *     38:45  KO4OIG N5MIG/P RR73
+   *     39:00  N5MIG/P W9ABC EN61       <- and again
+   *     39:15  CE8VJG N5MIG/P EM64     <- now they are working CE8VJG
+   *     39:30  N5MIG/P W9ABC EN61       <- and again
+   *
+   * Three transmissions into a conversation nobody was listening to. Useless to us and
+   * QRM to them.
+   */
+  private theirPartner: string | null = null;
+
+  /**
+   * An abandonment decided at DECODE time, waiting for the next tick to report it.
+   *
+   * `applyOne` has no return value — it reacts to a decode — but abandoning has an outcome
+   * the controller must see exactly once: the reason for the log, and the incomplete
+   * exchange when reports had gone both ways. Stashed here and drained by the next tick,
+   * so deciding early costs nothing and reports identically to abandoning in `tick`.
+   */
+  private pendingAbandon: QsoTick | null = null;
   private lastSent: string | null = null;
   private logged = false;
 
@@ -418,13 +451,49 @@ export class QsoSequencer {
   }
 
   private applyOne(p: ParsedMessage, at: number): void {
-    if (p.kind === "cq" && p.from === this.theirCall && p.grid) {
-      this.theirGrid = this.theirGrid ?? p.grid;
+    if (p.kind === "cq" && p.from === this.theirCall) {
+      // Calling CQ means whatever they were doing is finished and they are listening
+      // again. This is the clearest "free" signal there is, and it is worth acting on even
+      // when the CQ carries no grid.
+      this.theirPartner = null;
+      if (p.grid) this.theirGrid = this.theirGrid ?? p.grid;
       return;
     }
     if (p.kind !== "directed") return;
     if (p.from !== this.theirCall) return;
-    if (p.to !== this.o.myCall.toUpperCase()) return;
+
+    // ARE THEY TALKING TO SOMEBODY ELSE? See `theirPartner`.
+    if (p.to !== this.o.myCall.toUpperCase()) {
+      // A CLOSING TOKEN FREES THEM. `KO4OIG N5MIG/P RR73` ends their exchange, so this is
+      // the best possible moment to be calling rather than a reason to stop — the next
+      // window is the one to be in, ahead of everyone else who was waiting.
+      if (p.payload.type === "rr73" || p.payload.type === "rrr" || p.payload.type === "73") {
+        this.theirPartner = null;
+        return;
+      }
+
+      // Mid-exchange: a grid, a report, an R-report to somebody else. They are committed
+      // to that station for the next several windows and are not listening for us.
+      //
+      // GIVE THE TRANSMITTER UP NOW, rather than going quiet and keeping it. Those are
+      // not the same thing, and the difference is the whole point: while a sequencer is
+      // live the auto operator will not touch the transmitter, so a sequencer that holds
+      // silent costs exactly as many windows as one that calls into a conversation — it
+      // just wastes them quietly. Ending here hands the next window back, and the auto
+      // operator spends it on a station that might actually answer, or on a CQ.
+      //
+      // Acted on at DECODE time, not at the next tick, and that placement is what makes
+      // it free: their message arrives in their window, so the release happens before our
+      // next transmit window comes round and nothing is lost at all.
+      this.theirPartner = p.to;
+      if (this.state !== "complete" && this.state !== "abandoned") {
+        this.abandonFor(`They are working ${p.to}`, at);
+      }
+      return;
+    }
+
+    // Addressed to us, so whoever they were working, they are working us now.
+    this.theirPartner = null;
 
     // Any on-topic reply resets the repeat counter — the path is alive.
     this.repeats = 0;
@@ -485,6 +554,31 @@ export class QsoSequencer {
   }
 
   /**
+   * End the call now, for a reason that is not "nobody replied".
+   *
+   * Mirrors the abandon in `tick` exactly, including keeping the exchange when reports
+   * went BOTH ways — that case is a contact the far station may well have logged, and
+   * discarding it is how thirteen QSOs went missing until QRZ card requests turned them
+   * up months later. The only difference is when the decision is taken.
+   */
+  private abandonFor(reason: string, at: number): void {
+    this.state = "abandoned";
+    const out: QsoTick = { send: null, state: this.state, abandonReason: reason };
+    if (this.reportRcvd) {
+      out.abandoned = {
+        theirCall: this.theirCall,
+        theirGrid: this.theirGrid,
+        reportSent: formatReport(this.o.theirSnr),
+        reportRcvd: this.reportRcvd,
+        stage: "rreport-sent",
+        startedAt: this.o.startedAt,
+        endedAt: at,
+      };
+    }
+    this.pendingAbandon = out;
+  }
+
+  /**
    * `closedWith73` means THEY signed off, not merely confirmed.
    *
    * The distinction decides whether we owe a courtesy 73. It used to be inferred from the
@@ -517,7 +611,10 @@ export class QsoSequencer {
    */
   tick(at: number): QsoTick {
     if (this.state === "abandoned") {
-      return { send: null, state: this.state };
+      // Reported once, then the sequencer is inert. See `pendingAbandon`.
+      const pending = this.pendingAbandon;
+      this.pendingAbandon = null;
+      return pending ?? { send: null, state: this.state };
     }
 
     if (this.state === "complete") {

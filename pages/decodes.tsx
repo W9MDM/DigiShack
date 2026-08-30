@@ -1491,7 +1491,9 @@ function WorkStationPanel({
     "rreport-sent": "R-report sent — waiting for RR73",
     "rr73-sent": "RR73 sent — waiting for their 73",
     complete: "QSO complete — logged",
-    abandoned: "Gave up (no reply)",
+    // Two reasons reach this state now: nobody replied, or they answered somebody
+    // else and we released the transmitter rather than call into their exchange.
+    abandoned: "Call ended",
   };
 
   return (
