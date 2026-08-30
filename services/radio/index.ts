@@ -89,7 +89,7 @@ import { freqToBand } from "@/lib/ham/bands";
 import { inferDigitalMode, type DigitalMode } from "@/lib/ham/digital-freqs";
 import { clearAlert, raiseAlert } from "@/lib/alerts";
 import { guardFaultsCleared, watchGuardFaults } from "./guard-alerts";
-import { TxPowerTracker } from "@/lib/radio/power";
+import { TxPowerTracker, dbmToWatts } from "@/lib/radio/power";
 import { NoiseFloor } from "@/lib/radio/noise";
 import { UNREAD_RECEIVER, type ReceiverControls } from "@/lib/radio/receiver-controls";
 import { getEqslCredentials, syncEqslInbox } from "@/lib/integrations/eqsl";
@@ -442,6 +442,25 @@ let activeGuards: OperatingGuards | null = null;
  * reconnect.
  */
 let activeTxPower: TxPowerTracker | null = null;
+
+/**
+ * Did the radio report any real forward power during the transmission in progress?
+ *
+ * "you're not making any power out" - keyed, 2,370 DAX packets streamed, PA cold at 34 C,
+ * SWR 1.0, nothing on the air. The TX slice was sitting in USB instead of DIGU: in a voice
+ * mode the radio takes audio from a microphone that is not there and ignores the DAX
+ * stream entirely.
+ *
+ * The preflight had ALREADY detected it, filed it as a warning nothing surfaces, computed
+ * once at attach and never re-checked - so it also went on claiming USB after the mode was
+ * corrected. A transmitter that keys and makes no power is never acceptable and never
+ * ambiguous, so it is judged here against the one source that cannot go stale: the radio's
+ * own forward-power meter, read while we are actually on the air.
+ *
+ * Module scope because the two radios' meter handlers and the transmit handler are built
+ * in different places and all three feed the same judgement.
+ */
+let sawRfThisTx = false;
 /**
  * The receive noise floor, per running session.
  *
@@ -1276,6 +1295,11 @@ async function startFlexSource(): Promise<() => Promise<void>> {
     // "what power was this contact made with". `fwdDbm` is null on receive, so
     // nothing but real transmissions reaches the tracker.
     activeTxPower?.sample(m.fwdDbm);
+    // Same floor the tracker uses: a transmitter that is OFF reads a very low dBm rather
+    // than nothing, so "any reading at all" would be satisfied by silence.
+    if (status.transmitting && m.fwdDbm !== null && dbmToWatts(m.fwdDbm) > 0.05) {
+      sawRfThisTx = true;
+    }
     // Receive only: a level taken while transmitting measures our own signal.
     if (!status.transmitting) noiseFloor.sample(m.dbm);
   });
@@ -1608,6 +1632,18 @@ async function startFlexSource(): Promise<() => Promise<void>> {
     // offers one list. Unmapped, the picker fell through to its placeholder and read "DIGU",
     // which is exactly what a broken control looks like.
     status.radioMode = fromFlexMode(slice.mode);
+
+    // RE-CHECKED ON EVERY SLICE UPDATE. The preflight version is computed once at attach
+    // and is wrong for ever after the mode changes: setting the slice to DIGU left the
+    // stale "TX slice mode is USB" standing, which is worse than no warning at all
+    // because it says the thing you just fixed is still broken.
+    const digitalSlice = (slice.mode ?? "").toUpperCase().startsWith("DIG");
+    status.txWarnings = [
+      ...status.txWarnings.filter((w) => !w.startsWith("TX slice mode is")),
+      ...(digitalSlice
+        ? []
+        : [`TX slice mode is ${slice.mode}, not DIGU/DIGL - no audio will reach the transmitter`]),
+    ];
     status.deCall = rig.state.callsign;
     // What the radio calls itself, from `info` — "FLEX-6400". Set here rather than at
     // connect because readInfo() is what fills it in.
@@ -1642,11 +1678,39 @@ async function startFlexSource(): Promise<() => Promise<void>> {
     // audio just stops), and the guard-tail drop makes any `dropUntil` test true for
     // every window. The radio's own transmit transitions are the only ground truth, and
     // they cover a front-panel key or an ATU tune as well as our own transmissions.
-    if (tx) txSpanStart = Date.now();
-    else if (txSpanStart !== null) {
+    if (tx) {
+      txSpanStart = Date.now();
+      sawRfThisTx = false;
+    } else if (txSpanStart !== null) {
+      const heldMs = Date.now() - txSpanStart;
       txSpans.push([txSpanStart, Date.now()]);
       if (txSpans.length > 40) txSpans.shift();
       txSpanStart = null;
+
+      // KEYED, AND NOTHING CAME OUT. Only for a transmission long enough to have been
+      // metered: an ATU tune or a keying blip lasts tens of milliseconds and would raise
+      // a false alarm every time.
+      if (heldMs > 2_000 && !sawRfThisTx) {
+        const sliceMode = (status.mode ?? "").toUpperCase();
+        const modeWrong = sliceMode !== "" && !sliceMode.startsWith("DIG");
+        console.error(
+          `[radio] TRANSMITTED WITH NO POWER OUT - keyed ${(heldMs / 1000).toFixed(1)}s and the radio ` +
+            `reported no forward power. ` +
+            (modeWrong
+              ? `The TX slice is in ${sliceMode}, not DIGU/DIGL: in a voice mode the radio takes audio ` +
+                `from the microphone and ignores the DAX stream DigiShack is feeding it. Set the slice ` +
+                `to DIGU on the Rig page or in SmartSDR.`
+              : `The slice mode looks right (${sliceMode || "unknown"}), so check the DAX TX channel, ` +
+                `the transmit antenna, and whether another client holds the transmitter.`),
+        );
+        // Where the operator is, not only in a log nobody opens.
+        status.txWarnings = [
+          `Keyed ${(heldMs / 1000).toFixed(1)}s with NO POWER OUT` +
+            (modeWrong ? ` - the TX slice is ${sliceMode}, not DIGU/DIGL` : ""),
+          ...status.txWarnings.filter((w) => !w.includes("NO POWER OUT")),
+        ];
+        broadcast({ kind: "status", status });
+      }
     }
     // Duty tracking follows the RADIO, not our intent. An ATU tune, a manual key from
     // the front panel or SmartSDR all heat the same finals, and a cooldown that only
@@ -2040,6 +2104,9 @@ async function startIcomBridge(): Promise<() => Promise<void>> {
       broadcast({ kind: "smeter", dbm: m.dbm, fwdDbm: m.fwdDbm, at: m.at });
       // Same path as the FlexRadio: whatever forward power this radio reports.
       activeTxPower?.sample(m.fwdDbm);
+      if (status.transmitting && m.fwdDbm !== null && dbmToWatts(m.fwdDbm) > 0.05) {
+        sawRfThisTx = true;
+      }
       if (!status.transmitting) noiseFloor.sample(m.dbm);
     },
     armWatchdog: (periodMs, label) => {

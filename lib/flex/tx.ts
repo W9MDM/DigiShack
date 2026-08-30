@@ -349,7 +349,19 @@ export class FlexDaxTransmitter {
       txSlice = slices.find((s) => s.tx) ?? slices[0];
       if (!txSlice) throw new Error("Created a slice but the radio never reported it");
       if (!txSlice.tx) {
-        await client.command(`slice set ${txSlice.index} tx=1`).catch(() => {});
+        // NOT SWALLOWED. A slice without `tx=1` is not the transmit slice, so the radio
+        // keys and puts NOTHING on the air — measured 2026-08-30 as 0.0 W across 45
+        // forward-power readings per transmission, with the operator watching a station
+        // that looked like it was working people. Every other command in this method
+        // checks its status and throws; this one caught and discarded the answer, which
+        // is how a fatal refusal became a silent one.
+        const setTx = await client.command(`slice set ${txSlice.index} tx=1`);
+        if (setTx.status !== 0) {
+          throw new Error(
+            `The radio refused to make slice ${txSlice.index} the transmit slice ` +
+              `(0x${setTx.status.toString(16)}). Without a transmit slice, keying produces no RF.`,
+          );
+        }
       }
     } else if (client.state.slices.size > 0 && this.otherGuiClients === 0) {
       // The slice existed before we did anything explicit — but when no other GUI
@@ -439,7 +451,19 @@ export class FlexDaxTransmitter {
     // Set unconditionally: there is no supported way to read it back first
     // (`transmit info` answers 0x50000016 on SmartSDR 4.2), and setting it when it
     // is already on is a no-op.
-    await client.command("transmit set dax=1").catch(() => {});
+    const daxSrc = await client.command("transmit set dax=1");
+    if (daxSrc.status !== 0) {
+      // ALSO NOT SWALLOWED, for the same reason and with the same consequence: with DAX
+      // not selected as the transmit source the radio takes audio from the microphone and
+      // ignores the stream entirely. The preflight already had a blocker for this
+      // condition ("DAX is not selected as the transmit source") — it fired on the live
+      // station and nothing acted on it, because the command that should have prevented
+      // it had thrown its own answer away.
+      throw new Error(
+        `The radio refused to select DAX as the transmit source (0x${daxSrc.status.toString(16)}). ` +
+          `Transmissions would key the radio and put no audio on the air.`,
+      );
+    }
 
     // Last line of defence: if this process dies mid-transmission, the radio must
     // not be left keyed.
@@ -602,6 +626,52 @@ export class FlexDaxTransmitter {
       );
     }
     if (!daxEnabled) blockers.push("DAX is not selected as the transmit source");
+
+    // WHICH SLICE IS THE TRANSMIT SLICE, AND IS IT THE ONE WE ARE USING.
+    //
+    // Observed live 2026-08-30, with the station apparently working people and putting
+    // 0.0 W on the air across every transmission:
+    //
+    //     slice 0 | 7.074000  | DIGU | tx 1 | dax 1 | active 0
+    //     slice 1 | 14.074000 | CW   | tx 0 | dax 0 | active 1
+    //
+    // Transmit was bound to a 40 m slice while the operator worked 20 m on a second slice
+    // that was in CW with no transmit and no DAX. Reported as "you keep adding a b slice"
+    // and "theres no tx on b slice" — the operator could see it on the radio's own display
+    // and nothing in this application ever looked.
+    const allSlices = [...client.state.slices.values()];
+    if (allSlices.length > 0 && !txSlice) {
+      blockers.push(
+        `No slice is set as the transmit slice (${allSlices.length} slice(s) in use) — ` +
+          `keying would produce no RF`,
+      );
+    }
+    // A tolerance rather than equality: the transmit slice sits at the dial and the
+    // operator may have nudged it, but a whole band away is a different slice entirely.
+    const OFF_FREQUENCY_HZ = 50_000;
+    if (txSlice?.freqHz && this.opts.freqHz) {
+      const offBy = Math.abs(txSlice.freqHz - this.opts.freqHz);
+      if (offBy > OFF_FREQUENCY_HZ) {
+        blockers.push(
+          `The transmit slice is on ${(txSlice.freqHz / 1e6).toFixed(6)} MHz but this station is ` +
+            `operating on ${(this.opts.freqHz / 1e6).toFixed(6)} MHz — transmissions would go out ` +
+            `on the wrong frequency, or nowhere`,
+        );
+      }
+    }
+    if (allSlices.length > 1) {
+      warnings.push(
+        `${allSlices.length} slices are in use (` +
+          allSlices
+            .map(
+              (sl) =>
+                `${sl.index}: ${sl.freqHz ? (sl.freqHz / 1e6).toFixed(3) : "?"} ${sl.mode ?? "?"}` +
+                `${sl.tx ? " TX" : ""}`,
+            )
+            .join(", ") +
+          `) — DigiShack transmits on the one marked TX`,
+      );
+    }
 
     // DIGU/DIGL are the modes that pass audio flat. Transmitting FT8 through a
     // voice-processed mode would produce a poor signal rather than no signal, so

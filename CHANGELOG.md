@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.160.0 - public release
+## 1.161.0 - public release
 
 Development happens in a private repository; this is where the public history starts.
 Earlier entries are not reproduced - they quote real operators by callsign, include
@@ -22,6 +22,8 @@ Notes for anyone running this:
 
 ## Release history
 
+- **1.161.0** — Two refusals that were caught and thrown away, and a wrong slice nobody looked at
+- **1.160.1** — Keyed, and nothing came out
 - **1.160.0** — FT-0 gives the transmitter back, and the bridge has a restart button
 - **1.159.4** — THE BUG: one window cut twice, and the second cut had nothing left
 - **1.159.3** — The instrument went blind in exactly the case it was built for

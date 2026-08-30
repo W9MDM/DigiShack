@@ -64,6 +64,17 @@ interface RigStatus {
   transmitting: boolean;
   rfPower: number | null;
   commandChannel: boolean;
+  /**
+   * Conditions the radio reports that make transmitting impossible or wrong.
+   *
+   * The bridge has computed these since the transmit path was written and NOTHING has
+   * ever displayed them. On 2026-08-30 that cost an evening: the radio was reporting
+   * "DAX is not selected as the transmit source" and a transmit slice on the wrong band,
+   * the station keyed for hours at 0.0 W, and the only place either fact appeared was a
+   * log file on the server.
+   */
+  txBlockers?: string[];
+  txWarnings?: string[];
   /** Which radio the bridge is driving, for the picker below the Radio card. */
   source: "flex" | "icom" | "wsjtx" | null;
   /**
@@ -595,6 +606,28 @@ export default function RigPage({ wsUrl }: Props) {
       {actionError && (
         <div className="mb-4">
           <ErrorBanner>{actionError}</ErrorBanner>
+        </div>
+      )}
+      {/*
+        WHAT THE RADIO SAYS IS WRONG WITH TRANSMITTING.
+
+        Blockers mean keying produces nothing — no DAX source, no transmit slice, an
+        interlock that refuses, a transmit slice on another band. Warnings mean it will
+        transmit but not as intended. Both come from the radio's own status, and both were
+        invisible until now.
+      */}
+      {status && (status.txBlockers?.length ?? 0) > 0 && (
+        <div className="mb-4">
+          <ErrorBanner>
+            <span className="font-display">The radio will not transmit:</span>{" "}
+            {status.txBlockers!.join(" · ")}
+          </ErrorBanner>
+        </div>
+      )}
+      {status && (status.txWarnings?.length ?? 0) > 0 && (
+        <div className="mb-4 rounded-sm border border-warn/40 bg-warn/10 px-3 py-2 text-sm text-fg">
+          <span className="font-display">Transmit warnings:</span>{" "}
+          {status.txWarnings!.join(" · ")}
         </div>
       )}
 
