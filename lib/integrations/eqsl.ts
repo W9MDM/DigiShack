@@ -199,6 +199,146 @@ export interface EqslSyncResult {
   unmatchedSamples: string[];
 }
 
+// ---------------------------------------------------------------------------
+// WHEN THE INBOX SYNC LAST RAN
+// ---------------------------------------------------------------------------
+//
+// THE FAULT. `syncEqslInbox` ran hourly inside the radio service and left NO trace
+// anywhere — no Setting row, no column, nothing on any page. There was no way, from
+// anywhere in the application, to tell whether the inbox had ever been read, let alone
+// when. That is worse than the PSKReporter case that preceded it, which at least stored
+// `pskreporter.lastQueryAt` for its own rate limit and could therefore be asked afterwards.
+//
+// Why it matters: the failure is silent AND indistinguishable from success. An operator
+// whose confirmations have stopped arriving sees exactly what an operator with no radio
+// service running sees — nothing, on every page. Acting on that means going to look at
+// eQSL, or at an award total, when the answer was that nothing had ever asked.
+//
+// RECORDED HERE, not in the tick. The function that performs the sync is the thing that
+// knows it ran; a marker written by the caller is a marker the next caller forgets. That is
+// how this got into the state it was in — `syncEqslInbox` was written, tested, wired to one
+// timer, and neither end recorded a thing.
+//
+// State, not configuration: written straight to `Setting` and deliberately absent from the
+// settings registry, the same as `lotw.lastRunAt` and `pskreporter.lastQueryAt`. Nothing
+// reads it to decide behaviour, so it needs no default and no help text.
+
+const KEY_LAST_SYNC = "eqsl.lastSyncAt";
+const KEY_LAST_RESULT = "eqsl.lastSyncResult";
+
+export interface EqslLastSync {
+  /** ISO timestamp, or null for never — and null IS the diagnosis. */
+  at: string | null;
+  /** What happened, in one line, for the page to print beside it. */
+  result: string | null;
+}
+
+/** When the inbox sync last ran, and what it found. Null `at` means never. */
+export async function getEqslLastSync(): Promise<EqslLastSync> {
+  const rows = await prisma.setting.findMany({
+    where: { key: { in: [KEY_LAST_SYNC, KEY_LAST_RESULT] } },
+    select: { key: true, value: true },
+  });
+  const get = (k: string) => rows.find((r) => r.key === k)?.value || null;
+  return { at: get(KEY_LAST_SYNC), result: get(KEY_LAST_RESULT) };
+}
+
+async function recordEqslSync(result: string): Promise<void> {
+  const put = async (key: string, value: string) =>
+    prisma.setting.upsert({
+      where: { key },
+      create: { key, value, encrypted: false },
+      update: { value },
+    });
+  try {
+    await put(KEY_LAST_SYNC, new Date().toISOString());
+    await put(KEY_LAST_RESULT, result.slice(0, 300));
+  } catch {
+    /* a status note must never be able to fail a sync */
+  }
+}
+
+/**
+ * One line describing a finished sync, for the marker and for the page.
+ *
+ * Unmatched confirmations are stated NEUTRALLY and never as a failure — on a multi-QTH
+ * account they are expected, and 1,799 of 9,427 on this station belong to another profile
+ * entirely. See the note below `syncEqslInbox`.
+ */
+export function describeEqslSync(r: EqslSyncResult): string {
+  if (!r.ok) return `failed: ${r.error ?? "no detail"}`;
+  if (r.found === 0) return "0 confirmations in the inbox";
+  return (
+    `${r.found} confirmation${r.found === 1 ? "" : "s"}: ${r.matched} newly confirmed, ` +
+    `${r.alreadyKnown} already known, ${r.unmatched} not in this log`
+  );
+}
+
+/**
+ * What a caller has to know to say whether the inbox sync can have run.
+ *
+ * Gathered BY THE CALLER rather than read here, for one practical reason: this module has to
+ * stay usable from inside the radio service, and the radio service has no business making an
+ * HTTP request to itself to find out whether it is running.
+ */
+export interface EqslInboxCheck {
+  /** Both a username and a password. Without either the tick returns immediately. */
+  configured: boolean;
+  /** `eqsl.autoSync` — "Download eQSL confirmations automatically". */
+  autoSync: boolean;
+  /** Is the radio service — the only thing that runs the timer — answering? */
+  running: boolean;
+  /** `eqsl.syncMinutes`, so the sentence can say how often. */
+  intervalMinutes: number;
+  /** Null means never, which is the whole diagnosis. */
+  lastSyncAt: string | null;
+  /** `bridge.port`, so the message names the address that was actually tried. */
+  port: number;
+}
+
+/**
+ * One sentence for the page, or "" when everything is as it should be.
+ *
+ * ORDERED BY WHAT TO FIX FIRST, which is the part that matters and the part that is easy to
+ * get wrong. Telling somebody "the radio service is not running" when they have never
+ * entered an eQSL password sends them to the wrong place: the message they need is the FIRST
+ * missing thing in the chain, not the last one checked.
+ *
+ * Empty is reserved for "configured, switched on, something is running it, and it HAS run at
+ * least once". Anything short of that gets a sentence, because an inbox with no new
+ * confirmations and an inbox nothing has ever opened look identical from the log.
+ */
+export function eqslInboxDetail(s: EqslInboxCheck): string {
+  if (!s.configured) {
+    return (
+      "No eQSL username and password are set, so nothing downloads your confirmations. " +
+      "Settings → eQSL.cc. Reading the inbox is read-only — it uploads nothing and posts no " +
+      "card to anybody."
+    );
+  }
+  if (!s.autoSync) {
+    return (
+      "Automatic download is off, so nothing reads your eQSL inbox and no confirmation " +
+      "reaches the log on its own. Settings → eQSL.cc → Download eQSL confirmations " +
+      "automatically."
+    );
+  }
+  if (!s.running) {
+    return (
+      `Nothing is syncing. The eQSL inbox is read inside the radio service, and it is not ` +
+      `answering on 127.0.0.1:${s.port} — so confirmations will not arrive however the ` +
+      `settings are configured. Start it (pm2 start digishack-bridge, or npm run bridge).`
+    );
+  }
+  if (!s.lastSyncAt) {
+    return (
+      `Switched on, but no sync has run yet. The first runs about six minutes after the ` +
+      `radio service starts, then every ${s.intervalMinutes} min.`
+    );
+  }
+  return "";
+}
+
 // THE INBOX CARRIES NO STATION OR QTH FIELD. Measured, against a real account:
 //
 //   <CALL:6>KB3HHA<QSO_DATE:8:D>20251109<TIME_ON:4>0307<BAND:3>40M<MODE:3>FT8
@@ -245,9 +385,37 @@ export interface EqslSyncResult {
  * the same mode. Unmatched confirmations are counted and sampled rather than
  * silently dropped — they usually mean a QSO that was never logged locally, which
  * is worth knowing about.
+ *
+ * Wrapped around the real work so that EVERY exit records the marker — see WHEN THE INBOX
+ * SYNC LAST RAN above. The wrapper is the LoTW shape (`syncLotwConfirmations` around
+ * `runLotwSync`) and exists for the same reason: three separate `return` statements inside
+ * the matcher had each been a place to forget.
  */
 export async function syncEqslInbox(
   opts: { since?: Date; dryRun?: boolean } = {},
+): Promise<EqslSyncResult> {
+  let result: EqslSyncResult;
+  try {
+    result = await runEqslInboxSync(opts);
+  } catch (err) {
+    // A THROW STILL COUNTS AS A RUN, and is recorded before the error is passed on. A
+    // marker that only advances on the happy path leaves a station whose sync throws every
+    // hour looking exactly like one where nothing is scheduled at all — which is the fault
+    // this whole section exists for, reintroduced one level down. The caller's behaviour is
+    // unchanged: the bridge still counts consecutive failures and raises its alert.
+    if (!opts.dryRun) {
+      await recordEqslSync(`failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    throw err;
+  }
+  // Only a REAL run is worth recording, the same rule the LoTW sync uses: a dry run answers
+  // a question, it does not change when the integration last did its job.
+  if (!opts.dryRun) await recordEqslSync(describeEqslSync(result));
+  return result;
+}
+
+async function runEqslInboxSync(
+  opts: { since?: Date; dryRun?: boolean },
 ): Promise<EqslSyncResult> {
   const base: EqslSyncResult = {
     ok: false,

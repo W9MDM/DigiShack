@@ -226,6 +226,20 @@ const TX_EDGE_GUARD_HZ = 100;
  * say so — the fix would silently do nothing and look exactly like the fix working.
  * MEASURED since: `sub tx all` does deliver `lo=100 hi=3100` on a FLEX-6400 at subscribe.
  */
+/**
+ * Who sent a message, or null when the message names no sender.
+ *
+ * One definition for the two places that ask. `recordRx` decides whether a decode
+ * belongs to the contact in progress and `onPriorityDecodes` decides whether the slice
+ * held anything worth acting on early, and those must agree exactly: a message counted
+ * as the partner's by one and not the other would be recorded in the transcript without
+ * advancing anything, or the reverse.
+ */
+function senderOf(message: string): string | null {
+  const p = parseMessage(message);
+  return p.kind === "cq" || p.kind === "directed" ? p.from : null;
+}
+
 export function resolveMaxTxOffset(reported: number | null): number {
   if (reported === null || !Number.isFinite(reported)) return MAX_TX_OFFSET_HZ;
   // Never BELOW the conservative default: a radio reporting something implausibly narrow
@@ -281,6 +295,28 @@ export class QsoController {
    * the wrong contact would be worse than no transcript.
    */
   private transcript: TranscriptEntry[] = [];
+  /**
+   * `at|message` pairs already handed to the sequencer, most recent windows only.
+   *
+   * NEEDED BECAUSE `QsoSequencer.onDecode` IS NOT IDEMPOTENT. That is verified rather
+   * than believed — scripts/check-decode-priority.ts asserts it directly — and the
+   * mechanism is specific: a message from our partner that does not move the state
+   * machine falls through `applyOne`'s final comparison to `this.stalledRx++`, and
+   * `tick` abandons the contact once `stalledRx` reaches `maxRepeats`, with "they are
+   * not decoding us". So feeding one message twice does not merely waste a call, it
+   * halves the patience of a live QSO and ends contacts that were working.
+   *
+   * It became reachable when the partner's slice started being decoded ahead of the
+   * band: their reply now arrives once on `priorityDecodes` and again in that window's
+   * `decodes`, which is by design — see DecodePipelineEvents.priorityDecodes — and both
+   * paths feed the sequencer.
+   *
+   * The transcript has its own guard on the same `(at, message)` pair and always had
+   * one; this is the sequencer's, which never did.
+   */
+  private fedToSeq = new Set<string>();
+  /** See `transmitPending`. */
+  private txPending = false;
 
   constructor(opts: QsoControllerOptions) {
     this.o = opts;
@@ -291,13 +327,111 @@ export class QsoController {
     opts.source.on("decodes", ({ windowStart, decodes }) => {
       for (const d of decodes) {
         this.recordRx(d, windowStart.getTime());
-        this.seq?.onDecode(d.message, windowStart.getTime());
+        this.feedSequencer(d.message, windowStart.getTime());
       }
       this.afterWindow(windowStart.getTime());
     });
     opts.source.on("window", ({ windowStart, skipped }) => {
       if (skipped) this.afterWindow(windowStart.getTime());
     });
+  }
+
+  /**
+   * The partner's slice, decoded ahead of the rest of the band. THE POINT OF ALL THIS.
+   *
+   * NOT A BUG FIX — 1.139.1 published the correction that lateness is not losing
+   * contacts, and the measurement behind it stands: completed and abandoned QSOs have
+   * the same median timing, 536 ms against 554 ms across 26,000 transmissions. What this
+   * reclaims is margin, not contacts.
+   *
+   * The margin is real and it is arithmetic. A reply is scheduled from a decode, the
+   * decode cannot start until the window has ended, and the full 200-3000 Hz search
+   * measures 1558 ms on the live box against 420-476 ms for a 200 Hz slice around a
+   * partner we already know the offset of. The window is cut at 13,840 ms and FT8's
+   * reply is due on the air at 15,500 ms, so the full search leaves about a tenth of a
+   * second to build the waveform and key the radio, while the slice leaves 1,240 ms.
+   *
+   * NOT WIRED THROUGH `source`. The event is real — see DecodePipelineEvents — but
+   * `DigitalSource` in lib/radio/types.ts deliberately names only the two events the
+   * operating layer needs, and widening that seam to carry an optimisation would undo
+   * the point of having narrowed it. The bridge calls this instead.
+   *
+   * Called with a window the controller may already have seen, or with decodes belonging
+   * to nobody we are working; both are handled here rather than by the caller.
+   */
+  onPriorityDecodes(d: { windowStart: Date; decodes: { message: string; snr: number; freqOffset: number }[] }): void {
+    const seq = this.seq;
+    if (!seq || seq.isDone) return;
+    const at = d.windowStart.getTime();
+
+    // ONLY OUR PARTNER SHORT-CIRCUITS THE WINDOW, and a slice that holds nothing of
+    // theirs is treated as though it had never run.
+    //
+    // This is the "what if the narrow pass finds nothing" case and it is not a corner:
+    // acting on an empty slice would tick the sequencer with no new information, and a
+    // tick with nothing new RE-SENDS THE LAST MESSAGE. Their actual reply would then
+    // arrive with the full pass a second later, into a sequencer that had already spent
+    // the window repeating itself and counted a repeat against `maxRepeats`. Answering a
+    // report with a repeated grid is worse than answering it a beat late.
+    //
+    // So: no partner in the slice, no state change of any kind, and `afterWindow` is
+    // left for the full pass exactly as before.
+    const mine = d.decodes.filter((x) => senderOf(x.message) === seq.theirCall);
+    if (mine.length === 0) return;
+
+    for (const x of mine) {
+      this.recordRx(x, at);
+      this.feedSequencer(x.message, at);
+    }
+    // The advance. `afterWindow` dedupes on the window, and `runTick` again on the
+    // transmit window, so the full pass arriving later with the same message changes
+    // nothing — asserted in scripts/check-decode-priority.ts rather than assumed.
+    this.afterWindow(at);
+  }
+
+  /**
+   * Where the station we are working transmits, or null when we are not working anyone.
+   *
+   * READ, NOT INVENTED. Their offset is recorded on every decode of theirs that reaches
+   * the transcript — `recordRx` writes `offsetHz` from the decode itself — and the call
+   * that opened the contact wrote the offset it was started from. So the last receive
+   * line of the transcript IS the most recent measurement of where they are, refreshed
+   * every cycle, and this reports it rather than keeping a second copy that could
+   * disagree with it.
+   *
+   * The fallback is `txOffsetHz`, which is where WE are transmitting. That is their
+   * frequency too by construction: `startCall` answers on the offset they were heard at,
+   * and `startAnswer` keeps our CQ frequency because an answerer comes to it. It matters
+   * for the first window of a contact started without a message — before any decode of
+   * theirs exists.
+   */
+  get partnerOffsetHz(): number | null {
+    if (!this.seq || this.seq.isDone) return null;
+    for (let i = this.transcript.length - 1; i >= 0; i--) {
+      const e = this.transcript[i]!;
+      if (e.dir === "rx" && typeof e.offsetHz === "number" && Number.isFinite(e.offsetHz)) {
+        return Math.round(e.offsetHz);
+      }
+    }
+    return this.txOffsetHz;
+  }
+
+  /**
+   * True from the instant a message is handed to the transmitter until it lets go.
+   *
+   * Set SYNCHRONOUSLY inside `runTick`, which matters: the decode pipeline asks this
+   * question immediately after emitting the priority decodes, and `EventEmitter.emit` is
+   * synchronous all the way down — emit, this controller's handler, `afterWindow`,
+   * `runTick`, `tx.transmit(...)` — so the answer is already correct by the time the
+   * pipeline reads it. Nothing has to be awaited and nothing has to be guessed.
+   *
+   * It stays true for the whole transmission, not just the wait before keying, because
+   * `FlexDaxTransmitter.streamAudio` paces its packets against a wall-clock deadline
+   * with a sleep between each. A full-band decode blocking the event loop mid-stream
+   * would stall that pacing exactly as it stalls the key.
+   */
+  get transmitPending(): boolean {
+    return this.txPending;
   }
 
   get state(): QsoPublicState {
@@ -393,6 +527,9 @@ export class QsoController {
     });
     this.activity = { sig: req.sig ?? null, sigInfo: req.sigInfo ?? null };
     this.transcript = [];
+    // A new sequencer has a fresh patience budget, so the record of what has been fed to
+    // one starts fresh too. See `fedToSeq`.
+    this.fedToSeq.clear();
     // Power measured from here on belongs to THIS contact, not the last one.
     this.o.txPower?.reset();
     if (req.theirMessage) {
@@ -420,7 +557,10 @@ export class QsoController {
     // Only messages addressed to us by them move it — `onDecode` checks that itself — so
     // clicking Call on a CQ still opens normally.
     if (req.theirMessage) {
-      this.seq.onDecode(req.theirMessage, req.theirWindowStart);
+      // Through the same gate the decode paths use, so the window's own `decodes` event
+      // — which fires around now, since this call was decided from inside it — cannot
+      // hand the sequencer the same message a second time.
+      this.feedSequencer(req.theirMessage, req.theirWindowStart);
       if (this.seq.currentState !== "calling") {
         this.o.log(
           `[qso] resuming with ${req.theirCall} at "${this.seq.currentState}" — they had already sent "${req.theirMessage}"`,
@@ -494,6 +634,7 @@ export class QsoController {
     });
     this.activity = { sig: req.sig ?? null, sigInfo: req.sigInfo ?? null };
     this.transcript = [];
+    this.fedToSeq.clear();
     this.o.txPower?.reset();
     if (req.theirMessage) {
       this.record({
@@ -521,6 +662,10 @@ export class QsoController {
     this.seq = null;
     this.txParity = null;
     this.lastTickWindow = null;
+    this.fedToSeq.clear();
+    // The operator's panic handle. Nothing may keep waiting on this transmission,
+    // including a full-band decode deferred behind it.
+    this.txPending = false;
     this.o.guards.operatorTouched();
     await this.o.tx.unkey();
     this.o.log("[qso] halted by operator");
@@ -541,6 +686,8 @@ export class QsoController {
     this.seq = null;
     this.txParity = null;
     this.lastTickWindow = null;
+    this.fedToSeq.clear();
+    this.txPending = false;
     this.o.guards.operatorTouched();
     if (call) this.o.guards.recordFailure(call, Date.now());
     await this.o.tx.unkey();
@@ -700,6 +847,12 @@ export class QsoController {
       }
       const { mode } = this.o.getBandMode();
       this.lastSent = tick.send;
+      // SET BEFORE THE CALL, not inside the promise. See `transmitPending`: the decode
+      // pipeline reads this the instant its priority emit returns, which is inside this
+      // very call stack, so a flag set from a `.then` would still read false and the
+      // full-band pass would block the loop straight over the transmission it had just
+      // scheduled.
+      this.txPending = true;
       // Fire and forget: transmit() occupies the whole window and afterWindow
       // runs on the decode path, which must not stall.
       void this.o.tx
@@ -720,7 +873,13 @@ export class QsoController {
             );
           this.o.broadcast({ kind: "qso-tx", message: tick.send, sent: r.sent, reason: r.reason });
         })
-        .catch((err) => this.o.log(`[qso] TX error: ${(err as Error).message}`));
+        .catch((err) => this.o.log(`[qso] TX error: ${(err as Error).message}`))
+        // Cleared however it ended — sent, refused or thrown. A flag left set by a
+        // failed transmission would hold a deferred full-band pass until its deadline
+        // and delay the decode list for a transmission that never happened.
+        .finally(() => {
+          this.txPending = false;
+        });
     }
 
     if (seq.isDone && this.seq === seq) {
@@ -729,6 +888,28 @@ export class QsoController {
     this.lastTickWindow = null;
     }
     this.broadcastState();
+  }
+
+  /**
+   * Hand one decode to the sequencer, at most once per `(window, message)`.
+   *
+   * See `fedToSeq` for why "at most once" is load-bearing rather than tidy.
+   *
+   * Bounded the same way `seenWindows` is, and for the same reason: this runs for every
+   * decode of every window for as long as the bridge is up, and an unbounded Set on that
+   * path is a leak. Sixteen windows is four minutes of FT8 — far longer than the two
+   * events for one window are ever apart, which is one decode time.
+   */
+  private feedSequencer(message: string, at: number): void {
+    const seq = this.seq;
+    if (!seq || seq.isDone) return;
+    const key = `${at}|${message}`;
+    if (this.fedToSeq.has(key)) return;
+    this.fedToSeq.add(key);
+    if (this.fedToSeq.size > 64) {
+      for (const k of [...this.fedToSeq].slice(0, 32)) this.fedToSeq.delete(k);
+    }
+    seq.onDecode(message, at);
   }
 
   /** Append to the exchange, and hand the entry back so it can be amended later. */
@@ -753,10 +934,7 @@ export class QsoController {
   ): void {
     const seq = this.seq;
     if (!seq || seq.isDone) return;
-    const p = parseMessage(d.message);
-    const from =
-      p.kind === "cq" ? p.from : p.kind === "directed" ? p.from : null;
-    if (from !== seq.theirCall) return;
+    if (senderOf(d.message) !== seq.theirCall) return;
     // The message that opened the transcript arrives as a decode too when the call was
     // started from the window it decoded in. Recording it twice would read as the station
     // having repeated itself, which is a thing that happens and would then be

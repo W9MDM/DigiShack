@@ -428,6 +428,8 @@ export class QsoSequencer {
    * ordinary. Repeating into it for ever is not.
    */
   private stalledRx = 0;
+  /** `at|message` of everything already applied. See onDecode. */
+  private seenDecodes = new Set<string>();
   private lastSent: string | null = null;
   private logged = false;
 
@@ -468,6 +470,35 @@ export class QsoSequencer {
    */
   onDecode(raw: string, at: number): void {
     if (this.isDone) return;
+
+    // THE SAME TRANSMISSION DELIVERED TWICE IS NOT EVIDENCE OF ANYTHING.
+    //
+    // This machine is deliberately not idempotent about repeats — since 1.151.0 a message
+    // from them that moves nothing increments `stalledRx`, and at `maxRepeats` the call
+    // ends. That is the endless-loop fix and it must stay: a station genuinely repeating
+    // itself IS the signal we act on.
+    //
+    // But "genuinely repeating" means a LATER window. The same message at the same instant
+    // is one transmission counted twice, and counting it halves the patience of a live
+    // contact — measured in `check:decode-priority`: an exchange survives 4 of their
+    // windows delivered once and only 2 delivered twice.
+    //
+    // Guarded here rather than only in the callers. The priority-decode path de-duplicates
+    // before it gets this far and is right to, but a rule every caller has to remember is
+    // a rule that gets forgotten — which is exactly how the transcript's duplicate guard
+    // came to assume an ordering it never stated.
+    //
+    // Keyed on `at` AND the message, so two stations in one window are two decodes, and
+    // the same station in the next window is a repeat that still counts.
+    const fingerprint = `${at}|${raw}`;
+    if (this.seenDecodes.has(fingerprint)) return;
+    this.seenDecodes.add(fingerprint);
+    // A contact is a handful of windows; this cannot grow without bound in practice. The
+    // cap is for the pathological case rather than the ordinary one.
+    if (this.seenDecodes.size > 512) {
+      this.seenDecodes.clear();
+      this.seenDecodes.add(fingerprint);
+    }
     // Every statement in the transmission, not just the first. A fox/hound message carries
     // two — "K9XYZ RR73; DL2HIR <3D2USU> -20" acknowledges one station and reports to
     // another — and ours can be either half.

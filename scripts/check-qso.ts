@@ -1056,6 +1056,71 @@ async function main(): Promise<void> {
     }
   }
 
+  // ---------------------------------------------------------------------------------
+  // The same transmission delivered twice must not spend the contact's patience.
+  //
+  // This machine is deliberately NOT idempotent about repeats - since the endless-loop fix
+  // a message that moves nothing increments the stall counter, and at maxRepeats the call
+  // ends. That is the point. But "repeating" means a LATER window; the same message at the
+  // same instant is one transmission counted twice, and counting it halves the patience of
+  // a live contact.
+  //
+  // Found by the decode-priority work, which feeds the sequencer from two passes over the
+  // same window and measured the cost: an exchange survives 4 of their windows delivered
+  // once and only 2 delivered twice.
+  console.log("");
+  console.log("A decode delivered twice");
+  {
+    const mk = (): QsoSequencer =>
+      new QsoSequencer({
+        myCall: "W9ABC", myGrid: "EN61", theirCall: "KM4SXE",
+        theirSnr: -7, role: "caller", startedAt: 0,
+      });
+
+    {
+      // Same window, same message, twice: the second is ignored entirely.
+      const q = mk();
+      q.tick(15_000);
+      q.onDecode("W9ABC KM4SXE +07", 22_000);
+      q.onDecode("W9ABC KM4SXE +07", 22_000);
+      eq(q.tick(45_000).send, "KM4SXE W9ABC R-07", "a duplicate does not advance the machine twice");
+
+      let windows = 0;
+      for (let i = 0; i < 20 && !q.isDone; i++) {
+        // Delivered TWICE every window, as a two-pass decoder would.
+        q.onDecode("W9ABC KM4SXE +07", 50_000 + i * 30_000);
+        q.onDecode("W9ABC KM4SXE +07", 50_000 + i * 30_000);
+        q.tick(75_000 + i * 30_000);
+        windows++;
+      }
+      // Without the guard this ends in half the windows.
+      ok(windows >= 4, `survives ${windows} doubled windows, same as undoubled (>= 4)`);
+    }
+
+    {
+      // The endless-loop fix must still fire: a genuine repeat is a LATER window, so it
+      // carries a different `at` and still counts.
+      const q = mk();
+      q.tick(15_000);
+      q.onDecode("W9ABC KM4SXE +07", 22_000);
+      q.tick(45_000);
+      for (let i = 0; i < 20 && !q.isDone; i++) {
+        q.onDecode("W9ABC KM4SXE +07", 50_000 + i * 30_000);
+        q.tick(75_000 + i * 30_000);
+      }
+      ok(q.isDone, "a station repeating across windows still ends the call");
+    }
+
+    {
+      // Two stations in one window are two decodes, not a duplicate.
+      const q = mk();
+      q.tick(15_000);
+      q.onDecode("W9ABC N0CALL -05", 22_000);
+      q.onDecode("W9ABC KM4SXE +07", 22_000);
+      eq(q.tick(45_000).send, "KM4SXE W9ABC R-07", "a different message in the same window still lands");
+    }
+  }
+
   console.log(`\n${pass} passed, ${fail} failed\n`);
   if (fail > 0) process.exit(1);
 }

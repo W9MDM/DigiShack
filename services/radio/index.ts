@@ -1198,6 +1198,25 @@ async function startFlexSource(): Promise<() => Promise<void>> {
     // exactly that connection. `status.dialFrequency` is maintained from the separate
     // tracking client below, which is not the originator and so does get the updates.
     dialHz: () => status.dialFrequency,
+    // DECODE THE PARTNER'S SLICE FIRST, when there is a partner.
+    //
+    // A reply is scheduled from a decode and a decode cannot begin until the window has
+    // ended, so the full 200-3000 Hz search — 1558 ms measured on this installation —
+    // eats nearly all the room between the window cut at 13,840 ms and the instant FT8's
+    // reply is due at 15,500 ms. A 200 Hz slice around a partner we already know the
+    // offset of measures 420-476 ms and leaves 1,240 ms in hand.
+    //
+    // NOT A BUG FIX and not to be described as one: 1.139.1 published the correction
+    // that late transmissions are not losing contacts (536 ms median for completed
+    // exchanges against 554 ms for abandoned ones, over 26,000 transmissions). This is
+    // spare margin being taken back.
+    //
+    // Read through `activeQso` — the same handle the control API uses — rather than
+    // captured, because the controller does not exist until the transmitter attaches,
+    // which is after this source is built. Null before then, and null whenever no
+    // contact is in progress, which is when the pipeline behaves exactly as it did.
+    priorityOffsetHz: () => activeQso()?.partnerOffsetHz ?? null,
+    transmitPending: () => activeQso()?.transmitPending ?? false,
   });
 
   // S-meter, straight through to the UI. Not stored: like the waterfall it has
@@ -1292,6 +1311,20 @@ async function startFlexSource(): Promise<() => Promise<void>> {
   });
 
   source.on("decodes", (d) => onDecodedWindow(d, "flex.decodeDepth"));
+
+  // The partner's slice, about a second ahead of the rest of the band.
+  //
+  // ONLY the QSO controller. Nothing is persisted, broadcast or spotted from here: every
+  // message in this event also arrives in that window's `decodes`, and doing anything
+  // else with it would be the duplicate row, duplicate websocket event and duplicate
+  // PSKReporter spot that the whole design is arranged to avoid.
+  //
+  // Not routed through `source.on` inside the controller because `DigitalSource` in
+  // lib/radio/types.ts names only the two events the operating layer needs, and it is
+  // deliberately narrow — widening it to carry an optimisation would undo the reason it
+  // was narrowed. The controller ignores windows it has already acted on and decodes
+  // that are not its partner's.
+  source.on("priorityDecodes", (d) => activeQso()?.onPriorityDecodes(d));
 
   // Native transmit: the sequencer drives this through the QSO controller.
   // Shares the source's GUI-client connection and slice — a second GUI client

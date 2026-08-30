@@ -53,9 +53,29 @@ interface ServiceStatus {
   capabilities: string[];
 }
 
+/**
+ * The eQSL inbox sync, as reported by /api/integrations/status.
+ *
+ * Every field here existed nowhere before. The sync ran on the radio service's timer and
+ * recorded nothing, so the only honest thing this page could have said about it was that it
+ * might exist. See eqslInboxStatus in pages/api/integrations/status.ts.
+ */
+interface EqslInboxStatus {
+  configured: boolean;
+  autoSync: boolean;
+  running: boolean;
+  intervalMinutes: number;
+  lastSyncAt: string | null;
+  lastResult: string | null;
+  port: number;
+  /** Ordered by what to fix first; empty when there is nothing to say. */
+  detail: string;
+}
+
 interface StatusResponse {
   services: ServiceStatus[];
   lotw?: { at: string | null; result: string | null; marker: string | null };
+  eqsl?: EqslInboxStatus;
 }
 
 interface SyncReport {
@@ -204,6 +224,7 @@ export default function IntegrationsPage() {
   }
 
   const lotw = data?.lotw;
+  const eqsl = data?.eqsl;
 
   return (
     <>
@@ -294,6 +315,66 @@ export default function IntegrationsPage() {
                   <dd className="text-right tnum text-fg-muted">{report.unmatched}</dd>
                 </dl>
               </div>
+            )}
+          </div>
+        </Card>
+
+        {/* eQSL, BESIDE LoTW ON PURPOSE.
+
+            LoTW has printed "Last run / Result / Fetched up to" since it was written, and
+            an operator can therefore tell at a glance whether it is alive. The eQSL inbox
+            sync — the thing that actually earns eQSL award credit — had no marker at all
+            and appeared on no page, so the identical question had no answer anywhere.
+
+            There is no "Sync now" button here and that is not an oversight: eQSL inbox sync
+            has no endpoint of its own, only the radio service's timer. Adding a button would
+            mean adding a route; saying so is the honest interim. */}
+        <Card title="eQSL.cc inbox">
+          <div className="flex flex-col gap-3">
+            <p className="text-sm text-fg-muted">
+              Downloads the confirmations other operators have sent you and matches them to
+              the log, which is what earns eQSL award credit. Read only — it uploads nothing
+              and posts no card to anybody.
+            </p>
+
+            {eqsl ? (
+              <>
+                <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
+                  <dt className="text-fg-subtle">Last run</dt>
+                  <dd className="text-right tnum">
+                    {eqsl.lastSyncAt ? formatUtc(eqsl.lastSyncAt) : "never"}
+                  </dd>
+                  <dt className="text-fg-subtle">Result</dt>
+                  <dd className="text-right">{eqsl.lastResult ?? "—"}</dd>
+                  <dt className="text-fg-subtle">Checks every</dt>
+                  <dd className="text-right tnum">
+                    {eqsl.autoSync ? `${eqsl.intervalMinutes} min` : "not scheduled"}
+                  </dd>
+                </dl>
+
+                {/* The sentence that was missing entirely. Red when nothing can be syncing,
+                    because "never" beside a silent explanation is the reading an operator
+                    acts on by blaming eQSL. */}
+                {eqsl.detail !== "" && (
+                  <p className={eqsl.lastSyncAt ? "text-sm text-warn" : "text-sm text-danger"}>
+                    {eqsl.detail}
+                  </p>
+                )}
+                {eqsl.detail === "" && (
+                  <p className="text-sm text-fg-muted">
+                    The radio service is reading the inbox every {eqsl.intervalMinutes} min.
+                  </p>
+                )}
+
+                <p className="text-[11px] text-fg-subtle">
+                  Runs only on the radio service&apos;s timer — there is no button for it
+                  here. Confirmations already in the log from an ADIF import are left alone;
+                  a confirmation that matches nothing is discarded rather than guessed at,
+                  which on a multi-QTH eQSL account is expected rather than a fault.
+                </p>
+              </>
+            ) : (
+              <p className="text-sm text-fg-subtle">Checking…</p>
             )}
           </div>
         </Card>

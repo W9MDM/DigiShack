@@ -14,6 +14,10 @@
 //
 // Live stations expire after 15 minutes and fade as they age, so the map shows the
 // band as it is, not as it was an hour ago.
+//
+// EVERY LIVE MARKER ON THIS MAP ARRIVES OVER ONE WEBSOCKET from the radio service. When that
+// socket is not connected the map is not quiet, it is blind — and the two look identical.
+// See the Calling CQ card at the bottom for the sentence that used to conflate them.
 
 import Link from "next/link";
 import type { GetServerSidePropsContext } from "next";
@@ -582,9 +586,39 @@ export default function GridMapPage({ wsUrl }: Props) {
 
           <Card title={`Calling CQ (${cqs.length})`}>
             {cqs.length === 0 ? (
-              <p className="text-sm text-fg-subtle">
-                Nobody in the last 15 minutes. CQs appear here the moment they decode.
-              </p>
+              // AN EMPTY LIST HAS THREE CAUSES AND ONLY ONE OF THEM IS THE BAND.
+              //
+              // "Nobody in the last 15 minutes. CQs appear here the moment they decode." was
+              // said in all three, and it is a claim about the air — the one an operator acts
+              // on, by going to look at an antenna. It is true only when decodes are actually
+              // arriving and none of them is a CQ.
+              //
+              // Ordered by what to fix first, the same rule as `collectorState` in
+              // pages/api/psk-spots.ts: a closed socket outranks a silent one, because a
+              // silent socket cannot be diagnosed until there is a socket.
+              !connected ? (
+                <p className="text-sm text-warn">
+                  Not connected to the radio service, so nothing is arriving — this list stays
+                  empty however busy the band is, and so does the map. It fills in on its own
+                  when the connection comes back.
+                </p>
+              ) : liveList.length === 0 ? (
+                <p className="text-sm text-fg-muted">
+                  Connected, and nothing at all has decoded in the last 15 minutes — not just
+                  no CQs. That is as likely to be a receiver that is not decoding as a quiet
+                  band; the{" "}
+                  <Link href="/decodes" className="text-accent-bright hover:underline">
+                    Digital page
+                  </Link>{" "}
+                  says which.
+                </p>
+              ) : (
+                <p className="text-sm text-fg-subtle">
+                  Nobody calling CQ in the last 15 minutes — but {liveList.length} station
+                  {liveList.length === 1 ? " has" : "s have"} decoded in that time, so this
+                  one is a fact about the band and not about the receiver.
+                </p>
+              )
             ) : (
               <ul className="flex flex-col divide-y divide-line -mx-4 max-h-[24rem] overflow-auto">
                 {cqs.map((s) => (

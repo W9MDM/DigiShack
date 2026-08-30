@@ -190,6 +190,17 @@ export interface DaxSourceOptions {
    * rather than trying to make a client observe its own commands.
    */
   dialHz?: () => number | null;
+  /**
+   * Where the station we are working transmits, or null when we are working nobody.
+   *
+   * Passed straight to the decode pipeline, which searches that slice ahead of the rest
+   * of the band so a reply can be scheduled about a second earlier. See
+   * `DecodePipelineOptions.priorityOffsetHz` for the measurements; nothing Flex-specific
+   * happens to it here.
+   */
+  priorityOffsetHz?: () => number | null;
+  /** "Is our transmit path occupied?" See `DecodePipelineOptions.transmitPending`. */
+  transmitPending?: () => boolean;
 }
 
 /** Radio health, read from the meter stream. */
@@ -209,6 +220,24 @@ export interface Telemetry {
 
 type Events = {
   decodes: [{ windowStart: Date; decodes: DaxDecode[]; rms: number; decodeMs: number }];
+  /**
+   * The QSO partner's slice, decoded ahead of the band. Forwarded, not interpreted.
+   *
+   * Every message here appears again in this window's `decodes`, so a consumer that
+   * wants the window has always been able to ignore this event and still be complete.
+   * See DecodePipelineEvents.priorityDecodes for why it is not simply an early
+   * `decodes`.
+   */
+  priorityDecodes: [
+    {
+      windowStart: Date;
+      decodes: DaxDecode[];
+      centreHz: number;
+      loHz: number;
+      hiHz: number;
+      decodeMs: number;
+    },
+  ];
   window: [{ windowStart: Date; samples: number; rms: number; skipped: boolean }];
   spectrum: [SpectrumRow];
   /**
@@ -255,10 +284,20 @@ type Events = {
 export class FlexDaxSource extends EventEmitter<Events> {
   // `passbandHz` stays optional: the pipeline owns the default and the clamp, and
   // duplicating the number here is how the waterfall and the decoder end up disagreeing.
-  private opts: Required<Omit<DaxSourceOptions, "host" | "port" | "passbandHz" | "dialHz">> & {
+  private opts: Required<
+    Omit<
+      DaxSourceOptions,
+      "host" | "port" | "passbandHz" | "dialHz" | "priorityOffsetHz" | "transmitPending"
+    >
+  > & {
     host: string;
     port: number;
     passbandHz?: number;
+    // Optional for the same reason `dialHz` is: a caller with no QSO controller — the
+    // wiring check, a receive-only install — still constructs, and the pipeline simply
+    // never runs a priority pass.
+    priorityOffsetHz?: () => number | null;
+    transmitPending?: () => boolean;
     // Optional so a caller that has no dial tracker still constructs. The panadapter
     // then falls back to this connection's own slice cache, which is correct at connect
     // and stale after any tune this connection issued — see the option's own comment.
@@ -534,6 +573,8 @@ export class FlexDaxSource extends EventEmitter<Events> {
       },
       panadapter: options.panadapter ?? { enabled: false },
       dialHz: options.dialHz,
+      priorityOffsetHz: options.priorityOffsetHz,
+      transmitPending: options.transmitPending,
     };
 
     // The decode half lives in lib/radio/decode-pipeline.ts, shared with the Icom
@@ -545,12 +586,15 @@ export class FlexDaxSource extends EventEmitter<Events> {
       depth: this.opts.depth,
       silenceRms: this.opts.silenceRms,
       maxHz: this.opts.passbandHz,
+      priorityOffsetHz: this.opts.priorityOffsetHz,
+      transmitPending: this.opts.transmitPending,
     });
     // Built from the pipeline's clamped value rather than the raw option, so the
     // waterfall shows exactly the range the decoder searches even when the setting is
     // out of range.
     this.spectrum = new SpectrumAnalyser(DAX_SAMPLE_RATE, this.pipeline.maxHz, this.spectrumProfile);
     this.pipeline.on("decodes", (d) => this.emit("decodes", d));
+    this.pipeline.on("priorityDecodes", (d) => this.emit("priorityDecodes", d));
     this.pipeline.on("window", (w) => this.emit("window", w));
     this.pipeline.on("error", (e) => this.emit("error", e));
   }

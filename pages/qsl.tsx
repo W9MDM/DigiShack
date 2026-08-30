@@ -19,6 +19,11 @@ import { cn } from "@/lib/utils";
 // operators: queue (resolves the address and renders the message), review and
 // approve, then send. Nothing skips a step, and the message that was reviewed is
 // the message that goes out — the body is stored at queue time.
+//
+// THE FOURTH STEP IS INVISIBLE AND THAT WAS THE BUG. Automatic queuing, approval and sending
+// all run on a timer inside the radio service, so a queue nothing is sending looks EXACTLY
+// like a queue waiting for a person — same rows, same badges, same counts. `sender` on the
+// queue response is the missing half; see QslSenderCheck in pages/api/qsl/queue.ts.
 
 interface QueueEntry {
   id: string;
@@ -43,10 +48,24 @@ interface Candidate {
   startTime: string;
 }
 
+/** Whether anything will actually send this queue. See pages/api/qsl/queue.ts. */
+interface QslSenderStatus {
+  enabled: boolean;
+  autoApprove: boolean;
+  running: boolean;
+  intervalMinutes: number;
+  port: number;
+  /** True only when something sends approved messages unattended. */
+  sending: boolean;
+  /** Ordered by what to fix first; empty only when something really is sending. */
+  detail: string;
+}
+
 interface QueueResponse {
   queue: QueueEntry[];
   counts: Record<string, number>;
   candidates: Candidate[];
+  sender?: QslSenderStatus;
 }
 
 /**
@@ -186,6 +205,7 @@ export default function QslPage() {
   const candidates = data?.candidates ?? [];
   const pending = queue.filter((q) => q.status === "PENDING");
   const approved = queue.filter((q) => q.status === "APPROVED");
+  const sender = data?.sender;
 
   async function act(body: Record<string, unknown>, label: string) {
     setBusy(label);
@@ -257,6 +277,31 @@ export default function QslPage() {
         ))}
       </div>
 
+      {/* WHETHER ANYTHING IS SENDING, said before the queue rather than deduced from it.
+
+          The tone is graded rather than uniformly red, because "automatic emailing is off"
+          is the deliberate default for unsolicited mail and colouring it as a failure would
+          teach an operator to ignore the line that matters. Red is reserved for the one case
+          that IS a fault: automatic sending switched on with nothing running it. */}
+      {sender && (
+        <p
+          className={cn(
+            "mb-4 text-sm",
+            sender.sending
+              ? "text-fg-muted"
+              : sender.enabled && !sender.running
+                ? "text-danger"
+                : approved.length > 0
+                  ? "text-warn"
+                  : "text-fg-subtle",
+          )}
+        >
+          {sender.sending
+            ? `The radio service queues and sends automatically, every ${sender.intervalMinutes} min.`
+            : sender.detail}
+        </p>
+      )}
+
       <GatewayRequeue onDone={(msg) => { setLastResult(msg); void reload(); }} />
 
       <div className="grid gap-4 lg:grid-cols-3">
@@ -282,8 +327,21 @@ export default function QslPage() {
           }
         >
           {pending.length === 0 ? (
+            // "Nothing waiting" alone read as "there is nothing to do". Whether anything
+            // FILLS this list is a separate fact from whether it is empty, and only one of
+            // the two was ever on the page.
             <p className="text-sm text-fg-subtle">
-              Nothing waiting. Queue some contacts from the panel on the right.
+              Nothing waiting for review. Queue some contacts from the panel on the right
+              {/* `!sender` is its own branch and says nothing, rather than falling through
+                  to "that is switched off". Defaulting an unknown to a claim is the exact
+                  fault this page was being fixed for. */}
+              {!sender
+                ? "."
+                : sender.enabled && sender.running
+                  ? `, or leave it — the radio service adds eligible contacts every ${sender.intervalMinutes} min.`
+                  : sender.enabled
+                    ? ". Nothing is adding any automatically: the radio service is not running."
+                    : ". Nothing is adding any automatically — that is switched off."}
             </p>
           ) : (
             <div className="overflow-auto -mx-4 max-h-[26rem]">
@@ -332,6 +390,15 @@ export default function QslPage() {
               <span className="text-sm">
                 <strong className="tnum">{approved.length}</strong> approved and ready to
                 send
+                {/* The whole point of the sender state, at the place an operator looks to
+                    find out why a number is not going down. "Ready to send" is not the same
+                    as "about to be sent", and for most of this application's life the page
+                    could not tell the two apart. */}
+                {sender && !sender.sending && (
+                  <span className="block text-xs text-warn">
+                    Nothing will send these on its own — the button is the only way out.
+                  </span>
+                )}
               </span>
               <Button
                 variant="danger"

@@ -351,11 +351,36 @@ function walk(dir: string, out: string[] = []): string[] {
   return out;
 }
 
+/**
+ * Blank out comments, keeping line numbers and the file's shape.
+ *
+ * A source check that greps raw text cannot tell code from the prose explaining it, and
+ * this has now bitten three separate pieces of work: `check-contrast` failed because a
+ * comment NAMED the class it forbids, `check-job-visibility` failed on its own
+ * documentation, and this check failed because a comment about the decode table contained
+ * the characters `<table>`.
+ *
+ * That is a check punishing the codebase for explaining itself, which is backwards - the
+ * comments here are load-bearing, and several exist because a wrong conclusion was reached
+ * twice. Replacing comment bodies with spaces rather than deleting them keeps every line
+ * and column intact, so a reported line number still points at the real thing.
+ *
+ * Deliberately naive about strings: a `//` inside a string literal is blanked too. For a
+ * grep over JSX that is harmless, and a real parser would be a large dependency for this.
+ */
+function stripComments(src: string): string {
+  const blank = (m: string): string => m.replace(/[^\n]/g, " ");
+  return src
+    .replace(/\/\*[\s\S]*?\*\//g, blank)
+    .replace(/(^|[^:"'`\\])\/\/[^\n]*/g, (m, lead: string) => lead + blank(m.slice(lead.length)));
+}
+
 const tsxFiles = [...walk("pages"), ...walk("components")];
 
 const unwrapped: string[] = [];
 for (const rel of tsxFiles) {
-  const src = read(rel);
+  // Comments stripped first: a comment mentioning `<table>` is not a table. See above.
+  const src = stripComments(read(rel));
   const lines = src.split("\n");
   lines.forEach((line, i) => {
     if (!line.includes("<table")) return;

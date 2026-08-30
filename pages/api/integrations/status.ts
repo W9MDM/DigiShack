@@ -2,12 +2,18 @@ import type { NextApiRequest, NextApiResponse } from "next";
 
 import { sendJson } from "@/lib/api/respond";
 import { authedRoute } from "@/lib/auth/guard";
+import {
+  eqslInboxDetail,
+  getEqslCredentials,
+  getEqslLastSync,
+  type EqslInboxCheck,
+} from "@/lib/integrations/eqsl";
 import { getLotwLastRun, testLotw } from "@/lib/integrations/lotw";
 import { testQrzLogbook } from "@/lib/integrations/qrz-logbook";
 import { testCloudlog } from "@/lib/integrations/cloudlog";
 import { testN3fjp } from "@/lib/integrations/n3fjp";
 import { lotwCertInfo } from "@/lib/integrations/lotw-cert";
-import { getSetting } from "@/lib/settings";
+import { getBooleanSetting, getNumberSetting, getSetting } from "@/lib/settings";
 
 // Read-only credential checks.
 //
@@ -18,6 +24,71 @@ import { getSetting } from "@/lib/settings";
 //
 // Services with no read-only endpoint are reported as "configured, untested"
 // rather than being probed with a write.
+
+/**
+ * The eQSL inbox sync, and whether anything is running it.
+ *
+ * THE FAULT THIS EXISTS FOR. The inbox sync was the worst instance of a shape this codebase
+ * has now found four times: a job that runs ONLY on a timer inside the radio service, feeding
+ * a page that reports the absence of its output as a fact about the world. Uploads had it
+ * (pages/api/uploads/index.ts), PSKReporter had it (pages/api/psk-spots.ts), and eQSL had it
+ * worst of all — it stored no marker at all, so not one page in the application mentioned the
+ * sync's existence, never mind its last run.
+ *
+ * LoTW next door has always done this properly: `lotw.lastRunAt` is written on every real run
+ * and the card prints it or the word "never". This makes eQSL match.
+ *
+ * The state is assembled here rather than in lib/integrations/eqsl.ts because deciding
+ * whether the radio service is up means asking it over HTTP, and that module must stay
+ * callable from inside the radio service itself.
+ */
+export interface EqslInboxStatus extends EqslInboxCheck {
+  /** What the last run reported. Null alongside a null `lastSyncAt` means never. */
+  lastResult: string | null;
+  /** One sentence, ordered by what to fix first. Empty when all is well. */
+  detail: string;
+}
+
+/**
+ * Is the radio service answering?
+ *
+ * A local copy, and the third one — uploads and psk-spots each have their own. Deliberate:
+ * the alternative is a shared helper in `lib/`, which would be imported by the bridge sooner
+ * or later and have it asking itself over TCP whether it exists. Six lines is the cheaper
+ * mistake.
+ */
+async function bridgeUp(port: number): Promise<boolean> {
+  try {
+    const r = await fetch(`http://127.0.0.1:${port}/status`, {
+      signal: AbortSignal.timeout(2_000),
+    });
+    return r.ok;
+  } catch {
+    return false;
+  }
+}
+
+async function eqslInboxStatus(): Promise<EqslInboxStatus> {
+  const [creds, autoSync, intervalMinutes, port, last] = await Promise.all([
+    getEqslCredentials(),
+    getBooleanSetting("eqsl.autoSync", true),
+    getNumberSetting("eqsl.syncMinutes", 60),
+    getNumberSetting("bridge.port", 3101),
+    getEqslLastSync(),
+  ]);
+  const check: EqslInboxCheck = {
+    // BOTH halves. `getEqslCredentials` returns null without a password, and the tick uses
+    // exactly that call to decide whether to do anything — so a username on its own is not
+    // "configured" here either, however the Services row below counts it.
+    configured: creds !== null,
+    autoSync,
+    running: await bridgeUp(port),
+    intervalMinutes,
+    lastSyncAt: last.at,
+    port,
+  };
+  return { ...check, lastResult: last.result, detail: eqslInboxDetail(check) };
+}
 
 interface ServiceStatus {
   id: string;
@@ -204,6 +275,8 @@ async function get(_req: NextApiRequest, res: NextApiResponse) {
     // integration's memory, and an empty one is the clearest sign it has never
     // completed a run — which was true here for the whole life of the feature.
     lotw: await getLotwLastRun(),
+    // The same treatment for eQSL, which had none of it. See eqslInboxStatus above.
+    eqsl: await eqslInboxStatus(),
     note: "Every check here is read-only. Nothing on this page writes to a remote logbook.",
   });
 }

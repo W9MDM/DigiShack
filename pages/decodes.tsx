@@ -213,6 +213,169 @@ function decodeBins(b64: string): Uint8Array {
  * from matchMedia in the useState initialiser would be one render shorter and would
  * mismatch on every server-rendered load.
  */
+/**
+ * A viewer preference kept on this device, read once on mount.
+ *
+ * `localStorage` is the right home for both of the settings below and the wrong home for
+ * almost anything else: they are one operator's comfort on one screen, they must not
+ * follow an account to a different monitor, and losing them costs nothing. A server
+ * setting would sync a 27-inch operator's row height onto a phone.
+ *
+ * Every access is wrapped, including the accessor itself — Firefox throws on `getItem`
+ * when site data is blocked, so a `try` around the read alone is not enough. A blocked
+ * store degrades to "the default, every time", which is exactly right.
+ */
+function readStored(key: string): string | null {
+  try {
+    return window.localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function writeStored(key: string, value: string): void {
+  try {
+    window.localStorage.setItem(key, value);
+  } catch {
+    /* private mode, blocked site data, or a full quota. Not worth telling anyone. */
+  }
+}
+
+/**
+ * How big the decode list is set, in px, and the controls to change it.
+ *
+ * Two reviewers wanted opposite things from this list and BOTH were right about their own
+ * screen: a 74-year-old with age-related vision decline could not read 12px monospace at
+ * all, and a DXer on a 27-inch monitor wanted more rows on screen than WSJT-X gives him.
+ * There is no single number that serves both, so the number is the operator's.
+ *
+ * The steps are absolute px rather than a multiplier because the starting point — the old
+ * hardcoded `text-xs` — is 12px, and an operator asking for "bigger" wants a size they can
+ * read, not a ratio.
+ */
+const DECODE_SIZE_KEY = "digishack:decode-size:v1";
+const DECODE_SIZES = [10, 11, 12, 13, 15, 17, 20] as const;
+const DECODE_SIZE_DEFAULT = DECODE_SIZES.indexOf(12);
+
+function useDecodeSize(): {
+  px: number;
+  bigger: () => void;
+  smaller: () => void;
+  canGrow: boolean;
+  canShrink: boolean;
+  reset: () => void;
+  isDefault: boolean;
+} {
+  // Starts at the default so the server render and the first client render agree; the
+  // stored value is applied in an effect. Getting this wrong is a hydration mismatch, not
+  // a wrong size.
+  const [i, setI] = useState(DECODE_SIZE_DEFAULT);
+
+  useEffect(() => {
+    const raw = readStored(DECODE_SIZE_KEY);
+    const n = Number.parseInt(raw ?? "", 10);
+    // Validated against the CURRENT step list rather than trusted: a stored index from a
+    // build with a different list would otherwise read off the end and render NaN px.
+    if (Number.isInteger(n) && n >= 0 && n < DECODE_SIZES.length) setI(n);
+  }, []);
+
+  const move = (delta: number): void => {
+    setI((prev) => {
+      const next = Math.min(DECODE_SIZES.length - 1, Math.max(0, prev + delta));
+      writeStored(DECODE_SIZE_KEY, String(next));
+      return next;
+    });
+  };
+
+  return {
+    px: DECODE_SIZES[i]!,
+    bigger: () => move(1),
+    smaller: () => move(-1),
+    canGrow: i < DECODE_SIZES.length - 1,
+    canShrink: i > 0,
+    reset: () => {
+      writeStored(DECODE_SIZE_KEY, String(DECODE_SIZE_DEFAULT));
+      setI(DECODE_SIZE_DEFAULT);
+    },
+    isDefault: i === DECODE_SIZE_DEFAULT,
+  };
+}
+
+/**
+ * Waterfall height, in px, draggable by the handle beneath it.
+ *
+ * It was a constant, and no constant is right: 300px is a third of a phone screen showing
+ * a display that cannot resolve two stations 40 Hz apart at that width, and on a 27-inch
+ * monitor it is the thing standing between the operator and forty decode rows. One DXer
+ * asked for it to be a resizable pane; a POTA operator wanted it small; on a desk it is
+ * the nicest thing on the page.
+ *
+ * Stored per device and separately from the compact default, so shrinking it on a phone
+ * does not shrink it in the shack.
+ */
+const WATERFALL_KEY = "digishack:waterfall-height:v1";
+const WATERFALL_MIN = 60;
+const WATERFALL_MAX = 640;
+
+function useWaterfallHeight(compact: boolean): {
+  height: number;
+  onHandleDown: (e: React.PointerEvent<HTMLDivElement>) => void;
+  reset: () => void;
+  custom: boolean;
+} {
+  const fallback = compact ? 120 : 300;
+  const [stored, setStored] = useState<number | null>(null);
+
+  useEffect(() => {
+    const n = Number.parseInt(readStored(WATERFALL_KEY) ?? "", 10);
+    if (Number.isFinite(n) && n >= WATERFALL_MIN && n <= WATERFALL_MAX) setStored(n);
+  }, []);
+
+  const height = stored ?? fallback;
+
+  const onHandleDown = (e: React.PointerEvent<HTMLDivElement>): void => {
+    e.preventDefault();
+    const startY = e.clientY;
+    const startH = height;
+    // Pointer capture, so a fast drag that leaves the 6px handle keeps resizing instead of
+    // stopping dead — the whole point of a drag handle is that you stop aiming at it.
+    const el = e.currentTarget;
+    el.setPointerCapture(e.pointerId);
+
+    const move = (ev: PointerEvent): void => {
+      const next = Math.min(WATERFALL_MAX, Math.max(WATERFALL_MIN, startH + (ev.clientY - startY)));
+      setStored(next);
+    };
+    const up = (ev: PointerEvent): void => {
+      el.releasePointerCapture(ev.pointerId);
+      el.removeEventListener("pointermove", move);
+      el.removeEventListener("pointerup", up);
+      // Written on release, not on every frame: a drag is ~200 events and localStorage is
+      // synchronous.
+      setStored((h) => {
+        if (h !== null) writeStored(WATERFALL_KEY, String(h));
+        return h;
+      });
+    };
+    el.addEventListener("pointermove", move);
+    el.addEventListener("pointerup", up);
+  };
+
+  return {
+    height,
+    onHandleDown,
+    reset: () => {
+      try {
+        window.localStorage.removeItem(WATERFALL_KEY);
+      } catch {
+        /* nothing to do */
+      }
+      setStored(null);
+    },
+    custom: stored !== null,
+  };
+}
+
 function useCompactLayout(): boolean {
   const [compact, setCompact] = useState(false);
   useEffect(() => {
@@ -425,6 +588,9 @@ export default function DigitalPage({ wsUrl }: Props) {
 
   /** Phone/small-tablet layout. See useCompactLayout — CSS handles everything it can. */
   const compact = useCompactLayout();
+  /** Per-device comfort settings. See useDecodeSize / useWaterfallHeight. */
+  const decodeSize = useDecodeSize();
+  const waterfall = useWaterfallHeight(compact);
 
   /**
    * What the Escape key just did, said out loud.
@@ -1161,18 +1327,39 @@ export default function DigitalPage({ wsUrl }: Props) {
             markers={markers}
             txHz={status?.txDF ?? null}
             gain={gain}
-            // 300px of an 844px phone screen for a display that, at 390px wide showing
-            // 0-2500 Hz, is 6.4 Hz per pixel against 2px-wide markers — it cannot
-            // resolve two stations 40 Hz apart, which is most of a busy band. Shrunk
-            // rather than hidden: it is still the fastest confirmation that audio is
-            // arriving at all, and that reading survives at 120px.
+            // Was `compact ? 120 : 300`. Both numbers were defensible and neither was
+            // right for everyone: 300px is a third of a phone screen for a display that
+            // at 390px wide cannot resolve two stations 40 Hz apart, and on a 27-inch
+            // monitor it is what stands between the operator and forty decode rows.
+            // Those defaults survive as the starting point; the handle below overrides
+            // them per device. See useWaterfallHeight.
             //
             // A number, not a CSS class, because the <canvas> height attribute sizes the
-            // bitmap; see useCompactLayout. Crossing the breakpoint reallocates the
-            // canvas and so wipes the scroll history, which is correct — the rows would
-            // be the wrong height otherwise — and happens only on a rotate or a resize.
-            height={compact ? 120 : 300}
+            // bitmap. Changing it reallocates the canvas and so wipes the scroll history,
+            // which is correct — the rows would be the wrong height otherwise.
+            height={waterfall.height}
           />
+          {/* DRAG TO RESIZE. A 6px grab strip with a wider invisible hit area, because a
+              6px target is a 6px target however tall the thing above it is. Double-click
+              restores the default for this screen. */}
+          <div
+            onPointerDown={waterfall.onHandleDown}
+            onDoubleClick={waterfall.reset}
+            role="separator"
+            aria-orientation="horizontal"
+            aria-label="Drag to resize the waterfall. Double-click to reset."
+            title={
+              waterfall.custom
+                ? `Waterfall ${waterfall.height}px — drag to resize, double-click to reset`
+                : "Drag to resize the waterfall"
+            }
+            className="group relative h-1.5 cursor-ns-resize touch-none select-none"
+          >
+            {/* The visible grip: quiet until pointed at, so it does not compete with the
+                spectrum immediately above it. */}
+            <div className="absolute inset-x-0 top-1/2 -translate-y-1/2 h-px bg-line group-hover:bg-line-strong" />
+            <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 h-1 w-10 rounded-sm bg-line-strong opacity-0 group-hover:opacity-100 transition-opacity" />
+          </div>
         </div>
 
         {/* flex-wrap added with the reorder: at 390px this row is a slider, a passband
@@ -1329,6 +1516,51 @@ export default function DigitalPage({ wsUrl }: Props) {
               title={`Decodes (${visible.length})`}
               actions={
                 <div className="flex items-center gap-2">
+                  {/* HOW BIG THE LIST IS, decided by whoever is reading it.
+                      Two reviewers wanted opposite things and both were right about
+                      their own screen: 12px monospace is unreadable with age-related
+                      vision decline, and a DXer on a 27-inch monitor wants more rows
+                      than WSJT-X shows him. There is no number that serves both.
+                      Kept beside the search box rather than in Settings because the
+                      right size depends on where you are sitting right now — reading
+                      the log from the sofa is not the same as working a run. */}
+                  <div
+                    className="flex items-center rounded-sm border border-line-strong"
+                    role="group"
+                    aria-label="Decode text size"
+                  >
+                    <button
+                      type="button"
+                      onClick={decodeSize.smaller}
+                      disabled={!decodeSize.canShrink}
+                      aria-label="Smaller decode text"
+                      title="Smaller — fits more rows on screen"
+                      className="tap-inline px-2 py-1 text-sm leading-none text-fg-muted hover:text-fg disabled:opacity-40 disabled:hover:text-fg-muted"
+                    >
+                      −
+                    </button>
+                    {/* Double duty: it shows the current size, and clicking it puts the
+                        size back. A reset nobody can find is a reset nobody has. */}
+                    <button
+                      type="button"
+                      onClick={decodeSize.reset}
+                      disabled={decodeSize.isDefault}
+                      title={decodeSize.isDefault ? "Default size" : "Back to the default size"}
+                      className="tap-inline px-1 py-1 text-[11px] leading-none tnum text-fg-subtle hover:text-fg disabled:hover:text-fg-subtle border-x border-line"
+                    >
+                      {decodeSize.px}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={decodeSize.bigger}
+                      disabled={!decodeSize.canGrow}
+                      aria-label="Larger decode text"
+                      title="Larger — easier to read across the room"
+                      className="tap-inline px-2 py-1 text-sm leading-none text-fg-muted hover:text-fg disabled:opacity-40 disabled:hover:text-fg-muted"
+                    >
+                      +
+                    </button>
+                  </div>
                   {/* Type a callsign. Uppercased as you type because that is how every
                       decode is written, and a lowercase search matching nothing would
                       read as "they are not on the air". */}
@@ -1439,7 +1671,13 @@ export default function DigitalPage({ wsUrl }: Props) {
                 // above it, because one unwrapped table sets the width of the whole
                 // document and every page then scrolls sideways.
                 <div className="-mx-4 overflow-x-auto lg:overflow-auto lg:max-h-[52rem]">
-                  <table className="w-full text-sm border-collapse">
+                  {/* The size is set HERE and inherited, so one number moves the header,
+                      the rows and the row height together. Setting it per-cell would let
+                      them drift apart at the extremes of the range. */}
+                  <table
+                    className="w-full border-collapse"
+                    style={{ fontSize: `${decodeSize.px}px` }}
+                  >
                     {/* Sticky only where there is an inner scroller to stick to. Below
                         `lg` this header was pinned to the top of a container that had
                         itself scrolled off the top of the screen, so the column labels
@@ -1449,14 +1687,17 @@ export default function DigitalPage({ wsUrl }: Props) {
                         {["UTC", "dB", "Hz", "dt", "Mode", "Message"].map((h) => (
                           <th
                             key={h}
-                            className="px-2.5 py-1 font-medium text-fg-muted text-xs uppercase tracking-wide"
+                            // `em`, not a fixed step: the header has to track the body
+                            // or the two drift apart as the operator moves the size.
+                            className="px-2.5 py-1 font-medium text-fg-muted text-[0.85em] uppercase tracking-wide"
                           >
                             {h}
                           </th>
                         ))}
                       </tr>
                     </thead>
-                    <tbody className="divide-y divide-line font-mono text-xs">
+                    {/* No `text-xs` — the size is inherited from the <table> above. */}
+                    <tbody className="divide-y divide-line font-mono">
                       {visible.map((d) => {
                         const isCq = /^CQ\b/i.test(d.message);
                         const mine = mentionsMe(d.message);
