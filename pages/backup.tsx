@@ -290,7 +290,7 @@ export default function BackupPage() {
                     </td>
                     <td className="py-1.5">
                       {f.name.includes(".bundle.") ? (
-                        <Badge tone="accent">Bundle</Badge>
+                        <Badge tone="neutral">Bundle</Badge>
                       ) : (
                         <Badge>SQL</Badge>
                       )}

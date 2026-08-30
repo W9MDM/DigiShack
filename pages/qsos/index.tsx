@@ -12,6 +12,8 @@ import {
   Input,
   PageHeader,
   Select,
+  Td,
+  Th,
 } from "@/components/ui/primitives";
 import { withPageAuth } from "@/lib/auth/guard";
 import { useApi } from "@/lib/client/api";
@@ -269,24 +271,14 @@ export default function QsoLogPage() {
                 <Th field="band" sort={sort} dir={dir} onSort={toggleSort}>
                   Band
                 </Th>
-                <th className="px-3 py-2 font-medium text-fg-muted text-xs uppercase tracking-wide">
-                  Freq
-                </th>
+                <Th>Freq</Th>
                 <Th field="mode" sort={sort} dir={dir} onSort={toggleSort}>
                   Mode
                 </Th>
-                <th className="px-3 py-2 font-medium text-fg-muted text-xs uppercase tracking-wide">
-                  RST
-                </th>
-                <th className="px-3 py-2 font-medium text-fg-muted text-xs uppercase tracking-wide">
-                  Grid
-                </th>
-                <th className="px-3 py-2 font-medium text-fg-muted text-xs uppercase tracking-wide">
-                  Station / Op
-                </th>
-                <th className="px-3 py-2 font-medium text-fg-muted text-xs uppercase tracking-wide">
-                  QSL
-                </th>
+                <Th>RST</Th>
+                <Th>Grid</Th>
+                <Th>Station / Op</Th>
+                <Th>QSL</Th>
               </tr>
             </thead>
             <tbody className="divide-y divide-line">
@@ -296,10 +288,10 @@ export default function QsoLogPage() {
                   className="hover:bg-surface-2 cursor-pointer"
                   onClick={() => void router.push(`/qsos/${qso.id}`)}
                 >
-                  <td className="px-3 py-1.5 tnum whitespace-nowrap text-fg-muted">
+                  <Td className="tnum whitespace-nowrap text-fg-muted">
                     {formatUtc(qso.startTime)}
-                  </td>
-                  <td className="px-3 py-1.5">
+                  </Td>
+                  <Td>
                     <Link
                       href={`/qsos/${qso.id}`}
                       className="font-display text-base tracking-wide hover:text-accent-bright"
@@ -333,23 +325,26 @@ export default function QsoLogPage() {
                         )}
                       </span>
                     )}
-                  </td>
-                  <td className="px-3 py-1.5">
-                    <Badge tone="accent">{qso.band}</Badge>
-                  </td>
-                  <td className="px-3 py-1.5 tnum whitespace-nowrap text-fg-muted">
+                  </Td>
+                  <Td>
+                    {/* `neutral`, not `accent`. Every row in the log has a band, so a
+                        red pill in every one of them carried no information whatever —
+                        while ON AIR and Delete, the two things on this page that really
+                        are urgent, were the same colour. Accent is the transmit colour;
+                        spending it on a per-row label is what made it mean nothing. */}
+                    <Badge tone="neutral">{qso.band}</Badge>
+                  </Td>
+                  <Td className="tnum whitespace-nowrap text-fg-muted">
                     {formatFreqMHz(qso.freqHz)}
-                  </td>
-                  <td className="px-3 py-1.5">
+                  </Td>
+                  <Td>
                     <Badge>{qso.mode}</Badge>
-                  </td>
-                  <td className="px-3 py-1.5 tnum whitespace-nowrap text-fg-muted">
+                  </Td>
+                  <Td className="tnum whitespace-nowrap text-fg-muted">
                     {qso.rstSent ?? "—"} / {qso.rstRcvd ?? "—"}
-                  </td>
-                  <td className="px-3 py-1.5 tnum text-fg-muted">
-                    {qso.gridSquare ?? "—"}
-                  </td>
-                  <td className="px-3 py-1.5 text-fg-muted whitespace-nowrap">
+                  </Td>
+                  <Td className="tnum text-fg-muted">{qso.gridSquare ?? "—"}</Td>
+                  <Td className="text-fg-muted whitespace-nowrap">
                     {qso.station.callsign}
                     {qso.operator && (
                       <span className="text-fg-subtle">
@@ -357,10 +352,10 @@ export default function QsoLogPage() {
                         / {qso.operator.callsign}
                       </span>
                     )}
-                  </td>
-                  <td className="px-3 py-1.5">
+                  </Td>
+                  <Td>
                     <QslCell qso={qso} />
-                  </td>
+                  </Td>
                 </tr>
               ))}
             </tbody>
@@ -387,48 +382,6 @@ export default function QsoLogPage() {
         </div>
       )}
     </>
-  );
-}
-
-function Th({
-  field,
-  sort,
-  dir,
-  onSort,
-  children,
-}: {
-  field: SortField;
-  sort: SortField;
-  dir: "asc" | "desc";
-  onSort: (f: SortField) => void;
-  children: React.ReactNode;
-}) {
-  const active = sort === field;
-  return (
-    <th
-      // `scope` is what tells a screen reader this cell heads a column; without it a
-      // 50-row table reads as 450 unlabelled cells.
-      scope="col"
-      // `aria-sort` is the only way the current sort is conveyed non-visually — the
-      // ▲/▼ is aria-hidden, correctly, because "black up-pointing triangle" is not
-      // information.
-      aria-sort={active ? (dir === "asc" ? "ascending" : "descending") : "none"}
-      className="px-3 py-2 font-medium text-xs uppercase tracking-wide"
-    >
-      <button
-        type="button"
-        onClick={() => onSort(field)}
-        className={`flex items-center gap-1 ${active ? "text-accent-bright" : "text-fg-muted hover:text-fg"}`}
-      >
-        {children}
-        {active && <span aria-hidden>{dir === "asc" ? "▲" : "▼"}</span>}
-        <span className="sr-only">
-          {active
-            ? `, sorted ${dir === "asc" ? "ascending" : "descending"}. Activate to reverse.`
-            : ", activate to sort by this column"}
-        </span>
-      </button>
-    </th>
   );
 }
 

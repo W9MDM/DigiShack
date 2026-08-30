@@ -21,7 +21,7 @@ import { decodeFT4, decodeFT8, HashCallBook } from "@e04/ft8ts";
 
 import { ft2DecodeAudio } from "@/lib/digital/ft2demod";
 import { HashCallBook as Ft2HashCallBook } from "@/lib/digital/pack77";
-import { PERIOD_MS } from "@/lib/radio/timing";
+import { PERIOD_MS, TRANSMISSION_MS } from "@/lib/radio/timing";
 import type { TxMode } from "@/lib/radio/waveform";
 
 /** What every decoder here is fed, whatever the radio delivered. */
@@ -33,11 +33,10 @@ export const DECODE_SAMPLE_RATE = 12_000;
  * FT2's 1947 includes the modulator's two-symbol pulse tail, not just its 144 channel
  * symbols; cutting at 1920 would clip the last symbol's energy.
  */
-export const TRANSMISSION_MS: Record<TxMode, number> = {
-  FT8: 12_640,
-  FT4: 5_040,
-  FT2: 1_947,
-};
+// Moved to lib/radio/timing.ts, beside PERIOD_MS and TX_START_OFFSET_MS, so the
+// transmitter can read it without importing this module. Re-exported because the name is
+// used widely here and in the checks.
+export { TRANSMISSION_MS } from "@/lib/radio/timing";
 
 /**
  * How long after the transmission ends the window is cut for decoding.
@@ -110,8 +109,100 @@ export const CUT_MARGIN_MS = 1_200;
  * placed in software and is stable to the Hz — it is our own belief about where they are,
  * which is refreshed from their last decode every cycle. 100 Hz is generous for that and
  * still three times cheaper than the full band.
+ *
+ * NARROWING BUYS ALMOST NOTHING, WHICH IS WORTH WRITING DOWN because the arithmetic
+ * suggests otherwise. Measured on this machine against the same window, median of five:
+ * +/-25 is 82 ms, +/-50 is 89 ms, +/-100 is 106 ms, and the full 200-3000 Hz band is
+ * 405 ms. So going from +/-100 to +/-50 saves 17 ms — 16% of a slice, 4% of the full
+ * pass — and halves the drift a belief may be wrong by. It is not a good trade: a
+ * believed offset 40 Hz low still finds the station at +/-50 and does NOT at +/-25.
+ *
+ * The reason is that the cost is nearly all fixed. That is also what MAX_SLICE_WIDTH_HZ
+ * is about, from the other end of the same curve.
  */
 export const PRIORITY_HALF_WIDTH_HZ = 100;
+
+/**
+ * How many candidate slices one window may be searched for, at most.
+ *
+ * A HARD CAP ON TOP OF A TIME BUDGET, and it exists for a reason the budget cannot
+ * express: three 200 Hz slices are 600 Hz, which is already 21% of the 200-3000 Hz band
+ * this pipeline searches. Past that a "slice" stops being one and we are simply paying
+ * for the band twice — once in pieces and once whole — for a window we were going to
+ * search in full anyway.
+ *
+ * Three rather than one because the top-ranked candidate is not always the one we call.
+ * `rankCandidates` orders by award value then signal, and `mayCall` then refuses dupes
+ * and stations still cooling down, so the call frequently lands on the second or third
+ * name. Each further slice costs the same and buys a smaller share of the remaining
+ * probability, which is what makes this a cap and not a target.
+ */
+export const MAX_CANDIDATE_SLICES = 3;
+
+/**
+ * Widest a merged candidate slice may be before it is cheaper to run two, Hz.
+ *
+ * MEASURED, and the shape of the curve is the whole argument. One bounded FT8 search over
+ * the same ten-signal window on this machine, median of five:
+ *
+ *      200 Hz  113 ms        900 Hz  250 ms
+ *      400 Hz  118 ms       1400 Hz  405 ms
+ *      600 Hz  189 ms       2800 Hz  516 ms   (the full band)
+ *
+ * The cost is almost entirely FIXED up to about 400 Hz — a 400 Hz search is 5 ms dearer
+ * than a 200 Hz one — and grows roughly with width after that. So two candidates close
+ * enough to share a slice should share it, and two that are not should not: measured,
+ * 250-450 plus 1080-1280 as separate searches is 278 ms, while one 250-1280 search
+ * covering both is 360 ms. Merging past this width makes things worse, which is exactly
+ * the kind of "obviously cheaper" change that would never have been noticed.
+ *
+ * It is also what stops an unbounded widen. The ranked list can be twenty stations, and a
+ * chain of them each within 200 Hz of the last would otherwise grow one slice across the
+ * whole band while the cap on the NUMBER of slices never fired.
+ */
+export const MAX_SLICE_WIDTH_HZ = 400;
+
+/**
+ * Total time the candidate slices may spend before the full-band pass, ms.
+ *
+ * SELF-CALIBRATING, and it has to be. The first slice always runs — that is the cost
+ * the partner slice has been paying since 1.153.0 and it is already accepted — and its
+ * MEASURED duration then decides whether a second fits. So the same constant produces
+ * three slices on this development machine and exactly one on the live box, without
+ * either number being written down anywhere:
+ *
+ *     development machine   95-98 ms a slice     -> 3 slices, 294 ms
+ *     live box (Xeon)      420-476 ms a slice    -> 1 slice
+ *
+ * WHY IT MUST BE SMALL. The slices run BEFORE the full-band pass, and `processWindow` is
+ * synchronous, so every millisecond spent here delays the whole band's decodes by the
+ * same millisecond. In the window where a candidate is found that does not matter: the
+ * call goes out on time and the full pass defers behind it. In the window where nothing
+ * is found it is pure loss, and it lands on the very path — the ordinary hunt, deciding
+ * from the full pass — whose lateness this change exists to remove. So the miss has to
+ * stay cheap even though the win is worth a lot.
+ *
+ * 300 ms is roughly a fifth of the 1,435-1,795 ms the full pass measures live and a
+ * sixth of the 1,860 ms of slack an FT8 window has after its transmission. Reasoned from
+ * those two, not measured as a threshold.
+ */
+export const CANDIDATE_BUDGET_MS = 300;
+
+/**
+ * The budget rule itself, as a function, so the arithmetic can be asserted directly.
+ *
+ * A check script cannot make this machine as slow as the live box, so asserting the
+ * BEHAVIOUR would only ever exercise the count cap. Asserting the RULE covers both
+ * machines from either one — scripts/check-first-tx.ts drives it with the live box's
+ * measured 420-476 ms and with this machine's 95-98 ms and shows the two answers.
+ *
+ * `lastSliceMs` rather than an average: a candidate slice that ran long is the best
+ * evidence available that the next one will too, and being wrong in that direction costs
+ * the whole band's decodes.
+ */
+export function anotherSliceFits(spentMs: number, lastSliceMs: number): boolean {
+  return spentMs + lastSliceMs <= CANDIDATE_BUDGET_MS;
+}
 
 /**
  * How close two decodes must be in frequency to be the same signal, Hz.
@@ -144,7 +235,14 @@ export interface Decode {
 export type DecodePipelineEvents = {
   decodes: [{ windowStart: Date; decodes: Decode[]; rms: number; decodeMs: number }];
   /**
-   * The QSO partner's slice, decoded ahead of the rest of the band.
+   * A slice decoded ahead of the rest of the band — the QSO partner's, or a candidate's.
+   *
+   * FIRES ONCE PER SLICE THAT FOUND SOMETHING, so a window may emit it more than once.
+   * There is only ever one partner slice, but there can be up to MAX_CANDIDATE_SLICES
+   * candidate slices in a window where no contact is in progress, and each is reported
+   * on its own with its own bounds and its own cost. Consumers already have to tolerate
+   * a slice holding nobody they care about — that is the empty-slice rule below — and
+   * several such slices is the same rule applied more than once.
    *
    * A SEPARATE EVENT, not an early `decodes`. Everything that consumes `decodes` —
    * the database write, the websocket feed, PSKReporter, the CSV, the auto operator —
@@ -208,10 +306,10 @@ export interface DecodePipelineOptions {
   /**
    * Where the station we are working transmits, asked fresh at every window cut.
    *
-   * Null — no contact in progress, or nobody has decoded yet — means no priority pass at
-   * all and this file behaves exactly as it did. That is also the answer for the FIRST
-   * transmission of every contact: there is no partner yet, so nothing here helps it.
-   * The gain starts at the second transmission and applies to every one after it.
+   * Null — no contact in progress, or nobody has decoded yet — means no PARTNER pass,
+   * and the window falls through to `candidateOffsetsHz` below. That is the answer for
+   * the FIRST transmission of every contact: there is no partner yet, so nothing on this
+   * option can help it, and the candidate list exists precisely because of that gap.
    *
    * A closure rather than a number, and a PULL rather than a push, for the reason
    * `txFilterHiHz` on QsoControllerOptions is one: the answer changes during a contact —
@@ -222,6 +320,36 @@ export interface DecodePipelineOptions {
    * the controller had already recorded from their decodes.
    */
   priorityOffsetHz?: () => number | null;
+  /**
+   * Where the stations we are most likely to CALL transmit, for the window about to be
+   * decoded. Asked at every window cut, with that window's start.
+   *
+   * THE FIRST TRANSMISSION OF A CONTACT IS WHAT THIS IS FOR, and it is the one
+   * `priorityOffsetHz` above says plainly it cannot help: there is no partner yet. Yet
+   * the first call is the transmission most worth rescuing — measured on the live box,
+   * replies now go out 1 ms EARLY while first calls are still 1.3-1.4 s late, because a
+   * reply has a partner offset and a first call has nothing.
+   *
+   * IT DOES NOT NEED ONE. In hunt mode the auto operator ranks every CQ it hears and
+   * calls the best one it is allowed to; the ranked list for a window is finished long
+   * before the NEXT window of the same parity is even cut. A station calling CQ transmits
+   * on one parity and listens on the other, so whoever called CQ two windows ago is very
+   * likely to be calling CQ again in the window being cut now, on the same offset. That
+   * is where these come from — `AutoOperator.candidateOffsetsHz`, which reports the list
+   * `huntWindow` already built rather than keeping a second one.
+   *
+   * PER-WINDOW, and the argument is not decoration: the answer depends on the window's
+   * PARITY. Handing back the last window's candidates would search for stations that are
+   * receiving, not transmitting, and find nothing every time.
+   *
+   * A PULL, like `priorityOffsetHz`, and for the same reason: the list is rebuilt from
+   * every decoded window and a value captured at construction would be empty for ever.
+   *
+   * Best first. The pipeline searches them in order and stops when its budget runs out —
+   * see MAX_CANDIDATE_SLICES and CANDIDATE_BUDGET_MS — so the order is what decides
+   * which ones are actually looked at on a slow machine.
+   */
+  candidateOffsetsHz?: (windowStartMs: number) => number[];
   /**
    * "Is our transmit path occupied right now?" — asked once, after the priority pass.
    *
@@ -278,6 +406,7 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
   private readonly ft2Book = new Ft2HashCallBook();
 
   private readonly priorityOffsetHz: (() => number | null) | null;
+  private readonly candidateOffsetsHz: ((windowStartMs: number) => number[]) | null;
   private readonly transmitPendingFn: (() => boolean) | null;
   /**
    * The one full-band pass waiting for the transmitter, if any.
@@ -296,6 +425,7 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
     this.depth = opts.depth ?? 2;
     this.silenceRms = opts.silenceRms ?? 0.001;
     this.priorityOffsetHz = opts.priorityOffsetHz ?? null;
+    this.candidateOffsetsHz = opts.candidateOffsetsHz ?? null;
     this.transmitPendingFn = opts.transmitPending ?? null;
     // Clamped rather than trusted: the decoders work on 12 kHz audio, so anything at or
     // above 6 kHz is past Nyquist and asking for it would search noise. The floor keeps
@@ -483,32 +613,45 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
     const audio = decimateTo12k(samples, this.inputRate);
     normalise(audio);
 
-    // ---- the priority slice, when a contact is in progress and we know where they are
-    const slice = this.prioritySlice();
-    let priority: Decode[] = [];
+    // ---- the priority slices: the QSO partner, or the stations we are likely to call
+    const slices = this.prioritySlices(windowStart);
+    const priority: Decode[] = [];
     let spentMs = 0;
-    if (slice) {
+    for (const slice of slices) {
       const started = Date.now();
+      let found: Decode[] = [];
       try {
-        priority = this.decodeFT8Range(audio, windowStart, slice.loHz, slice.hiHz);
+        found = this.decodeFT8Range(audio, windowStart, slice.loHz, slice.hiHz);
       } catch (err) {
         // NEVER FATAL, unlike a failure of the full pass. This is an optimisation on top
         // of a search that is about to happen anyway, so the only correct response to it
         // failing is to say so and carry on to the search that matters.
         this.emit("error", err instanceof Error ? err : new Error("priority decode failed"));
-        priority = [];
+        found = [];
       }
-      spentMs = Date.now() - started;
-      if (priority.length > 0) {
+      const sliceMs = Date.now() - started;
+      spentMs += sliceMs;
+      if (found.length > 0) {
+        priority.push(...found);
         this.emit("priorityDecodes", {
           windowStart,
-          decodes: priority,
+          decodes: found,
           centreHz: slice.centreHz,
           loHz: slice.loHz,
           hiHz: slice.hiHz,
-          decodeMs: spentMs,
+          decodeMs: sliceMs,
         });
+        // `emit` is synchronous all the way down, so if that slice made us take the
+        // transmitter there is nothing left to look for: the window's remaining
+        // candidates are stations we are now NOT going to call, and every further slice
+        // would be spent delaying the transmission it just produced.
+        if (this.transmitPendingFn?.() === true) break;
       }
+      // SELF-CALIBRATING, and measured rather than predicted: the slice that just ran is
+      // the best estimate of what the next one costs on THIS machine. One slice always
+      // runs — that is the cost the partner pass has paid since 1.153.0 — and a second
+      // only runs when the first proved there is room for it.
+      if (!anotherSliceFits(spentMs, sliceMs)) break;
     }
 
     // TWO CONDITIONS, AND BOTH MATTER.
@@ -608,7 +751,7 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
   }
 
   /**
-   * The slice to search first, or null for "search the band the way you always did".
+   * The slices to search first, best first, or empty for "search the band as you always did".
    *
    * FT8 ONLY, and that is measured rather than cautious.
    *
@@ -618,21 +761,71 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
    *     the whole 200-3000 Hz band. Narrowing FT4 is both slower and lossier. It also
    *     has nothing to buy: the full FT4 search costs a fifth of FT8's, and its window
    *     leaves 1,260 ms between the cut and the next boundary.
-   *   - FT2 IS BEYOND HELP FROM HERE, and not because of decode time — `ft2DecodeAudio`
-   *     takes 184 ms over 400-2800 Hz on this machine and does accept a narrower range.
-   *     The arithmetic is what rules it out: FT2's window is cut at 1,947 + 1,200 =
-   *     3,147 ms into a 3,000 ms period, so the cut for one window already lands 147 ms
-   *     AFTER the transmission that answers it should have started. Its
-   *     LATE_TX_TOLERANCE_MS is 0 — a late FT2 signal does not decode at the far end at
-   *     all — so there is no late transmission here to rescue. That is a different fault
-   *     from this one and is not addressed here.
+   *   - FT2 HAS NOTHING TO BUY EITHER, and the reason has been rewritten because the old
+   *     one was arithmetic from a 3,000 ms period FT2 no longer has. The period is 3,750,
+   *     the window is cut at 1,947 + 1,200 = 3,147, and the next transmission is due at
+   *     the boundary itself — FT2 has no start offset. So the decode has 603 ms to finish
+   *     in, and the whole 400-2800 Hz FT2 pass MEASURES 170 ms on this machine. It
+   *     already fits, with three and a half times the room it needs.
+   *
+   *     FT4 is the same story with more slack: cut at 6,240 of a 7,500 ms period, the
+   *     reply due at 8,000, so 1,760 ms of margin for a full pass measuring 92 ms.
+   *
+   * The whole of this file's priority machinery exists for ONE mode's arithmetic: FT8
+   * cuts at 13,840, is due on the air at 15,500, and its full pass measures 1,435-1,795 ms
+   * live. That is the only combination where the search does not comfortably fit.
    */
-  private prioritySlice(): { centreHz: number; loHz: number; hiHz: number } | null {
-    if (this.mode !== "FT8") return null;
-    const raw = this.priorityOffsetHz?.();
+  private prioritySlices(windowStart: Date): PrioritySlice[] {
+    if (this.mode !== "FT8") return [];
+
+    // THE PARTNER WINS, ALONE AND WITHOUT A BUDGET.
+    //
+    // A contact in progress has one right answer to "who are we about to transmit to",
+    // and it is not a guess: `QsoController.partnerOffsetHz` is their last decode. The
+    // candidate list is the auto operator's opinion about who it MIGHT call next, which
+    // is a different and weaker thing, and searching for those while a contact is live
+    // would spend the window's margin looking for stations we are not going to answer.
+    // So this returns exactly one slice and the loop in `processWindow` behaves as it
+    // did before candidates existed.
+    const partner = this.sliceAround(this.priorityOffsetHz?.());
+    if (partner) return [{ ...partner, kind: "partner" }];
+
+    const raw = this.candidateOffsetsHz?.(windowStart.getTime());
+    if (!raw || raw.length === 0) return [];
+
+    const out: PrioritySlice[] = [];
+    for (const hz of raw) {
+      const slice = this.sliceAround(hz);
+      if (!slice) continue;
+      // MERGED RATHER THAN REPEATED. Two candidates 80 Hz apart are one search, not two:
+      // their slices overlap, the decoder would return the same signals twice, and the
+      // second search would spend a whole slice's budget on audio just examined. Widening
+      // the first is strictly cheaper and cannot lose either of them.
+      // Only up to MAX_SLICE_WIDTH_HZ: past that the merged search costs more than the
+      // two it replaced, and a long chain of near neighbours would widen one slice across
+      // the band without the cap on the NUMBER of slices ever firing.
+      const touching = out.find(
+        (o) =>
+          slice.loHz <= o.hiHz &&
+          slice.hiHz >= o.loHz &&
+          Math.max(o.hiHz, slice.hiHz) - Math.min(o.loHz, slice.loHz) <= MAX_SLICE_WIDTH_HZ,
+      );
+      if (touching) {
+        touching.loHz = Math.min(touching.loHz, slice.loHz);
+        touching.hiHz = Math.max(touching.hiHz, slice.hiHz);
+        continue;
+      }
+      out.push({ ...slice, kind: "candidate" });
+      if (out.length >= MAX_CANDIDATE_SLICES) break;
+    }
+    return out;
+  }
+
+  /** One centre offset to a bounded slice, or null when there is nothing to search. */
+  private sliceAround(raw: number | null | undefined): { centreHz: number; loHz: number; hiHz: number } | null {
     if (raw === null || raw === undefined || !Number.isFinite(raw)) return null;
     const centreHz = Math.round(raw);
-    // Outside the searched passband there is nothing to prioritise: a partner reported
+    // Outside the searched passband there is nothing to prioritise: a station reported
     // above `maxHz` cannot have been decoded by this pipeline in the first place.
     if (centreHz < 200 || centreHz > this.maxHz) return null;
     const loHz = Math.max(200, centreHz - PRIORITY_HALF_WIDTH_HZ);
@@ -694,6 +887,20 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
     this.deferred = null;
     this.runFullPass(p);
   }
+}
+
+/**
+ * One bounded search to run before the full band, and where it came from.
+ *
+ * `kind` is not used to decide anything here — both kinds are decoded identically — but
+ * it is what makes the budget rule legible: a partner slice is alone and unbudgeted, a
+ * candidate slice is one of up to MAX_CANDIDATE_SLICES sharing CANDIDATE_BUDGET_MS.
+ */
+interface PrioritySlice {
+  kind: "partner" | "candidate";
+  centreHz: number;
+  loHz: number;
+  hiHz: number;
 }
 
 /** A full-band pass that has been paid for but not yet run. See `transmitPending`. */

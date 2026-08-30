@@ -134,6 +134,37 @@ export interface AutoOperatorOptions {
   log: (line: string) => void;
 }
 
+/**
+ * One ranked, callable CQ from a decoded window — everything `startCall` asks for.
+ *
+ * Deliberately the WHOLE record and not just the offset. The offset is what the decode
+ * pipeline needs, but the fast path in `onPriorityDecodes` also has to start the contact,
+ * and re-deriving the grid, the park and the SIG from a second decode a second later is
+ * how two paths end up disagreeing about what a contact was for.
+ */
+interface HuntCandidate {
+  call: string;
+  grid: string | null;
+  /** Why `rankCandidates` put them where it did, for the status line. */
+  reasons: string[];
+  snr: number;
+  freqOffset: number;
+  sig: string | null;
+  sigInfo: string | null;
+  message: string;
+}
+
+/**
+ * How long a callsign's DXCC entity is remembered, ms.
+ *
+ * Half an hour, because the thing being cached does not change on a shorter timescale
+ * than an administrator loading a new cty.xml. See `entityCache`.
+ */
+const ENTITY_CACHE_MS = 30 * 60_000;
+
+/** Callsigns remembered at once. A busy evening on 20 m is a few hundred. */
+const ENTITY_CACHE_MAX = 2_000;
+
 /** Listen this many windows after enabling a mode or changing band. */
 const WARMUP_WINDOWS = 2;
 
@@ -317,6 +348,23 @@ export class AutoOperator {
    * Oldest first — whoever asked first gets worked first.
    */
   private callbacks: PendingCallback[] = [];
+  /**
+   * The ranked candidates from the last window we listened to, and which window it was.
+   *
+   * ONE WINDOW, NOT A ROLLING SET, and the window it came from is half the value. A
+   * station calling CQ transmits on one parity and listens on the other, so this list
+   * only predicts the NEXT window of the SAME parity — two periods later. Applied to the
+   * window in between it would search for stations that are receiving.
+   *
+   * An empty `list` is a real answer meaning "we listened on that parity and nobody was
+   * calling CQ", which is why `rankWindow` writes one rather than leaving the field
+   * alone. Without it a quiet window would silently reuse a list from a minute earlier.
+   */
+  private candidates: { at: number; heardCq: boolean; list: HuntCandidate[] } | null = null;
+  /** The window a candidate call has already been attempted for. One attempt per window. */
+  private lastCandidateWindow: number | null = null;
+  /** See `callPending`. */
+  private startingCall = false;
 
   constructor(opts: AutoOperatorOptions) {
     this.o = opts;
@@ -394,6 +442,11 @@ export class AutoOperator {
     // Carrying them across a switch to Off — or to another band via chase — would
     // call someone back minutes later from somewhere they never heard us.
     this.callbacks = [];
+    // Same argument, and the band case is the sharper one: a candidate list is a claim
+    // about who is transmitting on this band at this parity, and after a hop every part
+    // of that is wrong. Warm-up would suppress it anyway; clearing it says why.
+    this.candidates = null;
+    this.lastCandidateWindow = null;
 
     // Where chase mode should come back to. Captured here rather than derived later
     // because by the time the chase ends the dial has moved, possibly to another
@@ -413,6 +466,175 @@ export class AutoOperator {
     this.lastAction = mode === "off" ? "stopped" : `enabled ${mode}`;
     this.o.log(`[auto] mode = ${mode}`);
     this.broadcastState();
+  }
+
+  /**
+   * Where the stations we would most likely call are transmitting, best first.
+   *
+   * ASKED BY THE DECODE PIPELINE, at the instant it cuts `windowStartMs` and before it
+   * has decoded a single sample of it. That is the whole point: the first transmission of
+   * a contact is scheduled from a decode, and today it goes out 1.3-1.4 s late because the
+   * full 200-3000 Hz search has to finish before anyone knows who to call. A reply does
+   * not suffer from this — measured at -1 ms since 1.153.0 — because a reply has a
+   * partner offset. This is the same trick with the same mechanism, given an offset for
+   * the case where there is no partner yet.
+   *
+   * EXACTLY THE PREVIOUS WINDOW OF THIS PARITY, and nothing older. Two periods back is
+   * the last time we listened while these stations were transmitting; four periods back
+   * is a minute ago on FT8, and pointing a slice at where somebody used to be is a miss
+   * that costs a slice. When the list is stale, absent, or from the wrong parity this
+   * returns nothing and the pipeline searches the band exactly as it always did.
+   *
+   * EMPTY WHENEVER WE COULD NOT CALL ANYWAY. A contact in progress belongs to the
+   * partner slice — the pipeline prefers it regardless, and this agrees so the two can
+   * never both be searching. Paused guards, warm-up and the non-hunting modes have no
+   * first call to make punctual.
+   */
+  candidateOffsetsHz(windowStartMs: number): number[] {
+    if (!this.candidateReady(windowStartMs)) return [];
+    return this.candidates!.list.map((c) => c.freqOffset);
+  }
+
+  /**
+   * True from the synchronous start of a candidate call until it has been taken or refused.
+   *
+   * WITHOUT THIS THE CANDIDATE SLICE WOULD BE WORSE THAN USELESS. The pipeline asks
+   * `transmitPending` the instant its priority emit returns, and defers the full-band
+   * pass only if the answer is yes — because a full pass is synchronous and would hold
+   * the event loop straight over the moment it just found the candidate early FOR. The
+   * QSO controller can answer honestly there: its path is synchronous down to
+   * `tx.transmit`. This one is NOT — `mayCall` reads the do-not-call list and the band
+   * slot from the database, and `startCall` reads the dupe index — so by the time the
+   * transmitter is taken the pipeline has long since stopped asking.
+   *
+   * So the flag is set BEFORE the first await and cleared when the attempt settles, and
+   * the bridge ORs it with the controller's. There is no gap between the two: `startCall`
+   * sets `QsoController.transmitPending` synchronously inside the call this is still
+   * covering.
+   *
+   * WHAT IT COSTS WHEN THE CALL IS REFUSED: the window's full-band decodes wait out those
+   * database reads and one 100 ms poll. Bounded, rare, and the deferral has its own
+   * one-period deadline underneath it.
+   */
+  get callPending(): boolean {
+    return this.startingCall;
+  }
+
+  /**
+   * A candidate's slice, decoded ahead of the band. Call them NOW rather than in 1.4 s.
+   *
+   * NOT WIRED THROUGH `source`, for the same reason `QsoController.onPriorityDecodes` is
+   * not: `DigitalSource` names the two events the operating layer needs and widening it
+   * to carry an optimisation would undo the point of having narrowed it. The bridge calls
+   * this.
+   *
+   * MUST NOT CONSUME THE WINDOW. `onWindow` dedupes on `windowStartMs` and is what feeds
+   * `recentOffsets`, the dead-band counter, the band-hop tally and the callback queue.
+   * Treating a slice as the window would hand all of that one station and silently
+   * discard the other twenty-nine. So this touches none of it: it looks for one ranked
+   * candidate, starts the contact if it is there, and leaves the window itself entirely
+   * to the full pass — which will then find the contact already active and step aside.
+   *
+   * AN EMPTY OR IRRELEVANT SLICE DOES NOTHING AT ALL. No state, no status line, no
+   * attempt marked as spent. That is the same rule the partner slice follows and it is
+   * what makes a miss cost nothing beyond the decode itself.
+   */
+  onPriorityDecodes(d: {
+    windowStart: Date;
+    decodes: { message: string; snr: number; freqOffset: number }[];
+  }): void {
+    const at = d.windowStart.getTime();
+    if (!this.candidateReady(at)) return;
+    // One attempt per window, whichever of the (up to three) candidate slices got here
+    // first. A second attempt could only be for a lower-ranked station in the same window,
+    // and it would race the first one's database reads.
+    if (this.lastCandidateWindow === at) return;
+
+    const me = this.o.identity.myCall.toUpperCase();
+    for (const c of this.candidates!.list) {
+      // THIS window's decode of them, not the remembered one: the offset, the SNR and the
+      // message are all facts about the transmission we are actually answering. The
+      // remembered record supplies only what this window cannot — the grid, the park and
+      // the SIG, which came from the same rank that chose them.
+      const heard = d.decodes.find((x) => {
+        const p = parseMessage(x.message);
+        if (p.kind !== "cq" || p.from !== c.call || p.from === me) return false;
+        return this.mode === "hunt-pota"
+          ? (p as { modifier: string | null }).modifier === "POTA"
+          : true;
+      });
+      if (!heard) continue;
+      const p = parseMessage(heard.message);
+      this.lastCandidateWindow = at;
+      this.startingCall = true;
+      void this.callCandidate(c, heard, p.kind === "cq" ? p.grid : c.grid, at);
+      return;
+    }
+  }
+
+  /** The gates every candidate path shares, so the pipeline and the fast path agree. */
+  private candidateReady(windowStartMs: number): boolean {
+    if (this.mode !== "hunt" && this.mode !== "hunt-pota") return false;
+    if (this.warmup > 0) return false;
+    if (this.o.guards.pausedReason) return false;
+    // The partner slice owns a live contact, and a second call must never be started
+    // under one. `startingCall` closes the window between deciding and the controller
+    // knowing about it.
+    if (this.o.controller.hasActive || this.startingCall) return false;
+    const c = this.candidates;
+    if (!c || c.list.length === 0) return false;
+    // Same parity, one full cycle back. See `candidates`.
+    return windowStartMs - c.at === 2 * this.o.source.periodMs;
+  }
+
+  /** Start the contact a candidate slice found. Async, and covered by `callPending`. */
+  private async callCandidate(
+    c: HuntCandidate,
+    heard: { message: string; snr: number; freqOffset: number },
+    grid: string | null,
+    windowStartMs: number,
+  ): Promise<void> {
+    try {
+      const { band, mode } = this.o.getBandMode();
+      // THE SAME GATE THE ORDINARY HUNT USES, including `callChecks()`. `startCall` runs
+      // `mayCall` too, but WITHOUT the do-not-call list and the band-slot check — those
+      // are the auto operator's to apply, and a fast path that skipped them would call
+      // stations the operator has explicitly excluded.
+      const may = await this.o.guards.mayCall(
+        c.call,
+        band ?? "?",
+        mode,
+        Date.now(),
+        this.o.wasWorked,
+        this.o.callChecks(),
+      );
+      // Refused: step aside completely. The window's own `decodes` event is still coming
+      // and `huntWindow` will rank it afresh, try the next name down, and say so in the
+      // status line. Announcing anything here would overwrite that with a staler answer.
+      if (!may.allowed) return;
+
+      const result = await this.o.controller.startCall({
+        theirCall: c.call,
+        theirGrid: grid,
+        theirSnr: heard.snr,
+        theirOffsetHz: heard.freqOffset,
+        theirWindowStart: windowStartMs,
+        sig: c.sig,
+        sigInfo: c.sigInfo,
+        theirMessage: heard.message,
+      });
+      if (!result.ok) return;
+      const why = c.reasons.length ? ` — ${c.reasons.join(", ")}` : "";
+      this.lastAction = `hunting ${c.call} (${heard.snr} dB)${why} — from their slice, on time`;
+      this.o.log(`[auto] ${this.lastAction}`);
+      this.broadcastState();
+    } catch (err) {
+      this.o.log(`[auto] candidate call failed: ${(err as Error).message}`);
+    } finally {
+      // However it ended. A flag left set would hold this window's full-band decodes
+      // until the pipeline's deferral deadline and block the next candidate window.
+      this.startingCall = false;
+    }
   }
 
   private async onWindow(
@@ -487,7 +709,7 @@ export class AutoOperator {
     // guard fault are all irrelevant to it — and each of those returns early below.
     // Placed after them, a tail-ender calling during the two warm-up windows of a
     // fresh band, or while the guards were paused, was heard and forgotten.
-    if (this.o.controller.hasActive) this.noteCallbacks(answers, windowStartMs);
+    if (this.o.controller.hasActive || this.startingCall) this.noteCallbacks(answers, windowStartMs);
 
     // A paused guard is where band-hopping takes over — otherwise wait for the
     // operator to re-arm.
@@ -539,8 +761,29 @@ export class AutoOperator {
       return;
     }
 
+    // WHO WE WOULD CALL, WORKED OUT NOW RATHER THAN WHEN WE NEED IT.
+    //
+    // Ranking this window's CQs costs a cached worked-index read and one DXCC lookup per
+    // callsign, and it happens about thirteen seconds before the next window is cut — as
+    // far from the critical path as anything in this file gets. What it buys is that when
+    // that window IS cut, the decode pipeline can be told where to look first, and the
+    // first call of a contact stops going out 1.3-1.4 s late. See `candidateOffsetsHz`.
+    //
+    // DELIBERATELY BEFORE THE `hasActive` RETURN BELOW, and that placement is the whole
+    // reason this is here and not left inside `huntWindow`. The commonest first call in
+    // the log is the one right after a contact ends, and during that contact `huntWindow`
+    // never runs — so the list would be a minute stale exactly when it matters most. Our
+    // own transmit windows are silent and rank to an empty list, which is correct: we
+    // heard nothing on that parity because we were talking.
+    //
+    // After the pause and warm-up returns, because a station that may not transmit has no
+    // first call to make punctual, and a warming-up band has not been listened to yet.
+    if (this.mode === "hunt" || this.mode === "hunt-pota") {
+      await this.rankWindow(windowStartMs, decodes);
+    }
+
     // Hand answers to the controller: someone called us while we were CQing.
-    if (!this.o.controller.hasActive && answers.length > 0 && this.cqParity !== null) {
+    if (!this.o.controller.hasActive && !this.startingCall && answers.length > 0 && this.cqParity !== null) {
       // Strongest answer wins; the rest will call again next cycle.
       const best = answers.sort((a, b) => b.snr - a.snr)[0]!;
       const p = parseMessage(best.message);
@@ -564,7 +807,14 @@ export class AutoOperator {
 
     // While a QSO runs, the controller owns the transmitter. Anyone who called in
     // the meantime was noted above.
-    if (this.o.controller.hasActive) {
+    //
+    // `startingCall` counts as running. A candidate's slice starts the contact through
+    // `mayCall` and `startCall`, both of which read the database, and until those settle
+    // `hasActive` is still false — so without this a slow lookup would let this window's
+    // full pass rank the band and call somebody ELSE, and the two would race for the
+    // transmitter. The deferral in the decode pipeline usually keeps that window from
+    // arriving at all; this is what holds when it does.
+    if (this.o.controller.hasActive || this.startingCall) {
       this.broadcastState();
       return;
     }
@@ -626,6 +876,81 @@ export class AutoOperator {
     decodes: { message: string; snr: number; freqOffset: number }[],
   ): Promise<void> {
     const { band, mode } = this.o.getBandMode();
+    const ranked = await this.rankWindow(windowStartMs, decodes);
+    if (ranked === null) {
+      this.lastAction = "no CQs heard this window";
+      return;
+    }
+    if (ranked.length === 0) {
+      const prefs = await this.o.huntPrefs();
+      this.lastAction = prefs.newOnly ? "nothing new on frequency" : "nothing above the SNR floor";
+      return;
+    }
+
+    for (const c of ranked) {
+      const may = await this.o.guards.mayCall(
+        c.call,
+        band ?? "?",
+        mode,
+        Date.now(),
+        this.o.wasWorked,
+        this.o.callChecks(),
+      );
+      if (!may.allowed) continue;
+
+      const result = await this.o.controller.startCall({
+        theirCall: c.call,
+        theirGrid: c.grid,
+        theirSnr: c.snr,
+        theirOffsetHz: c.freqOffset,
+        theirWindowStart: windowStartMs,
+        sig: c.sig,
+        sigInfo: c.sigInfo,
+        theirMessage: c.message,
+      });
+      if (result.ok) {
+        const why = c.reasons.length ? ` — ${c.reasons.join(", ")}` : "";
+        this.lastAction = `hunting ${c.call} (${c.snr} dB)${why}`;
+        this.o.log(`[auto] ${this.lastAction}`);
+        return;
+      }
+    }
+    const prefs = await this.o.huntPrefs();
+    this.lastAction = prefs.newOnly
+      ? "nothing new on frequency"
+      : "no callable CQs (dupes / cooling down)";
+  }
+
+  /**
+   * Rank this window's CQs and REMEMBER the answer. Null when nobody called CQ.
+   *
+   * Split out of `huntWindow` because the ranking is worth more than the call it
+   * immediately produces: it is also the only honest answer to "where will the station we
+   * are most likely to call next be transmitting", and that question is asked by the
+   * decode pipeline about a LATER window, before that window has been decoded. See
+   * `candidateOffsetsHz`.
+   *
+   * NO SECOND SOURCE OF TRUTH. This is the list `huntWindow` has always built, kept
+   * instead of discarded. The callsign, grid, SNR, offset and park all come from the same
+   * decode and the same `rankCandidates` call that decides who gets called; nothing here
+   * re-derives any of them, so the candidate slice can never be pointed somewhere the
+   * hunt would not have gone.
+   */
+  private async rankWindow(
+    windowStartMs: number,
+    decodes: { message: string; snr: number; freqOffset: number }[],
+  ): Promise<HuntCandidate[] | null> {
+    // ONCE PER WINDOW. This is now called twice for every hunted window — once eagerly
+    // from `onWindow` so the list exists before the next same-parity cut, and again from
+    // `huntWindow` when the ordinary hunt runs — and the second call must not repeat a
+    // DXCC lookup per callsign against the database.
+    const memo = this.candidates;
+    // `heardCq` rather than a length test: a window where twenty stations called CQ and
+    // every one was filtered out by `newOnly` or `minSnr` is NOT a window where nobody
+    // called, and the status line says something different about each.
+    if (memo && memo.at === windowStartMs) return memo.heardCq ? memo.list : null;
+
+    const { band } = this.o.getBandMode();
     const me = this.o.identity.myCall.toUpperCase();
 
     const cqs = decodes
@@ -637,8 +962,12 @@ export class AutoOperator {
           : true,
       );
     if (cqs.length === 0) {
-      this.lastAction = "no CQs heard this window";
-      return;
+      // Recorded as an EMPTY list rather than left alone, so `candidateOffsetsHz` can
+      // tell "this parity had nobody" from "this parity was never listened to". Without
+      // that distinction a quiet window would silently reuse the offsets from a minute
+      // ago and search where nobody is.
+      this.candidates = { at: windowStartMs, heardCq: false, list: [] };
+      return null;
     }
 
     const worked = await this.workedFor(band);
@@ -677,7 +1006,7 @@ export class AutoOperator {
         call: p.from,
         snr: d.snr,
         grid: p.grid,
-        dxcc: await this.o.resolveEntity(p.from),
+        dxcc: await this.entityFor(p.from),
         // The same park the contact would be logged against, so an unworked
         // reference ranks an activator up — this is the scoring the decode list's
         // badges show, and the two must not disagree about what is worth calling.
@@ -693,39 +1022,14 @@ export class AutoOperator {
       minSnr: prefs.minSnr,
     });
 
+    const list: HuntCandidate[] = [];
     for (const c of ranked) {
       const heard = byCall.get(c.call);
       if (!heard) continue;
-      const may = await this.o.guards.mayCall(
-        c.call,
-        band ?? "?",
-        mode,
-        Date.now(),
-        this.o.wasWorked,
-        this.o.callChecks(),
-      );
-      if (!may.allowed) continue;
-
-      const result = await this.o.controller.startCall({
-        theirCall: c.call,
-        theirGrid: c.grid,
-        theirSnr: heard.snr,
-        theirOffsetHz: heard.freqOffset,
-        theirWindowStart: windowStartMs,
-        sig: heard.sig,
-        sigInfo: heard.sigInfo,
-        theirMessage: heard.message,
-      });
-      if (result.ok) {
-        const why = c.reasons.length ? ` — ${c.reasons.join(", ")}` : "";
-        this.lastAction = `hunting ${c.call} (${heard.snr} dB)${why}`;
-        this.o.log(`[auto] ${this.lastAction}`);
-        return;
-      }
+      list.push({ call: c.call, grid: c.grid, reasons: c.reasons, ...heard });
     }
-    this.lastAction = prefs.newOnly
-      ? "nothing new on frequency"
-      : "no callable CQs (dupes / cooling down)";
+    this.candidates = { at: windowStartMs, heardCq: true, list };
+    return list;
   }
 
   /**
@@ -997,6 +1301,31 @@ export class AutoOperator {
    * not something to run every 15 seconds, and it changes only when we log
    * something (which invalidates it explicitly).
    */
+  /**
+   * DXCC entity per callsign, remembered.
+   *
+   * WHAT THIS IS ACTUALLY FOR IS TIMING, not database load. `rankWindow` resolves the
+   * entity of every station calling CQ, and on a busy 20 m evening that is twenty or
+   * thirty separate queries between the window's decodes arriving and the first call
+   * going out — the chain that puts a first call 1.3-1.4 s behind its window. The
+   * candidate slice steps around that chain when it hits; this shortens it for every
+   * window where it does not, which is the case the slice makes slightly worse by
+   * costing a decode before the full pass.
+   *
+   * SAFE TO REMEMBER, unlike the worked index next door. A callsign's DXCC entity is a
+   * fact about the prefix and the date, and it changes only when an administrator loads a
+   * new cty.xml — which is why this has a plain TTL and no invalidation hook, while
+   * `workedCache` has `invalidateWorked()` called on every logged contact. The cost of
+   * being half an hour stale is one contact ranked against yesterday's entity list; the
+   * cost of a stale worked index is calling a dupe.
+   *
+   * NOT MEASURED AGAINST THE LIVE DATABASE. There is none on this machine. The shape of
+   * the win is certain — the same twenty callsigns call CQ window after window, so after
+   * one cycle nearly every lookup is a hit — but the milliseconds are not, and the live
+   * `[qso] first transmission in` line is what will say.
+   */
+  private entityCache = new Map<string, { at: number; entity: Awaited<ReturnType<AutoOperatorOptions["resolveEntity"]>> }>();
+
   private workedCache: { band: string | null; at: number; index: WorkedIndex } | null = null;
 
   private async workedFor(band: string | null): Promise<WorkedIndex> {
@@ -1010,6 +1339,26 @@ export class AutoOperator {
   /** Called after a QSO is logged: the index is now stale. */
   invalidateWorked(): void {
     this.workedCache = null;
+  }
+
+  /** `resolveEntity`, remembered for ENTITY_CACHE_MS. See `entityCache`. */
+  private async entityFor(
+    call: string,
+  ): Promise<Awaited<ReturnType<AutoOperatorOptions["resolveEntity"]>>> {
+    const key = call.toUpperCase();
+    const hit = this.entityCache.get(key);
+    if (hit && Date.now() - hit.at < ENTITY_CACHE_MS) return hit.entity;
+    const entity = await this.o.resolveEntity(call);
+    // Bounded, because this runs for every callsign heard for as long as the bridge is
+    // up. Oldest first: a Map iterates in insertion order, and the entries being dropped
+    // are the ones least likely to call CQ again in the next few minutes.
+    if (this.entityCache.size >= ENTITY_CACHE_MAX) {
+      for (const k of [...this.entityCache.keys()].slice(0, ENTITY_CACHE_MAX / 4)) {
+        this.entityCache.delete(k);
+      }
+    }
+    this.entityCache.set(key, { at: Date.now(), entity });
+    return entity;
   }
 
   /** Call CQ in the next window if it is (or becomes) our parity. */

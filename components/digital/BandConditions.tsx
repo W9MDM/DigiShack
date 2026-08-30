@@ -4,6 +4,7 @@ import { useApi } from "@/lib/client/api";
 import { formatMinutesAgo } from "@/lib/time";
 import { cn } from "@/lib/utils";
 
+import { useVisibleInterval } from "@/lib/client/use-visible-interval";
 /**
  * Band conditions from three independent angles, kept visibly separate.
  *
@@ -77,10 +78,10 @@ export function BandConditions({
   // so most of these cost a database query for our own decode counts and nothing
   // over the network. See lib/propagation — the fetcher will not query PSKReporter
   // more often than its own interval no matter how often it is asked.
-  useEffect(() => {
-    const id = setInterval(() => void reload(), 120_000);
-    return () => clearInterval(id);
-  }, [reload]);
+  // Mounted in the /decodes header, so this one runs the whole time the station is
+  // operating. Cheap per call and still not worth making against a screen nobody is
+  // looking at.
+  useVisibleInterval(() => void reload(), 120_000);
 
   if (!data) return null;
 

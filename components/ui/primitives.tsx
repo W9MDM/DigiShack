@@ -7,6 +7,7 @@ import {
   type ReactElement,
   type ReactNode,
   type SelectHTMLAttributes,
+  type TdHTMLAttributes,
   type TextareaHTMLAttributes,
 } from "react";
 
@@ -99,6 +100,30 @@ export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
    * changed label on a control that already has focus is not announced. `aria-busy` is.
    */
   loading?: boolean;
+  /**
+   * Why this control is off, in a sentence.
+   *
+   * A dimmed label is the whole of what a disabled button in this application says, and
+   * what it says is "broken". On the cards page the two buttons an operator needs are
+   * off until a row is ticked, and nothing anywhere on that page mentions ticking a row.
+   * The operator who reported it is 74 and has low confidence with computers; she read
+   * the greyed pair as a fault in the software and stopped.
+   *
+   * The pattern is QsoForm's rather than a new one. It puts "No operators on this
+   * station yet" beside the Operator select through `Field`'s `hint`, where the sentence
+   * is both visible and tied to the control with `aria-describedby`. This does the same
+   * for a button: visible text, `aria-describedby`, and shown only while the button is
+   * genuinely disabled — not while it is merely `loading`, where the spinner and
+   * `aria-busy` are already saying something different.
+   *
+   * It WRAPS the button in an inline-flex column to hang the sentence under it, so any
+   * `className` meant for the surrounding row (`ml-auto`, `w-full`) still lands on the
+   * button and not on the wrapper. Where several controls share one reason — three batch
+   * buttons in a single actions row — do not set this on each of them and print the same
+   * sentence three times: write it once and point all of them at it with
+   * `aria-describedby`, the way pages/qsl/cards.tsx does.
+   */
+  disabledReason?: string;
 }
 
 /** The in-flight indicator. `aria-hidden` — `aria-busy` on the button is what gets spoken. */
@@ -138,13 +163,21 @@ export function Button({
   variant = "secondary",
   size = "md",
   loading = false,
+  disabledReason,
   className,
   type = "button",
   disabled,
   children,
   ...props
 }: ButtonProps) {
-  return (
+  const reasonId = useId();
+  const showReason = Boolean(disabledReason) && Boolean(disabled) && !loading;
+  const describedBy =
+    [props["aria-describedby"], showReason ? reasonId : null]
+      .filter(Boolean)
+      .join(" ") || undefined;
+
+  const button = (
     <button
       type={type}
       disabled={disabled || loading}
@@ -152,16 +185,59 @@ export function Button({
       className={cn(
         "inline-flex items-center justify-center gap-2 border rounded-sm",
         "font-medium transition-colors",
-        "disabled:opacity-45 disabled:cursor-not-allowed",
+        /* `opacity-75`, not `opacity-45`.
+         *
+         * Opacity dims the label AND the fill underneath it, so it does not make a
+         * control quieter — it collapses the distance between the two. Measured with
+         * the WCAG 2.1 formula against the four surface tokens as globals.css writes
+         * them today, worst case, at 45%: danger 1.99:1, ghost 2.63:1, primary 3.09:1,
+         * secondary 3.82:1. Fully opaque the same four are 4.65, 6.98, 6.13 and 14.12.
+         * (Those enabled figures are lower than the audit's, which quoted 6.01 for
+         * danger, because these take the worst of all four surfaces and the audit did
+         * not go down to surface-3.)
+         *
+         * WCAG exempts disabled controls, so none of it is a violation. It is a
+         * usability defect, and the report behind it is an operator of 74 reading a
+         * greyed control as a broken one.
+         *
+         * At 75%: primary 4.93, secondary 8.47 and ghost 4.64 all clear AA, while
+         * danger 3.22, danger-solid 4.22 and link 3.22 clear the 3:1 large-text floor
+         * and not AA. The red variants cannot be got past 4.65:1 at ANY opacity —
+         * that is what `--color-danger` measures against surface-3 with no dimming at
+         * all — so lifting them needs a separate disabled foreground colour, which is
+         * more machinery than this fault has earned.
+         *
+         * Rejected: per-variant disabled treatments, six more class strings for one
+         * state; and adding only `disabledReason` while leaving the opacity alone,
+         * which explains a label you still cannot read.
+         *
+         * `check:contrast` reads the stylesheet and knows nothing about composited
+         * opacity, so nothing will catch these drifting if the surface ramp moves. */
+        "disabled:opacity-75 disabled:cursor-not-allowed",
         BUTTON_SIZES[size],
         BUTTON_VARIANTS[variant],
         className,
       )}
       {...props}
+      aria-describedby={describedBy}
     >
       {loading && <ButtonSpinner size={size} />}
       {children}
     </button>
+  );
+
+  if (!showReason) return button;
+
+  return (
+    /* A span rather than a div, and the reason is a span too: this drops into table
+       cells and inline action rows, where a block-level element would be reparented by
+       the HTML parser on the server-rendered pass and mismatch on hydration. */
+    <span className="inline-flex flex-col items-start gap-1">
+      {button}
+      <span id={reasonId} className="text-sm text-fg-subtle">
+        {disabledReason}
+      </span>
+    </span>
   );
 }
 
@@ -422,6 +498,28 @@ const BADGE_SIZES: Record<BadgeSize, string> = {
   md: "px-1.5 py-0.5 text-xs",
 };
 
+/**
+ * A small status pill.
+ *
+ * **Accent is for STATE, not metadata.** `--color-accent` is the transmit colour in an
+ * application that keys a transmitter on somebody's licence, and a badge on every row
+ * spends it: with a red pill in every line of the log it carried no information at all,
+ * while ON AIR and Delete were the same colour. Keep `accent` for the active nav item, a
+ * live readout, "this station is calling you", the answer to a lookup. Band, mode, grid,
+ * file type and every other per-row label are `neutral`.
+ *
+ * The five per-row badges that were breaking this rule are now `neutral`: the band on
+ * the dashboard, on /rig and in the log, the grid square on /stations, and the file-type
+ * label on /backup. Deliberately left alone, because they are state or an answer rather
+ * than a label on a row: the headline `Stat` figures on the dashboard and /pota, the
+ * lookup result on /dxcc, "N behind" on /update, and the FT-0 badge. One or two per page
+ * is what an accent is for.
+ *
+ * Not addressed here and filed as issue #24: of 155 accent class instances counted by
+ * the design audit, 74 are the bright-accent text colour and most of those are `hover:`
+ * states on otherwise neutral elements — so hovering anything and "this station is
+ * calling you" currently look the same.
+ */
 export function Badge({
   tone = "neutral",
   size = "md",
@@ -444,6 +542,162 @@ export function Badge({
     >
       {children}
     </span>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Table cells
+// ---------------------------------------------------------------------------
+
+/** Which way a sortable column is currently ordered. */
+export type SortDirection = "asc" | "desc";
+
+/**
+ * How tightly a table packs its rows.
+ *
+ * Three values because there were exactly three, and collapsing them would have been a
+ * restyle smuggled into an extraction: `sm` is the cards page, which puts several hundred
+ * monospace rows in a fixed-height scroller; `md` is the log and everything shaped like
+ * it; `lg` is the admin tables, whose cells contain a `Select` and need the extra 2px.
+ *
+ * The HEADER padding is identical at `md` and `lg` because it always was — only the body
+ * rows ever differed — and that is recorded rather than tidied away, so the next person
+ * to touch it knows the duplication is the truth and not a copy-paste.
+ */
+type CellSize = "sm" | "md" | "lg";
+
+const TH_PAD: Record<CellSize, string> = {
+  sm: "px-2 py-1.5",
+  md: "px-3 py-2",
+  lg: "px-3 py-2",
+};
+
+const TD_PAD: Record<CellSize, string> = {
+  sm: "px-2 py-1",
+  md: "px-3 py-1.5",
+  lg: "px-3 py-2",
+};
+
+/**
+ * A column header, sortable or not.
+ *
+ * THE FAULT. This exact string —
+ *
+ *     px-3 py-2 font-medium text-fg-muted text-xs uppercase tracking-wide
+ *
+ * was copy-pasted into eight files, and every `<th>` carrying it was missing
+ * `scope="col"`. `scope` is the attribute that tells a screen reader a cell heads a
+ * column; without it the log's fifty rows read as four hundred and fifty unlabelled
+ * cells. Meanwhile a header that got all of this right — `scope`, `aria-sort`, a real
+ * button, an `aria-hidden` arrow, and screen-reader text saying what activating it does
+ * — already existed and was a private function at the foot of pages/qsos/index.tsx, so
+ * the other fifteen tables in the application inherited none of it. A design audit named
+ * this the highest-value extraction available, and the reason is that one of the two
+ * halves was already written.
+ *
+ * The sortable behaviour is carried over unchanged, deliberately: it was already correct.
+ * What is new is that a plain column gets `scope` as well, which is the part that was
+ * being left on the floor sixty times over.
+ *
+ * `text-[0.85em]`, not `text-xs`. 12px was hardcoded against a body running at `text-sm`,
+ * so a table that changes its own size — the decode table does, from a slider — took its
+ * header with it only by coincidence. At the 14px these tables run at, 0.85em computes to
+ * 11.9px: the same header as before to within a rounding error. The point is not the
+ * pixel, it is that the two now move together.
+ *
+ * `field` and `onSort` together make a column sortable. Omit both for a plain header and
+ * it renders no button, no `aria-sort` and therefore no claim that it can be ordered —
+ * an `aria-sort="none"` on a column that cannot be sorted at all is a lie a screen reader
+ * will repeat.
+ */
+export function Th<F extends string>({
+  field,
+  sort,
+  dir,
+  onSort,
+  size = "md",
+  className,
+  children,
+}: {
+  field?: F;
+  sort?: F;
+  dir?: SortDirection;
+  onSort?: (field: F) => void;
+  size?: CellSize;
+  className?: string;
+  children?: ReactNode;
+}) {
+  const sortable = field !== undefined && onSort !== undefined;
+  const active = sortable && sort === field;
+
+  return (
+    <th
+      // `scope` is what tells a screen reader this cell heads a column; without it a
+      // 50-row table reads as 450 unlabelled cells.
+      scope="col"
+      // `aria-sort` is the only way the current sort is conveyed non-visually — the
+      // ▲/▼ is aria-hidden, correctly, because "black up-pointing triangle" is not
+      // information.
+      aria-sort={
+        sortable
+          ? active
+            ? dir === "asc"
+              ? "ascending"
+              : "descending"
+            : "none"
+          : undefined
+      }
+      className={cn(
+        "font-medium text-fg-muted text-[0.85em] uppercase tracking-wide",
+        TH_PAD[size],
+        className,
+      )}
+    >
+      {sortable ? (
+        <button
+          type="button"
+          onClick={() => onSort(field)}
+          className={cn(
+            "flex items-center gap-1",
+            active ? "text-accent-bright" : "text-fg-muted hover:text-fg",
+          )}
+        >
+          {children}
+          {active && <span aria-hidden>{dir === "asc" ? "▲" : "▼"}</span>}
+          <span className="sr-only">
+            {active
+              ? `, sorted ${dir === "asc" ? "ascending" : "descending"}. Activate to reverse.`
+              : ", activate to sort by this column"}
+          </span>
+        </button>
+      ) : (
+        children
+      )}
+    </th>
+  );
+}
+
+/**
+ * A data cell.
+ *
+ * Padding only, and that is the whole point: the cell classes were as duplicated as the
+ * header ones and rather less consistent — the same table would use `py-1.5` in seven
+ * cells and `py-2` in the eighth. Everything else a cell wants (`tnum`,
+ * `whitespace-nowrap`, `text-fg-muted`, `font-mono`) stays at the call site through
+ * `className`, because those say something about the DATA and differ per column.
+ *
+ * `size` must match the `Th` above it or the columns will not line up.
+ */
+export function Td({
+  size = "md",
+  className,
+  children,
+  ...props
+}: TdHTMLAttributes<HTMLTableCellElement> & { size?: CellSize }) {
+  return (
+    <td className={cn(TD_PAD[size], className)} {...props}>
+      {children}
+    </td>
   );
 }
 

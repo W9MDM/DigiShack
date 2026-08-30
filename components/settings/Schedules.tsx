@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
 import { HelpTip } from "@/components/ui/HelpTip";
+import { Td, Th } from "@/components/ui/primitives";
 import type { JobHost } from "@/lib/schedule/jobs";
 
 // The crontab: everything that runs on a timer, and how often it really runs.
@@ -87,19 +88,16 @@ export function Schedules() {
             <thead>
               <tr className="bg-surface-2 text-left">
                 {["Job", "Cron", "Every", "Setting", ""].map((h) => (
-                  <th
-                    key={h}
-                    className="px-3 py-2 font-medium text-fg-muted text-xs uppercase tracking-wide whitespace-nowrap"
-                  >
+                  <Th key={h} size="lg" className="whitespace-nowrap">
                     {h}
-                  </th>
+                  </Th>
                 ))}
               </tr>
             </thead>
             <tbody className="divide-y divide-line">
               {rows.map((j) => (
                 <tr key={j.id} className={j.enabled ? "" : "opacity-55"}>
-                  <td className="px-3 py-2">
+                  <Td size="lg">
                     <div className="flex items-center gap-2">
                       <span className="font-medium">{j.label}</span>
                       {!j.enabled ? (
@@ -118,25 +116,25 @@ export function Schedules() {
                     {j.fixedReason ? (
                       <div className="text-xs text-fg-subtle italic">{j.fixedReason}</div>
                     ) : null}
-                  </td>
-                  <td className="px-3 py-2 font-mono text-xs whitespace-nowrap text-fg-muted">
+                  </Td>
+                  <Td size="lg" className="font-mono text-xs whitespace-nowrap text-fg-muted">
                     {j.enabled ? j.cron : "—"}
-                  </td>
-                  <td className="px-3 py-2 tnum whitespace-nowrap text-fg-muted">
+                  </Td>
+                  <Td size="lg" className="tnum whitespace-nowrap text-fg-muted">
                     {j.enabled ? every(j.effectiveMs) : "—"}
-                  </td>
-                  <td className="px-3 py-2 font-mono text-xs text-fg-subtle">
+                  </Td>
+                  <Td size="lg" className="font-mono text-xs text-fg-subtle">
                     {j.intervalSetting ?? <span className="italic">not adjustable</span>}
                     {j.enabledSetting ? (
                       <div className="text-fg-subtle/70">{j.enabledSetting}</div>
                     ) : null}
-                  </td>
-                  <td className="px-3 py-2 text-xs text-fg-subtle whitespace-nowrap">
+                  </Td>
+                  <Td size="lg" className="text-xs text-fg-subtle whitespace-nowrap">
                     {j.host === "bridge" ? "bridge" : "web"}
                     {j.firstRunDelayMs ? (
                       <div>first run +{Math.round(j.firstRunDelayMs / 1000)}s</div>
                     ) : null}
-                  </td>
+                  </Td>
                 </tr>
               ))}
             </tbody>

@@ -32,6 +32,7 @@ import { colourFor } from "@/lib/ham/band-colours";
 import { gridFromMessage } from "@/lib/ham/grid-message";
 import { cn } from "@/lib/utils";
 
+import { useVisibleInterval } from "@/lib/client/use-visible-interval";
 interface Props extends Record<string, unknown> {
   wsUrl: string;
 }
@@ -172,10 +173,8 @@ export default function GridMapPage({ wsUrl }: Props) {
   );
 
   // Ages drive the fade; once a second is plenty for a 15-minute decay.
-  useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), 1_000);
-    return () => clearInterval(id);
-  }, []);
+  // Stopped while hidden: the fade is a rendering concern and nothing is being rendered.
+  useVisibleInterval(() => setNow(Date.now()), 1_000);
 
   // The same reconnecting-socket shape as the decodes page, for the same reasons —
   // including the socket held OUTSIDE connect() so cleanup can actually close it.
@@ -259,6 +258,11 @@ export default function GridMapPage({ wsUrl }: Props) {
 
   // Expire quietly rather than on render: a Map rebuilt every second is churn the
   // page feels; once a minute keeps it bounded.
+  // Left running deliberately, unlike the others on this page. This one BOUNDS MEMORY
+  // rather than driving a display: a hidden tab still receives decodes over the socket, so
+  // suspending the expiry would let the Map grow for as long as the page is in the
+  // background. Once a minute against a Map of a few hundred entries is not a battery
+  // concern; an unbounded Map is a correctness one.
   useEffect(() => {
     const id = setInterval(() => {
       setLive((prev) => {

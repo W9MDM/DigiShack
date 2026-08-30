@@ -29,6 +29,7 @@ import {
 import { HelpTip } from "@/components/ui/HelpTip";
 import { cn } from "@/lib/utils";
 
+import { useVisibleInterval } from "@/lib/client/use-visible-interval";
 // CAT control for the radio DigiShack is already connected to.
 //
 // This is deliberately not a general-purpose rig-control app: it exposes the
@@ -367,10 +368,13 @@ export default function RigPage({ wsUrl }: Props) {
 
   // Poll: the radio can be changed from its own front panel or SmartSDR, and a
   // control panel showing stale values is worse than one showing none.
-  useEffect(() => {
-    const id = setInterval(() => reload(), 2_000);
-    return () => clearInterval(id);
-  }, [reload]);
+  //
+  // Suspended while the tab is hidden — a control panel nobody is looking at is not
+  // showing stale values, it is showing nothing, and two requests a second against a
+  // locked phone is the most expensive thing this page does. The catch-up on return is
+  // what makes the "stale is worse" argument still hold: the first thing a returning
+  // operator sees is current.
+  useVisibleInterval(() => reload(), 2_000);
 
   async function send(body: Record<string, unknown>, label: string) {
     setBusy(label);
@@ -403,11 +407,7 @@ export default function RigPage({ wsUrl }: Props) {
 
   // POTA is a volunteer service and the endpoint caches for 60 s, so asking more often
   // than that buys nothing but load.
-  useEffect(() => {
-    if (!spotsPath) return;
-    const id = setInterval(() => void reloadSpots(), 60_000);
-    return () => clearInterval(id);
-  }, [spotsPath, reloadSpots]);
+  useVisibleInterval(() => void reloadSpots(), 60_000, { enabled: Boolean(spotsPath) });
 
   const panSpots = useMemo(
     () =>
@@ -641,7 +641,7 @@ export default function RigPage({ wsUrl }: Props) {
               </span>
             )}
           </div>
-          {status?.band && <Badge tone="accent">{status.band}</Badge>}
+          {status?.band && <Badge tone="neutral">{status.band}</Badge>}
           {status?.transmitting && <Badge tone="danger">TX</Badge>}
           {voiceOn && <Badge tone="warn">VOICE</Badge>}
           <span className="text-xs text-fg-muted tnum">

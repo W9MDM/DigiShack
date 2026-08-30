@@ -9,6 +9,8 @@ import {
   ErrorBanner,
   PageHeader,
   Select,
+  Td,
+  Th,
 } from "@/components/ui/primitives";
 import { withPageAuth } from "@/lib/auth/guard";
 import { ApiError, apiPost, useApi } from "@/lib/client/api";
@@ -23,6 +25,9 @@ import { cn } from "@/lib/utils";
 // recorded at once.
 
 type Route = "BUREAU" | "DIRECT" | "MANAGER";
+
+/** The one sentence explaining why the batch buttons are off, shared by all three. */
+const NEEDS_SELECTION = "qsl-cards-needs-selection";
 
 interface CardQso {
   id: string;
@@ -56,6 +61,11 @@ export default function QslCardsPage() {
 
   const qsos = data?.qsos ?? [];
   const chosen = useMemo(() => qsos.filter((q) => selected.has(q.id)), [qsos, selected]);
+  const nothingTicked = selected.size === 0;
+  /* The buttons are off whenever nothing is ticked, but the SENTENCE is only true when
+     there is something to tick. On an empty "Owed a card" view it would send the operator
+     to a list that is not there, and the card body already says why it is empty. */
+  const explainSelection = nothingTicked && qsos.length > 0;
 
   async function act(action: string) {
     if (selected.size === 0) return;
@@ -171,25 +181,44 @@ export default function QslCardsPage() {
               <option value="DIRECT">Direct</option>
               <option value="MANAGER">Manager</option>
             </Select>
+            {/* Three controls, ONE reason.
+             *
+             * All three are off until a row is ticked, and nothing on the page said so —
+             * the fault reported on the email queue, which has the same shape: the two
+             * buttons the operator needed were grey and the word "select" appeared
+             * nowhere. `Button`'s own `disabledReason` would have printed the identical
+             * sentence three times, so the sentence is written once and all three point
+             * at it, which is what `aria-describedby` is for. */}
             <Button
               variant="primary"
-              disabled={busy || selected.size === 0}
+              disabled={busy || nothingTicked}
+              aria-describedby={explainSelection ? NEEDS_SELECTION : undefined}
               onClick={() => void act("mark-sent")}
             >
               Mark sent
             </Button>
             <Button
-              disabled={busy || selected.size === 0}
+              disabled={busy || nothingTicked}
+              aria-describedby={explainSelection ? NEEDS_SELECTION : undefined}
               onClick={() => void act("mark-received")}
             >
               Mark received
             </Button>
             <Button
-              disabled={busy || selected.size === 0}
+              disabled={busy || nothingTicked}
+              aria-describedby={explainSelection ? NEEDS_SELECTION : undefined}
               onClick={() => setPrinting(true)}
             >
               Labels ({selected.size})
             </Button>
+            {explainSelection && (
+              /* `basis-full` drops it onto its own line under the cluster rather than
+                 squeezing it in beside three buttons and two selects, where it would be
+                 the first thing to wrap off the end. */
+              <span id={NEEDS_SELECTION} className="basis-full text-sm text-fg-subtle">
+                Tick a contact in the list below to mark it or print a label for it.
+              </span>
+            )}
           </div>
         }
       >
@@ -204,21 +233,21 @@ export default function QslCardsPage() {
             <table className="w-full text-sm border-collapse">
               <thead className="sticky top-0 bg-surface-2">
                 <tr className="text-left">
-                  <th className="px-3 py-1.5 w-8">
+                  {/* `px-3` back on top of the packed size: the tick box is the column
+                      an operator has to hit, and it is 16px wide in a table whose cells
+                      are otherwise text. */}
+                  <Th size="sm" className="px-3 w-8">
                     <input
                       type="checkbox"
                       checked={selected.size === qsos.length && qsos.length > 0}
                       onChange={toggleAll}
                       className="accent-accent"
                     />
-                  </th>
+                  </Th>
                   {["Call", "UTC", "Band", "Mode", "Sent", "Rcvd"].map((h) => (
-                    <th
-                      key={h}
-                      className="px-2 py-1.5 font-medium text-fg-muted text-xs uppercase tracking-wide"
-                    >
+                    <Th key={h} size="sm">
                       {h}
-                    </th>
+                    </Th>
                   ))}
                 </tr>
               </thead>
@@ -228,7 +257,7 @@ export default function QslCardsPage() {
                     key={q.id}
                     className={cn("hover:bg-surface-2", selected.has(q.id) && "bg-accent/10")}
                   >
-                    <td className="px-3 py-1">
+                    <Td size="sm" className="px-3">
                       <input
                         type="checkbox"
                         checked={selected.has(q.id)}
@@ -242,29 +271,36 @@ export default function QslCardsPage() {
                         }
                         className="accent-accent"
                       />
-                    </td>
-                    <td className="px-2 py-1">{q.callsign}</td>
-                    <td className="px-2 py-1 tnum text-fg-subtle whitespace-nowrap">
+                    </Td>
+                    <Td size="sm">{q.callsign}</Td>
+                    <Td size="sm" className="tnum text-fg-subtle whitespace-nowrap">
                       {formatUtc(q.startTime)}
-                    </td>
-                    <td className="px-2 py-1 tnum">{q.band}</td>
-                    <td className="px-2 py-1 text-fg-muted">{q.mode}</td>
-                    <td className="px-2 py-1">
+                    </Td>
+                    <Td size="sm" className="tnum">{q.band}</Td>
+                    <Td size="sm" className="text-fg-muted">{q.mode}</Td>
+                    <Td size="sm">
                       {q.qslSent === "NONE" ? (
                         <span className="text-fg-subtle">—</span>
                       ) : (
-                        <Badge tone={q.qslSent === "SENT" ? "ok" : "accent"}>
+                        <Badge
+                          // `warn`, not `accent`. The per-row accent rule applies, but the
+                          // semantic argument is the better one: the non-SENT states here
+                          // are QUEUED and REQUESTED — a card OUTSTANDING, which is not a
+                          // fault and not the radio keying. Amber is what "waiting on me"
+                          // looks like everywhere else in this interface.
+                          tone={q.qslSent === "SENT" ? "ok" : "warn"}
+                        >
                           {q.qslSentVia ? q.qslSentVia[0] : q.qslSent[0]}
                         </Badge>
                       )}
-                    </td>
-                    <td className="px-2 py-1">
+                    </Td>
+                    <Td size="sm">
                       {q.qslRcvd === "NONE" ? (
                         <span className="text-fg-subtle">—</span>
                       ) : (
                         <Badge tone="ok">{q.qslRcvdVia ? q.qslRcvdVia[0] : "Y"}</Badge>
                       )}
-                    </td>
+                    </Td>
                   </tr>
                 ))}
               </tbody>

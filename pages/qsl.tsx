@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { useState } from "react";
 
+import { HelpTip } from "@/components/ui/HelpTip";
 import {
   Badge,
   Button,
@@ -80,11 +81,31 @@ function GatewayBadge({ address }: { address: string }) {
   if (!gateway) return null;
   const { notes } = rulesFor(address);
   return (
-    <span
-      className="ml-2 rounded-sm border border-warn/40 bg-warn/10 px-1 py-0.5 text-[10px] uppercase tracking-wide text-warn align-middle"
-      title={notes.join(" ")}
-    >
-      {gateway === "winlink" ? "Winlink · text + //WL2K" : "arrl.net · forwarder"}
+    <span className="ml-2 inline-flex shrink-0 items-center gap-1 align-middle">
+      <span className="rounded-sm border border-warn/40 bg-warn/10 px-1 py-0.5 text-[10px] uppercase tracking-wide text-warn">
+        {gateway === "winlink" ? "Winlink · text + //WL2K" : "arrl.net · forwarder"}
+      </span>
+      {/* THE FAULT: the whole explanation lived in `title={notes.join(" ")}`, and a native
+          title never appears on a touch screen. The shack tablet showed an operator a badge
+          reading "Winlink · text + //WL2K" with no way whatever to find out what that meant —
+          not a shortened explanation, none at all. The badge is exactly the kind of label
+          that is meaningless without its note, so on the device most likely to be propped up
+          next to the radio it was pure decoration.
+
+          `align="right"` because this sits in the second-to-last column; a left-anchored
+          256px panel would open off the edge of the table. UNVERIFIED at phone width: the
+          pending list is a `max-h-[26rem] overflow-auto` scroll container, so a panel opened
+          on one of the last rows is reachable by scrolling rather than fully in view. */}
+      <HelpTip
+        align="right"
+        label={
+          gateway === "winlink"
+            ? "About Winlink addresses"
+            : "About arrl.net addresses"
+        }
+      >
+        {notes.join(" ")}
+      </HelpTip>
     </span>
   );
 }
@@ -180,6 +201,137 @@ function GatewayRequeue({ onDone }: { onDone: (msg: string) => void }) {
             </>
           )}
         </p>
+      )}
+    </div>
+  );
+}
+
+/**
+ * How many go out on one click.
+ *
+ * Sent EXPLICITLY rather than left to the server's default, because the button prints this
+ * number and a button that prints a number it cannot keep is worse than one that prints
+ * none. `sendApprovedQsls` takes `opts.limit ?? 25` (lib/qsl/queue.ts), so `Send 40` sent
+ * twenty-five and reported "Sent 25 of 25" — leaving fifteen approved rows and an operator
+ * with no reason to think anything had gone wrong. Naming the limit here makes the count on
+ * the button and the count on the wire the same by construction.
+ *
+ * 25 rather than the schema's maximum of 100 keeps the existing behaviour exactly: sending is
+ * sequential with a 400 ms gap and re-renders a card per message, so a hundred is minutes of
+ * held-open request. Raising it is a separate decision with a timeout to think about.
+ */
+const SEND_BATCH = 25;
+
+/**
+ * Approved messages, and the send that puts them on the wire.
+ *
+ * THE FAULT: `Send 12` sent twelve emails on the first click, with no confirmation of any
+ * kind. Deleting one QSO asks. Deleting one API key asks. Removing one operator asks.
+ * Restoring a backup asks twice and makes you type REPLACE. The only action on this page
+ * that reaches OTHER PEOPLE — unsolicited mail, to addresses scraped off QRZ, which no
+ * undo, retraction or delete can pull back once SMTP has accepted it — was the one action
+ * that never asked. A mis-aimed click here is not recoverable by anything this application
+ * can do; it is recoverable by writing to twelve strangers and apologising.
+ *
+ * The two steps are GatewayRequeue's, ninety lines up this file, not a new invention: a
+ * quiet button that shows what WOULD happen, then a loud one that names the count. The one
+ * thing this adds is the recipient list, because the client already holds it and no round
+ * trip is needed — "how many" is answered by a number, but "did I approve the right rows"
+ * is only answered by the callsigns and the addresses, and the wrong row here is somebody
+ * else's inbox.
+ *
+ * The arming is tied to the count, not a bare boolean. The queue reloads underneath this
+ * panel and the radio service can approve more while it is open; a confirmation that says
+ * twelve and sends thirteen is not a confirmation.
+ */
+function SendApproved({
+  approved,
+  busy,
+  sending,
+  /** Whether anything sends unattended. `null` when the queue response did not say. */
+  autoSends,
+  onSend,
+}: {
+  approved: QueueEntry[];
+  busy: boolean;
+  sending: boolean;
+  autoSends: boolean | null;
+  onSend: (limit: number) => void;
+}) {
+  const [armedFor, setArmedFor] = useState<number | null>(null);
+
+  const count = Math.min(approved.length, SEND_BATCH);
+  const held = approved.length - count;
+  const armed = armedFor === approved.length;
+
+  return (
+    <div className="mt-4 pt-4 border-t border-line flex flex-col gap-3">
+      <div className="flex items-center justify-between gap-3">
+        <span className="text-sm">
+          <strong className="tnum">{approved.length}</strong> approved and ready to send
+          {/* The whole point of the sender state, at the place an operator looks to
+              find out why a number is not going down. "Ready to send" is not the same
+              as "about to be sent", and for most of this application's life the page
+              could not tell the two apart. */}
+          {autoSends === false && (
+            <span className="block text-xs text-warn">
+              Nothing will send these on its own — the button is the only way out.
+            </span>
+          )}
+        </span>
+        {!armed && (
+          <Button disabled={busy} onClick={() => setArmedFor(approved.length)}>
+            Review and send…
+          </Button>
+        )}
+      </div>
+
+      {armed && (
+        <div className="rounded-sm border border-danger/40 bg-danger/5 px-3 py-2 flex flex-col gap-2">
+          <p className="text-sm text-fg">
+            Send {count} QSL email{count === 1 ? "" : "s"} now — one message per contact,
+            to {count === 1 ? "this address" : "these addresses"}?
+          </p>
+          <ul className="flex max-h-40 flex-col gap-0.5 overflow-auto text-xs">
+            {approved.slice(0, count).map((e) => (
+              <li key={e.id} className="flex gap-2">
+                <span className="w-20 shrink-0 font-mono">{e.callsign}</span>
+                <span className="truncate text-fg-muted">{e.toAddress}</span>
+              </li>
+            ))}
+          </ul>
+          <p className="text-xs text-fg-muted">
+            This cannot be undone. There is no recall and no unsend: once the message has
+            left the server it is in someone else&apos;s mailbox, and these are unsolicited
+            — the recipients did not ask for them.
+            {held > 0 &&
+              ` The remaining ${held} stay approved and go out on the next send.`}
+          </p>
+          <div className="flex gap-2">
+            {/* `danger-solid`, and the reason is weight rather than severity. This was
+                `variant="danger"` — the transparent outline that "Delete this QSO" wears at
+                the foot of the log form — so the most consequential control on the page
+                rendered QUIETER than "Approve" beside it, and red-outline meant both "send
+                my QSLs" and "destroy this record" depending on which screen you were on.
+                `danger` is now used nowhere on this page, so the outline keeps one meaning.
+
+                Sending is irreversible but it is not destructive: nothing here is deleted
+                and no record is lost. That is why it stops at one confirmation and does not
+                borrow the typed REPLACE from pages/backup.tsx — a ceremony reused where it
+                does not fit is a ceremony people learn to click through. */}
+            <Button
+              variant="danger-solid"
+              disabled={busy}
+              loading={sending}
+              onClick={() => onSend(count)}
+            >
+              Send {count} email{count === 1 ? "" : "s"}
+            </Button>
+            <Button variant="ghost" disabled={busy} onClick={() => setArmedFor(null)}>
+              Cancel
+            </Button>
+          </div>
+        </div>
       )}
     </div>
   );
@@ -361,13 +513,20 @@ export default function QslPage() {
                       <td className="px-2 py-1.5 text-fg-subtle tnum whitespace-nowrap">
                         {e.qso ? `${e.qso.band} ${e.qso.mode}` : ""}
                       </td>
-                      <td className="px-2 py-1.5 text-fg-muted truncate max-w-[16rem]">
-                        {e.toAddress}
-                        {/* Say when an address is not an ordinary mailbox. Both of
-                            these change what actually goes on the wire, and an
-                            operator wondering why a QSL had no card should be able
-                            to see the reason on the row rather than guess. */}
-                        <GatewayBadge address={e.toAddress} />
+                      {/* `truncate` moved off the cell and onto the address alone. It is
+                          `overflow: hidden`, so with it on the cell the badge's help panel
+                          was clipped out of existence the moment it opened — the popover
+                          would have replaced a tooltip that does not show on touch with a
+                          panel that does not show anywhere. */}
+                      <td className="px-2 py-1.5 text-fg-muted max-w-[16rem]">
+                        <span className="flex min-w-0 items-center">
+                          <span className="truncate">{e.toAddress}</span>
+                          {/* Say when an address is not an ordinary mailbox. Both of
+                              these change what actually goes on the wire, and an
+                              operator wondering why a QSL had no card should be able
+                              to see the reason on the row rather than guess. */}
+                          <GatewayBadge address={e.toAddress} />
+                        </span>
                       </td>
                       <td className="px-2 py-1.5 text-right">
                         <button
@@ -386,28 +545,13 @@ export default function QslPage() {
           )}
 
           {approved.length > 0 && (
-            <div className="mt-4 pt-4 border-t border-line flex items-center justify-between gap-3">
-              <span className="text-sm">
-                <strong className="tnum">{approved.length}</strong> approved and ready to
-                send
-                {/* The whole point of the sender state, at the place an operator looks to
-                    find out why a number is not going down. "Ready to send" is not the same
-                    as "about to be sent", and for most of this application's life the page
-                    could not tell the two apart. */}
-                {sender && !sender.sending && (
-                  <span className="block text-xs text-warn">
-                    Nothing will send these on its own — the button is the only way out.
-                  </span>
-                )}
-              </span>
-              <Button
-                variant="danger"
-                disabled={busy !== null}
-                onClick={() => void act({ action: "send" }, "send")}
-              >
-                {busy === "send" ? "Sending…" : `Send ${approved.length}`}
-              </Button>
-            </div>
+            <SendApproved
+              approved={approved}
+              busy={busy !== null}
+              sending={busy === "send"}
+              autoSends={sender ? sender.sending : null}
+              onSend={(limit) => void act({ action: "send", limit }, "send")}
+            />
           )}
         </Card>
 

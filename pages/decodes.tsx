@@ -32,6 +32,7 @@ import {
 } from "@/lib/ham/digital-freqs";
 import { cn } from "@/lib/utils";
 
+import { useVisibleInterval } from "@/lib/client/use-visible-interval";
 interface RigStatus {
   connected: boolean;
   dialFrequency: number | null;
@@ -637,10 +638,13 @@ export default function DigitalPage({ wsUrl }: Props) {
 
   // Drives the cycle-progress bar. One second is enough — the bar shows where you
   // are in a 15s or 7.5s window, not a stopwatch.
-  useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(id);
-  }, []);
+  //
+  // Stopped while the tab is hidden. This ticks the largest component in the application
+  // once a second, and the bar it drives has a 1s CSS transition, so between them they
+  // never let the page idle — the single most expensive thing here for a phone in a
+  // pocket. The catch-up on return means the bar is correct the instant it is looked at
+  // rather than up to a second stale.
+  useVisibleInterval(() => setNow(Date.now()), 1000);
 
   const push = useCallback((event: DecodeEvent) => {
     if (pausedRef.current) return;

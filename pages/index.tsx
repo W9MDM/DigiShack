@@ -178,7 +178,7 @@ export default function DashboardPage() {
                         <span className="font-display text-base tracking-wide w-32">
                           {q.callsign}
                         </span>
-                        <Badge tone="accent">{q.band}</Badge>
+                        <Badge tone="neutral">{q.band}</Badge>
                         <Badge>{q.mode}</Badge>
                         <span className="tnum text-sm text-fg-muted">
                           {formatFreqMHz(q.freqHz)} MHz

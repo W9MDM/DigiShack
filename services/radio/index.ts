@@ -1216,7 +1216,21 @@ async function startFlexSource(): Promise<() => Promise<void>> {
     // which is after this source is built. Null before then, and null whenever no
     // contact is in progress, which is when the pipeline behaves exactly as it did.
     priorityOffsetHz: () => activeQso()?.partnerOffsetHz ?? null,
-    transmitPending: () => activeQso()?.transmitPending ?? false,
+    // AND THE FIRST CALL OF A CONTACT, which the partner offset above says plainly it
+    // cannot help — there is no partner yet. Measured on this installation: replies went
+    // from a median 542 ms late to -1 ms when 1.153.0 landed, and first calls did not
+    // move at all, still 1.3-1.4 s late. The auto operator has ranked the CQs it heard on
+    // this parity a full cycle ago, so at the instant this window is cut it already knows
+    // where the station it is most likely to call will be. See
+    // `AutoOperator.candidateOffsetsHz`; there is no new source of truth here either.
+    candidateOffsetsHz: (windowStartMs) => activeAuto()?.candidateOffsetsHz(windowStartMs) ?? [],
+    // OR-ED, NOT SWAPPED. Both paths can take the transmitter off the back of a priority
+    // slice, and the pipeline must defer its full-band pass for either — otherwise it
+    // holds the event loop straight over the key instant it just bought. The auto
+    // operator's own flag exists because its path has to await the database before the
+    // controller's flag can be set; see `AutoOperator.callPending`.
+    transmitPending: () =>
+      (activeQso()?.transmitPending ?? false) || (activeAuto()?.callPending ?? false),
   });
 
   // S-meter, straight through to the UI. Not stored: like the waterfall it has
@@ -1324,7 +1338,14 @@ async function startFlexSource(): Promise<() => Promise<void>> {
   // deliberately narrow — widening it to carry an optimisation would undo the reason it
   // was narrowed. The controller ignores windows it has already acted on and decodes
   // that are not its partner's.
-  source.on("priorityDecodes", (d) => activeQso()?.onPriorityDecodes(d));
+  source.on("priorityDecodes", (d) => {
+    // BOTH, AND IN THIS ORDER. A live contact is the QSO controller's; only when it has
+    // no contact — which is exactly when `partnerOffsetHz` is null and the slice was
+    // aimed at a candidate — can the auto operator have anything to do with it. Each
+    // ignores what is not theirs, so the order is about intent rather than correctness.
+    activeQso()?.onPriorityDecodes(d);
+    activeAuto()?.onPriorityDecodes(d);
+  });
 
   // Native transmit: the sequencer drives this through the QSO controller.
   // Shares the source's GUI-client connection and slice — a second GUI client

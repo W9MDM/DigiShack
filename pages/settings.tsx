@@ -19,6 +19,7 @@ import {
   RangeEditor,
   ScheduleEditor,
 } from "@/components/settings/ScheduleEditor";
+import { HelpTip } from "@/components/ui/HelpTip";
 import { DoNotCallList } from "@/components/digital/DoNotCallList";
 import { LotwCertificate } from "@/components/settings/LotwCertificate";
 import { Schedules } from "@/components/settings/Schedules";
@@ -262,27 +263,39 @@ export default function SettingsPage() {
                     <div className="flex items-center gap-2">
                       <span>{group.title}</span>
                       {/* Where to read more about this group.
-                          
+
                           Set only where a document genuinely covers the settings under it —
                           a link to a page that turns out not to discuss them is worse than
                           no link, because the reader pays a click to find that out. The
-                          tooltip says what they will find, so the click is informed.
-                          
+                          click is meant to be an informed one.
+
                           Points at the public repository rather than an in-app viewer:
                           rendering markdown would mean a new dependency for one icon. The
                           same files are on disk in `docs/` for a shack with no internet,
-                          which the tooltip names. */}
+                          which is worth naming for exactly that shack.
+
+                          THE FAULT: everything above was delivered by `title=` on a bare "i"
+                          — so on a tablet the entire informing half was missing and what
+                          remained was an unlabelled circle that navigated somewhere off-site
+                          when touched. The one control on the page whose only job was to
+                          explain was the one that could not. The link now lives INSIDE the
+                          explanation instead of behind it, which costs a mouse user a click
+                          and gives a touch user the sentence they never had. */}
                       {group.doc && (
-                        <a
-                          href={`https://github.com/W9MDM/DigiShack/blob/main/docs/${group.doc}.md`}
-                          target="_blank"
-                          rel="noreferrer"
-                          title={`${group.docLabel ?? "Documentation"} — docs/${group.doc}.md`}
-                          aria-label={`Help for ${group.title}`}
-                          className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-line-strong text-[10px] font-semibold text-fg-muted hover:border-accent-bright hover:text-accent-bright"
-                        >
-                          i
-                        </a>
+                        <HelpTip label={`Help for ${group.title}`}>
+                          {group.docLabel ?? "Documentation"} for these settings.{" "}
+                          <a
+                            href={`https://github.com/W9MDM/DigiShack/blob/main/docs/${group.doc}.md`}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-accent-bright underline underline-offset-2"
+                          >
+                            Read it on GitHub
+                          </a>
+                          , or open{" "}
+                          <span className="font-mono">docs/{group.doc}.md</span> on the
+                          server if the shack has no internet.
+                        </HelpTip>
                       )}
                     </div>
                   }
@@ -507,7 +520,10 @@ function SettingField({
     s.type === "limit" || s.key === "schedule.hours" || s.key === "schedule.sleep";
 
   const hint = (() => {
-    if (cleared) return "Will be cleared when you save";
+    // Says the value is still there, not just that it is going. "Will be cleared when you
+    // save" left the operator to work out for themselves whether the stored password had
+    // already gone; naming Undo is the difference between a warning and an instruction.
+    if (cleared) return "Still stored. It goes when you save — Undo keeps it.";
     if (s.type === "secret" && s.configured) {
       return s.fromEnv
         ? `Currently ${s.masked} from ${s.envFallback} — saving a value here moves it into the database, encrypted`
@@ -613,14 +629,34 @@ function SettingField({
             second red "Clear" beside the day strip reads as "clear the strip". The
             limit checkbox is likewise its own off switch. */}
         {s.configured && !usesCustomEditor && (
-          <Button
-            variant={cleared ? "secondary" : "danger"}
-            onClick={onToggleClear}
-            title={cleared ? "Keep this value" : "Clear this value on save"}
-            className="shrink-0"
-          >
-            {cleared ? "Undo" : "Clear"}
-          </Button>
+          <div className="flex shrink-0 items-center gap-1">
+            <Button variant={cleared ? "secondary" : "danger"} onClick={onToggleClear}>
+              {cleared ? "Undo" : "Clear"}
+            </Button>
+            {/* THE FAULT: `title="Clear this value on save"` was the ONLY statement anywhere
+                that this button does not delete anything yet — and a title attribute does not
+                exist on a touch screen. What the tablet showed was a red Clear sitting beside
+                a saved API key or a QRZ password, with nothing at all to say whether pressing
+                it would destroy the credential on the spot. That is a question an operator has
+                to answer BEFORE the click, so putting the answer in the hint that appears
+                AFTER it is not a fix; the popover is reachable while the value is still safe.
+
+                `align="right"` because this sits at the right-hand edge of a two-column grid
+                and a left-anchored panel would open past the card. */}
+            <HelpTip align="right" label={`What Clear does to ${s.label}`}>
+              Nothing is deleted yet. Clear only marks the value to be removed the next time
+              you press <strong className="font-medium text-fg">Save changes</strong> — until
+              then it stays exactly as it is, and Undo puts it back.
+              {s.type === "secret" && (
+                <>
+                  {" "}
+                  Saving it cleared is final, though: the stored secret is not recoverable
+                  afterwards. To REPLACE one, type the new value instead — you do not have
+                  to clear it first.
+                </>
+              )}
+            </HelpTip>
+          </div>
         )}
       </div>
     </Field>

@@ -14,6 +14,7 @@ import { withPageAuth } from "@/lib/auth/guard";
 import { ApiError, apiGet, apiPatch, apiPost } from "@/lib/client/api";
 import { formatUtc } from "@/lib/time";
 
+import { useVisibleInterval } from "@/lib/client/use-visible-interval";
 interface UpdateCheck {
   allowed: boolean;
   branch: string | null;
@@ -144,11 +145,10 @@ export default function UpdatePage() {
 
   // Poll while a run is in flight. Keeps going through the reload, which is when
   // the connection drops and comes back.
-  useEffect(() => {
-    if (!running) return;
-    const id = setInterval(() => void refresh(), 2000);
-    return () => clearInterval(id);
-  }, [running, refresh]);
+  // `enabled` rather than an early return, so the hook keeps its own subscription tidy.
+  // Two seconds is right while an update is in flight and pointless against a locked
+  // screen; the catch-up on return is what shows the finished result immediately.
+  useVisibleInterval(() => void refresh(), 2000, { enabled: running });
 
   useEffect(() => {
     if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;

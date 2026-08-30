@@ -16,6 +16,7 @@ import type { PotaReport } from "@/pages/api/pota";
 import { formatAgo, formatUtc, formatUtcDate } from "@/lib/time";
 import { cn } from "@/lib/utils";
 
+import { useVisibleInterval } from "@/lib/client/use-visible-interval";
 // Parks on the Air.
 //
 // The page is built around a distinction worth being explicit about, because
@@ -300,10 +301,12 @@ export default function PotaPage() {
 
   // Spots go stale in minutes. The server caches POTA's response, so polling here
   // costs a local query rather than a request to a volunteer-run API.
-  useEffect(() => {
-    const t = setInterval(() => void reload(), REFRESH_MS);
-    return () => clearInterval(t);
-  }, [reload]);
+  // Suspended while the tab is hidden. This is the heaviest poll in the app for a field
+  // operator: a full LTE wake-up and TLS round trip every minute, running with the phone in
+  // a pocket, and on flaky signal a FAILED fetch is worse still because the modem ramps to
+  // full power hunting for a connection. Catches up on return, since a spot list that is
+  // ten minutes stale is the one case where waiting another minute is clearly wrong.
+  useVisibleInterval(() => void reload(), REFRESH_MS);
 
   const spots = useMemo(() => {
     const list = data?.spots ?? [];

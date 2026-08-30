@@ -11,6 +11,8 @@ import {
   Input,
   PageHeader,
   Select,
+  Td,
+  Th,
 } from "@/components/ui/primitives";
 import { withPageAuth } from "@/lib/auth/guard";
 import { MIN_PASSWORD_LENGTH } from "@/lib/auth/password-policy";
@@ -84,12 +86,9 @@ export default function UsersPage() {
               <tr className="bg-surface-2 text-left">
                 {["User", "Email", "Role", "Status", "Last login", "Sessions", ""].map(
                   (h) => (
-                    <th
-                      key={h}
-                      className="px-3 py-2 font-medium text-fg-muted text-xs uppercase tracking-wide"
-                    >
+                    <Th key={h} size="lg">
                       {h}
-                    </th>
+                    </Th>
                   ),
                 )}
               </tr>
@@ -99,7 +98,7 @@ export default function UsersPage() {
                 const isMe = u.id === me?.id;
                 return (
                   <tr key={u.id} className={u.active ? "" : "opacity-55"}>
-                    <td className="px-3 py-2">
+                    <Td size="lg">
                       <div className="flex items-center gap-2">
                         {u.callsign && (
                           <span className="font-display tracking-wide">
@@ -109,9 +108,9 @@ export default function UsersPage() {
                         <span className="text-fg-muted">{u.name}</span>
                         {isMe && <Badge tone="info">You</Badge>}
                       </div>
-                    </td>
-                    <td className="px-3 py-2 text-fg-muted">{u.email}</td>
-                    <td className="px-3 py-2">
+                    </Td>
+                    <Td size="lg" className="text-fg-muted">{u.email}</Td>
+                    <Td size="lg">
                       <Select
                         value={u.role}
                         title={ROLE_HELP[u.role]}
@@ -124,21 +123,21 @@ export default function UsersPage() {
                           </option>
                         ))}
                       </Select>
-                    </td>
-                    <td className="px-3 py-2">
+                    </Td>
+                    <Td size="lg">
                       {u.active ? (
                         <Badge tone="ok">Active</Badge>
                       ) : (
                         <Badge tone="danger">Disabled</Badge>
                       )}
-                    </td>
-                    <td className="px-3 py-2 tnum text-fg-subtle whitespace-nowrap">
+                    </Td>
+                    <Td size="lg" className="tnum text-fg-subtle whitespace-nowrap">
                       {u.lastLoginAt ? formatUtc(u.lastLoginAt) : "never"}
-                    </td>
-                    <td className="px-3 py-2 tnum text-fg-subtle">
+                    </Td>
+                    <Td size="lg" className="tnum text-fg-subtle">
                       {u._count?.sessions ?? 0}
-                    </td>
-                    <td className="px-3 py-2">
+                    </Td>
+                    <Td size="lg">
                       <div className="flex items-center gap-1.5 justify-end">
                         <button
                           type="button"
@@ -195,7 +194,7 @@ export default function UsersPage() {
                           </button>
                         )}
                       </div>
-                    </td>
+                    </Td>
                   </tr>
                 );
               })}

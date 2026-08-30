@@ -167,7 +167,7 @@ function StationCard({
           <h2 className="font-display text-lg tracking-wide">
             {station.callsign}
           </h2>
-          <Badge tone="accent">{station.grid}</Badge>
+          <Badge tone="neutral">{station.grid}</Badge>
           <span className="text-xs text-fg-subtle tnum">
             {qsoCount.toLocaleString()} QSO{qsoCount === 1 ? "" : "s"}
           </span>

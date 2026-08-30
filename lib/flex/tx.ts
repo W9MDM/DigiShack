@@ -3,7 +3,12 @@ import dgram from "node:dgram";
 
 import { FlexClient } from "@/lib/flex/client";
 import { resolveAntenna } from "@/lib/flex/antennas";
-import { nextWindowStart, PERIOD_MS, transmitStartAt } from "@/lib/radio/timing";
+import {
+  lateTxToleranceMs,
+  nextWindowStart,
+  PERIOD_MS,
+  transmitStartAt,
+} from "@/lib/radio/timing";
 import { buildWaveform, samplesPerSymbol } from "@/lib/radio/waveform";
 
 // Native FT8/FT4 transmit over FlexRadio DAX TX. No external decoder, no WSJT-X.
@@ -203,6 +208,18 @@ export class FlexDaxTransmitter {
    */
   private busySince: number | null = null;
   private busyForWindow: number | null = null;
+  /**
+   * Bumped on every accepted transmit request, so a superseded one can tell it no longer
+   * owns the transmitter and must not clear state the new owner is using.
+   */
+  private txGen = 0;
+  /**
+   * The transmission that is WAITING for its window and has not keyed yet.
+   *
+   * Null once keying starts — from that moment there is a real signal on the air and
+   * nothing may take the transmitter. See the supersede rule in `transmit`.
+   */
+  private pendingKey: { gen: number; startAt: number; abort: () => void } | null = null;
   private watchdog: NodeJS.Timeout | null = null;
   private packetCount = 0;
 
@@ -666,6 +683,40 @@ export class FlexDaxTransmitter {
     if (!this.client || !this.socket || !this.streamId) {
       return { ...base, reason: "Transmitter is not started" };
     }
+    // SUPERSEDE A TRANSMISSION THAT HAS NOT KEYED YET.
+    //
+    // `busy` is held across the pre-transmission wait so that two transmissions can never
+    // be scheduled at once, and that much is right. But `startCall` schedules up to a
+    // period ahead — the live log carries `first transmission in 27.9s` forty times in one
+    // day — and for those whole 28 seconds every other request was refused with a message
+    // saying a transmission was in progress when the radio was silent. Measured at 13% of
+    // all refusals.
+    //
+    // A request for the SAME window or an EARLIER one is not a competitor, it is a
+    // correction: the sequencer has decided something newer, and the queued transmission is
+    // stale. So the pending wait is aborted and this request takes over.
+    //
+    // The moment `keyed` is true this does not apply at any price — there is RF on the air
+    // and taking the transmitter would truncate a real transmission mid-symbol.
+    // ANY un-keyed pending transmission is superseded, not just an earlier-or-equal one.
+    //
+    // The first version compared `req.startAt <= pendingKey.startAt`, on the reasoning that
+    // a request for a LATER window is not urgent enough to displace a queued one. That is
+    // the wrong model: the transmitter is not a queue, and the sequencer does not schedule
+    // speculatively. If it has decided something new, the queued message is what it decided
+    // BEFORE — a station that has since answered, or been abandoned, or been superseded by
+    // one worth more. Sending the stale one and refusing the fresh one is exactly backwards.
+    //
+    // `keyed` still stops everything: there is RF on the air and taking the transmitter
+    // would truncate a real transmission mid-symbol.
+    if (this.busy && !this.keyed && this.pendingKey) {
+      this.pendingKey.abort();
+      this.pendingKey = null;
+      this.busy = false;
+      this.busySince = null;
+      this.busyForWindow = null;
+    }
+
     if (this.busy || this.keyed) {
       // WHICH flag, and for how long. The two mean different things: `keyed` is the radio
       // actually on the air, `busy` is this object holding the transmitter - including
@@ -711,11 +762,21 @@ export class FlexDaxTransmitter {
     // instant to key is real time; the clock we wait against is ours.
     const waitMs = audioStartAt - linkLagMs - nowMs();
 
-    if (waitMs < -1_500) {
+    // PER MODE, from the same function the scheduler uses. This was a hardcoded -1,500 for
+    // every mode, and the transmitter is the LAST line of defence — so it was the one place
+    // holding the wrong number. FT2 was measured to stop decoding entirely beyond about
+    // 400 ms late, and this would have sent it 1.5 s late without comment.
+    //
+    // FT8 930, FT4 800, FT2 0. See lateTxToleranceMs in lib/radio/timing.ts for the
+    // derivation and the measured DT cliffs behind it.
+    const lateLimitMs = lateTxToleranceMs(req.mode);
+    if (waitMs < -lateLimitMs) {
       // Late enough that the receiving stations' decode windows have moved on.
       return {
         ...base,
-        reason: `Missed the window by ${Math.abs(Math.round(waitMs))}ms — not transmitting late`,
+        reason:
+          `Missed the window by ${Math.abs(Math.round(waitMs))}ms — ` +
+          `${req.mode} tolerates ${lateLimitMs}ms, not transmitting late`,
       };
     }
     if (waitMs > 60_000) {
@@ -725,6 +786,7 @@ export class FlexDaxTransmitter {
     this.busy = true;
     this.busySince = nowMs();
     this.busyForWindow = Math.round(audioStartAt);
+    const gen = ++this.txGen;
 
     try {
       // HELD ACROSS THE WAIT, DELIBERATELY - two transmissions must not be scheduled at
@@ -735,7 +797,31 @@ export class FlexDaxTransmitter {
       // is. Measured: only ~18% of refusals coincide with a far-ahead pending transmission,
       // so this is a real defect and NOT the main cause. The rest is still open; the
       // instrumentation above exists to find it rather than guess again.
-      if (waitMs > 0) await new Promise((r) => setTimeout(r, waitMs));
+      if (waitMs > 0) {
+        // Abortable, so a newer request for this window or an earlier one can take over
+        // rather than being refused for the length of the wait. Resolves either way; the
+        // generation check below decides whether this call is still the owner.
+        let superseded = false;
+        await new Promise<void>((resolve) => {
+          const timer = setTimeout(resolve, waitMs);
+          this.pendingKey = {
+            gen,
+            startAt: req.startAt,
+            abort: () => {
+              superseded = true;
+              clearTimeout(timer);
+              resolve();
+            },
+          };
+        });
+        this.pendingKey = null;
+        if (superseded || gen !== this.txGen) {
+          // Someone newer owns the transmitter. Return without keying and WITHOUT touching
+          // the shared flags — the `finally` below is generation-guarded for the same
+          // reason. Clearing them here would unlock a transmitter that is now in use.
+          return { ...base, reason: "Superseded by a newer transmission for the same window" };
+        }
+      }
 
       // Watchdog armed BEFORE keying, and deliberately not cleared by the send
       // loop's own success path alone — unkey() is idempotent, so a redundant
@@ -786,9 +872,15 @@ export class FlexDaxTransmitter {
         reason: err instanceof Error ? err.message : "Transmission failed",
       };
     } finally {
-      this.busy = false;
-      this.busySince = null;
-      this.busyForWindow = null;
+      // ONLY IF THIS CALL STILL OWNS THE TRANSMITTER. A superseded request reaching here
+      // would otherwise clear the flags belonging to the transmission that replaced it,
+      // and the next request would key on top of a live one.
+      if (gen === this.txGen) {
+        this.busy = false;
+        this.busySince = null;
+        this.busyForWindow = null;
+        this.pendingKey = null;
+      }
     }
   }
 

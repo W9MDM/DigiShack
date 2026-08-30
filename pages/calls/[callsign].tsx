@@ -2,7 +2,7 @@ import Link from "next/link";
 import { useRouter } from "next/router";
 
 import { HelpTip } from "@/components/ui/HelpTip";
-import { Badge, Button, Card, ErrorBanner, PageHeader } from "@/components/ui/primitives";
+import { Badge, Button, Card, ErrorBanner, PageHeader, Td, Th } from "@/components/ui/primitives";
 import { withPageAuth } from "@/lib/auth/guard";
 import { useApi } from "@/lib/client/api";
 import { formatFreqMHz } from "@/lib/ham/bands";
@@ -206,41 +206,36 @@ export default function CallsignPage() {
                     <thead>
                       <tr className="text-left">
                         {["When", "Band", "Mode", "Frequency", "Sent", "Rcvd", "QSL"].map((h) => (
-                          <th
-                            key={h}
-                            className="px-3 py-2 font-medium text-fg-muted text-xs uppercase tracking-wide"
-                          >
-                            {h}
-                          </th>
+                          <Th key={h}>{h}</Th>
                         ))}
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-line">
                       {data.recent.map((q) => (
                         <tr key={q.id}>
-                          <td className="px-3 py-1.5 tnum whitespace-nowrap">
+                          <Td className="tnum whitespace-nowrap">
                             <Link
                               href={`/qsos/${q.id}`}
                               className="hover:text-accent-bright"
                             >
                               {formatUtc(q.startTime)}
                             </Link>
-                          </td>
-                          <td className="px-3 py-1.5 font-mono">{q.band}</td>
-                          <td className="px-3 py-1.5 font-mono">{q.mode}</td>
-                          <td className="px-3 py-1.5 tnum text-fg-muted">
+                          </Td>
+                          <Td className="font-mono">{q.band}</Td>
+                          <Td className="font-mono">{q.mode}</Td>
+                          <Td className="tnum text-fg-muted">
                             {q.freqHz ? formatFreqMHz(q.freqHz) : "—"}
-                          </td>
-                          <td className="px-3 py-1.5 tnum text-fg-muted">{q.rstSent ?? "—"}</td>
-                          <td className="px-3 py-1.5 tnum text-fg-muted">{q.rstRcvd ?? "—"}</td>
-                          <td className="px-3 py-1.5">
+                          </Td>
+                          <Td className="tnum text-fg-muted">{q.rstSent ?? "—"}</Td>
+                          <Td className="tnum text-fg-muted">{q.rstRcvd ?? "—"}</Td>
+                          <Td>
                             <div className="flex gap-1">
                               {q.lotwRcvd && <Badge tone="ok">L</Badge>}
                               {q.eqslRcvd && <Badge tone="ok">e</Badge>}
                               {q.qslRcvd === "CONFIRMED" && <Badge tone="ok">Card</Badge>}
                               {!q.confirmed && <span className="text-fg-subtle">—</span>}
                             </div>
-                          </td>
+                          </Td>
                         </tr>
                       ))}
                     </tbody>

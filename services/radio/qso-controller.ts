@@ -1,43 +1,86 @@
 import { nowMs } from "@/lib/time/clock";
-import { transmitStartAt } from "@/lib/radio/timing";
+import { PERIOD_MS, transmitStartAt, TX_START_OFFSET_MS } from "@/lib/radio/timing";
+import { TRANSMISSION_MS } from "@/lib/radio/decode-pipeline";
 import type { TxMode } from "@/lib/radio/waveform";
 
 /**
- * How much of a head start the first transmission of a call needs, ms.
+ * How long it takes to get from "transmit this" to RF, ms.
  *
- * The waveform is generated before anything keys and the key command has to cross the
- * network to the radio — measured at 11-40 ms one way to this station's FlexRadio. 400 ms
- * is comfortably more than both while still catching a window that has only just opened,
- * which is the case worth catching: it is the difference between answering a CQ in the
- * next window and answering it 30 seconds later.
+ * THIS REPLACES `FIRST_TX_LEAD_MS`, WHICH WAS 400 AND HAD A DEAD ZONE UNDER IT.
+ *
+ * The old rule was a pair of tests: send if there are 400 ms in hand, or send if we are
+ * late but not late enough to matter. A lead BETWEEN 0 and 400 ms satisfied neither, so
+ * `firstTxWindow` skipped the window and the call waited a full 30 seconds. That is not
+ * a corner. It is where the automatic path habitually landed: the decode of the window
+ * we are answering finishes about 1,500 ms after the boundary, the reply is due at +500,
+ * and the arithmetic put the lead at roughly +102 ms. The log carries the consequence in
+ * plain words — `first transmission in 27.9s`, forty times in one day.
+ *
+ * It also meant MORE DELAY MADE TRANSMITTING MORE LIKELY, because another second of
+ * decoding pushed the lead below zero and back into the late branch. Anything that made
+ * the station faster — the partner slice in 1.153.0, the candidate slice here — moved
+ * the timing INTO the gap rather than past it.
+ *
+ * So the test is no longer "is there room to be comfortable" but "how late will the
+ * audio actually be", and a lead of 0-400 ms is answered honestly: the transmission goes
+ * out, a few tens of milliseconds late, which every mode here tolerates and which is
+ * thirty seconds better than the alternative.
+ *
+ * MEASURED, on this machine: `buildWaveform` takes 7.4 ms median and 15 ms worst for a
+ * 303,360-sample FT8 waveform (3.0 / 5.8 for FT4, 1.3 / 2.8 for FT2). The live box
+ * benchmarks about 3.4x slower on decode work, so call it 50 ms there. The one-way trip
+ * to this station's FlexRadio is a measured 11-40 ms, and `FlexDaxTransmitter.transmit`
+ * already keys early by it whenever it has the lead to do so. 100 ms covers both with
+ * room, and is a quarter of the 400 ms it replaces.
  */
-const FIRST_TX_LEAD_MS = 400;
+const KEY_PREP_MS = 100;
 
 /**
- * How late the FIRST transmission of a call may start, per mode, and still be worth sending.
+ * How late the FIRST transmission of a call may start, per mode — DERIVED, not chosen.
  *
- * This is the number that actually decides whether answering a CQ costs one cycle or two,
- * and it exists because DECODING IS NOT FREE. A station transmits in window W; W's audio
- * is only complete at its end, and this installation then spends 2.0-2.4 s decoding it. So
- * by the time there is a callsign to answer, the ideal start of W+1 — half a second past
- * its boundary — is already about 1.6 s gone. Requiring a head start therefore skips W+1
- * entirely and lands on W+3, which is the 28-second wait an operator sees.
+ * The old table was three hand-picked numbers: FT8 1,500, FT4 800, FT2 0. The FT8 figure
+ * was the one that hurt. An FT8 window has 1,860 ms of slack after its 12,640 ms of audio
+ * (15,000 period, 500 start offset), and spending 1,500 of it leaves 360 ms — which is
+ * less than the worst overrun the live instrumentation actually measured. Over eleven
+ * days `TX refused: A transmission is already in progress` ran at 1.1-3.6% of attempts
+ * and then stepped to 9.8% in the hour 1.129.0 landed; every refusal is `keyed and busy`,
+ * the radio genuinely on the air, and the dominant cluster (62%, n=34) holds the
+ * transmitter 14,248-15,367 ms against a 15,000 ms period — up to 367 ms PAST the end of
+ * the window it belongs to.
  *
- * Starting late instead is viable, and the arithmetic says by how much. FT8 is 79 symbols
- * at 6.25 baud = 12.64 s inside a 15 s window; beginning at +0.5 s it ends at 13.14 s,
- * leaving 1.86 s of slack. FT4 is 105 symbols at 20.83 baud = 5.04 s in 7.5 s, ending at
- * 5.54 s with 1.96 s spare. So a start up to ~1.5 s late still finishes inside its own
- * window, and the receiving decoder searches a DT range wide enough to find it.
+ * TWO CEILINGS, AND THE ANSWER IS THE LOWER ONE.
  *
- * FT2 IS ZERO, and that is not caution. Its DT search spans only 0.5 s — see
- * lib/radio/timing.ts — so an FT2 signal sent late does not decode at all. Transmitting it
- * would be worse than waiting: it costs a cycle AND puts an unreadable signal on the air.
+ *   1. TIMING. Half the slack, so a late transmission never consumes more of the window's
+ *      margin than it leaves behind. FT8 1,860 -> 930, FT4 1,960 -> 980, FT2 1,803 -> 901.
+ *      The 930 ms left over is 2.5x the largest overrun measured.
+ *   2. DECODABILITY. Being inside our own window is worthless if the far end cannot read
+ *      it. MEASURED here against the real decoder, one station placed late in a
+ *      ten-signal window — see scripts/check-first-tx.ts, which asserts these cliffs so
+ *      they cannot quietly move:
+ *
+ *          FT8   still decodes at 2,000 ms late   (no cliff inside the slack at all)
+ *          FT4   decodes at 900, GONE at 1,000
+ *          FT2   decodes at 400, GONE at 500
+ *
+ * So FT8 is limited by timing and FT4 by the decoder, which is why FT4 keeps its 800 ms
+ * — arrived at independently and now confirmed to sit one measured step inside its own
+ * cliff. FT8 drops from 1,500 to 930.
+ *
+ * FT2 IS PINNED TO ZERO and the derivation does not get a vote. Its DT search spans only
+ * 0.5 s — see lib/radio/timing.ts — and the measurement above agrees: 400 ms late reads,
+ * 500 ms does not. Both ceilings would allow several hundred milliseconds; transmitting
+ * there would cost a cycle AND put a signal on the air that nobody can decode, which is
+ * worse than waiting. A slack derivation alone would have handed FT2 901 ms, and that is
+ * exactly the sort of tidy arithmetic that ships an unreadable transmitter.
  */
-const LATE_TX_TOLERANCE_MS: Record<TxMode, number> = {
-  FT8: 1_500,
-  FT4: 800,
-  FT2: 0,
-};
+// The tolerance moved to lib/radio/timing.ts so `lib/flex/tx.ts` can apply the SAME number
+// as its own last-line refusal. It used to refuse below a hardcoded -1,500 ms for every
+// mode, which meant it would have transmitted FT2 1.5 s late — a mode measured not to
+// decode at all beyond 400 ms. Re-exported: this module is where the checks and the
+// operating layer already look for it.
+export { lateTxToleranceMs } from "@/lib/radio/timing";
+import { lateTxToleranceMs } from "@/lib/radio/timing";
+
 import type { FlexDaxSource } from "@/lib/flex/dax";
 import type { DigitalSource, DigitalTransmitter } from "@/lib/radio/types";
 import type { DigitalMode } from "@/lib/ham/digital-freqs";
@@ -737,14 +780,17 @@ export class QsoController {
    * exactly what an operator sees as "waiting an extra cycle before transmitting".
    *
    * Returns null when there is no usable window soon, which leaves the old behaviour
-   * (wait for the next window event) rather than keying at a moment already gone.
+   * (wait for the next window event) rather than keying at a moment already gone. With
+   * FT2, whose late tolerance is zero, that is a real outcome; for FT8 and FT4 the window
+   * two periods out always qualifies, and the cost of reaching it is the 30-second wait
+   * this function exists to avoid.
    */
   private firstTxWindow(): number | null {
     if (this.txParity === null) return null;
     const period = this.o.source.periodMs;
     const { mode } = this.o.getBandMode();
     const now = this.now();
-    const late = LATE_TX_TOLERANCE_MS[mode as TxMode] ?? 0;
+    const late = lateTxToleranceMs(mode as TxMode);
     // Start at the window we are CURRENTLY IN, not the next one. That window is the whole
     // point: it is the one immediately after the station we are answering, and we are
     // inside it by a decode time rather than ahead of it.
@@ -752,14 +798,20 @@ export class QsoController {
     for (let i = 0; i < 4; i++) {
       const w = current + i * period;
       if (Math.floor(w / period) % 2 !== this.txParity) continue;
-      const startAt = transmitStartAt(mode as TxMode, w);
-      const lead = startAt - now;
-      // Ahead of it with time to build the waveform and get the key across the network.
-      if (lead >= FIRST_TX_LEAD_MS) return w;
-      // Or behind it, but not so far that the transmission would run past its own window
-      // or land outside the receiver's DT search. Being late is a real cost and it is
-      // still far cheaper than waiting another 30 seconds.
-      if (lead < 0 && -lead <= late) return w;
+      const lead = transmitStartAt(mode as TxMode, w) - now;
+      // ONE TEST, ON THE INSTANT THE AUDIO WILL ACTUALLY START.
+      //
+      // The old pair of tests — "at least 400 ms in hand" or "late, but inside the
+      // tolerance" — left everything between 0 and 400 ms answering to neither, and the
+      // automatic path lands there routinely. See KEY_PREP_MS.
+      //
+      // What the window is really being asked is how late the RF will be, and that is
+      // `KEY_PREP_MS - lead`: with a full lead the transmitter waits and keys on time, and
+      // with less than a full lead it keys as soon as the waveform is built and the
+      // command has crossed the network. Both branches of the old rule are special cases
+      // of this one, and the gap between them closes.
+      const lateBy = Math.max(0, KEY_PREP_MS - lead);
+      if (lateBy <= late) return w;
     }
     return null;
   }

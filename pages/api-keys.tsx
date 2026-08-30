@@ -10,6 +10,8 @@ import {
   Input,
   PageHeader,
   Select,
+  Td,
+  Th,
 } from "@/components/ui/primitives";
 import { withPageAuth } from "@/lib/auth/guard";
 import { ApiError, apiDelete, apiPatch, apiPost, useApi } from "@/lib/client/api";
@@ -107,12 +109,9 @@ export default function ApiKeysPage() {
                 <tr className="bg-surface-2 text-left">
                   {["Name", "Token", "Role", "Status", "Last used", "Expires", ""].map(
                     (h) => (
-                      <th
-                        key={h}
-                        className="px-3 py-2 font-medium text-fg-muted text-xs uppercase tracking-wide"
-                      >
+                      <Th key={h} size="lg">
                         {h}
-                      </th>
+                      </Th>
                     ),
                   )}
                 </tr>
@@ -123,11 +122,11 @@ export default function ApiKeysPage() {
                     k.expiresAt !== null && new Date(k.expiresAt) <= new Date();
                   return (
                     <tr key={k.id} className={k.active && !expired ? "" : "opacity-55"}>
-                      <td className="px-3 py-2">{k.name}</td>
-                      <td className="px-3 py-2 font-mono text-xs text-fg-subtle">
+                      <Td size="lg">{k.name}</Td>
+                      <Td size="lg" className="font-mono text-xs text-fg-subtle">
                         {k.prefix}…
-                      </td>
-                      <td className="px-3 py-2">
+                      </Td>
+                      <Td size="lg">
                         <Select
                           value={k.role}
                           aria-label={`Role for the API key ${k.name}`}
@@ -151,8 +150,8 @@ export default function ApiKeysPage() {
                             </option>
                           ))}
                         </Select>
-                      </td>
-                      <td className="px-3 py-2">
+                      </Td>
+                      <Td size="lg">
                         {expired ? (
                           <Badge tone="warn">Expired</Badge>
                         ) : k.active ? (
@@ -160,14 +159,14 @@ export default function ApiKeysPage() {
                         ) : (
                           <Badge tone="danger">Revoked</Badge>
                         )}
-                      </td>
-                      <td className="px-3 py-2 tnum text-fg-subtle whitespace-nowrap">
+                      </Td>
+                      <Td size="lg" className="tnum text-fg-subtle whitespace-nowrap">
                         {k.lastUsedAt ? formatUtc(k.lastUsedAt) : "never"}
-                      </td>
-                      <td className="px-3 py-2 tnum text-fg-subtle whitespace-nowrap">
+                      </Td>
+                      <Td size="lg" className="tnum text-fg-subtle whitespace-nowrap">
                         {k.expiresAt ? formatUtc(k.expiresAt) : "—"}
-                      </td>
-                      <td className="px-3 py-2">
+                      </Td>
+                      <Td size="lg">
                         <div className="flex gap-2 justify-end">
                           <button
                             type="button"
@@ -203,7 +202,7 @@ export default function ApiKeysPage() {
                             Delete
                           </button>
                         </div>
-                      </td>
+                      </Td>
                     </tr>
                   );
                 })}

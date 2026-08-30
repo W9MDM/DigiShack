@@ -52,7 +52,19 @@ if [ "$DO_PULL" -eq 1 ]; then
   fi
 
   BRANCH="$(git rev-parse --abbrev-ref HEAD)"
-  git pull --ff-only origin "$BRANCH"
+  # GIT_TERMINAL_PROMPT=0 so a credential problem FAILS instead of hanging.
+  #
+  # This update runs unattended on other operators' machines. The public repo needs no
+  # credentials, so the normal path never asks — but git's behaviour when it does ask is the
+  # problem: on a 401 it runs `credential reject` and DELETES the stored credential, so the
+  # next attempt has nothing to offer, tries to prompt, and with no terminal attached it
+  # waits. The update does not fail, it stops, and an operator watching a script that has
+  # printed nothing for ten minutes has no way to tell those apart.
+  #
+  # With this set, git returns a real error immediately and the message below names the
+  # branch it could not reach. Costs nothing when credentials are not needed, which is
+  # almost always.
+  GIT_TERMINAL_PROMPT=0 git pull --ff-only origin "$BRANCH"     || die "could not pull origin/$BRANCH — check the network, or that this checkout still points at a repository you can read"
   ok "pulled origin/$BRANCH"
 else
   warn "skipping git pull"

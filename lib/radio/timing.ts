@@ -39,6 +39,60 @@ export const TX_START_OFFSET_MS: Record<TxMode, number> = {
   FT2: 0,
 };
 
+/**
+ * On-air length of a transmission, ms — where the guard time begins.
+ *
+ * FT2's 1947 includes the modulator's two-symbol pulse tail, not just its 144 channel
+ * symbols; cutting at 1920 would clip the last symbol's energy.
+ *
+ * Lives here rather than in the decode pipeline because it is a property of the MODE, like
+ * everything else in this file, and because two consumers now need it who must not import
+ * each other: the pipeline decides when to cut a window, and the transmitter decides how
+ * late is too late. `decode-pipeline.ts` already imports `PERIOD_MS` from here, so the
+ * dependency only runs one way.
+ */
+export const TRANSMISSION_MS: Record<TxMode, number> = {
+  FT8: 12_640,
+  FT4: 5_040,
+  FT2: 1_947,
+};
+
+/** A late transmission may never eat more of the window's margin than it leaves behind. */
+const LATE_TX_SLACK_FRACTION = 0.5;
+
+/**
+ * The measured DT cliff per mode, ms — the last lateness that still decoded, less a step.
+ *
+ * FT8 has no cliff inside its own slack (2,000 ms still decodes), so its entry is the slack
+ * itself and the timing rule is what binds. FT4 decoded at 900 and was gone at 1,000; FT2
+ * decoded at 400 and was gone at 500, which is why FT2 is pinned to zero — there is no such
+ * thing as a usefully late FT2 transmission. Asserted against the real decoder in
+ * scripts/check-first-tx.ts rather than trusted.
+ */
+const DECODABLE_LATE_MS: Record<TxMode, number> = {
+  FT8: 1_860,
+  FT4: 800,
+  FT2: 0,
+};
+
+/**
+ * How late this mode's transmission may start and still be worth sending, ms.
+ *
+ * FT8 930, FT4 800, FT2 0.
+ *
+ * THE ONE NUMBER, IN ONE PLACE. It used to exist twice and disagree: the QSO controller
+ * derived it per mode, while `lib/flex/tx.ts` refused only below a hardcoded −1,500 ms for
+ * every mode. So the transmitter would happily send **FT2 1.5 s late**, and FT2 at 500 ms
+ * late was measured not to decode at all — the last line of defence was the one that had
+ * the wrong number. Two copies of a timing constant is also how the 0.5 s start offset came
+ * to be wrong in two transmitters at once.
+ */
+export function lateTxToleranceMs(mode: TxMode): number {
+  const slack = PERIOD_MS[mode] - TX_START_OFFSET_MS[mode] - TRANSMISSION_MS[mode];
+  const byTiming = Math.floor(slack * LATE_TX_SLACK_FRACTION);
+  return Math.max(0, Math.min(byTiming, DECODABLE_LATE_MS[mode]));
+}
+
 /** The next period boundary at or after `from`. */
 export function nextWindowStart(mode: TxMode, from = nowMs()): number {
   const period = PERIOD_MS[mode];

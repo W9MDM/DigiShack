@@ -199,6 +199,15 @@ export interface DaxSourceOptions {
    * happens to it here.
    */
   priorityOffsetHz?: () => number | null;
+  /**
+   * Where the stations we are most likely to CALL transmit, for the window being cut.
+   *
+   * The same idea as `priorityOffsetHz` above, for the transmission that one cannot help:
+   * the FIRST of a contact, which has no partner yet and goes out 1.3-1.4 s late as a
+   * result. Passed straight through to the decode pipeline; see
+   * `DecodePipelineOptions.candidateOffsetsHz`.
+   */
+  candidateOffsetsHz?: (windowStartMs: number) => number[];
   /** "Is our transmit path occupied?" See `DecodePipelineOptions.transmitPending`. */
   transmitPending?: () => boolean;
 }
@@ -287,7 +296,13 @@ export class FlexDaxSource extends EventEmitter<Events> {
   private opts: Required<
     Omit<
       DaxSourceOptions,
-      "host" | "port" | "passbandHz" | "dialHz" | "priorityOffsetHz" | "transmitPending"
+      | "host"
+      | "port"
+      | "passbandHz"
+      | "dialHz"
+      | "priorityOffsetHz"
+      | "candidateOffsetsHz"
+      | "transmitPending"
     >
   > & {
     host: string;
@@ -297,6 +312,7 @@ export class FlexDaxSource extends EventEmitter<Events> {
     // wiring check, a receive-only install — still constructs, and the pipeline simply
     // never runs a priority pass.
     priorityOffsetHz?: () => number | null;
+    candidateOffsetsHz?: (windowStartMs: number) => number[];
     transmitPending?: () => boolean;
     // Optional so a caller that has no dial tracker still constructs. The panadapter
     // then falls back to this connection's own slice cache, which is correct at connect
@@ -574,6 +590,7 @@ export class FlexDaxSource extends EventEmitter<Events> {
       panadapter: options.panadapter ?? { enabled: false },
       dialHz: options.dialHz,
       priorityOffsetHz: options.priorityOffsetHz,
+      candidateOffsetsHz: options.candidateOffsetsHz,
       transmitPending: options.transmitPending,
     };
 
@@ -587,6 +604,7 @@ export class FlexDaxSource extends EventEmitter<Events> {
       silenceRms: this.opts.silenceRms,
       maxHz: this.opts.passbandHz,
       priorityOffsetHz: this.opts.priorityOffsetHz,
+      candidateOffsetsHz: this.opts.candidateOffsetsHz,
       transmitPending: this.opts.transmitPending,
     });
     // Built from the pipeline's clamped value rather than the raw option, so the

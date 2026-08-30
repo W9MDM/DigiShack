@@ -2,7 +2,16 @@ import { useCallback, useEffect, useState } from "react";
 
 import { ToolTabs } from "@/components/settings/ToolTabs";
 import { HelpTip } from "@/components/ui/HelpTip";
-import { Badge, Button, Card, ErrorBanner, PageHeader, Textarea } from "@/components/ui/primitives";
+import {
+  Badge,
+  Button,
+  Card,
+  ErrorBanner,
+  PageHeader,
+  Td,
+  Textarea,
+  Th,
+} from "@/components/ui/primitives";
 import { withPageAuth } from "@/lib/auth/guard";
 import { useCan } from "@/lib/client/session";
 import { formatFreqMHz } from "@/lib/ham/bands";
@@ -240,6 +249,15 @@ export default function IncompletePage() {
             <Button
               variant="primary"
               disabled={checking || paste.trim() === ""}
+              /* The button was off from the moment the page loaded and said nothing about
+                 why. The box above it is empty and unlabelled apart from a placeholder,
+                 so "greyed out" was the only signal, and greyed out reads as broken.
+                 Not shown while `checking`, where the label already says "Comparing…". */
+              disabledReason={
+                paste.trim() === ""
+                  ? "Paste the QRZ request table into the box above first."
+                  : undefined
+              }
               onClick={() => void check()}
             >
               {checking ? "Comparing…" : "Compare"}
@@ -278,27 +296,22 @@ export default function IncompletePage() {
                 <thead>
                   <tr className="text-left">
                     {["QSO date", "Callsign", "Verdict", "What we hold", ""].map((h) => (
-                      <th
-                        key={h}
-                        className="px-3 py-2 font-medium text-fg-muted text-xs uppercase tracking-wide"
-                      >
-                        {h}
-                      </th>
+                      <Th key={h}>{h}</Th>
                     ))}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-line">
                   {result.requests.map((r, i) => (
                     <tr key={`${r.request.qsoDate}|${r.request.callsign}|${i}`}>
-                      <td className="px-3 py-1.5 tnum whitespace-nowrap">{r.request.qsoDate}</td>
-                      <td className="px-3 py-1.5 font-display tracking-wide">
+                      <Td className="tnum whitespace-nowrap">{r.request.qsoDate}</Td>
+                      <Td className="font-display tracking-wide">
                         {r.request.callsign}
-                      </td>
-                      <td className="px-3 py-1.5">
+                      </Td>
+                      <Td>
                         <Badge tone={TONE[r.verdict]}>{LABEL[r.verdict]}</Badge>
-                      </td>
-                      <td className="px-3 py-1.5 text-xs text-fg-muted">{r.note}</td>
-                      <td className="px-3 py-1.5 whitespace-nowrap">
+                      </Td>
+                      <Td className="text-xs text-fg-muted">{r.note}</Td>
+                      <Td className="whitespace-nowrap">
                         {/* Only a promotable row gets a button. A wrong-date row deliberately
                             has none: acting on it would be guessing whose date is wrong. */}
                         {r.verdict === "promotable" && r.incomplete && isAdmin && (
@@ -315,7 +328,7 @@ export default function IncompletePage() {
                             {busy === r.incomplete.id ? "Adding…" : "Add to log"}
                           </Button>
                         )}
-                      </td>
+                      </Td>
                     </tr>
                   ))}
                 </tbody>
@@ -340,31 +353,26 @@ export default function IncompletePage() {
                 <thead>
                   <tr className="text-left">
                     {["When", "Callsign", "Band", "Mode", "Sent", "Rcvd", "Stage", ""].map((h) => (
-                      <th
-                        key={h}
-                        className="px-3 py-2 font-medium text-fg-muted text-xs uppercase tracking-wide"
-                      >
-                        {h}
-                      </th>
+                      <Th key={h}>{h}</Th>
                     ))}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-line">
                   {rows.map((x) => (
                     <tr key={x.id}>
-                      <td className="px-3 py-1.5 tnum whitespace-nowrap" title={x.reason}>
+                      <Td className="tnum whitespace-nowrap" title={x.reason}>
                         {formatUtc(x.startedAt)}
-                      </td>
-                      <td className="px-3 py-1.5 font-display tracking-wide">{x.callsign}</td>
-                      <td className="px-3 py-1.5 font-mono">{x.band}</td>
-                      <td className="px-3 py-1.5 font-mono">{x.mode}</td>
-                      <td className="px-3 py-1.5 tnum">{x.reportSent ?? "—"}</td>
-                      <td className="px-3 py-1.5 tnum">{x.reportRcvd ?? "—"}</td>
-                      <td className="px-3 py-1.5 text-xs text-fg-subtle">
+                      </Td>
+                      <Td className="font-display tracking-wide">{x.callsign}</Td>
+                      <Td className="font-mono">{x.band}</Td>
+                      <Td className="font-mono">{x.mode}</Td>
+                      <Td className="tnum">{x.reportSent ?? "—"}</Td>
+                      <Td className="tnum">{x.reportRcvd ?? "—"}</Td>
+                      <Td className="text-xs text-fg-subtle">
                         {x.stage}
                         {x.freqHz ? ` · ${formatFreqMHz(x.freqHz)}` : ""}
-                      </td>
-                      <td className="px-3 py-1.5 whitespace-nowrap">
+                      </Td>
+                      <Td className="whitespace-nowrap">
                         {isAdmin && (
                           <div className="flex gap-2">
                             <Button
@@ -383,7 +391,7 @@ export default function IncompletePage() {
                             </button>
                           </div>
                         )}
-                      </td>
+                      </Td>
                     </tr>
                   ))}
                 </tbody>

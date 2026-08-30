@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { useState } from "react";
 
-import { Card, ErrorBanner, PageHeader, Select } from "@/components/ui/primitives";
+import { Card, ErrorBanner, PageHeader, Select, Td, Th } from "@/components/ui/primitives";
 import { HelpTip } from "@/components/ui/HelpTip";
 import { withPageAuth } from "@/lib/auth/guard";
 import { useApi } from "@/lib/client/api";
@@ -155,12 +155,7 @@ export default function StatsPage() {
                 <thead>
                   <tr className="text-left">
                     {["Year", "Contacts", "Confirmed", "Stations", "Entities"].map((h) => (
-                      <th
-                        key={h}
-                        className="px-3 py-2 font-medium text-fg-muted text-xs uppercase tracking-wide"
-                      >
-                        {h}
-                      </th>
+                      <Th key={h}>{h}</Th>
                     ))}
                   </tr>
                 </thead>
@@ -169,8 +164,8 @@ export default function StatsPage() {
                     // A silent year is dimmed rather than omitted: the gap is part of the
                     // history, and a table that leaves it out reads as continuous activity.
                     <tr key={y.year} className={y.qsos === 0 ? "opacity-45" : ""}>
-                      <td className="px-3 py-1.5 tnum font-medium">{y.year}</td>
-                      <td className="px-3 py-1.5">
+                      <Td className="tnum font-medium">{y.year}</Td>
+                      <Td>
                         {/* The bar is scaled to the busiest year, so a quiet one reads as
                             quiet rather than as almost-nothing. */}
                         <div className="relative">
@@ -181,15 +176,15 @@ export default function StatsPage() {
                           />
                           <span className="relative tnum">{y.qsos.toLocaleString()}</span>
                         </div>
-                      </td>
-                      <td className="px-3 py-1.5 tnum text-fg-muted">
+                      </Td>
+                      <Td className="tnum text-fg-muted">
                         {y.confirmed.toLocaleString()}
                         <span className="text-fg-subtle"> · {pct(y.confirmed, y.qsos)}</span>
-                      </td>
-                      <td className="px-3 py-1.5 tnum text-fg-muted">
+                      </Td>
+                      <Td className="tnum text-fg-muted">
                         {y.callsigns.toLocaleString()}
-                      </td>
-                      <td className="px-3 py-1.5 tnum text-fg-muted">{y.entities}</td>
+                      </Td>
+                      <Td className="tnum text-fg-muted">{y.entities}</Td>
                     </tr>
                   ))}
                 </tbody>
@@ -245,19 +240,14 @@ export default function StatsPage() {
                 <thead>
                   <tr className="text-left">
                     {["Callsign", "Contacts", "Bands", "First", "Last"].map((h) => (
-                      <th
-                        key={h}
-                        className="px-3 py-2 font-medium text-fg-muted text-xs uppercase tracking-wide"
-                      >
-                        {h}
-                      </th>
+                      <Th key={h}>{h}</Th>
                     ))}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-line">
                   {data.mostWorked.map((w) => (
                     <tr key={w.callsign}>
-                      <td className="px-3 py-1.5">
+                      <Td>
                         {/* To their history rather than to the filtered log: the next
                             question after "who have I worked most" is "on what, and is it
                             confirmed", which the log's date-ordered rows answer badly. The
@@ -268,15 +258,15 @@ export default function StatsPage() {
                         >
                           {w.callsign}
                         </Link>
-                      </td>
-                      <td className="px-3 py-1.5 tnum">{w.qsos.toLocaleString()}</td>
-                      <td className="px-3 py-1.5 tnum text-fg-muted">{w.bands}</td>
-                      <td className="px-3 py-1.5 tnum text-fg-subtle whitespace-nowrap">
+                      </Td>
+                      <Td className="tnum">{w.qsos.toLocaleString()}</Td>
+                      <Td className="tnum text-fg-muted">{w.bands}</Td>
+                      <Td className="tnum text-fg-subtle whitespace-nowrap">
                         {formatUtc(w.firstWorked).slice(0, 10)}
-                      </td>
-                      <td className="px-3 py-1.5 tnum text-fg-subtle whitespace-nowrap">
+                      </Td>
+                      <Td className="tnum text-fg-subtle whitespace-nowrap">
                         {formatUtc(w.lastWorked).slice(0, 10)}
-                      </td>
+                      </Td>
                     </tr>
                   ))}
                 </tbody>
