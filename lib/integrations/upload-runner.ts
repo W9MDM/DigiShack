@@ -19,7 +19,7 @@
 
 import { QSO_INCLUDE, toAdifInput } from "@/lib/adif/from-row";
 import { prisma } from "@/lib/db/prisma";
-import { uploadAdifToClubLog } from "@/lib/integrations/clublog";
+import { uploadQsoToClubLog } from "@/lib/integrations/clublog";
 import { uploadToCloudlog } from "@/lib/integrations/cloudlog";
 import { N3FJP_DEFAULT_PORT, sendToN3fjp } from "@/lib/integrations/n3fjp";
 import { insertQrzQso } from "@/lib/integrations/qrz-logbook";
@@ -51,6 +51,24 @@ export type UploadableService = (typeof UPLOADABLE)[number];
  * log fills with the same error until it stops being read.
  */
 const FAILURE_LIMIT = 3;
+
+/**
+ * Failing Club Log requests in a row before the sweep gives up on the rest.
+ *
+ * Club Log is uploaded ONE CONTACT AT A TIME, which turns a sweep from one request into
+ * up to `maxPerRun` of them, and Club Log documents repeated failures as what earns an
+ * address a real block. A batch that failed cost one request and could do so for ever
+ * harmlessly; twenty-five cannot.
+ *
+ * Three rather than one, because the fault this has to survive is a single record Club
+ * Log will not take — an imported log had exactly one, a callsign whose prefix belongs to
+ * no DXCC entity — and stopping the whole sweep on it would let one bad row hold up
+ * everything behind it indefinitely.
+ *
+ * Smaller than `FAILURE_LIMIT`'s job, and not a replacement for it: this bounds ONE
+ * sweep, the breaker stands the service down across sweeps.
+ */
+const CLUBLOG_CONSECUTIVE_FAILURES = 3;
 
 const breaker: Record<string, { failures: number; lastError: string }> = {};
 
@@ -587,29 +605,51 @@ export async function runUploads(
         noteFailure(service, res.detail);
       }
     } else {
-      // Club Log takes the whole batch in one request, and builds the ADIF itself.
-      const res = await uploadAdifToClubLog(rows.map(toAdifInput));
-      if (res.ok) {
-        r.uploaded = rows.length;
-        await markUploaded(service as UploadService, rows.map((q) => q.id));
+      // CLUB LOG GOES ONE CONTACT AT A TIME, through `realtime.php`.
+      //
+      // The batch endpoint answers ONCE for a whole file, so a record it drops is
+      // invisible to the caller: the sweep marks all twenty-five sent including the one
+      // that was skipped, or fails all twenty-five and re-sends the twenty-four Club Log
+      // already holds. Neither is recoverable from the reply, because the reply does not
+      // say which record was at fault. Sent per contact, each row's fate is known.
+      //
+      // THE COST IS REQUEST COUNT, AND IT NEEDS A BRAKE — see
+      // CLUBLOG_CONSECUTIVE_FAILURES. Twenty-five doomed requests a sweep at a service
+      // that blocks addresses for repeated failures is a materially different thing from
+      // the one doomed request the batch path made.
+      let consecutive = 0;
+      for (const row of rows) {
+        const res = await uploadQsoToClubLog(toAdifInput(row));
+        if (res.ok) {
+          consecutive = 0;
+          r.uploaded++;
+          if (res.duplicate) r.duplicates++;
+          // Marked per contact rather than once at the end. A sweep interrupted after
+          // nineteen — a restart, a deploy, a timeout on the twentieth — must not come
+          // back and send those nineteen a second time.
+          await markUploaded(service as UploadService, [row.id]);
+        } else {
+          consecutive++;
+          r.failed++;
+          if (r.errors.length < 5) r.errors.push(`${row.callsign}: ${res.detail}`);
+          if (consecutive >= CLUBLOG_CONSECUTIVE_FAILURES) break;
+        }
+      }
+      // `attempted` was set to the whole batch before the branch, which is true for every
+      // service that tries all of its rows. This one can stop early, and reporting 25
+      // attempted when 5 were tried would make the brake invisible in the run report —
+      // the failure rate would read as 3-in-25 rather than 3-in-5.
+      r.attempted = r.uploaded + r.failed;
+
+      // ANY success resets the breaker, and that is deliberate. The breaker is for a
+      // service that is down or refusing everything. A single record Club Log will not
+      // take is a fact about that record, and letting it count towards standing the
+      // service down would let one bad row in an imported log stop uploads for the whole
+      // log — which is exactly the shape of fault this sweep now exists to isolate.
+      if (r.uploaded > 0) {
         resetBreaker(service);
-      } else if (res.permanent) {
-        // SKIPPED, not FAILED, and the difference is the whole point.
-        //
-        // The bridge alerts after three consecutive sweeps where a service failed and
-        // uploaded nothing. Club Log's edge refusal is permanent, so it met that bar every
-        // day — an email about a condition already investigated, already documented as
-        // unfixable from here, and with nothing for the reader to do. Reporting it as
-        // skipped keeps it visible on the page and out of the inbox.
-        //
-        // The contacts stay flagged unsent, so if Club Log ever starts accepting them
-        // they go out on the next sweep with nothing to reconfigure.
-        r.skipped = res.detail;
-        noteFailure(service, res.detail);
-      } else {
-        r.failed = rows.length;
-        r.errors.push(res.detail ?? "failed");
-        noteFailure(service, res.detail ?? "failed");
+      } else if (r.failed > 0) {
+        noteFailure(service, r.errors[r.errors.length - 1] ?? "failed");
       }
     }
 

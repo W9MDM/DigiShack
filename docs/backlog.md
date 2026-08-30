@@ -36,7 +36,7 @@ distinction that has been load-bearing more than once.
 
 The API wants label **IDs**, not names — posting `"labels": ["bug"]` is rejected with
 `cannot unmarshal JSON string into Go int64`. Read them from
-`/api/v1/repos/PCARC/DigiSHACK/labels` first.
+`/api/v1/repos/<owner>/<repo>/labels` first.
 
 Write the evidence into the issue, not a title and a shrug. Every item here that turned out
 to be worth keeping was worth keeping because of a number attached to it.

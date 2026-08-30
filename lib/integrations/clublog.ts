@@ -1,5 +1,6 @@
 import { adifHeader, adifRecord, type AdifQsoInput } from "@/lib/adif/write";
 import { getSetting } from "@/lib/settings";
+import { classifyClubLogReply } from "@/lib/integrations/clublog-reply";
 
 // Club Log.
 //
@@ -7,21 +8,39 @@ import { getSetting } from "@/lib/settings";
 // nothing about the method, which impersonates an IP-level block convincingly enough
 // to mislead.
 //
-// DOWNLOAD works: `getadif.php`, POST, form-encoded, `call` (not `callsign`).
-// Omitting `type` returns the whole log; `type=dxqrs` narrows it to OQRS.
+// DOWNLOAD: `getadif.php`, POST, form-encoded, `call` (not `callsign`). Omitting `type`
+// returns the whole log; `type=dxqrs` narrows it to OQRS.
 //
-// UPLOAD is refused from this installation with a bare nginx 403 — before PHP, so it
-// is not an authentication result. Ruled out by measurement: the credential type,
-// an IP block (`getadif.php` returned 28,001 records from the same address in the
-// same minute), the HTTP method and encoding, and anything specific to multipart.
-// The refusal follows the path: reads pass, writes do not.
+// UPLOAD NEEDS AN API KEY, and its absence looks nothing like a missing credential.
+// Without `api`, both write endpoints answer a bare nginx 403 — refused before PHP, so
+// no error text and no mention of authentication. This file previously recorded, as
+// settled fact, that Club Log blocks uploads from this installation at its edge and that
+// nothing could change it. That was WRONG, and it was wrong for a month. Reads kept
+// working from the same address the entire time, which made the false diagnosis fit
+// perfectly: "the refusal follows the path, reads pass and writes do not" describes a
+// missing form field exactly as well as it describes a firewall rule.
 //
-// Do not probe it further. Repeated failures against these endpoints are what Club
-// Log documents as triggering a real IP block, and this installation does not have
-// one. An operator who wants their contacts on Club Log can point Club Log at LoTW,
-// which needs nothing from here.
+// The key is requested from Club Log's HELPDESK rather than generated on the site, so
+// there is no way to discover it is required by looking at their settings page.
+//
+// MEASURED 2026-08-30 from the live station, with the key attached:
+//     getadif.php    200   28,001 records
+//     putlogs.php    200   "Upload accepted and queued!"
+//     realtime.php   200   "OK", and "Dupe" for a record already held
+//
+// UPLOADS GO ONE CONTACT AT A TIME through `realtime.php` — see `uploadQsoToClubLog`.
+//
+// `uploadAdifToClubLog` HAS NO CALLER, and that is said plainly because this file has
+// been here before: `upload-runner.ts` opens by recording that it and `insertQrzQso` were
+// once "written, tested and never called". It is kept for one capability `realtime.php`
+// does not have — Club Log's `clear` flag, which replaces a log rather than merging into
+// it, and which is the only way to repair a log uploaded wrongly. Deleting it would mean
+// writing it again the first time somebody needs that. If a whole-log rebuild is still
+// unbuilt a release or two from now, delete it rather than let this comment keep
+// excusing it.
 
 const PUT_URL = "https://clublog.org/putlogs.php";
+const REALTIME_URL = "https://clublog.org/realtime.php";
 const GET_URL = "https://clublog.org/getadif.php";
 
 export interface ClubLogCredentials {
@@ -60,20 +79,25 @@ export interface ClubLogUploadResult {
   ok: boolean;
   /** Club Log's own reply text, which is where it explains itself. */
   detail: string;
-  /** QSOs in the batch that was sent. */
+  /** QSOs Club Log took, counting any it already held. */
   sent: number;
   /**
-   * This installation will NEVER be able to upload, so retrying is waste.
+   * Club Log already had this contact, and that counts as delivered.
    *
-   * Distinguished from an ordinary failure because the two deserve opposite treatment. A
-   * timeout or a bad password is worth another sweep and worth an email; a bare nginx 403
-   * on `putlogs.php` is a refusal at the edge, before PHP, that has been ruled out as
-   * credentials, method, encoding and IP block — see the note at the top of this file. It
-   * will answer the same way for ever, and retrying it every ten minutes produced a daily
-   * "clublog uploads are failing" email about a condition nobody can act on.
+   * See `ClubLogReplyVerdict.duplicate` for why it is success rather than failure.
+   * Reported separately only so a run can tell contacts it put there from contacts that
+   * were already there.
    */
-  permanent?: boolean;
+  duplicate?: boolean;
 }
+
+// `permanent` USED TO LIVE ON THAT TYPE, and its removal is the point rather than tidying.
+// It marked the bare nginx 403 as a dead end nobody could act on, and the runner used it
+// to report Club Log as SKIPPED instead of FAILED so the daily "uploads are failing" email
+// would stop. That is reasonable treatment for a condition that is genuinely hopeless, and
+// this one never was: the refusal was a missing API key. A flag whose only purpose is to
+// suppress the report of a fixable fault is worse than no flag, so the fault is reported
+// again, with the fix named in the message.
 
 /**
  * Upload a batch of QSOs as ADIF.
@@ -120,36 +144,87 @@ export async function uploadAdifToClubLog(
       body: form,
       signal: AbortSignal.timeout(opts.timeoutMs ?? 180_000),
     });
-    const body = (await res.text()).trim();
-
-    // Club Log answers 200 with a body describing the outcome, and uses non-200
-    // for auth and quota problems. Both need reporting verbatim — its messages
-    // are specific and guessing at them helps nobody.
-    if (!res.ok) {
-      // A 403 whose body is an nginx error page rather than anything Club Log wrote is
-      // the documented dead end: the request never reached the application, so no
-      // credential or payload change can affect it. Club Log's OWN 403 would carry its
-      // own words, and that one IS worth retrying — hence matching on the body, not just
-      // the status.
-      const edgeRefusal =
-        res.status === 403 && /<html|nginx/i.test(body) && !/clublog/i.test(body);
-      return {
-        ok: false,
-        sent: 0,
-        permanent: edgeRefusal,
-        detail: edgeRefusal
-          ? "Club Log refuses uploads from this installation at its edge (a bare nginx 403, " +
-            "before the application). Ruled out by measurement: credentials, IP block, HTTP " +
-            "method and encoding — downloads from the same address work. Nothing here can " +
-            "change it; point Club Log at LoTW instead, which needs nothing from DigiShack."
-          : `HTTP ${res.status}: ${body.slice(0, 300)}`,
-      };
-    }
-    const failed = /error|invalid|denied|fail/i.test(body);
+    // Club Log answers 200 with a body describing the outcome and uses non-200 for auth
+    // and quota problems, so the reply is read rather than the status. See
+    // `clublog-reply.ts` for every case and what it was measured to say.
+    const verdict = classifyClubLogReply(res.status, await res.text());
     return {
-      ok: !failed,
-      sent: failed ? 0 : qsos.length,
-      detail: body.slice(0, 300) || "(empty reply)",
+      ok: verdict.ok,
+      sent: verdict.ok ? qsos.length : 0,
+      duplicate: verdict.duplicate,
+      detail: verdict.detail,
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      sent: 0,
+      detail: err instanceof Error ? err.message : "Club Log upload failed",
+    };
+  }
+}
+
+/**
+ * Upload ONE contact through Club Log's real-time endpoint.
+ *
+ * THIS IS THE PATH DIGISHACK USES for ordinary logging. Club Log documents it for a
+ * program uploading as it works, and it answers per contact rather than per file.
+ *
+ * WHY NOT THE BATCH ENDPOINT HERE. `putlogs.php` takes a whole ADIF and answers ONCE for
+ * the lot, so a record it dislikes is indistinguishable in the reply from the twenty-four
+ * beside it: the sweep either marks all twenty-five sent — including the one that was
+ * dropped — or none of them, and re-sends twenty-four contacts Club Log already holds.
+ * That is not hypothetical. A batch of 22 was accepted on 2026-08-30 with one record
+ * silently skipped (`Q0UO`, from an imported log, a prefix belonging to no DXCC entity),
+ * and nothing in the HTTP reply said so. It arrived hours later as an email.
+ *
+ * Both differences from the batch endpoint are MEASURED rather than assumed:
+ *   - `adif` is a PLAIN FORM FIELD holding a single record, not a file part, and carries
+ *     no header — an `<EOH>` here is part of the record as far as Club Log is concerned.
+ *   - a contact already held answers 200 "Dupe", which is success. See
+ *     `classifyClubLogReply`.
+ *
+ * THE COST IS REQUEST COUNT, AND THE CALLER OWNS IT. One contact is one request, so a
+ * five-thousand backlog is five thousand requests where the batch endpoint needed ten.
+ * Club Log documents repeated FAILURES as what earns an address a real block, so a caller
+ * looping over rows must stop on consecutive failures rather than run the loop out — see
+ * the Club Log branch of `runUploads`.
+ */
+export async function uploadQsoToClubLog(
+  qso: AdifQsoInput,
+  opts: { callsign?: string; timeoutMs?: number } = {},
+): Promise<ClubLogUploadResult> {
+  const creds = await getClubLogCredentials();
+  if (!creds) {
+    return { ok: false, sent: 0, detail: "Club Log email/password are not configured" };
+  }
+
+  const callsign = opts.callsign || creds.callsign || qso.station.callsign;
+  if (!callsign) {
+    return { ok: false, sent: 0, detail: "No station callsign to attribute the upload to" };
+  }
+
+  const form = new FormData();
+  form.set("email", creds.email);
+  form.set("password", creds.password);
+  form.set("callsign", callsign.toUpperCase());
+  // One bare record, no header — `realtime.php` reads this field as a single QSO.
+  form.set("adif", adifRecord(qso).trim());
+  if (creds.apiKey) form.set("api", creds.apiKey);
+
+  try {
+    const res = await fetch(REALTIME_URL, {
+      method: "POST",
+      body: form,
+      // Much shorter than the batch timeout. This is one record, and a caller working
+      // through a backlog blocks on it before sending the next.
+      signal: AbortSignal.timeout(opts.timeoutMs ?? 30_000),
+    });
+    const verdict = classifyClubLogReply(res.status, await res.text());
+    return {
+      ok: verdict.ok,
+      sent: verdict.ok ? 1 : 0,
+      duplicate: verdict.duplicate,
+      detail: verdict.detail,
     };
   } catch (err) {
     return {
@@ -177,6 +252,9 @@ export async function testClubLog(): Promise<{ ok: boolean; detail: string }> {
   form.set("email", creds.email);
   form.set("password", creds.password);
   form.set("callsign", (creds.callsign || "K9XYZ").toUpperCase());
+  // Without this the probe fails at the edge exactly as the real uploads did, which is
+  // what an operator who had just pasted a valid key would have seen.
+  if (creds.apiKey) form.set("api", creds.apiKey);
   form.set("file", new Blob([adifHeader({ programVersion: "DigiShack" })], { type: "text/plain" }), "probe.adi");
 
   try {
@@ -185,6 +263,11 @@ export async function testClubLog(): Promise<{ ok: boolean; detail: string }> {
       body: form,
       signal: AbortSignal.timeout(60_000),
     });
+    // NOT routed through `classifyClubLogReply`, deliberately. This probe uploads a
+    // header and no records, and what Club Log answers to that has never been measured.
+    // The shared rules read an empty 200 as a failure, which is right for a real contact
+    // and would be wrong here — reporting a working configuration as broken. UNVERIFIED
+    // either way; it stays lenient until somebody measures it.
     const body = (await res.text()).trim();
     if (!res.ok) return { ok: false, detail: `HTTP ${res.status}: ${body.slice(0, 200)}` };
     if (/invalid|denied|error/i.test(body)) return { ok: false, detail: body.slice(0, 200) };
