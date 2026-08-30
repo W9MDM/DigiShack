@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.158.2 - public release
+## 1.158.3 - public release
 
 Development happens in a private repository; this is where the public history starts.
 Earlier entries are not reproduced - they quote real operators by callsign, include
@@ -22,6 +22,7 @@ Notes for anyone running this:
 
 ## Release history
 
+- **1.158.3** — The settings doc caught up with its registry
 - **1.158.2** — A contest the sequencer could not hear, and decodes stuck behind the waterfall
 - **1.158.1** — Two of my numbers were wasting your cycles
 - **1.158.0** — Worked three times in three minutes, and the switch that allowed it
