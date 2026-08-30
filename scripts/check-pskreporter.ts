@@ -27,7 +27,12 @@ function ok(cond: boolean, label: string, detail = ""): void {
 
 const rx: ReceiverInfo = {
   callsign: "K9XYZ",
-  grid: "EN61jj",
+  // A grid that is NOBODY'S — deliberately not the station's real one. The scrub that
+  // builds the public mirror rewrites the real grid wherever it appears, and it rewrote
+  // the "EN61aa" this test EXPECTED while leaving the mixed-case "EN61jj" it FED, so the
+  // assertion held in the private tree and failed in the mirror. The fifth scrub-break;
+  // publish-public.ts documents the first four and predicted this one.
+  grid: "FN42xy",
   software: "DigiShack 0.21.0",
   antenna: "dipole",
 };
@@ -112,8 +117,8 @@ console.log("\nrecord sets");
   ok(d[idx - 1] === call.length, "callsign is length-prefixed", `${d[idx - 1]} vs ${call.length}`);
 
   // Grid must be upper-cased on the wire.
-  ok(d.includes(Buffer.from("EN61aa", "utf8")), "grid is upper-cased");
-  ok(!d.includes(Buffer.from("en61aa", "utf8")), "no lower-case grid leaks through");
+  ok(d.includes(Buffer.from("FN42XY", "utf8")), "grid is upper-cased");
+  ok(!d.includes(Buffer.from("FN42xy", "utf8")), "the mixed-case input does not reach the wire");
 
   // Both spots must appear.
   ok(d.includes(Buffer.from("K1ABC", "utf8")), "first spot present");
