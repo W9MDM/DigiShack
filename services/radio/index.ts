@@ -2496,6 +2496,31 @@ async function main(): Promise<void> {
           auto: activeAuto()?.state ?? null,
           telemetry: lastTelemetry,
           clock: clockState(),
+          // MEMORY, because the bridge grew from ~107 MB to 653 MB over 3.6 hours and
+          // starved a deploy: the Next build was OOM-killed after it had already deleted
+          // the previous output, leaving the web tier serving from memory with nothing on
+          // disk to restart into.
+          //
+          // Reported rather than reasoned about, because the split is the whole diagnosis
+          // and cannot be inferred from RSS. `heapUsed` growing means JS objects are being
+          // retained — a cache, a queue, a listener holding a closure. `external` and
+          // `arrayBuffers` growing means Buffers, which on this process means the VITA-49
+          // UDP audio and the spectrum frames. Those are different faults with different
+          // fixes, and RSS alone cannot tell them apart.
+          //
+          // `rss` is included for continuity with `ps`, which is what first showed this —
+          // note pm2 reports the tsx WRAPPER (~36 MB), not the process doing the work.
+          memory: (() => {
+            const m = process.memoryUsage();
+            return {
+              rssMb: Math.round(m.rss / 1048576),
+              heapUsedMb: Math.round(m.heapUsed / 1048576),
+              heapTotalMb: Math.round(m.heapTotal / 1048576),
+              externalMb: Math.round(m.external / 1048576),
+              arrayBuffersMb: Math.round(m.arrayBuffers / 1048576),
+              uptimeMin: Math.round(process.uptime() / 60),
+            };
+          })(),
         });
         return;
       }

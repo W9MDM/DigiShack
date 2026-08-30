@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.154.0 - public release
+## 1.154.1 - public release
 
 Development happens in a private repository; this is where the public history starts.
 Earlier entries are not reproduced - they quote real operators by callsign, include
@@ -22,6 +22,7 @@ Notes for anyone running this:
 
 ## Release history
 
+- **1.154.1** — Report the bridge's memory, because RSS cannot say what is growing
 - **1.154.0** — The first call is on time too, and one timing number in one place
 - **1.153.1** — Make the transmitter say WHY it refused
 - **1.153.0** — Answer on time, and say when a job last ran
