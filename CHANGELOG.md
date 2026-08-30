@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.161.0 - public release
+## 1.161.1 - public release
 
 Development happens in a private repository; this is where the public history starts.
 Earlier entries are not reproduced - they quote real operators by callsign, include
@@ -22,6 +22,7 @@ Notes for anyone running this:
 
 ## Release history
 
+- **1.161.1** — Hamlib, researched rather than assumed
 - **1.161.0** — Two refusals that were caught and thrown away, and a wrong slice nobody looked at
 - **1.160.1** — Keyed, and nothing came out
 - **1.160.0** — FT-0 gives the transmitter back, and the bridge has a restart button

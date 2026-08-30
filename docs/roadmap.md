@@ -217,6 +217,114 @@ transmit switch off and disconnects, in two steps because it takes the station o
 mid-session. Named for the joke mode at ft-0.com — 0 baud, 0 Hz bandwidth, −∞ dB minimum SNR —
 which is credited on the button's help text.
 
+## Hamlib, and what it would and would not buy
+
+Researched 2026-08-30, at the operator's request: what integrating Hamlib would take, and
+which radios it would actually add.
+
+**The short version: Hamlib solves the half of the problem this project has already solved
+twice, and does not touch the half that is actually expensive.**
+
+### What DigiShack needs from a radio
+
+The seam is already narrow, and deliberately so. A radio has to satisfy exactly two
+interfaces (`lib/radio/types.ts`):
+
+    DigitalSource        periodMs, and two events: `decodes` and `window`
+    DigitalTransmitter   transmit({ message, mode, offsetHz, startAt }), unkey()
+
+Behind those two, four jobs:
+
+1. **CAT control** - frequency, mode, filter, PTT, antenna, power.
+2. **Receive audio** into the decode pipeline, at a known sample rate.
+3. **Transmit audio** out, keyed to a window boundary within milliseconds.
+4. **Capability reporting**, so the UI offers only controls the radio really has
+   (`lib/radio/capabilities.ts`).
+
+### Hamlib answers exactly one of them
+
+Hamlib is a CAT library. It covers **over 200 rig models** behind one command set, and it
+is the reason WSJT-X, fldigi and N1MM can drive almost anything. It has **no audio path at
+all** - not receive, not transmit. That is not an oversight; audio is a sound-card concern
+and Hamlib is a control library.
+
+So Hamlib would answer job 1, contribute usefully to job 4, and answer neither 2 nor 3.
+
+### The integration itself is small, and needs no native bindings
+
+`rigctld` is a daemon speaking a plain-text line protocol over TCP (default **4532**).
+Single-letter commands - lower case reads, upper case writes:
+
+    f            get frequency        F 14074000    set frequency
+    m            get mode + width     M USB 3000    set mode
+    t            get PTT              T 1           key / unkey
+    s / S        split                l / L         levels (power, gain)
+    \dump_caps   what this rig can do
+
+Prefixing a command with `+` switches the reply to named fields, which is worth doing:
+parsing positional output is how a protocol reader breaks silently on the next release.
+
+**This fits how DigiShack already works.** It talks TCP to a FlexRadio on 4992 and to an
+Icom over its LAN protocol; a third TCP text protocol is the pattern, not an exception. No
+`libhamlib` linkage, no node-gyp, no native build in the container - which matters, because
+this ships as an LXC anyone can create from a script.
+
+Rough size: **300-500 lines** for a `rigctld` client plus a `RadioCapabilities` mapping.
+Compare `lib/icom/` at 4,363 lines, most of which is not CI-V at all - it is
+`control-stream`, `audio-stream`, `packets` and `passcode`, the LAN transport that carries
+the audio.
+
+### The expensive half: audio
+
+**There is no sound-device library in this project.** Not one. Both radios stream audio
+over the NETWORK - VITA-49 DAX from the Flex, the Icom's own LAN protocol - and the decode
+pipeline is fed from UDP packets.
+
+A Hamlib radio is a radio DigiShack controls but does not stream from. Its audio arrives at
+a **sound card**: the rig's USB codec, or a physical interface. That is a new subsystem:
+
+- capture at a known rate and feed `DecodePipeline.push()`
+- playback of generated FT8/FT4 audio, started at a window boundary
+- device enumeration and selection in Settings, because "which sound card" is a question
+  every operator will answer differently
+- Windows, Linux and macOS all differ here, and the one deployment that matters is a
+  headless Linux container
+
+**And a trap this project has now paid for once.** The window cut is timed in the audio's
+arrival frame, and 2026-08-30 was spent on a race where a cut could fire twice because
+`setTimeout` drifted by a millisecond against a re-measured link latency. A sound card
+brings a harder version of the same problem: **its clock is not the radio's clock and not
+the system clock**, and it drifts. DAX delivers a disciplined 24 kHz; a USB codec delivers
+whatever its crystal says, and over a 15-second window a few hundred ppm is audible to the
+decoder as DT drift. Whoever builds this should assume drift tracking or resampling is part
+of the job, not a refinement afterwards.
+
+PTT timing is the same shape. Today the transmitter keys early by a measured link latency
+and tolerates 1,488 ms of lateness on FT8 (`lib/radio/timing.ts`). `rigctld` adds a TCP
+round trip plus the rig's own CAT latency, and on a serial rig that is tens of milliseconds
+and variable. **Unverified**: nobody here has measured `rigctld` PTT latency, and it should
+be measured before it is designed around, exactly as the FlexRadio link latency was.
+
+### What it would actually add
+
+Sensibly staged:
+
+1. **`rigctld` CAT source.** Tune, mode, PTT, power. Paired with the EXISTING WSJT-X source
+   for decodes, this alone gives band hopping, scheduling and logging on any Hamlib rig,
+   with WSJT-X still doing the DSP. Small, useful, and it needs no audio work.
+2. **Sound-device audio.** The real project. With it, any rig with a USB codec becomes a
+   full native DigiShack radio - IC-7300 over USB, FT-991A, K4, G90, and the long tail.
+3. **Capabilities from `\dump_caps`.** Hamlib already knows each rig's tuning range, modes
+   and levels. `RadioCapabilities` was written for exactly this - its own comment says a
+   third radio should need "two numbers and not a new table".
+
+### What it does not obsolete
+
+The FlexRadio and Icom LAN paths stay. Hamlib would drive both radios' CAT, and give up the
+panadapter, the network audio, DAX, and slice control - which is most of what makes those
+two first-class here. **Hamlib is how the long tail gets supported, not how the good radios
+get supported.**
+
 ## Also queued
 
 Accurate as of 1.113.0. The previous version of this list had gone stale in a way worth naming:
