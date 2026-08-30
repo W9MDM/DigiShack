@@ -221,7 +221,7 @@ function StationCard({
           <Field
             label="Grid square"
             htmlFor={`edit-grid-${station.id}`}
-            hint="Maidenhead, e.g. EN61 or EN61jj"
+            hint="Maidenhead, e.g. EN61 or EN61aa"
           >
             <Input
               id={`edit-grid-${station.id}`}

@@ -100,7 +100,7 @@ async function main(): Promise<void> {
   {
     const m = standardMessages({
       myCall: "K9XYZ",
-      myGrid: "EN61jj",
+      myGrid: "EN61aa",
       theirCall: "AA1ABC",
       theirSnr: -18,
     });

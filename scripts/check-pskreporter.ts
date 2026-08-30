@@ -29,7 +29,7 @@ const rx: ReceiverInfo = {
   callsign: "K9XYZ",
   // A grid that is NOBODY'S — deliberately not the station's real one. The scrub that
   // builds the public mirror rewrites the real grid wherever it appears, and it rewrote
-  // the "EN61aa" this test EXPECTED while leaving the mixed-case "EN61jj" it FED, so the
+  // the "EN61AA" this test EXPECTED while leaving the mixed-case "EN61aa" it FED, so the
   // assertion held in the private tree and failed in the mirror. The fifth scrub-break;
   // publish-public.ts documents the first four and predicted this one.
   grid: "FN42xy",

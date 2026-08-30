@@ -77,7 +77,7 @@ async function main(): Promise<void> {
     ok(r.text.includes("JO80"), "their grid upper-cased");
     ok(r.text.includes("73,"), "signs off");
     ok(r.text.includes("Matt") && r.text.includes("K9XYZ"), "sign-off names the operator");
-    ok(r.text.includes("EN61aa"), "our grid included");
+    ok(r.text.includes("EN61AA"), "our grid included");
     // The wording is the OPERATOR'S now, not ours, so assert the mechanism
     // rather than a phrase: the body is whatever the template says, verbatim.
     ok(r.text.includes("Thank you for the QSO"), "the body comes through from the template");

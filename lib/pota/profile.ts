@@ -111,7 +111,7 @@ export function parsePotaProfile(raw: unknown, callsign: string): PotaProfile {
     callsign: str(d.callsign) ?? callsign.toUpperCase(),
     name: str(d.name),
     qth: str(d.qth),
-    // POTA returns mixed case ("EN61jj"); grids are conventionally upper.
+    // POTA returns mixed case ("EN61aa"); grids are conventionally upper.
     grid: str(d.grid)?.toUpperCase() ?? null,
     activator: {
       activations: num(activator.activations),

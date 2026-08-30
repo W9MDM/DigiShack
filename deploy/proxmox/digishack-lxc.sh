@@ -28,8 +28,18 @@ set -euo pipefail
 # --------------------------------------------------------------------- defaults
 CTID=""
 HOSTNAME_="digishack"
-CORES=2
-MEMORY=2048        # MB. Node's build wants headroom; 1024 works but builds slowly.
+# SIZED FROM A CONTAINER THAT RAN UNDERSIZED FOR A MONTH, not from a guess. At 2 cores /
+# 2 GB the reference install measured: FT8 decode passes of 2.4-2.8 s against a 2.4 s
+# budget (late decodes become late replies, which cost whole 30 s cycles), first calls
+# landing 1.0-1.7 s late from CPU contention, and `next build` OOM-killed after it had
+# already deleted the previous output - which is a downed site, not a slow one. Raising
+# that container to 4+ cores and 4+ GB is what ended it.
+#
+# 2 cores / 2 GB still RUNS - decode fits most passes and 1 GB builds crawl through - so
+# the minimums stay documented below, but they are a floor, not a recommendation.
+CORES=4
+MEMORY=4096        # MB. `next build` peaks past 1.5 GB ALONGSIDE the running app; 2048
+                   # is the measured floor where a rebuild can OOM while the site serves.
 DISK=12            # GB. The log itself is small; decode CSVs are what grow.
 BRIDGE="vmbr0"
 STORAGE=""         # auto-detected below
@@ -48,8 +58,10 @@ usage() {
 Options:
   --ctid N              Container ID (default: ask, offering Proxmox's next free id)
   --hostname NAME       Container hostname (default: ${HOSTNAME_})
-  --cores N             CPU cores (default: ${CORES})
-  --memory MB           RAM in MB (default: ${MEMORY})
+  --cores N             CPU cores (default: ${CORES}; 2 is the measured floor - decode
+                        passes take ~2.5 s of a 2.4 s budget there and replies slip cycles)
+  --memory MB           RAM in MB (default: ${MEMORY}; below 4096 a rebuild can be
+                        OOM-killed while the site is serving)
   --disk GB             Root disk in GB (default: ${DISK})
   --bridge NAME         Network bridge (default: ${BRIDGE})
   --storage NAME        Container storage (default: auto-detect)
