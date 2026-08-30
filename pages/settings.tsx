@@ -468,7 +468,7 @@ function LimitField({
             onChange("0");
           }
         }}
-        className="h-4 w-4 shrink-0 accent-[var(--accent)]"
+        className="h-4 w-4 shrink-0 accent-accent"
       />
       <Input
         id={id}

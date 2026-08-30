@@ -949,6 +949,113 @@ async function main(): Promise<void> {
     }
   }
 
+  // ---------------------------------------------------------------------------------
+  // THE ENDLESS LOOP.
+  //
+  // Observed live, W9ABC calling KM4SXE, and it had been running for at least six rounds
+  // when it was caught:
+  //
+  //     29:00  W9ABC KM4SXE +07     <- their report
+  //     29:15  KM4SXE W9ABC R-07    <- our roger
+  //     29:30  W9ABC KM4SXE +07     <- their report, again
+  //     29:45  KM4SXE W9ABC R-07    <- our roger, again
+  //     30:00  W9ABC KM4SXE +07
+  //     30:15  KM4SXE W9ABC R-07
+  //     ...
+  //
+  // `maxRepeats` is 4 and should have stopped it. It could not, because every message
+  // from them ran `this.repeats = 0` on the grounds that "the path is alive". The path
+  // WAS alive - and stuck. A reply that changes nothing is evidence of a stall, not of
+  // progress, and resetting the budget on it made the budget unreachable.
+  console.log("");
+  console.log("A station that replies but never advances");
+  {
+    const mk = (): QsoSequencer =>
+      new QsoSequencer({
+        myCall: "W9ABC",
+        myGrid: "EN61",
+        theirCall: "KM4SXE",
+        theirSnr: -7,
+        role: "caller",
+        startedAt: 0,
+      });
+
+    {
+      // The loop itself. Drive the exact exchange and require that it ends.
+      const q = mk();
+      q.tick(15_000); //                                     KM4SXE W9ABC EN61
+      q.onDecode("W9ABC KM4SXE +07", 22_000); //              their report -> we advance
+      eq(q.tick(45_000).send, "KM4SXE W9ABC R-07", "we roger their report");
+
+      let sent = 0;
+      let ended = null as string | undefined | null;
+      for (let i = 0; i < 20 && !q.isDone; i++) {
+        // They repeat, verbatim, for ever.
+        q.onDecode("W9ABC KM4SXE +07", 50_000 + i * 30_000);
+        const t = q.tick(75_000 + i * 30_000);
+        if (t.send) sent++;
+        if (t.abandonReason) ended = t.abandonReason;
+      }
+
+      ok(q.isDone, "the exchange ENDS rather than running for ever");
+      ok(sent <= 4, `and we stop repeating (sent ${sent} more times, budget is 4)`);
+      ok(
+        /without acknowledging|not decoding us/i.test(ended ?? ""),
+        "the reason says they never acknowledged, not 'no reply'",
+      );
+    }
+
+    {
+      // Reports went BOTH ways before it stalled, so this is a contact the far station
+      // may well have logged. Kept, not discarded - the same rule that recovered thirteen
+      // QSOs found months later through QRZ card requests.
+      const q = mk();
+      q.tick(15_000);
+      q.onDecode("W9ABC KM4SXE +07", 22_000);
+      q.tick(45_000);
+      let kept = false;
+      for (let i = 0; i < 20 && !q.isDone; i++) {
+        q.onDecode("W9ABC KM4SXE +07", 50_000 + i * 30_000);
+        const t = q.tick(75_000 + i * 30_000);
+        if (t.abandoned) kept = true;
+      }
+      ok(kept, "the incomplete exchange is kept for the operator to judge");
+    }
+
+    {
+      // PROGRESS MUST STILL RESET THE BUDGET. This is the half that has to keep working:
+      // a station repeating because it genuinely has not decoded us deserves several
+      // tries, and a long exchange that keeps advancing must never be cut short.
+      const q = mk();
+      q.tick(15_000);
+      q.onDecode("W9ABC KM4SXE +07", 22_000); //   advances calling -> rreport-sent
+      q.tick(45_000);
+      // Three stalled repeats, then real progress.
+      q.onDecode("W9ABC KM4SXE +07", 52_000);
+      q.tick(75_000);
+      q.onDecode("W9ABC KM4SXE +07", 82_000);
+      q.tick(105_000);
+      ok(!q.isDone, "three repeats is not yet a stall — they may just not have heard us");
+      q.onDecode("W9ABC KM4SXE RR73", 112_000); // progress
+      ok(q.isDone, "and their RR73 still completes the contact normally");
+    }
+
+    {
+      // A repeat that carries a DIFFERENT report is still not progress. The state is what
+      // decides, not whether the bytes changed - otherwise a station cycling -07/-08/-09
+      // would reset the budget every time and loop for ever exactly as before.
+      const q = mk();
+      q.tick(15_000);
+      q.onDecode("W9ABC KM4SXE +07", 22_000);
+      q.tick(45_000);
+      for (let i = 0; i < 20 && !q.isDone; i++) {
+        q.onDecode(`W9ABC KM4SXE +0${(i % 3) + 5}`, 50_000 + i * 30_000);
+        q.tick(75_000 + i * 30_000);
+      }
+      ok(q.isDone, "a drifting report number does not buy them unlimited retries");
+    }
+  }
+
   console.log(`\n${pass} passed, ${fail} failed\n`);
   if (fail > 0) process.exit(1);
 }

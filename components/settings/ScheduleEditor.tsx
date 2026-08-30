@@ -402,7 +402,7 @@ export function PaCooldownField({
           checked={on}
           disabled={disabled}
           onChange={(e) => onChangeAfter(e.target.checked ? "30" : "0")}
-          className="h-4 w-4 accent-[var(--accent)]"
+          className="h-4 w-4 accent-accent"
         />
         Rest the transmitter periodically
       </label>

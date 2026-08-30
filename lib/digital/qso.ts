@@ -401,6 +401,33 @@ export class QsoSequencer {
    * so deciding early costs nothing and reports identically to abandoning in `tick`.
    */
   private pendingAbandon: QsoTick | null = null;
+  /**
+   * Consecutive messages from them that moved nothing.
+   *
+   * THE ENDLESS LOOP. Observed live, W9ABC calling KM4SXE:
+   *
+   *     29:00  W9ABC KM4SXE +07     <- their report
+   *     29:15  KM4SXE W9ABC R-07    <- our roger
+   *     29:30  W9ABC KM4SXE +07     <- their report, again
+   *     29:45  KM4SXE W9ABC R-07    <- our roger, again
+   *     30:00  W9ABC KM4SXE +07
+   *     30:15  KM4SXE W9ABC R-07
+   *     30:30  W9ABC KM4SXE +07
+   *     30:45  KM4SXE W9ABC R-07
+   *     31:00  W9ABC KM4SXE +07
+   *     31:15  KM4SXE W9ABC R-07     ... and so on, for ever
+   *
+   * Neither side advanced, and the contact never ended. `maxRepeats` should have stopped
+   * it after four — but it could not, because every one of their messages ran
+   * `this.repeats = 0` on the grounds that "the path is alive". The path WAS alive. It
+   * was also stuck, and those are not the same thing: a reply that changes nothing is
+   * evidence of a stall, not of progress, and resetting the budget on it made the budget
+   * unreachable.
+   *
+   * They are almost certainly not decoding our R-report — a one-way path, which on FT8 is
+   * ordinary. Repeating into it for ever is not.
+   */
+  private stalledRx = 0;
   private lastSent: string | null = null;
   private logged = false;
 
@@ -495,8 +522,13 @@ export class QsoSequencer {
     // Addressed to us, so whoever they were working, they are working us now.
     this.theirPartner = null;
 
-    // Any on-topic reply resets the repeat counter — the path is alive.
-    this.repeats = 0;
+    // ONLY PROGRESS RESETS THE REPEAT BUDGET.
+    //
+    // This used to reset on any on-topic reply, and that is what made the exchange above
+    // run for ever. Captured before the switch and compared after, so "did anything
+    // actually move" is answered by the state machine rather than assumed from the fact
+    // that a message arrived.
+    const before = this.state;
 
     switch (p.payload.type) {
       case "grid":
@@ -551,6 +583,16 @@ export class QsoSequencer {
         }
         break;
     }
+
+    if (this.state !== before) {
+      // Real progress. The path is alive AND moving, so the budget starts again.
+      this.repeats = 0;
+      this.stalledRx = 0;
+      return;
+    }
+
+    // They answered and nothing moved. Counted, and acted on in `tick`.
+    this.stalledRx++;
   }
 
   /**
@@ -612,6 +654,24 @@ export class QsoSequencer {
   tick(at: number): QsoTick {
     if (this.state === "abandoned") {
       // Reported once, then the sequencer is inert. See `pendingAbandon`.
+      const pending = this.pendingAbandon;
+      this.pendingAbandon = null;
+      return pending ?? { send: null, state: this.state };
+    }
+
+    // A STATION THAT REPLIES BUT NEVER ADVANCES. See `stalledRx`.
+    //
+    // Bounded by the same `maxRepeats`, because it is the same judgement: how many times
+    // to say a thing that is not getting through. Repeating IS correct for the first few
+    // — they may simply not have decoded us — and this only fires once that has clearly
+    // stopped being the explanation.
+    if (this.stalledRx >= this.o.maxRepeats) {
+      const n = this.stalledRx;
+      this.abandonFor(
+        `${this.theirCall} sent the same thing ${n} times without acknowledging ours — ` +
+          `they are not decoding us`,
+        at,
+      );
       const pending = this.pendingAbandon;
       this.pendingAbandon = null;
       return pending ?? { send: null, state: this.state };
