@@ -55,6 +55,21 @@ function empty(): CollectResult {
 /** Where the last query went out, so a restart cannot reset the rate limit. */
 const KEY_LAST_QUERY = "pskreporter.lastQueryAt";
 
+/**
+ * Has anything ever asked PSKReporter who heard us, and when?
+ *
+ * Exported so the "Heard by" panel can tell "nobody heard you" apart from "nothing has
+ * ever asked". Those two produce an identical empty list, and the panel reported the first
+ * for both — which is the wrong one to report, because it is the one an operator acts on
+ * by going and checking their antenna.
+ *
+ * Null means never. That is the whole diagnosis in one value.
+ */
+export async function lastReceptionQuery(): Promise<Date | null> {
+  const at = await lastQueryAt();
+  return at > 0 ? new Date(at) : null;
+}
+
 async function lastQueryAt(): Promise<number> {
   const row = await prisma.setting.findUnique({ where: { key: KEY_LAST_QUERY } });
   const n = Number.parseInt(row?.value ?? "", 10);

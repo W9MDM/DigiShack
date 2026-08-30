@@ -16,6 +16,8 @@ import { authedRoute } from "@/lib/auth/guard";
 import { prisma } from "@/lib/db/prisma";
 import { freqToBand } from "@/lib/ham/bands";
 import { distanceKm, gridToLatLon } from "@/lib/propagation";
+import { lastReceptionQuery } from "@/lib/pskreporter/collect";
+import { getBooleanSetting, getNumberSetting } from "@/lib/settings";
 
 const querySchema = z.object({
   /** How far back to look. A day at most: this is a live view, not a history. */
@@ -34,8 +36,35 @@ export interface HeardByReceiver {
   km: number | null;
 }
 
+/**
+ * Whether anything is actually asking PSKReporter, and if not, why not.
+ *
+ * The panel showed "Nobody yet, in the last hour" for four different situations: nobody
+ * genuinely heard us, collection switched off, no radio service running to do the asking,
+ * and no station callsign to ask about. Only the first is about propagation, and it is the
+ * one an operator acts on — by suspecting their antenna, when the actual answer was a
+ * setting.
+ *
+ * The same fault the Uploads card had, in the same shape and for the same reason: the
+ * collector runs INSIDE the radio service, on a five-minute timer, and an installation not
+ * running it never asks at all. See pages/api/uploads/index.ts.
+ */
+export interface CollectorState {
+  /** `pskreporter.enabled` — "Collect reception reports". */
+  enabled: boolean;
+  /** A callsign to ask about. Without one the collector refuses outright. */
+  hasCallsign: boolean;
+  /** When anything last asked. Null means never, which is the whole diagnosis. */
+  lastQueryAt: string | null;
+  /** Is the radio service — the only thing that asks — answering? */
+  running: boolean;
+  /** One sentence for the panel. Empty when everything is as it should be. */
+  detail: string;
+}
+
 export interface HeardByResponse {
   since: string;
+  collector: CollectorState;
   receivers: HeardByReceiver[];
   /** Every receiver in the window, not only the ones returned. */
   totalReceivers: number;
@@ -45,9 +74,63 @@ export interface HeardByResponse {
   truncated: boolean;
 }
 
+/** Is the radio service up? It is the only thing that queries PSKReporter. */
+async function bridgeUp(): Promise<boolean> {
+  const port = await getNumberSetting("bridge.port", 3101);
+  try {
+    const r = await fetch(`http://127.0.0.1:${port}/status`, {
+      signal: AbortSignal.timeout(2_000),
+    });
+    return r.ok;
+  } catch {
+    return false;
+  }
+}
+
+async function collectorState(): Promise<CollectorState> {
+  const [enabled, station, lastQuery, running] = await Promise.all([
+    getBooleanSetting("pskreporter.enabled", false),
+    prisma.station.findFirst({ orderBy: { createdAt: "asc" }, select: { callsign: true } }),
+    lastReceptionQuery(),
+    bridgeUp(),
+  ]);
+  const hasCallsign = Boolean(station?.callsign);
+
+  // Ordered by what to fix FIRST. Reporting "the radio service is not running" to somebody
+  // who has not switched collection on would send them to the wrong place.
+  let detail = "";
+  if (!enabled) {
+    detail =
+      "Collecting reception reports is off, so nothing is asking PSKReporter who heard " +
+      "you. Settings → PSKReporter → Collect reception reports. Note this is a different " +
+      "setting from Report my decodes, which uploads what YOU hear.";
+  } else if (!hasCallsign) {
+    detail = "No station callsign is set, so there is nothing to ask PSKReporter about.";
+  } else if (!running) {
+    detail =
+      "Nothing is asking. Reception reports are collected inside the radio service, and " +
+      "it is not answering — so this panel stays empty however the settings are " +
+      "configured. Start it (pm2 start digishack-bridge, or npm run bridge).";
+  } else if (!lastQuery) {
+    detail =
+      "Switched on, but no query has been made yet. The first runs a couple of minutes " +
+      "after the radio service starts, then every five minutes.";
+  }
+
+  return {
+    enabled,
+    hasCallsign,
+    lastQueryAt: lastQuery?.toISOString() ?? null,
+    running,
+    detail,
+  };
+}
+
 async function get(req: NextApiRequest, res: NextApiResponse) {
   const { minutes, limit } = querySchema.parse(req.query);
   const since = new Date(Date.now() - minutes * 60_000);
+
+  const collector = await collectorState();
 
   const station = await prisma.station.findFirst({
     orderBy: { createdAt: "asc" },
@@ -111,6 +194,7 @@ async function get(req: NextApiRequest, res: NextApiResponse) {
 
   const body: HeardByResponse = {
     since: since.toISOString(),
+    collector,
     receivers: all.slice(0, limit),
     totalReceivers: all.length,
     totalReports: rows.length,

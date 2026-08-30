@@ -2274,6 +2274,14 @@ function HeardBy() {
     totalReports: number;
     furthest: { receiverCall: string; km: number } | null;
     truncated: boolean;
+    /** Whether anything is actually asking PSKReporter. See the API for why. */
+    collector?: {
+      enabled: boolean;
+      hasCallsign: boolean;
+      lastQueryAt: string | null;
+      running: boolean;
+      detail: string;
+    };
   }>("/api/psk-spots?minutes=60&limit=12");
 
   return (
@@ -2303,10 +2311,41 @@ function HeardBy() {
       ) : !data && loading ? (
         <p className="text-sm text-fg-subtle">Loading reception reports…</p>
       ) : !data || data.totalReceivers === 0 ? (
-        <p className="text-sm text-fg-subtle">
-          Nobody yet, in the last hour. Reports come from PSKReporter a few minutes behind
-          the transmission, and only when a receiver heard us and uploaded it.
-        </p>
+        /* AN EMPTY LIST IS NOT THE SAME CLAIM AS "NOBODY HEARD YOU".
+           It also means: collection is switched off, no radio service is running to do
+           the asking, or no callsign has been set. Only the first is about propagation,
+           and it was the one being reported for all four — so an operator whose setting
+           was wrong went and looked at their antenna. Reported by W9ABC, who had switched
+           something on and seen nothing. */
+        <div className="text-sm flex flex-col gap-2">
+          {data?.collector?.detail ? (
+            <>
+              <p className="text-warn">{data.collector.detail}</p>
+              <p className="text-fg-subtle text-xs">
+                Until that is fixed this panel says nothing about whether anyone can hear
+                you.
+              </p>
+            </>
+          ) : (
+            <>
+              <p className="text-fg-subtle">
+                Nobody yet, in the last hour. Reports come from PSKReporter a few minutes
+                behind the transmission, and only when a receiver heard us and uploaded it.
+              </p>
+              {/* The two things that make this genuinely empty rather than broken, and
+                  both are easy to forget: nobody can hear a station that has not
+                  transmitted, and PSKReporter only knows what its receivers upload. */}
+              <p className="text-fg-subtle text-xs">
+                Asking every five minutes
+                {data?.collector?.lastQueryAt
+                  ? `, last at ${formatUtcTime(data.collector.lastQueryAt)}`
+                  : ""}
+                . Nobody can hear a station that has not transmitted — check the transmit
+                gate if this stays empty while you are calling.
+              </p>
+            </>
+          )}
+        </div>
       ) : (
         <div className="flex flex-col gap-3">
           <dl className="text-sm flex flex-col gap-1.5">
