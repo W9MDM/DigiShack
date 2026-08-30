@@ -26,6 +26,19 @@ const CLAIMED = 48_000;
 const ws = new WebSocket("ws://127.0.0.1:3101/ws/audio");
 const samples: number[] = [];
 
+// Without this the script dies on an unhandled 'error' event and a stack trace through
+// ws/lib/websocket.js, which says "ECONNREFUSED" and nothing about what the reader should
+// do. This is a measurement instrument, not a unit test — it needs a running bridge and a
+// radio on WWV — so not having one is an ordinary condition to explain, not a fault.
+ws.on("error", (err: Error) => {
+  console.log(`  skip  no audio stream on 127.0.0.1:3101 — ${err.message}`);
+  console.log(
+    "        This is a measurement, not a unit test: it needs the bridge running with a " +
+      "radio tuned to WWV (2.5, 5, 10, 15 or 20 MHz, AM) and audio flowing.",
+  );
+  process.exit(0);
+});
+
 ws.on("message", (d: Buffer, isBinary: boolean) => {
   if (!isBinary) { console.log("hello:", d.toString()); return; }
   for (let i = 0; i + 1 < d.length; i += 2) samples.push(d.readInt16LE(i) / 32768);

@@ -2,6 +2,7 @@
 // QSL email rendering checks. Nothing here sends mail or opens a socket.
 
 import { renderQslEmail, sendQslEmail } from "@/lib/qsl/email";
+import { skipWithoutDatabase } from "./needs-db";
 
 let pass = 0;
 let fail = 0;
@@ -185,6 +186,14 @@ async function main(): Promise<void> {
   }
 
   console.log("\naddress validation and dry run");
+  // Only THIS section needs a database - `sendQslEmail` loads the templates through
+  // `getSetting`. Everything above renders from literals and must keep running without
+  // one, so the guard sits here rather than at the top of the script.
+  if (await skipWithoutDatabase("check:qsl address validation")) {
+    console.log(`\n${pass} passed, ${fail} failed\n`);
+    if (fail > 0) process.exit(1);
+    return;
+  }
   {
     for (const bad of ["", "nobody", "no@body", "a b@c.com", "@x.com"]) {
       const r = await sendQslEmail({

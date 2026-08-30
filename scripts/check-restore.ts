@@ -16,10 +16,15 @@ import { BACKUP_DIR, splitStatements } from "@/lib/db/backup";
 import { backupBundle } from "@/lib/db/bundle";
 import { tarUnpack } from "@/lib/db/tar";
 import { prisma } from "@/lib/db/prisma";
+import { skipWithoutDatabase } from "./needs-db";
 
 const SCRATCH = "digishack_restore_test";
 
 async function main() {
+  // This one restores a real backup into a scratch database, so it is meaningless without
+  // a server. A skip, not a crash. See scripts/needs-db.ts.
+  if (await skipWithoutDatabase("check:restore")) return;
+
   console.log("1. make a bundle");
   const result = await backupBundle(false);
   const raw = await readFile(path.join(BACKUP_DIR, result.file));

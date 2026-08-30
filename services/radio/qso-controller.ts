@@ -106,6 +106,21 @@ export interface QsoControllerOptions {
    */
   txFilterHiHz?: () => number | null;
   /**
+   * The clock this controller schedules against. Defaults to the corrected wall clock.
+   *
+   * Injectable because it was NOT, and that was a hidden dependency rather than a
+   * convenience. Every other instant in the QSO path arrives as an argument — window
+   * events carry their own start, `tick` takes the instant it is advancing to — but
+   * `firstTxWindow` reached for `nowMs()` directly. So the one piece of scheduling that
+   * decides whether a call goes out in this window or the next was the one piece that
+   * could not be driven by a test, and five assertions in `check:operating` had been
+   * failing since it was written without anyone being able to see why.
+   *
+   * It works live, because there the wall clock and the window stream are the same clock.
+   * That is exactly what made it invisible.
+   */
+  now?: () => number;
+  /**
    * Typed to the narrow shapes in lib/radio/types.ts, not to the FlexRadio classes.
    *
    * These layers only ever read `source.periodMs` and call `tx.transmit` / `tx.unkey`.
@@ -233,6 +248,11 @@ export class QsoController {
    * refusing to answer anyone between 2800 and 3100 Hz on a radio that says it can reach
    * 3100 is throwing away a slice of the band for no reason.
    */
+  /** The clock, as configured. See `now` on the options. */
+  private now(): number {
+    return this.o.now ? this.o.now() : nowMs();
+  }
+
   private maxTxOffset(): number {
     return resolveMaxTxOffset(this.o.txFilterHiHz?.() ?? null);
   }
@@ -369,7 +389,7 @@ export class QsoController {
       theirGrid: req.theirGrid ?? null,
       theirSnr: req.theirSnr,
       role: "caller",
-      startedAt: nowMs(),
+      startedAt: this.now(),
     });
     this.activity = { sig: req.sig ?? null, sigInfo: req.sigInfo ?? null };
     this.transcript = [];
@@ -424,7 +444,7 @@ export class QsoController {
     // to the station we are answering. See firstTxWindow.
     const first = this.firstTxWindow();
     if (first !== null) {
-      this.o.log(`[qso] first transmission in ${((first - nowMs()) / 1000).toFixed(1)}s`);
+      this.o.log(`[qso] first transmission in ${((first - this.now()) / 1000).toFixed(1)}s`);
       this.runTick(first);
     }
 
@@ -470,7 +490,7 @@ export class QsoController {
       theirGrid: req.theirGrid ?? null,
       theirSnr: req.theirSnr,
       role: "answerer",
-      startedAt: nowMs(),
+      startedAt: this.now(),
     });
     this.activity = { sig: req.sig ?? null, sigInfo: req.sigInfo ?? null };
     this.transcript = [];
@@ -576,7 +596,7 @@ export class QsoController {
     if (this.txParity === null) return null;
     const period = this.o.source.periodMs;
     const { mode } = this.o.getBandMode();
-    const now = nowMs();
+    const now = this.now();
     const late = LATE_TX_TOLERANCE_MS[mode as TxMode] ?? 0;
     // Start at the window we are CURRENTLY IN, not the next one. That window is the whole
     // point: it is the one immediately after the station we are answering, and we are
@@ -738,11 +758,26 @@ export class QsoController {
       p.kind === "cq" ? p.from : p.kind === "directed" ? p.from : null;
     if (from !== seq.theirCall) return;
     // The message that opened the transcript arrives as a decode too when the call was
-    // started from the window it decoded in. Recording it twice would read as the
-    // station having repeated itself, which is a thing that happens and would then be
+    // started from the window it decoded in. Recording it twice would read as the station
+    // having repeated itself, which is a thing that happens and would then be
     // indistinguishable from this.
-    const last = this.transcript.at(-1);
-    if (last && last.dir === "rx" && last.at === at && last.message === d.message) return;
+    //
+    // Checked against the WHOLE transcript rather than only its last entry. The last-entry
+    // form assumed the duplicate arrives immediately after the original, and since 1.135.0
+    // it need not: the first transmission is now scheduled inside `startCall`, so a TX line
+    // can be written between the opening message and the decode that repeats it, and the
+    // guard looked at the TX and let the duplicate through.
+    //
+    // MEASURED: 400 live transcripts on this station contain no duplicated line, so that
+    // ordering does not arise on the production path — it was found by `check:operating`,
+    // which does reach it. Widened anyway, because the narrow form was relying on an
+    // ordering it never stated.
+    //
+    // A station genuinely repeating itself is unaffected: that repeat is in a later window
+    // and so carries a different `at`.
+    if (this.transcript.some((e) => e.dir === "rx" && e.at === at && e.message === d.message)) {
+      return;
+    }
     this.record({
       at,
       dir: "rx",

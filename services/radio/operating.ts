@@ -136,6 +136,12 @@ export interface OperatingDeps {
   txFilterHiHz?: () => number | null;
   /** Receive noise floor in dBm, for judging whether a band is worth sitting on. */
   noiseDbm?: () => number | null;
+  /**
+   * The clock the QSO scheduler works against. Defaults to the corrected wall clock.
+   *
+   * Only a test supplies this. See `now` on QsoControllerOptions for why it exists.
+   */
+  now?: () => number;
   /** Move to a band's calling frequency. The FlexRadio also runs its ATU here. */
   retune: (band: string, mode: DigitalMode) => Promise<boolean>;
   /** Move to an exact frequency — POTA activators are off the calling frequency. */
@@ -537,6 +543,7 @@ export async function buildOperating(deps: OperatingDeps): Promise<Operating> {
     // What the RADIO says its transmitter can reach, so a station at 2903 Hz on a rig
     // whose filter runs to 3100 is answerable instead of refused on a constant.
     txFilterHiHz: deps.txFilterHiHz,
+    now: deps.now,
     radio: deps.radio,
     txPower,
     // Straight to the auto operator: it keeps the tally per band.

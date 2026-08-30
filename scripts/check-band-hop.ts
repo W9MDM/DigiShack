@@ -434,6 +434,12 @@ async function endToEnd() {
     identity: { myCall: "K9XYZ", myGrid: "EN61" },
     getBandMode: () => ({ band, mode: "FT8" as DigitalMode, dialHz: null }),
     wasWorked: async () => false,
+    // The same omission `check-callback-queue` had, hidden by the same
+    // `as unknown as AutoOperatorOptions` cast at the end of this literal: the check died
+    // with "this.o.callChecks is not a function" the moment it reached the end-to-end case,
+    // which is the one it is named after. Every field of MayCallChecks is optional, so an
+    // empty object is a complete stub.
+    callChecks: () => ({}),
     retune: async (b: string) => {
       retuned.push(b);
       band = b;

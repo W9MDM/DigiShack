@@ -12,6 +12,7 @@
 //   npx tsx scripts/check-pota-refs.ts --backfill create missing rows from Qso.sigInfo
 
 import { prisma } from "@/lib/db/prisma";
+import { skipWithoutDatabase } from "./needs-db";
 
 let pass = 0;
 let fail = 0;
@@ -26,6 +27,8 @@ function ok(cond: boolean, label: string, detail = ""): void {
 }
 
 async function main(): Promise<void> {
+  // A missing database is a skip, not a crash. See scripts/needs-db.ts.
+  if (await skipWithoutDatabase("check:pota-refs")) return;
   const backfill = process.argv.includes("--backfill");
 
   // Contacts with a mirrored reference but no row for it. That is every contact that

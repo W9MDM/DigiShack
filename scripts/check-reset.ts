@@ -10,6 +10,7 @@ import { randomBytes } from "node:crypto";
 import { verifyPassword } from "@/lib/auth/password";
 import { consumePasswordReset, createPasswordReset } from "@/lib/auth/reset";
 import { prisma } from "@/lib/db/prisma";
+import { skipWithoutDatabase } from "./needs-db";
 
 let failed = 0;
 function ok(cond: boolean, what: string): void {
@@ -18,6 +19,8 @@ function ok(cond: boolean, what: string): void {
 }
 
 async function main() {
+  // A missing database is a skip, not a crash. See scripts/needs-db.ts.
+  if (await skipWithoutDatabase("check:reset")) return;
   const email = `check-reset-${randomBytes(6).toString("hex")}@example.invalid`;
   const user = await prisma.user.create({
     data: { email, name: "check-reset fixture", passwordHash: "scrypt$x$x$x$x$x" },

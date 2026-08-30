@@ -16,6 +16,7 @@ import {
   transmitGateKey,
 } from "@/lib/radio/transmit-gate";
 import { prisma } from "@/lib/db/prisma";
+import { skipWithoutDatabase } from "./needs-db";
 import { getSetting, writeSettings } from "@/lib/settings";
 
 let pass = 0;
@@ -34,6 +35,8 @@ function eq(a: unknown, b: unknown, label: string): void {
 }
 
 async function main(): Promise<void> {
+  // A missing database is a skip, not a crash. See scripts/needs-db.ts.
+  if (await skipWithoutDatabase("check:transmit-gate")) return;
   eq(transmitGateKey("flex"), "flex.allowTransmit", "the Flex key is unchanged");
   eq(transmitGateKey("icom"), "icom.allowTransmit", "the Icom has its own key");
 

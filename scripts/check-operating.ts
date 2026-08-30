@@ -83,8 +83,29 @@ class FakeSource extends EventEmitter {
   readonly periodMs = PERIOD;
   mode: DigitalMode = "FT8";
 
+  /**
+   * The simulated instant, advanced by every window this fake emits.
+   *
+   * The QSO controller schedules the FIRST transmission of a call against a clock, and it
+   * used to read the wall clock directly — so under test it compared a 2027 fixture
+   * against the real Date.now() and picked a window several million periods away. Five
+   * assertions here failed on that for four releases, reporting a spurious extra
+   * transmission that no operator ever saw, because live the two clocks are the same one.
+   *
+   * Set to nine tenths of the way through the window just emitted: a decode is only
+   * available once the transmission has finished (12.64 s of a 15 s window) and been
+   * decoded, which is exactly the position the controller has to reason from when it
+   * decides whether it can still make the next window.
+   */
+  at = T0;
+
+  now(): number {
+    return this.at;
+  }
+
   /** A receive window that decoded something. */
   window(windowStartMs: number, heard: Heard[]): void {
+    this.at = windowStartMs + Math.round(PERIOD * 0.9);
     this.emit("decodes", {
       windowStart: new Date(windowStartMs),
       decodes: heard.map((h) => ({ ...h, dt: 0.1, mode: this.mode })),
@@ -95,6 +116,7 @@ class FakeSource extends EventEmitter {
 
   /** Our own transmit window: no receive audio, so only `window` fires. */
   ourWindow(windowStartMs: number): void {
+    this.at = windowStartMs + Math.round(PERIOD * 0.9);
     this.emit("window", {
       windowStart: new Date(windowStartMs),
       samples: 180_000,
@@ -165,6 +187,8 @@ interface FactoryDeps {
   tx: DigitalTransmitter;
   station: { id: string; callsign: string; grid: string };
   dialHz: () => number | null;
+  /** The fixture's clock, so the first-transmission scheduler is testable at all. */
+  now: () => number;
   radio: () => string | null;
   retune: (band: string, mode: DigitalMode) => Promise<boolean>;
   tuneHz: (hz: number) => Promise<boolean>;
@@ -187,6 +211,7 @@ async function makeOperating(deps: FactoryDeps): Promise<Operating> {
     tx: deps.tx,
     station: deps.station,
     dialHz: deps.dialHz,
+    now: deps.now,
     radio: deps.radio,
     retune: deps.retune,
     tuneHz: deps.tuneHz,
@@ -281,6 +306,8 @@ async function session(kind: "flex" | "icom"): Promise<Observations> {
     tx,
     station: STATION,
     dialHz: () => DIAL_HZ,
+    // The fixture's clock, not the wall clock. See FakeSource.at.
+    now: () => source.now(),
     // Both radios name themselves; the operating layer only passes it through.
     radio: () => (kind === "icom" ? "IC-7300MK2" : "FLEX-6400"),
     // The whole per-radio difference, in two functions.
@@ -549,6 +576,7 @@ async function main(): Promise<void> {
       tx,
       station: STATION,
       dialHz: () => DIAL_HZ,
+      now: () => source.now(),
       radio: () => "FLEX-6400",
       retune: async () => true,
       tuneHz: async () => true,
@@ -648,6 +676,7 @@ async function main(): Promise<void> {
       tx,
       station: STATION,
       dialHz: () => DIAL_HZ,
+      now: () => source.now(),
       radio: () => (kind === "flex" ? "FLEX-6400" : "IC-7300MK2"),
       retune: async (band, mode) => {
         retuned.push(`${band} ${mode}`);
@@ -724,6 +753,7 @@ console.log("\nwhat makes it hop, and what makes it hop again");
       tx,
       station: STATION,
       dialHz: () => DIAL_HZ,
+      now: () => source.now(),
       radio: () => "IC-7300MK2",
       retune: async (band, mode) => {
         hops.push({ to: `${band} ${mode}`, cqsBefore: cqsSent() });
