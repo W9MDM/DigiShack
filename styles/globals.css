@@ -32,6 +32,18 @@
   --color-surface: #131316;
   --color-surface-2: #1c1c21;
   --color-surface-3: #26262d;
+  /* An ALIAS of --color-surface-2, and it exists because `bg-bg-raised` was already
+     written in 19 places across 8 files before anything defined it.
+     Tailwind v4 emits nothing for a token it cannot resolve — no error, no warning, no
+     rule — so every one of those rendered with NO BACKGROUND: the form inputs in the
+     schedule editor, the do-not-call list, the settings textarea, four panels on the rig
+     page, and worst of all the HelpTip popover, which is a floating panel whose whole job
+     is to be readable over the page behind it.
+     Defined rather than renamed at the 19 call sites because the name is the honest one:
+     these are controls and panels raised off their container, and `bg-raised` says that
+     where `bg-surface-2` only says how dark it is. Opacity modifiers (`bg-bg-raised/40`
+     on the panadapter and the setup page) need the token to exist too. */
+  --color-bg-raised: #1c1c21;
 
   /* --- borders --- */
   --color-line: #2e2e36;

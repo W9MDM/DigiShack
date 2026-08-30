@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.150.0 - public release
+## 1.150.1 - public release
 
 Development happens in a private repository; this is where the public history starts.
 Earlier entries are not reproduced - they quote real operators by callsign, include
@@ -22,6 +22,7 @@ Notes for anyone running this:
 
 ## Release history
 
+- **1.150.1** — Nineteen backgrounds that were never there
 - **1.150.0** — An install button, and the four reasons there might not be one
 - **1.149.0** — Stop calling a station that is plainly working somebody else
 - **1.148.0** — "Nobody yet" was four different answers wearing one coat
