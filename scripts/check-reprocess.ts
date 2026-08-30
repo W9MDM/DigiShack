@@ -17,6 +17,7 @@
 // reimplementation followed.
 
 import {
+  SENT_FIELD_FOR,
   UPLOADABLE,
   pendingWhere,
   resolveServices,
@@ -135,6 +136,27 @@ console.log("5. picking the destinations");
     "nothing enabled and nothing named means nothing runs",
     resolveServices({}, ALL_OFF).length === 0,
   );
+}
+
+console.log("");
+console.log("6. the baseline marks the same column it counted");
+{
+  // `baselineAsUploaded` writes a *Sent column and the endpoint that previews it counts
+  // against one. If those two ever name different columns the preview says 4,992 and the
+  // write touches a different set — and because nothing is uploaded, there is no service
+  // response to disagree with it. It would simply be wrong, quietly.
+  const seen = new Set<string>();
+  for (const service of UPLOADABLE) {
+    const field = SENT_FIELD_FOR(service);
+    check(`${service} -> ${field}`, field === `${service}Sent`, field);
+    check(`${service}'s column is its own`, !seen.has(field), field);
+    seen.add(field);
+    // The same column the sweep filters on, so a baselined contact is one the sweep then
+    // skips. That is the entire effect of the feature.
+    const w = pendingWhere(service, {});
+    check(`${service}: the sweep filters on that same column`, field in w, w);
+  }
+  check("every service has a distinct column", seen.size === UPLOADABLE.length, [...seen]);
 }
 
 console.log("");

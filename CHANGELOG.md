@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.144.2 - public release
+## 1.145.0 - public release
 
 Development happens in a private repository; this is where the public history starts.
 Earlier entries are not reproduced - they quote real operators by callsign, include
@@ -22,6 +22,7 @@ Notes for anyone running this:
 
 ## Release history
 
+- **1.145.0** — Adopt an upload target without replaying the whole log at it
 - **1.144.2** — The transmit ceiling now says what it resolved to
 - **1.144.1** — The backlog is now eleven issues
 - **1.144.0** — Send one contact again, to the places you pick

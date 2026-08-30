@@ -620,6 +620,17 @@ export async function runUploads(
 }
 
 /**
+ * Which column records that this service has the contact.
+ *
+ * Exported because the baseline endpoint counts against the same column it is about to
+ * write, and a second copy of this mapping is exactly how a service ends up counted
+ * against one field and marked on another.
+ */
+export function SENT_FIELD_FOR(service: UploadableService): string {
+  return SENT_FIELD[service];
+}
+
+/**
  * Has this service been given what it needs to accept an upload?
  *
  * Each answers differently, and a chain of ternaries had already let one fall through to

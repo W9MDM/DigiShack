@@ -11,6 +11,7 @@ import {
 } from "@/components/ui/primitives";
 import { withPageAuth } from "@/lib/auth/guard";
 import { ApiError, apiGet, apiPost, useApi } from "@/lib/client/api";
+import { useCan } from "@/lib/client/session";
 import { formatUtc } from "@/lib/time";
 
 // The logbook services, and what they are actually doing.
@@ -71,6 +72,7 @@ interface SyncReport {
 export default function IntegrationsPage() {
   const { data, error, reload } = useApi<StatusResponse>("/api/integrations/status");
   const { data: uploads, reload: reloadUploads } = useApi<UploadsResponse>("/api/uploads");
+  const isAdmin = useCan("ADMIN");
   const [uploadBusy, setUploadBusy] = useState<string | null>(null);
   const [uploadNote, setUploadNote] = useState<string | null>(null);
 
@@ -113,6 +115,56 @@ export default function IntegrationsPage() {
       setUploadBusy(null);
     }
   }
+  /**
+   * Mark everything logged so far as already uploaded, WITHOUT sending any of it.
+   *
+   * The honest way to adopt an upload target on a log that predates it. An operator whose
+   * contacts are already at QRZ from a previous logger wants the flags to say so, not
+   * thousands of API calls that each come back "duplicate" — and for N3FJP, which is a
+   * program on somebody's desk rather than a service, that difference is 29,739 records
+   * arriving unannounced.
+   *
+   * The count is read fresh and echoed back to the server. If it has moved between the
+   * confirmation and the click the server refuses, because a dialog that describes 4,992
+   * contacts and then acts on 4,993 is not a confirmation.
+   */
+  async function baseline(service: string) {
+    setUploadBusy(`baseline:${service}`);
+    setUploadNote(null);
+    try {
+      const preview = await apiGet<{ count: number; before: string }>(
+        `/api/uploads/baseline?service=${encodeURIComponent(service)}`,
+      );
+      if (preview.count === 0) {
+        setUploadNote(`${service} has nothing left to mark.`);
+        return;
+      }
+      if (
+        !window.confirm(
+          `Mark ${preview.count.toLocaleString()} contacts as already sent to ${service}?\n\n` +
+            `Nothing is uploaded. This only sets the flags, so ${service} will never be ` +
+            `offered these contacts again.\n\n` +
+            `Do this only if they are already there from another logger. It cannot be undone.`,
+        )
+      ) {
+        return;
+      }
+      const r = await apiPost<{ marked: number }>("/api/uploads/baseline", {
+        service,
+        before: preview.before,
+        expected: preview.count,
+      });
+      setUploadNote(
+        `${r.marked.toLocaleString()} contacts marked as already sent to ${service}. Nothing was uploaded.`,
+      );
+      reloadUploads();
+    } catch (err) {
+      setUploadNote(err instanceof ApiError ? err.message : "Could not set the baseline");
+    } finally {
+      setUploadBusy(null);
+    }
+  }
+
   const [busy, setBusy] = useState<string | null>(null);
   const [report, setReport] = useState<SyncReport | null>(null);
   const [syncError, setSyncError] = useState<string | null>(null);
@@ -336,26 +388,52 @@ export default function IntegrationsPage() {
                     className="flex items-center justify-between gap-3 border-b border-line pb-1.5 last:border-0"
                   >
                     <span className="text-sm text-fg">{c.service}</span>
-                    <span className="text-xs tnum text-fg-muted">
-                      {!c.configured ? (
-                        <span className="text-fg-subtle">not set up</span>
-                      ) : c.pending === 0 && c.backlog === 0 ? (
-                        <span className="text-ok">up to date</span>
-                      ) : (
-                        <>
-                          {c.pending} waiting
-                          {c.backlog > c.pending && (
-                            <span className="text-fg-subtle">
-                              {" "}
-                              · {c.backlog - c.pending} older than the cutoff
-                            </span>
-                          )}
-                        </>
+                    <span className="flex items-center gap-3">
+                      <span className="text-xs tnum text-fg-muted">
+                        {!c.configured ? (
+                          <span className="text-fg-subtle">not set up</span>
+                        ) : c.pending === 0 && c.backlog === 0 ? (
+                          <span className="text-ok">up to date</span>
+                        ) : (
+                          <>
+                            {c.pending} waiting
+                            {c.backlog > c.pending && (
+                              <span className="text-fg-subtle">
+                                {" "}
+                                · {c.backlog - c.pending} older than the cutoff
+                              </span>
+                            )}
+                          </>
+                        )}
+                      </span>
+                      {/* Only where there is a backlog to disclaim, and only for an
+                          admin. Offering this beside "up to date" would be offering a
+                          destructive action with nothing to act on. */}
+                      {isAdmin && c.backlog > 0 && (
+                        <Button
+                          className="text-xs px-2 py-0.5"
+                          disabled={uploadBusy !== null}
+                          onClick={() => void baseline(c.service)}
+                          title={`Mark all ${c.backlog} unsent contacts as already at ${c.service}, without uploading anything. For a log that was already uploaded by another program.`}
+                        >
+                          {uploadBusy === `baseline:${c.service}`
+                            ? "Marking…"
+                            : "Already sent"}
+                        </Button>
                       )}
                     </span>
                   </li>
                 ))}
               </ul>
+
+              {isAdmin && (uploads.counts.some((c) => c.backlog > 0) ?? false) && (
+                <p className="text-xs text-fg-subtle">
+                  <strong>Already sent</strong> marks a service&rsquo;s whole backlog as
+                  uploaded <em>without sending any of it</em> — for a log that another
+                  program already uploaded, where the alternative is thousands of calls
+                  that each come back &ldquo;duplicate&rdquo;. It cannot be undone.
+                </p>
+              )}
 
               {uploadNote && <p className="text-xs text-accent-bright">{uploadNote}</p>}
             </div>
