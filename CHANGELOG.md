@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.158.5 - public release
+## 1.160.0 - public release
 
 Development happens in a private repository; this is where the public history starts.
 Earlier entries are not reproduced - they quote real operators by callsign, include
@@ -22,6 +22,12 @@ Notes for anyone running this:
 
 ## Release history
 
+- **1.160.0** — FT-0 gives the transmitter back, and the bridge has a restart button
+- **1.159.4** — THE BUG: one window cut twice, and the second cut had nothing left
+- **1.159.3** — The instrument went blind in exactly the case it was built for
+- **1.159.2** — The warning that accused the radio of a fault every time we transmitted
+- **1.159.1** — The one skipped window that could not be logged
+- **1.159.0** — The decode list can now say why it is not moving
 - **1.158.5** — The installer sizes containers from measurement, and the scrub learned case
 - **1.158.4** — The fifth scrub-break, on schedule
 - **1.158.3** — The settings doc caught up with its registry

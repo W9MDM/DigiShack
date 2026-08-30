@@ -539,6 +539,18 @@ async function persistScheduleApplied(mode: AutoMode): Promise<void> {
 }
 
 let autoResumeMode: AutoMode | null = null;
+
+/**
+ * What FT-0 switched off, so releasing it can switch the same things back on.
+ *
+ * IN MEMORY, DELIBERATELY. Persisting it would need registry entries, and the failure
+ * mode of not persisting is the safe one: a bridge that restarts while FT-0 is engaged
+ * forgets that transmit HAD been armed, and releasing FT-0 then leaves the station
+ * disarmed. Silence is the correct answer to "I am not sure whether this operator wanted
+ * their transmitter on."
+ */
+let ft0RestoreTx = false;
+let ft0RestoreAuto: AutoMode = "off";
 let autoRunStartedAt: number | null = null;
 let autoQsosThisRun = 0;
 
@@ -1331,6 +1343,15 @@ async function startFlexSource(): Promise<() => Promise<void>> {
     broadcast({ kind: "status", status });
   });
 
+  /**
+   * Recent spans during which the RADIO reported itself transmitting, [start, end] ms.
+   *
+   * Bounded to the last 40 because only the current window is ever asked about, and an
+   * unbounded array on a station that transmits every 30 seconds is a slow leak.
+   */
+  const txSpans: [number, number][] = [];
+  let txSpanStart: number | null = null;
+
   source.on("window", (w) => {
     // The liveness heartbeat. A window arrives once per T/R period whether or not
     // anything decoded, so it stops only when the machinery stops — which is the
@@ -1338,11 +1359,45 @@ async function startFlexSource(): Promise<() => Promise<void>> {
     // 2 August 2026 that made this necessary.
     watchdog?.beat();
 
-    // A skipped window is normal — DAX RX audio is silent while the radio
-    // transmits — so it is not an error, but it is worth seeing.
-    if (w.skipped && w.rms > 0) {
+    // A SHORT WINDOW IS ALWAYS WORTH SAYING. It means the window did not hold enough
+    // audio for a whole transmission — UDP packet loss on the DAX stream, or the buffer
+    // still filling at startup — and it is the reason a decode cycle goes missing while
+    // the station is not transmitting at all. It could not be logged before: it reports
+    // `rms: 0` and the only log here was guarded on `rms > 0`, so the sole skip an
+    // operator needs to know about was the one that produced no evidence anywhere.
+    // Did the radio transmit at any point inside this window? Overlap, not containment:
+    // an FT8 transmission starts 500 ms after the boundary and ends well before the next,
+    // and a window is spoiled by any part of it.
+    const wStart = w.windowStart.getTime();
+    const wEnd = wStart + source.periodMs;
+    const ours =
+      (txSpanStart !== null && txSpanStart < wEnd) ||
+      txSpans.some(([a, b]) => b > wStart && a < wEnd);
+
+    // A window we transmitted through is ordinary and says nothing.
+    if (w.skipped && ours) {
+      // deliberately silent
+    } else if (w.skipped && w.reason === "short") {
+      const want = w.minSamples ?? 0;
+      const pct = want > 0 ? Math.round((w.samples / want) * 100) : 0;
+      console.warn(
+        `[bridge] window ${w.windowStart.toISOString().slice(11, 19)} DROPPED — only ` +
+          `${w.samples} samples of the ${want} a transmission needs (${pct}%). Nothing was ` +
+          `decoded for this cycle. Audio arrived short: DAX packet loss, or the buffer ` +
+          `still filling after a start or a band change.`,
+      );
+    } else if (w.skipped) {
+      // The ordinary one: DAX RX audio is silent while the radio transmits. Logged at
+      // `log` rather than `warn` because on a Flex it happens every transmit cycle.
+      //
+      // NO `rms > 0` GUARD ANY MORE. That guard was written to keep this quiet, and it
+      // also hid every zero-RMS window - which is what a window of pure silence looks
+      // like when we are NOT transmitting, and is then a real fault with no evidence
+      // anywhere. The transmit case is filtered above by REASON now, which is the honest
+      // way to be quiet about it.
       console.log(
-        `[bridge] window ${w.windowStart.toISOString().slice(11, 19)} skipped (rms ${w.rms.toExponential(1)})`,
+        `[bridge] window ${w.windowStart.toISOString().slice(11, 19)} skipped as silent ` +
+          `(rms ${w.rms.toExponential(1)}, ${w.samples} samples)`,
       );
     }
   });
@@ -1582,6 +1637,17 @@ async function startFlexSource(): Promise<() => Promise<void>> {
   rig.on("slice", applySlice);
   rig.on("transmit", (tx) => {
     status.transmitting = tx;
+    // WHEN THE RADIO WAS ACTUALLY ON THE AIR, kept so a skipped window can be told from
+    // one we caused. The pipeline cannot answer this: a Flex never calls `muteUntil` (DAX
+    // audio just stops), and the guard-tail drop makes any `dropUntil` test true for
+    // every window. The radio's own transmit transitions are the only ground truth, and
+    // they cover a front-panel key or an ATU tune as well as our own transmissions.
+    if (tx) txSpanStart = Date.now();
+    else if (txSpanStart !== null) {
+      txSpans.push([txSpanStart, Date.now()]);
+      if (txSpans.length > 40) txSpans.shift();
+      txSpanStart = null;
+    }
     // Duty tracking follows the RADIO, not our intent. An ATU tune, a manual key from
     // the front panel or SmartSDR all heat the same finals, and a cooldown that only
     // counted DigiShack's own transmissions would under-report exactly when the
@@ -2625,6 +2691,39 @@ async function main(): Promise<void> {
       // be a deliberate act, and silently re-arming a transmitter because someone
       // pressed the same button twice is exactly the surprise this mode exists to
       // prevent.
+      /**
+       * POST /restart — exit, and let PM2 bring the bridge back.
+       *
+       * ASKED FOR BY THE OPERATOR, after an evening in which restarting the bridge was the
+       * remedy for half a dozen different things and every one of them needed a shell.
+       * The radio, the decoders and the transmit path all live here, so "turn it off and
+       * on again" is a real diagnostic step and it should not require SSH.
+       *
+       * Exiting rather than re-initialising in place, because a clean process is the whole
+       * point: a bridge that rebuilt its own sources would carry over exactly the state
+       * somebody is restarting to be rid of. PM2 restarts on exit — the watchdog has used
+       * that path since August and it is well proven.
+       *
+       * UNKEYS FIRST. Exiting mid-transmission leaves the finals keyed until the radio's
+       * own timeout notices, which is the one way this button could do harm.
+       */
+      if (url.pathname === "/restart") {
+        console.log("[bridge] restart requested from the web UI — unkeying and exiting");
+        try {
+          await activeTx?.unkey();
+        } catch {
+          /* the exit hooks are the backstop */
+        }
+        sendJson(res, 200, {
+          ok: true,
+          detail:
+            "Restarting the radio service. It takes about 20 seconds to reconnect to the radio.",
+        });
+        // After the response is on the wire. 250 ms matches the watchdog's own exit path.
+        setTimeout(() => process.exit(0), 250);
+        return;
+      }
+
       if (url.pathname === "/ft0") {
         const body = await readJson(req);
         const engage = body.engage !== false;
@@ -2632,6 +2731,21 @@ async function main(): Promise<void> {
 
         if (engage) {
           const wasAuto = activeAuto()?.state.mode ?? "off";
+          // WHAT FT-0 IS ABOUT TO SWITCH OFF, so releasing it can switch it back on.
+          //
+          // Reported by the operator: "when you ft0 it disables transmit ... and doesnt
+          // turn transmit back on when u click resume". Correct, and it was deliberate -
+          // the release path logged "transmit still disabled" on purpose. That is the
+          // wrong instinct for a toggle. FT-0 is the stop-everything button; releasing it
+          // is the operator saying "put it back", and leaving the station silently
+          // unarmed means the next Auto Hunt does nothing with no visible reason why.
+          //
+          // Persisted rather than held in a variable because the bridge can restart while
+          // FT-0 is engaged - a deploy, a watchdog, a crash - and a memory-only note would
+          // strand the station disarmed with nothing left to say what it had been.
+          const wasArmed = await transmitArmed();
+          ft0RestoreTx = wasArmed;
+          ft0RestoreAuto = wasAuto;
           try {
             await activeTx?.unkey();
           } catch {
@@ -2665,7 +2779,9 @@ async function main(): Promise<void> {
             wasAuto,
             detail:
               "FT-0 engaged. Nothing is connected and nothing is transmitting. " +
-              "Transmit stays disabled until you turn it back on deliberately.",
+              (wasArmed
+                ? "Releasing it will put transmit back the way it was."
+                : "Transmit was already off and will stay off."),
           });
           return;
         }
@@ -2673,13 +2789,44 @@ async function main(): Promise<void> {
         status.ft0 = false;
         broadcast({ kind: "status", status });
         try {
+          // PUT BACK WHAT FT-0 TOOK, and only that. A station that was disarmed before
+          // FT-0 stays disarmed: restoring a gate the operator never had open would be
+          // FT-0 arming a transmitter, which it must never do.
+          const restoreTx = ft0RestoreTx;
+          const restoreAuto = ft0RestoreAuto;
+          // Cleared before use, so a second release cannot re-arm from a stale note.
+          ft0RestoreTx = false;
+          ft0RestoreAuto = "off";
+          if (user && restoreTx) {
+            await writeSettings(
+              [{ key: transmitGateKey(activeRadio), value: "true" }],
+              user.id,
+            );
+            invalidateSettingsCache();
+          }
+
           flexTeardown = await startActiveSource();
-          console.log("[ft0] released — radio reconnected, transmit still disabled");
+
+          // Auto last, and only after the source is up: setting a mode against a radio
+          // that has not attached yet is how a mode gets set and immediately dropped.
+          let autoBack = false;
+          if (restoreTx && restoreAuto !== "off" && activeAuto()) {
+            activeAuto()!.setMode(restoreAuto);
+            autoBack = true;
+          }
+
+          console.log(
+            `[ft0] released — radio reconnected, transmit ${restoreTx ? "restored" : "left off (it was off before)"}` +
+              `${autoBack ? `, auto "${restoreAuto}" resumed` : ""}`,
+          );
           sendJson(res, 200, {
             ok: true,
             ft0: false,
-            detail:
-              "FT-0 released and the radio is back. Transmit is still off — enable it in Settings when you mean to.",
+            transmitRestored: restoreTx,
+            autoRestored: autoBack ? restoreAuto : null,
+            detail: restoreTx
+              ? `FT-0 released. The radio is back and transmit is on again${autoBack ? `, with auto "${restoreAuto}" resumed` : ""}.`
+              : "FT-0 released and the radio is back. Transmit was off before FT-0 (or the bridge restarted since), so it has been left off — turn it on when you mean to.",
           });
         } catch (err) {
           sendJson(res, 502, {

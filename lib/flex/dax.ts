@@ -247,7 +247,17 @@ type Events = {
       decodeMs: number;
     },
   ];
-  window: [{ windowStart: Date; samples: number; rms: number; skipped: boolean }];
+  window: [
+    {
+      windowStart: Date;
+      samples: number;
+      rms: number;
+      skipped: boolean;
+      /** See DecodePipelineEvents.window — "short" is packet loss, "silent" is our own TX. */
+      reason?: "silent" | "short" | "transmit";
+      minSamples?: number;
+    },
+  ];
   spectrum: [SpectrumRow];
   /**
    * A row of RF spectrum — tens of kHz of band, not 3 kHz of audio.

@@ -117,7 +117,17 @@ export type IcomSourceEvents = {
   identified: [{ radioName: string; audioName: string }];
   /** From the shared pipeline, identical in shape to the FlexRadio path's. */
   decodes: [{ windowStart: Date; decodes: Decode[]; rms: number; decodeMs: number }];
-  window: [{ windowStart: Date; samples: number; rms: number; skipped: boolean }];
+  window: [
+    {
+      windowStart: Date;
+      samples: number;
+      rms: number;
+      skipped: boolean;
+      /** See DecodePipelineEvents.window — "short" is packet loss, "silent" is our own TX. */
+      reason?: "silent" | "short" | "transmit";
+      minSamples?: number;
+    },
+  ];
   /**
    * The waterfall, from the same shared analyser the FlexRadio uses.
    *

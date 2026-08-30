@@ -91,6 +91,8 @@ export default function RigPage({ wsUrl }: Props) {
     telemetry: Telemetry | null;
   }>("/api/bridge/status");
 
+  const [restarting, setRestarting] = useState(false);
+
   const [busy, setBusy] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [freqInput, setFreqInput] = useState("");
@@ -736,6 +738,42 @@ export default function RigPage({ wsUrl }: Props) {
               className="px-2 py-1 text-xs rounded-sm border border-line text-fg-muted hover:text-fg hover:border-fg-muted"
             >
               ATU
+            </button>
+            {/*
+              RESTART THE RADIO SERVICE.
+
+              The bridge owns the radio, the decoders and the transmit path, so restarting
+              it is a real diagnostic step — and until now every one of them needed a
+              shell. Asked for after an evening where it was the remedy half a dozen times.
+
+              Confirmed, because it drops any contact in flight and takes the station off
+              the air for about twenty seconds. Not `danger` styling: this is a recovery
+              action somebody reaches for when things are already wrong, and dressing it in
+              red invites hesitating at exactly the wrong moment.
+            */}
+            <button
+              type="button"
+              disabled={busy !== null || restarting}
+              onClick={() => {
+                if (
+                  !window.confirm(
+                    "Restart the radio service? Any contact in progress is dropped and the " +
+                      "station is off the air for about 20 seconds while it reconnects. " +
+                      "The web page itself keeps running.",
+                  )
+                ) {
+                  return;
+                }
+                setRestarting(true);
+                void apiPost("/api/bridge/control", { action: "restart" })
+                  .catch(() => {})
+                  // The bridge is gone for ~20 s; the socket reconnects on its own.
+                  .finally(() => setTimeout(() => setRestarting(false), 25_000));
+              }}
+              title="Restart the radio service (the bridge). Drops any contact in progress and reconnects to the radio, about 20 seconds. Use it when the radio link is stuck or decoding has stopped."
+              className="px-2 py-1 text-xs rounded-sm border border-line text-fg-muted hover:text-fg hover:border-fg-muted"
+            >
+              {restarting ? "Restarting…" : "Restart service"}
             </button>
             <button
               type="button"

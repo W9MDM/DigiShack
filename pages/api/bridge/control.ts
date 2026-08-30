@@ -24,6 +24,7 @@ const bodySchema = z.object({
     "atu",
     "rig",
     "ft0",
+    "restart",
     "source",
     "tune",
     "time/sync",

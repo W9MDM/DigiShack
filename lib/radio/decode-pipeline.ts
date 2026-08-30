@@ -267,7 +267,38 @@ export type DecodePipelineEvents = {
       decodeMs: number;
     },
   ];
-  window: [{ windowStart: Date; samples: number; rms: number; skipped: boolean }];
+  window: [
+    {
+      windowStart: Date;
+      samples: number;
+      rms: number;
+      skipped: boolean;
+      /**
+       * WHY it was skipped, because the two reasons could not be told apart.
+       *
+       * "silent" is the ordinary one: DAX RX audio goes quiet while the radio transmits,
+       * so our own TX cycle arrives as a below-squelch window every time.
+       *
+       * "transmit" is the OTHER ordinary one, and separating it from "short" is the whole
+       * point of having a reason at all. While we transmit, `muteUntil` discards receive
+       * audio, so the window arrives with ZERO samples and takes the short-window branch
+       * on its way out. Reported as packet loss it accuses the radio of a fault on every
+       * single transmit cycle - which the first version of this warning did, within
+       * minutes of shipping, on a station that was simply working someone.
+       *
+       * "short" is NEVER ordinary. The window did not contain enough audio to hold a
+       * whole transmission - UDP packet loss on the DAX stream, or the buffer not yet
+       * filled at startup. It was indistinguishable from "silent" downstream because it
+       * reports `rms: 0`, and the only log for a skipped window was guarded on `rms > 0`
+       * - so the one skip worth an operator's attention was the one that could not be
+       * seen. Reported live as decode cycles missing while the station was not even
+       * transmitting, with nothing in any log to show for it.
+       */
+      reason?: "silent" | "short" | "transmit";
+      /** How many samples a whole transmission needs, so "short" can say how short. */
+      minSamples?: number;
+    },
+  ];
   error: [Error];
 };
 
@@ -391,6 +422,8 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
   private timer: NodeJS.Timeout | null = null;
   /** Discard samples until this UTC ms — the tail of a window already taken. */
   private dropUntil = 0;
+  /** The window most recently cut, so one window can never be cut twice. */
+  private lastCutWindowMs = -1;
   /**
    * One-way transit from the radio, ms. See lib/radio/link-latency.ts.
    *
@@ -541,7 +574,30 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
     this.drainDeferred();
   }
 
-  private scheduleNextWindow(): void {
+  /**
+   * Arm the next cut.
+   *
+   * `afterWindowMs` is the window just taken. THE NEXT CUT IS DERIVED FROM IT, not from
+   * "now", and that is the whole fix for a window that decoded nothing:
+   *
+   * This is called from INSIDE the cut, at which instant `(now - lag) % period` sits
+   * exactly on `cutAt`. `setTimeout` may fire a fraction early, and `lag` is re-measured
+   * between the two reads - on the live station it swung between 5 ms and 84 ms under
+   * decode load. Either one puts `sincePeriod` a hair BELOW `cutAt`, so the "still ahead"
+   * branch is taken and `delay` comes out at about a millisecond. The timer fires again
+   * on the SAME window, against a buffer emptied a millisecond earlier, and emits a
+   * zero-sample window - which the short-window branch then reports as packet loss.
+   *
+   * MEASURED, 2026-08-30: DAX delivered 600-650 kB of audio in every window including
+   * the ones that decoded nothing, so the audio was always there and the pipeline was
+   * discarding it. The dropped windows followed a transmission five times out of five,
+   * because that is when the event loop is busiest and the jitter worst.
+   *
+   * Anchoring on the window just cut makes the next cut exactly one period later by
+   * construction, so no amount of timer jitter or lag re-measurement can produce a second
+   * cut of the same window.
+   */
+  private scheduleNextWindow(afterWindowMs?: number): void {
     const period = this.periodMs;
     const cutAt = this.transmissionMs + CUT_MARGIN_MS; // within the window
 
@@ -555,9 +611,16 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
     // Corrected time, not the OS clock. A window boundary is a claim about where the
     // rest of the world thinks the cycle starts, so it has to use the same clock the
     // rest of the world does — see lib/time/clock.ts.
-    const sincePeriod = (nowMs() - lag) % period;
-    // Next cut instant: this window's cut point if still ahead, else the next's.
-    const delay = sincePeriod < cutAt ? cutAt - sincePeriod : period - sincePeriod + cutAt;
+    let delay: number;
+    if (afterWindowMs !== undefined) {
+      // One period after the window just taken, in arrival time. Never "now".
+      delay = Math.max(1, afterWindowMs + period + cutAt + lag - nowMs());
+    } else {
+      // First arm only, where there is no previous window to anchor on.
+      const sincePeriod = (nowMs() - lag) % period;
+      // Next cut instant: this window's cut point if still ahead, else the next's.
+      delay = sincePeriod < cutAt ? cutAt - sincePeriod : period - sincePeriod + cutAt;
+    }
 
     this.timer = setTimeout(() => {
       // Re-read rather than captured: a measurement may have landed during the wait.
@@ -567,10 +630,21 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
       // We are at boundary+cutAt of the current window, in arrival time; identify
       // the window's start on the real clock.
       const windowStart = new Date(Math.floor((nowMs() - lagNow) / period) * period);
+
+      // BELT AS WELL AS BRACES. The schedule above makes a repeat cut impossible; this
+      // makes it harmless if it ever becomes possible again. A second cut of one window
+      // has nothing to decode by definition - the first took the samples - so emitting it
+      // can only ever produce a false empty window.
+      if (windowStart.getTime() === this.lastCutWindowMs) {
+        this.scheduleNextWindow(windowStart.getTime());
+        return;
+      }
+      this.lastCutWindowMs = windowStart.getTime();
+
       // The guard-time tail also arrives lag late, so the drop extends by the same.
       this.dropUntil = windowStart.getTime() + period + lagNow;
 
-      this.scheduleNextWindow();
+      this.scheduleNextWindow(windowStart.getTime());
       this.processWindow(samples, windowStart);
     }, delay);
     this.timer.unref?.();
@@ -594,7 +668,25 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
     // relative to that span rather than the full period.
     const minSamples = Math.floor(this.inputRate * (this.transmissionMs / 1000) * 0.7);
     if (samples.length < minSamples) {
-      this.emit("window", { windowStart, samples: samples.length, rms: 0, skipped: true });
+      // WHY THIS DOES NOT TRY TO NAME OUR OWN TRANSMISSION. It cannot, and one release
+      // spent believing it could: the test was `dropUntil > windowStart`, and `dropUntil`
+      // is reassigned at EVERY cut to `windowStart + period + lag` for the guard tail, so
+      // that condition is unconditionally true and classified every short window as ours.
+      // The instrument went blind in exactly the case it was built for.
+      //
+      // `muteUntil` is also not the answer: only the Icom path calls it. A FlexRadio's DAX
+      // audio simply stops during transmit, so the pipeline is never told at all.
+      //
+      // The bridge knows, because the RADIO tells it (`rig.on("transmit")`), and that is
+      // where the classification belongs.
+      this.emit("window", {
+        windowStart,
+        samples: samples.length,
+        rms: 0,
+        skipped: true,
+        reason: "short",
+        minSamples,
+      });
       return;
     }
 
@@ -604,7 +696,13 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
 
     if (rms < this.silenceRms) {
       // Almost certainly our own transmit cycle.
-      this.emit("window", { windowStart, samples: samples.length, rms, skipped: true });
+      this.emit("window", {
+        windowStart,
+        samples: samples.length,
+        rms,
+        skipped: true,
+        reason: "silent",
+      });
       return;
     }
 

@@ -605,6 +605,27 @@ export default function DigitalPage({ wsUrl }: Props) {
   const pausedRef = useRef(paused);
   pausedRef.current = paused;
 
+  /**
+   * When the socket last delivered ANYTHING, plus what and how much.
+   *
+   * THE INSTRUMENT FOR "the decode list is not live". The operator reported
+   * minute-long freezes; the bridge, and a listener connected through the same
+   * Cloudflare path, were measured delivering decodes the whole time (11-21 ms
+   * apart for ten straight minutes THROUGH one reported freeze). So the failure is
+   * in the last leg - this browser's connection, or this page - and only this page
+   * can tell those two apart: a silent socket is a transport stall; a fresh socket
+   * with stale rows is the page's own logic. A ref, not state: it is written on
+   * every message, up to a dozen a second, and the once-a-second `now` tick is when
+   * the reader needs it.
+   */
+  const linkStats = useRef({
+    msgAt: 0,
+    counts: {} as Record<string, number>,
+    parseErrors: 0,
+    /** Last stall already written to the console, so a stall logs once, not per tick. */
+    stallLoggedAt: 0,
+  });
+
   // The tx-result line belongs to one QSO; a new target must not inherit the
   // previous one's last transmission.
   const qsoCall = qso?.theirCall ?? null;
@@ -705,8 +726,13 @@ export default function DigitalPage({ wsUrl }: Props) {
       };
 
       ws.onmessage = (ev) => {
+        // Before the parse, so a malformed frame still counts as the socket being
+        // alive - it is, and "alive but unparseable" must not read as "silent".
+        linkStats.current.msgAt = Date.now();
         try {
           const msg = JSON.parse(ev.data as string);
+          const k = typeof msg.kind === "string" ? (msg.kind as string) : "?";
+          linkStats.current.counts[k] = (linkStats.current.counts[k] ?? 0) + 1;
           if (msg.kind === "status") setStatus(msg.status);
           else if (msg.kind === "decode") push(msg as DecodeEvent);
           else if (msg.kind === "spectrum") {
@@ -745,6 +771,7 @@ export default function DigitalPage({ wsUrl }: Props) {
           }
         } catch {
           /* skip a malformed frame rather than dropping the socket */
+          linkStats.current.parseErrors++;
         }
       };
 
@@ -912,6 +939,25 @@ export default function DigitalPage({ wsUrl }: Props) {
   // band into nothing.
   const cyclePeak = Math.max(1, ...recentCycles.map((c) => c.count));
   const staleSeconds = lastAt ? Math.floor((now - lastAt) / 1000) : null;
+
+  // Seconds since the socket delivered anything at all. Read together with
+  // `staleSeconds` these two numbers name the failure: socket silent means the
+  // TRANSPORT stalled; socket fresh while rows age means the decodes genuinely
+  // stopped (a band hop, our own TX windows) or this page dropped them.
+  const msgAgeSeconds =
+    linkStats.current.msgAt > 0 ? Math.floor((now - linkStats.current.msgAt) / 1000) : null;
+  // Spectrum alone flows several times a second, so anything past a few seconds is a
+  // real stall rather than jitter. 8 s is chosen to never fire on a healthy link.
+  const linkStalled = connected && msgAgeSeconds !== null && msgAgeSeconds >= 8;
+  if (linkStalled && now - linkStats.current.stallLoggedAt > 30_000) {
+    linkStats.current.stallLoggedAt = now;
+    // The forensic record for the next report: what had arrived when it went quiet.
+    console.warn(
+      `[decodes] socket silent ${msgAgeSeconds}s while connected`,
+      JSON.stringify(linkStats.current.counts),
+      `parseErrors=${linkStats.current.parseErrors}`,
+    );
+  }
   const decodingAs = status?.subMode ?? status?.mode ?? "—";
 
   // Which mode the band buttons retune to. All three have calling frequencies, so
@@ -1517,7 +1563,24 @@ export default function DigitalPage({ wsUrl }: Props) {
               to sit above the decodes it can take order-first without a fight. */}
           <div className="order-1 lg:order-none min-w-0">
             <Card
-              title={`Decodes (${visible.length})`}
+              title={
+                <span className="inline-flex items-center gap-2">
+                  {`Decodes (${visible.length})`}
+                  {/* The two-number verdict, shown only when something is wrong.
+                      "link" names the transport; "quiet" names a live link with no
+                      decode traffic - our own TX window, a hop, or a dead band. */}
+                  {linkStalled && (
+                    <Badge tone="warn">{`link stalled ${msgAgeSeconds}s`}</Badge>
+                  )}
+                  {!linkStalled &&
+                    connected &&
+                    staleSeconds !== null &&
+                    staleSeconds >= 90 && (
+                      <Badge tone="neutral">{`quiet ${staleSeconds}s — link ok`}</Badge>
+                    )}
+                  {!connected && <Badge tone="danger">reconnecting</Badge>}
+                </span>
+              }
               actions={
                 <div className="flex items-center gap-2">
                   {/* HOW BIG THE LIST IS, decided by whoever is reading it.
