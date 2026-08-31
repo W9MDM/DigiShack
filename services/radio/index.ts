@@ -1479,6 +1479,7 @@ async function startFlexSource(): Promise<() => Promise<void>> {
     const tx = new FlexDaxTransmitter({
       host,
       daxChannel,
+      controlMainSlice: await getBooleanSetting("flex.controlMainSlice", true),
       allowTransmit,
       // Read per transmission, so Settings takes effect immediately.
       isTransmitAllowed: transmitGate("flex"),

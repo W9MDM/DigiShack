@@ -105,6 +105,27 @@ export interface TransmitterOptions {
    * Ignored in shared mode, where the slice and its antenna belong to the DAX source.
    */
   antenna?: { tx?: string | null; rx?: string | null };
+  /**
+   * Steer the radio's own slice, even while SmartSDR is connected.
+   *
+   * WHAT THIS FIXES. The slice selection below picks the slice carrying `tx=1`, and when
+   * another GUI client is connected it then leaves that slice entirely alone - never
+   * tuning it, never setting DIGU - out of respect for an operator who might be using it.
+   * The result, seen on two separate stations on 2026-08-30:
+   *
+   *     slice 0 | 7.074000  | DIGU | tx 1 | active 0
+   *     slice 1 | 14.074000 | CW   | tx 0 | active 1
+   *
+   * DigiShack transmitted on a 40 m slice while the operator worked 20 m on the other one,
+   * which was in CW with no transmit and no DAX. "you keep adding a b slice", "theres no
+   * tx on b slice". Respecting the operator's slice produced a station transmitting on a
+   * frequency and mode nobody had chosen.
+   *
+   * With this on, the slice DigiShack will transmit through is tuned to the operating
+   * frequency, set to DIGU and marked `tx=1` - the ACTIVE slice by preference, so it is
+   * the one the operator is looking at rather than whichever happened to hold the flag.
+   */
+  controlMainSlice?: boolean;
   /** Must be true for anything to key the radio. */
   allowTransmit: boolean;
   /**
@@ -237,6 +258,7 @@ export class FlexDaxTransmitter {
       isTransmitAllowed: options.isTransmitAllowed ?? null,
       shared: options.shared ?? null,
       linkOneWayMs: options.linkOneWayMs ?? null,
+      controlMainSlice: options.controlMainSlice ?? true,
     };
   }
 
@@ -327,7 +349,14 @@ export class FlexDaxTransmitter {
     await client.command("sub slice all");
     await new Promise((r) => setTimeout(r, 1_200));
     let slices = [...client.state.slices.values()];
-    let txSlice = slices.find((s) => s.tx) ?? slices[0];
+    // THE ACTIVE SLICE FIRST when we are going to take control of it. That is the slice
+    // the operator is looking at and tuning; the `tx` flag can be sitting on a different
+    // one entirely, on another band, which is exactly the fault this option exists for.
+    // Without control, fall back to the old order - the tx slice is the only one we may
+    // legitimately use if we are not allowed to change anything.
+    let txSlice = this.opts.controlMainSlice
+      ? (slices.find((s) => s.active) ?? slices.find((s) => s.tx) ?? slices[0])
+      : (slices.find((s) => s.tx) ?? slices[0]);
 
     if (!txSlice) {
       const mhz = (this.opts.freqHz / 1_000_000).toFixed(6);
@@ -363,7 +392,10 @@ export class FlexDaxTransmitter {
           );
         }
       }
-    } else if (client.state.slices.size > 0 && this.otherGuiClients === 0) {
+    } else if (
+      client.state.slices.size > 0 &&
+      (this.otherGuiClients === 0 || this.opts.controlMainSlice)
+    ) {
       // The slice existed before we did anything explicit — but when no other GUI
       // client is connected, it is the radio's restored default profile brought up
       // by OUR `client gui` registration, not something an operator is using. Left
@@ -373,6 +405,23 @@ export class FlexDaxTransmitter {
       await client.command(`slice tune ${txSlice.index} ${mhz}`).catch(() => {});
       if (!/^DIG[UL]$/i.test(txSlice.mode ?? "")) {
         await client.command(`slice set ${txSlice.index} mode=DIGU`).catch(() => {});
+      }
+      // AND MAKE IT THE TRANSMIT SLICE. Steering a slice we then do not transmit through
+      // is the worst of both: the operator's display moves and the RF still goes out
+      // somewhere else. Checked rather than swallowed, for the reason written above the
+      // other `tx=1`.
+      if (this.opts.controlMainSlice && !txSlice.tx) {
+        const claim = await client.command(`slice set ${txSlice.index} tx=1`);
+        if (claim.status !== 0) {
+          throw new Error(
+            `The radio refused to make slice ${txSlice.index} the transmit slice ` +
+              `(0x${claim.status.toString(16)}). Another client may hold it. Without a ` +
+              `transmit slice, keying produces no RF.`,
+          );
+        }
+        console.log(
+          `[flex/tx] took control of slice ${txSlice.index} at ${mhz} MHz DIGU as the transmit slice`,
+        );
       }
     }
     this.sliceIndex = txSlice.index;

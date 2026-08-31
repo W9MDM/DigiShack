@@ -905,6 +905,20 @@ export const SETTINGS: SettingDef[] = [
     default: "20",
   },
   {
+    key: "flex.controlMainSlice",
+    label: "Take control of the radio's active slice",
+    type: "boolean",
+    group: "flex",
+    help:
+      "Tunes the slice you are looking at to the operating frequency, sets it to DIGU, and " +
+      "makes it the transmit slice. Leave it on unless you deliberately want SmartSDR to own " +
+      "the radio. With it OFF and SmartSDR connected, DigiShack transmits through whichever " +
+      "slice already carries the TX flag and does not touch it — which on two stations meant " +
+      "transmitting on 40m while the operator worked 20m, through a slice that was in CW with " +
+      "no transmit audio. It keys and no power comes out.",
+    default: "true",
+  },
+  {
     key: "flex.allowTransmit",
     label: "Allow transmit",
     type: "boolean",
