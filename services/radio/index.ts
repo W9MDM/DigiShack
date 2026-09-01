@@ -63,6 +63,7 @@ import {
   toFlexMode,
 } from "@/lib/radio/modes";
 import { spectrumMessage } from "@/lib/radio/spectrum";
+import { logDedupKey, normaliseCallsign, normaliseMode } from "@/lib/radio/log-dedup";
 import { WaterfallCanvas, overlayText } from "@/lib/stream/frame";
 import { YouTubeStream } from "@/lib/stream/youtube";
 import { broadcastAction } from "@/lib/radio/broadcast-policy";
@@ -858,7 +859,29 @@ async function onQsoLogged(msg: QSOLoggedMsg): Promise<void> {
     return;
   }
 
-  const key = `${msg.dxCall}|${band}|${msg.mode}`;
+  // WSJT-X reports FT4 as MFSK; the submode is what belongs in the log. Resolved HERE,
+  // above the dedup key, and that placement is the entire fix.
+  const mode = normaliseMode(msg.mode);
+  const callsign = normaliseCallsign(msg.dxCall);
+
+  // THE KEY MUST BE MADE OF WHAT GETS STORED, and it was not.
+  //
+  // It read `${msg.dxCall}|${band}|${msg.mode}` — the RAW fields — while the row it was
+  // protecting stored `msg.dxCall.toUpperCase()` and `normaliseMode(msg.mode)`. So every
+  // spelling of the same contact was a different key and none of them collided:
+  //
+  //     msg.mode "MFSK"  -> key ...|MFSK  -> stored mode FT4
+  //     msg.mode "FT4"   -> key ...|FT4   -> stored mode FT4
+  //     msg.dxCall "kb1ejq" -> key kb1ejq|... -> stored callsign KB1EJQ
+  //
+  // Any two of those inside the window both got written, as two rows identical in the
+  // columns anybody looks at. Reported from another station as three log entries per
+  // callsign on FT4, one carrying the grid and the others not.
+  //
+  // This is the same fault as the frequency guard in 1.164.0 and the deploy check in
+  // 1.170.4: a guard keyed on a value that is not the value it is guarding. The window
+  // was never the problem — it was watching for a collision that could not happen.
+  const key = logDedupKey(msg.dxCall, band, msg.mode);
   const now = Date.now();
   if (now - (recentlyLogged.get(key) ?? 0) < RESEND_WINDOW_MS) return;
   recentlyLogged.set(key, now);
@@ -879,13 +902,11 @@ async function onQsoLogged(msg: QSOLoggedMsg): Promise<void> {
   }
 
   const startTime = msg.dateTimeOn ?? new Date();
-  // WSJT-X reports MFSK for FT4; the submode is what belongs in the log.
-  const mode = normaliseMode(msg.mode);
 
   try {
     await prisma.qso.create({
       data: {
-        callsign: msg.dxCall.toUpperCase(),
+        callsign,
         band,
         freqHz: BigInt(msg.txFrequency || 0),
         mode,
@@ -910,13 +931,6 @@ async function onQsoLogged(msg: QSOLoggedMsg): Promise<void> {
       err instanceof Error ? err.message : err,
     );
   }
-}
-
-function normaliseMode(mode: string): string {
-  const m = mode.trim().toUpperCase();
-  // WSJT-X reports FT4 as MFSK; DigiShack stores what the operator calls it.
-  if (m === "MFSK") return "FT4";
-  return m.slice(0, 12) || "FT8";
 }
 
 // ---------------------------------------------------------------------------
