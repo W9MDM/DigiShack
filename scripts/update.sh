@@ -46,9 +46,47 @@ if [ "$DO_PULL" -eq 1 ]; then
   step "Fetching updates"
   command -v git >/dev/null 2>&1 || die "git not found (use --no-pull if you update another way)"
 
-  if [ -n "$(git status --porcelain)" ]; then
-    git status --short
+  # NPM-MANAGED FILES ARE RECLAIMED, NOT PROTECTED.
+  #
+  # This refused every update on another operator's station, forever, with:
+  #
+  #     ==> Fetching updates
+  #      M package-lock.json
+  #      M package.json
+  #         fail working tree has uncommitted changes — commit, stash, or use --no-pull
+  #
+  # He had hand-edited nothing. `npm install` during first-time setup resolves and
+  # rewrites the lockfile, and a different npm version normalises package.json — so an
+  # untouched installation goes dirty simply by having been installed, and then declines
+  # every release after it with no way out but a shell and some git knowledge. He sat four
+  # releases behind a frequency-guard fix because of these two lines.
+  #
+  # `lib/update/runner.ts` fixed exactly this — see its NPM_MANAGED comment, which quotes
+  # the same two filenames. The shell path never learned it, and the shell path is the one
+  # the README documents for other operators.
+  #
+  # They are build inputs owned by the repository. Nobody hand-edits them on a deployed
+  # install and the incoming version is authoritative. Everything else still blocks: a
+  # modified source file is a real edit and is what this guard was written to protect.
+  DIRTY="$(git status --porcelain | grep -vE '[ /](package|package-lock)\.json$' || true)"
+  if [ -n "$DIRTY" ]; then
+    printf '%s\n' "$DIRTY"
     die "working tree has uncommitted changes — commit, stash, or use --no-pull"
+  fi
+
+  # Discarded because `git merge --ff-only` REFUSES outright when a tracked file it would
+  # touch has local modifications. Without this the merge fails and reports a diverged
+  # branch, which is not what happened and points nowhere useful.
+  #
+  # Reclaiming exactly what the filter above forgave, taken from git rather than assumed:
+  # a hardcoded `package.json package-lock.json` would forgive a nested one and then fail
+  # to restore it, which is the same broken merge with an even stranger explanation.
+  NPM_DIRTY="$(git status --porcelain | grep -E '[ /](package|package-lock)\.json$' | cut -c4- || true)"
+  if [ -n "$NPM_DIRTY" ]; then
+    printf '%s\n' "$NPM_DIRTY" | while IFS= read -r f; do
+      [ -n "$f" ] && git checkout -- "$f"
+    done
+    ok "reclaimed $(printf '%s' "$NPM_DIRTY" | tr '\n' ' ')— npm rewrites these, the incoming version wins"
   fi
 
   BRANCH="$(git rev-parse --abbrev-ref HEAD)"
