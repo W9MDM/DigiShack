@@ -28,6 +28,7 @@ import { withPageAuth } from "@/lib/auth/guard";
 import { bridgeWsUrl } from "@/lib/bridge/ws-url";
 import { useApi } from "@/lib/client/api";
 import { LAND_RINGS } from "@/lib/geo/land";
+import { dragDelta, panView, zoomView, type ViewBounds } from "@/lib/geo/viewport";
 import { colourFor } from "@/lib/ham/band-colours";
 import { gridFromMessage } from "@/lib/ham/grid-message";
 import { cn } from "@/lib/utils";
@@ -76,6 +77,8 @@ const LIVE_TTL_MS = 15 * 60_000;
 
 const W = 1440;
 const H = 720;
+/** The projected extent, handed to the viewport maths so it owns no constants of its own. */
+const BOUNDS: ViewBounds = { width: W, height: H };
 
 function project(lat: number, lon: number): { x: number; y: number } {
   return { x: ((lon + 180) / 360) * W, y: ((90 - lat) / 180) * H };
@@ -293,15 +296,11 @@ export default function GridMapPage({ wsUrl }: Props) {
     (e: React.WheelEvent<SVGSVGElement>) => {
       e.preventDefault();
       const at = toMap(e);
-      setView((v) => {
-        const factor = e.deltaY > 0 ? 1.25 : 0.8;
-        const w = Math.min(W, Math.max(40, v.w * factor));
-        const h = (w * H) / W;
-        // Zoom about the cursor: keep the map point under it under it.
-        const x = Math.min(Math.max(at.x - ((at.x - v.x) / v.w) * w, 0), W - w);
-        const y = Math.min(Math.max(at.y - ((at.y - v.y) / v.h) * h, 0), H - h);
-        return { x, y, w, h };
-      });
+      // `at` is a local const, so this updater was already safe — unlike the pan one it
+      // sits beside. Routed through the same module anyway so both share one clamp and one
+      // set of assertions, rather than two copies that can drift apart.
+      const factor = e.deltaY > 0 ? 1.25 : 0.8;
+      setView((v) => zoomView(v, at, factor, BOUNDS));
     },
     [toMap],
   );
@@ -311,20 +310,33 @@ export default function GridMapPage({ wsUrl }: Props) {
     (e.target as Element).setPointerCapture?.(e.pointerId);
   };
   const onPointerMove = (e: React.PointerEvent<SVGSVGElement>) => {
-    if (!drag.current) return;
+    // READ THE REF ONCE, INTO A LOCAL, and never inside the updater below.
+    //
+    // This crashed /gridmap to a blank screen: the old code guarded `if (!drag.current)`
+    // and then read `drag.current!.vx` from inside the `setView` updater. React runs the
+    // updater when it processes the update, not when this handler returns — and by then
+    // `onPointerUp` has set the ref to null. "Cannot read properties of null (reading
+    // 'vx')". The guard was real, it just protected the wrong instant.
+    //
+    // `anchor` is a value. The updater closes over the value, so releasing the pointer
+    // mid-update can no longer pull the anchor out from under it.
+    const anchor = drag.current;
+    if (!anchor) return;
     const rect = svgRef.current?.getBoundingClientRect();
     if (!rect) return;
-    const dx = ((e.clientX - drag.current.px) / rect.width) * view.w;
-    const dy = ((e.clientY - drag.current.py) / rect.height) * view.h;
-    setView((v) => ({
-      ...v,
-      x: Math.min(Math.max(drag.current!.vx - dx, 0), W - v.w),
-      y: Math.min(Math.max(drag.current!.vy - dy, 0), H - v.h),
-    }));
+    const { dx, dy } = dragDelta(anchor, e.clientX, e.clientY, rect, view);
+    setView((v) => panView(anchor, v, dx, dy, BOUNDS));
   };
   const onPointerUp = () => {
     drag.current = null;
   };
+  // POINTER CANCEL, which was missing and is not the same event as up.
+  //
+  // A touch interrupted by a browser gesture, a pen leaving range, or the window losing
+  // the capture fires `pointercancel` or `lostpointercapture` and NEVER `pointerup`. The
+  // anchor then stayed set, so the map kept panning against a finger that was no longer
+  // there until the next press.
+  const onPointerCancel = onPointerUp;
 
   // ------------------------------------------------------------------- derived
 
@@ -394,6 +406,8 @@ export default function GridMapPage({ wsUrl }: Props) {
             onPointerDown={onPointerDown}
             onPointerMove={onPointerMove}
             onPointerUp={onPointerUp}
+            onPointerCancel={onPointerCancel}
+            onLostPointerCapture={onPointerCancel}
             role="img"
             aria-label="World map of live decodes, contacts and reception reports"
           >

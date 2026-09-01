@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.170.2 - public release
+## 1.170.3 - public release
 
 Development happens in a private repository; this is where the public history starts.
 Earlier entries are not reproduced - they quote real operators by callsign, include
@@ -22,6 +22,7 @@ Notes for anyone running this:
 
 ## Release history
 
+- **1.170.3** — The grid map died when you let go of the mouse
 - **1.170.2** — A timing check that failed by four milliseconds
 - **1.170.1** — Four faults the streaming verifier found that reasoning had not
 - **1.170.0** — Put the station on YouTube Live

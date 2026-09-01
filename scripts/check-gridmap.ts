@@ -5,6 +5,14 @@
 // are pinned against hand-computed values.
 
 import { LAND_RINGS } from "@/lib/geo/land";
+import {
+  dragDelta,
+  panView,
+  zoomView,
+  MIN_VIEW_W,
+  type DragAnchor,
+  type ViewWindow,
+} from "@/lib/geo/viewport";
 import { gridFromMessage } from "@/lib/ham/grid-message";
 import { gridToLatLon } from "@/lib/propagation";
 
@@ -90,6 +98,108 @@ console.log("\nthe vendored coastlines are actually there");
   // with room for a future re-quantization, not a target to hit.
   eq(points > 4_000, true, `enough coastline to draw (${points} points)`);
   eq(inRange, true, "every coordinate is a real place on Earth");
+}
+
+console.log("\nTHE CRASH: a drag anchor read after the pointer let go");
+{
+  // THE FAULT, REPRODUCED rather than described. /gridmap died to a blank screen with
+  // "TypeError: Cannot read properties of null (reading 'vx')" because the pan maths lived
+  // inside a setView updater and reached out to a ref for its anchor:
+  //
+  //     if (!drag.current) return;                                    // guard runs NOW
+  //     setView((v) => ({ ...v, x: ... drag.current!.vx - dx ... }))  // runs LATER
+  //
+  // React calls the updater when it processes the update, not when the handler returns, and
+  // onPointerUp had nulled the ref in between. This asserts the SEQUENCE — capture, release,
+  // then apply. The old code threw here; the fix cannot, because the anchor is a parameter
+  // and a pure function has no ref to reach for.
+  const BOUNDS = { width: W, height: H };
+  const view: ViewWindow = { x: 200, y: 100, w: 720, h: 360 };
+
+  // Exactly what the component does on pointer-down.
+  const ref: { current: DragAnchor | null } = {
+    current: { px: 500, py: 300, vx: view.x, vy: view.y },
+  };
+  const anchor = ref.current;
+  if (!anchor) throw new Error("fixture is wrong");
+  const { dx, dy } = dragDelta(anchor, 460, 280, { width: 1440, height: 720 }, view);
+
+  // THE POINTER LETS GO before React reaches the updater. This is the whole bug.
+  ref.current = null;
+
+  let threw: string | null = null;
+  let panned: ViewWindow | null = null;
+  try {
+    panned = panView(anchor, view, dx, dy, BOUNDS);
+  } catch (e) {
+    threw = (e as Error).message;
+  }
+  eq(threw, null, "panning after the pointer let go does not throw");
+  eq(panned !== null, true, "and it still produces a view");
+  // 40 px left on a 1440-wide element showing a 720-unit window is 20 projected units, and
+  // the map follows the finger: the origin increases.
+  close(panned?.x ?? -1, 220, 0.001, "the view moved the right way by the right amount");
+  eq(panned?.y, 110, "and vertically too");
+
+  // The other direction, so a sign error cannot pass by symmetry.
+  const back = dragDelta(anchor, 540, 320, { width: 1440, height: 720 }, view);
+  eq(panView(anchor, view, back.dx, back.dy, BOUNDS).x, 180, "dragging the other way moves back");
+}
+
+console.log("\npan cannot walk the map off its own edges");
+{
+  const BOUNDS = { width: W, height: H };
+  const view: ViewWindow = { x: 0, y: 0, w: 720, h: 360 };
+  const anchor: DragAnchor = { px: 0, py: 0, vx: 0, vy: 0 };
+
+  eq(panView(anchor, view, 5_000, 5_000, BOUNDS).x, 0, "a huge drag stops at the left edge");
+  eq(panView(anchor, view, 5_000, 5_000, BOUNDS).y, 0, "and at the top");
+  const far: DragAnchor = { px: 0, py: 0, vx: W, vy: H };
+  eq(panView(far, view, -5_000, -5_000, BOUNDS).x, W - view.w, "and at the right edge");
+  eq(panView(far, view, -5_000, -5_000, BOUNDS).y, H - view.h, "and at the bottom");
+
+  // FULLY ZOOMED OUT, where `width - w` is exactly zero.
+  const whole: ViewWindow = { x: 0, y: 0, w: W, h: H };
+  eq(panView(anchor, whole, 100, 100, BOUNDS).x, 0, "a full-extent view cannot be dragged");
+  eq(panView(anchor, whole, -100, -100, BOUNDS).x, 0, "in either direction");
+
+  // WIDER THAN THE BOUNDS, which makes the clamp range run backwards. The minimum must win,
+  // or the map leaps off-screen at the moment it is most zoomed out.
+  const wider: ViewWindow = { x: 0, y: 0, w: W + 200, h: H + 100 };
+  eq(panView(anchor, wider, -500, -500, BOUNDS).x, 0, "a view wider than the map clamps to 0");
+  eq(panView(anchor, wider, -500, -500, BOUNDS).y, 0, "not to a negative origin");
+
+  // A zero-sized element reports width 0. Dividing by it gives Infinity, which would clamp
+  // the view into a corner rather than leaving it alone.
+  const d = dragDelta(anchor, 100, 100, { width: 0, height: 0 }, view);
+  eq(d.dx, 0, "an unlaid-out element yields no movement, not Infinity");
+  eq(Number.isFinite(panView(anchor, view, d.dx, d.dy, BOUNDS).x), true, "so the view stays finite");
+}
+
+console.log("\nzoom keeps the point under the cursor under the cursor");
+{
+  const BOUNDS = { width: W, height: H };
+  const view: ViewWindow = { x: 0, y: 0, w: W, h: H };
+  const at = { x: 720, y: 360 };
+
+  const inOnce = zoomView(view, at, 0.8, BOUNDS);
+  eq(inOnce.w, W * 0.8, "zooming in narrows the window");
+  close(inOnce.w / inOnce.h, W / H, 1e-9, "and the aspect ratio is preserved");
+  // The cursor was at the centre, so the centre must still be under it.
+  close(inOnce.x + inOnce.w / 2, at.x, 0.001, "the grabbed point stays put horizontally");
+  close(inOnce.y + inOnce.h / 2, at.y, 0.001, "and vertically");
+
+  // The floor, and that repeated zooming does not breach it or go NaN on the way.
+  let v = view;
+  for (let i = 0; i < 40; i++) v = zoomView(v, at, 0.8, BOUNDS);
+  eq(v.w, MIN_VIEW_W, `forty zooms in stops at the floor (${MIN_VIEW_W})`);
+  eq(Number.isFinite(v.x) && Number.isFinite(v.y), true, "with a finite origin throughout");
+
+  // And the ceiling.
+  for (let i = 0; i < 60; i++) v = zoomView(v, at, 1.25, BOUNDS);
+  eq(v.w, W, "and zooming out stops at the whole world");
+  eq(v.x, 0, "flush to the left edge");
+  eq(v.y, 0, "and the top");
 }
 
 console.log(failed === 0 ? "\nall grid map assertions passed" : `\n${failed} FAILED`);
