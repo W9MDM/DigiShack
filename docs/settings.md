@@ -32,6 +32,7 @@ be read: `DATABASE_URL`, `SETTINGS_KEY` and `PORT`.
 - [Operating schedule](#operating-schedule) — 5 settings
 - [Bridge watchdog](#bridge-watchdog) — 2 settings
 - [Icom (network)](#icom-network) — 13 settings
+- [YouTube Live](#youtube-live) — 2 settings
 - [Issue alerts](#issue-alerts) — 4 settings
 - [Software updates](#software-updates) — 1 setting
 - [Outgoing email](#outgoing-email) — 7 settings
@@ -251,6 +252,15 @@ Used when the digital source is `icom`. Speaks the RS-BA1 network protocol direc
 | Allow transmit | `icom.allowTransmit` | on/off | `false` | Off means nothing can key this radio, ever. Separate from the FlexRadio's switch on purpose, and it inherits nothing from it: arming a Flex sitting on a proper antenna says nothing about an IC-7300 that might be on a dummy load or halfway through being set up. Each radio is armed deliberately or not at all. |
 | Silence threshold | `icom.silenceRms` | number | `0.0008` | Windows quieter than this are skipped without decoding. Lower than the FlexRadio equivalent on purpose: Icom audio arrives at 48 kHz and needs two decimation passes to reach the decoders' 12 kHz, against the Flex's one from 24 kHz, and the filter has about 0.8 gain per pass — so the same signal is roughly 20% quieter here. Reusing the Flex value would silently skip marginal windows and look like an antenna fault. |
 
+## YouTube Live
+
+Stream the waterfall and the receiver audio to YouTube. The audio is the actual band — what makes this worth watching rather than a silent screen recording. Needs a stream key from YouTube Studio; the key is stored encrypted and never leaves this server.
+
+| Setting | Key | Type | Default | What it does |
+|---|---|---|---|---|
+| YouTube stream key | `youtube.streamKey` | secret | — | From YouTube Studio → Go Live → Stream key. THIS IS A CREDENTIAL: anyone holding it can broadcast to your channel as you. Stored encrypted like any other secret here, never sent to the browser, and rewritten out of log lines before anything prints them — including ffmpeg’s own command line. |
+| Stream video bitrate (kbps) | `youtube.videoBitrateKbps` | limit | `2500` | 2500 suits 720p at ten frames a second, which is what a waterfall needs — it is a picture that scrolls, not a camera. Raising it costs encoder CPU on the same machine that decodes FT8, and the decoder has the better claim on it. |
+
 ## Issue alerts
 
 Email when the station goes wrong — the radio unreachable, the bridge restarted by its watchdog, uploads failing repeatedly. One email per condition with a cooldown, and a recovery note when it comes back. Uses the same SMTP settings as QSL email.
@@ -465,6 +475,7 @@ page shows whether one is set, not what it is.
 - `cloudlog.apiKey` — Cloudlog API key
 - `hrdlog.code` — HRDLOG upload code
 - `dxcc.ctyApiKey` — Club Log cty API key
+- `youtube.streamKey` — YouTube stream key
 - `icom.password` — Network password
 - `bridge.token` — Bridge shared secret
 - `smtp.password` — SMTP password

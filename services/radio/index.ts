@@ -63,6 +63,8 @@ import {
   toFlexMode,
 } from "@/lib/radio/modes";
 import { spectrumMessage } from "@/lib/radio/spectrum";
+import { WaterfallCanvas, overlayText } from "@/lib/stream/frame";
+import { YouTubeStream } from "@/lib/stream/youtube";
 import { broadcastAction } from "@/lib/radio/broadcast-policy";
 import { panadapterMessage } from "@/lib/radio/panadapter";
 import { AUDIO_STALL_MS } from "@/lib/flex/panadapter";
@@ -83,7 +85,7 @@ import {
   type ScheduleConfig,
 } from "@/lib/radio/schedule";
 import { startScheduleRunner } from "@/lib/radio/schedule-runner";
-import { FlexDaxSource } from "@/lib/flex/dax";
+import { FlexDaxSource, DAX_SAMPLE_RATE } from "@/lib/flex/dax";
 import { discoverRadios } from "@/lib/flex/discovery";
 import { freqToBand } from "@/lib/ham/bands";
 import { inferDigitalMode, type DigitalMode } from "@/lib/ham/digital-freqs";
@@ -442,6 +444,28 @@ let activeGuards: OperatingGuards | null = null;
  * reconnect.
  */
 let activeTxPower: TxPowerTracker | null = null;
+
+/**
+ * The YouTube stream, when one is running.
+ *
+ * Module scope beside the other actives because the spectrum tap, the audio tap and the
+ * control endpoint are built in different places and all three need it. Null is the normal
+ * state: nothing about streaming runs unless somebody started it.
+ */
+let liveStream: YouTubeStream | null = null;
+let liveCanvas: WaterfallCanvas | null = null;
+/** Frames are emitted on a timer rather than per spectrum row — see the tap. */
+let liveTimer: NodeJS.Timeout | null = null;
+let streamOverlayTimer: NodeJS.Timeout | null = null;
+/**
+ * Why the last stream stopped, kept after the stream object is gone.
+ *
+ * A rejected key kills ffmpeg about a second after it connects, so by the time anybody
+ * looks at the page the stream is already null and the reason would otherwise have gone
+ * with it — leaving "not streaming" and no explanation, which is the least useful
+ * thing a status can say.
+ */
+let lastStreamError: string | null = null;
 
 /**
  * Did the radio report any real forward power during the transmission in progress?
@@ -1338,6 +1362,8 @@ async function startFlexSource(): Promise<() => Promise<void>> {
   // Receiver audio to any browser listening. Both radios emit the same event; only the
   // sample rate differs, and a listener is told which at connect.
   source.on("audio", ({ samples }) => {
+    // The band itself, which is the whole reason a stream of this is worth watching.
+    liveStream?.writeAudio(samples);
     // The audio watchdog's only heartbeat, and the reason it is trustworthy: this fires
     // when the RADIO sends samples, so no timer of ours can keep it alive through a dead
     // receiver. See where it is armed.
@@ -1348,6 +1374,11 @@ async function startFlexSource(): Promise<() => Promise<void>> {
   source.on("spectrum", (row) => {
     lastSpectrum = spectrumMessage(row, source.mode, source.periodMs);
     broadcast(lastSpectrum);
+    // One waterfall row per spectrum row, exactly as the browser draws it. The FRAME is
+    // emitted on its own timer below: the encoder wants a steady rate whether or not the
+    // radio produced a row, and a variable frame rate is how a stream ends up out of sync
+    // with its own audio.
+    liveCanvas?.push({ bins: row.bins, binHz: row.binHz, maxHz: row.maxHz });
   });
 
   // RF spectrum. A different message from `spectrum`, not a variant of it — one
@@ -2631,6 +2662,152 @@ async function main(): Promise<void> {
     }
   }
 
+  // -------------------------------------------------------------------------
+  // YouTube Live
+  // -------------------------------------------------------------------------
+
+  /** Frames a second. Ten is plenty for a waterfall — it is a scrolling picture, not a camera. */
+  const STREAM_FPS = 10;
+  const STREAM_W = 1280;
+  const STREAM_H = 720;
+  /**
+   * Room at the top for the decode list ffmpeg draws over the frame.
+   *
+   * MEASURED FROM THE FONT, not chosen: `drawtext` starts at y=14 and each line is
+   * fontsize 17 plus line_spacing 4, so a header, a blank and ten decodes need
+   * 14 + 12 x 21 = 266. 280 leaves a margin without spending more of a 720-line frame on
+   * text than the waterfall can afford.
+   */
+  const STREAM_TOP_MARGIN = 280;
+
+  /**
+   * QSOs today, for the overlay.
+   *
+   * Cached and refreshed on a slow timer rather than counted per frame: at ten frames a
+   * second a database round trip per frame would be 600 queries a minute to render one
+   * number that changes a few times an hour.
+   */
+  let streamQsosToday = 0;
+  let streamQsoCountAt = 0;
+
+  async function refreshStreamQsoCount(): Promise<void> {
+    if (Date.now() - streamQsoCountAt < 30_000) return;
+    streamQsoCountAt = Date.now();
+    try {
+      const start = new Date();
+      start.setUTCHours(0, 0, 0, 0);
+      streamQsosToday = await prisma.qso.count({ where: { startTime: { gte: start } } });
+    } catch {
+      /* the overlay keeps the previous number; a failed count is not worth dropping a stream over */
+    }
+  }
+
+  async function startStream(): Promise<{ ok: boolean; detail: string }> {
+    if (liveStream?.status.running) {
+      return { ok: true, detail: "Already streaming." };
+    }
+    const key = (await getSetting("youtube.streamKey"))?.trim();
+    if (!key) {
+      return {
+        ok: false,
+        detail:
+          "No YouTube stream key is set. Settings → YouTube Live, then copy the key from YouTube Studio → Go Live.",
+      };
+    }
+    const bitrate = Number((await getSetting("youtube.videoBitrateKbps")) ?? 2500) || 2500;
+
+    const stream = new YouTubeStream({
+      streamKey: key,
+      width: STREAM_W,
+      height: STREAM_H,
+      fps: STREAM_FPS,
+      videoBitrateKbps: bitrate,
+      audioRate: DAX_SAMPLE_RATE,
+      // Logged through the bridge's own console, with the key rewritten out first.
+      onLog: (line) => console.log(line),
+    });
+    const canvas = new WaterfallCanvas({ width: STREAM_W, height: STREAM_H }, {
+      topMargin: STREAM_TOP_MARGIN,
+    });
+
+    try {
+      await stream.start();
+    } catch (err) {
+      return { ok: false, detail: (err as Error).message };
+    }
+
+    liveStream = stream;
+    liveCanvas = canvas;
+    lastStreamError = null;
+
+    // ONE FRAME PER TICK whether or not the radio produced a spectrum row. The encoder
+    // wants a steady rate; feeding it only when the receiver has something to say is how a
+    // stream drifts out of sync with its own audio and then stalls when the band goes quiet.
+    liveTimer = setInterval(() => {
+      if (!liveStream || !liveCanvas) return;
+      // ffmpeg gone — a rejected stream key is the common way, and YouTube rejects one
+      // within a second of connecting. Tear the timers down rather than spending the rest
+      // of the day drawing frames into a closed pipe.
+      if (!liveStream.status.running) {
+        void stopStream();
+        return;
+      }
+      liveStream.writeFrame(liveCanvas.rgb);
+      void refreshStreamQsoCount();
+    }, Math.round(1000 / STREAM_FPS));
+
+    // The text is rebuilt once a second, not per frame: `drawtext` re-reads the file every
+    // frame anyway, and rewriting it ten times a second would be ten times the disk churn
+    // for a list that changes once a cycle.
+    const overlayTimer = setInterval(() => {
+      if (!liveStream) return;
+      const recent = recentDecodes.slice(-12).reverse() as {
+        timestamp: string;
+        message: string;
+        snr: number;
+      }[];
+      liveStream.setOverlay(
+        overlayText({
+          callsign: status.deCall ?? "",
+          grid: status.deGrid ?? "",
+          band: status.band,
+          mode: status.subMode ?? status.mode,
+          dialHz: status.dialFrequency,
+          qsosToday: streamQsosToday,
+          decodes: recent.map((d) => ({
+            at: (d.timestamp ?? "").slice(11, 19),
+            message: d.message,
+            snr: d.snr,
+          })),
+        }),
+      );
+    }, 1_000);
+    streamOverlayTimer = overlayTimer;
+
+    console.log(`[stream] live at ${STREAM_W}x${STREAM_H} ${STREAM_FPS}fps ${bitrate}kbps`);
+    return { ok: true, detail: "Streaming to YouTube. It takes YouTube about 20 seconds to show it." };
+  }
+
+  async function stopStream(): Promise<void> {
+    const why = liveStream?.status.lastError ?? null;
+    if (why) console.log(`[stream] stopped: ${why}`);
+    lastStreamError = why;
+    if (liveTimer) clearInterval(liveTimer);
+    if (streamOverlayTimer) clearInterval(streamOverlayTimer);
+    liveTimer = null;
+    streamOverlayTimer = null;
+    liveCanvas = null;
+    const s = liveStream;
+    liveStream = null;
+    await s?.stop();
+  }
+
+  // A stream must not outlive the bridge: ffmpeg holds an RTMP connection open and YouTube
+  // will happily keep showing a frozen frame to anyone watching.
+  process.on("exit", () => {
+    void liveStream?.stop();
+  });
+
   // Only meaningful with an external decoder: the native paths have nothing to talk
   // to, and rig control there goes through the radio's own API instead.
   const sendToDecoder = (buf: Buffer): boolean => {
@@ -2652,6 +2829,9 @@ async function main(): Promise<void> {
           qso: activeQso()?.state ?? null,
           auto: activeAuto()?.state ?? null,
           telemetry: lastTelemetry,
+          // Counters and state only. The key is not here, is not derivable from anything
+          // here, and this payload is served UNAUTHENTICATED to the web app.
+          stream: liveStream?.status ?? { running: false, lastError: lastStreamError },
           clock: clockState(),
           // MEMORY, because the bridge grew from ~107 MB to 653 MB over 3.6 hours and
           // starved a deploy: the Next build was OOM-killed after it had already deleted
@@ -2789,6 +2969,19 @@ async function main(): Promise<void> {
         });
         // After the response is on the wire. 250 ms matches the watchdog's own exit path.
         setTimeout(() => process.exit(0), 250);
+        return;
+      }
+
+      if (url.pathname === "/stream") {
+        const body = await readJson(req);
+        const enable = body.enable !== false;
+        if (enable) {
+          const result = await startStream();
+          sendJson(res, result.ok ? 200 : 400, result);
+        } else {
+          await stopStream();
+          sendJson(res, 200, { ok: true, detail: "Stopped streaming." });
+        }
         return;
       }
 

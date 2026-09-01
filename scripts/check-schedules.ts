@@ -97,7 +97,14 @@ console.log("\nno timer in the bridge is unaccounted for");
   // running connection or a reaction to one, not scheduled work with an operator-visible
   // cadence — listing them would bury the nine that matter under a dozen that do not.
   const EXCLUDED: Record<string, string> = {
-    "1_000": "PA duty poll — samples the transmitter, not a scheduled job",
+    // TWO TIMERS SHARE THIS ARGUMENT, which the exclusion list keys on. Named here rather
+    // than left to the first reason that happened to be written, because an exclusion that
+    // describes one timer while silently covering another is the check lying about its own
+    // coverage.
+    "1_000":
+      "PA duty poll and the stream overlay rewrite — both sample a running thing, neither is a scheduled job",
+    "Math.round(1000 / STREAM_FPS)":
+      "YouTube frame timer — part of a running stream, and it only exists while one is live",
     "500": "frequency publish — part of the Icom source's live state",
     "30_000": "listed as operating-schedule",
     "10_000": "listed as transmit-gate",

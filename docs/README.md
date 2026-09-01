@@ -19,8 +19,9 @@ and a backup moves the whole installation.
 | [POTA](pota.md) | Chasing parks, importing your hunter log, the page |
 | [QSL cards and email](qsl.md) | Designing a card, the templates, sending one, sending hundreds |
 | [Logbook sync](logbook-sync.md) | Uploads, QRZ's differential download, and what Sent and Rcvd actually mean |
+| [Streaming to YouTube](streaming.md) | Putting the waterfall and the receiver audio on YouTube Live |
 | [Backup and moving](backup-and-moving.md) | Bundles, restore, and the two traps that break a migration |
-| [Settings reference](settings.md) | Every one of the 102 settings, generated from the code |
+| [Settings reference](settings.md) | Every one of the 175 settings, generated from the code |
 | [Networked Icom](icom.md) | Driving an IC-7300 or IC-705 over the network, with no bridge software |
 | [Architecture](architecture.md) | What runs where, and why the radio is its own process |
 | [Icom protocol](icom-protocol.md) | The RS-BA1 wire format, for anyone working on the driver |

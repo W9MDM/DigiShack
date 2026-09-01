@@ -267,6 +267,12 @@ export const SETTING_GROUPS: SettingGroup[] = [
       "Used when the digital source is `icom`. Speaks the RS-BA1 network protocol directly — the same one the Icom remote software uses — so no third-party bridge, no virtual audio cable and no virtual COM port. The username and password are the ones set in the radio's own network menu, not your callsign or your DigiShack login.",
   },
   {
+    id: "youtube",
+    title: "YouTube Live",
+    blurb:
+      "Stream the waterfall and the receiver audio to YouTube. The audio is the actual band — what makes this worth watching rather than a silent screen recording. Needs a stream key from YouTube Studio; the key is stored encrypted and never leaves this server.",
+  },
+  {
     id: "alerts",
     doc: "troubleshooting",
     docLabel: "What the station emails about, and what each alert means",
@@ -903,6 +909,28 @@ export const SETTINGS: SettingDef[] = [
     group: "flex",
     help: "How much the radio averages successive spectrum frames before sending them, 0-100. This is averaging in TIME, not across frequency: a steady carrier is present in every frame and averages to itself, while noise is different every frame and averages down — so unlike the resolution setting above, this does not smear a narrow signal into its neighbours. It was hardcoded off, and off is expensive: a single unaveraged FFT bin's noise spreads 12.65 dB from its 25th to its 99.5th percentile, and the display has to give all of that to the dark end of the colour ramp, leaving less of the palette for actual signals. Averaging four frames roughly halves that spread. 0 disables it; the display is correct either way, just grainier.",
     default: "20",
+  },
+  {
+    key: "youtube.streamKey",
+    label: "YouTube stream key",
+    type: "secret",
+    group: "youtube",
+    help:
+      "From YouTube Studio → Go Live → Stream key. THIS IS A CREDENTIAL: anyone holding it can " +
+      "broadcast to your channel as you. Stored encrypted like any other secret here, never sent to " +
+      "the browser, and rewritten out of log lines before anything prints them — including " +
+      "ffmpeg’s own command line.",
+  },
+  {
+    key: "youtube.videoBitrateKbps",
+    label: "Stream video bitrate (kbps)",
+    type: "limit",
+    group: "youtube",
+    help:
+      "2500 suits 720p at ten frames a second, which is what a waterfall needs — it is a picture " +
+      "that scrolls, not a camera. Raising it costs encoder CPU on the same machine that decodes FT8, " +
+      "and the decoder has the better claim on it.",
+    default: "2500",
   },
   {
     key: "flex.controlMainSlice",

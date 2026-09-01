@@ -100,6 +100,8 @@ export default function RigPage({ wsUrl }: Props) {
     reason?: string;
     status: RigStatus | null;
     telemetry: Telemetry | null;
+    /** Counters only — the stream key is never in this payload. */
+    stream: { running: boolean; since?: number | null; frames?: number; lastError?: string | null } | null;
   }>("/api/bridge/status");
 
   const [restarting, setRestarting] = useState(false);
@@ -328,6 +330,8 @@ export default function RigPage({ wsUrl }: Props) {
   const telemetry = data?.telemetry ?? null;
   const voice = status?.voice ?? null;
   const voiceOn = voice?.active === true;
+  const stream = data?.stream ?? null;
+  const streaming = stream?.running === true;
 
   // What this radio actually has. Every control below asks rather than assuming —
   // see lib/radio/capabilities.ts for the three defects that made that necessary.
@@ -608,6 +612,22 @@ export default function RigPage({ wsUrl }: Props) {
           <ErrorBanner>{actionError}</ErrorBanner>
         </div>
       )}
+
+      {/*
+        WHY THE STREAM STOPPED, rather than just that it did.
+
+        A rejected stream key kills ffmpeg about a second after it connects, so the button
+        goes back to "Go live" on its own and the operator is left with a control that
+        appears to do nothing. Reported here so the reason is on the page instead of in a
+        log file on the server.
+      */}
+      {!streaming && stream?.lastError && (
+        <div className="mb-4">
+          <ErrorBanner>
+            {`The YouTube stream stopped: ${stream.lastError}. If YouTube rejected it, check the stream key in Settings → YouTube Live — a key is per-channel and YouTube rotates it when you reset it in Studio.`}
+          </ErrorBanner>
+        </div>
+      )}
       {/*
         WHAT THE RADIO SAYS IS WRONG WITH TRANSMITTING.
 
@@ -807,6 +827,57 @@ export default function RigPage({ wsUrl }: Props) {
               className="px-2 py-1 text-xs rounded-sm border border-line text-fg-muted hover:text-fg hover:border-fg-muted"
             >
               {restarting ? "Restarting…" : "Restart service"}
+            </button>
+            {/*
+              YOUTUBE LIVE.
+
+              The waterfall and the receiver audio, pushed to the operator's channel. The
+              AUDIO is what makes it worth watching — a silent screen recording is neither
+              interesting nor, as far as YouTube is concerned, a healthy stream.
+
+              Confirmed on the way ON and not on the way off, which is the opposite of the
+              usual rule and deliberate: going live is the irreversible half. Stopping a
+              stream is always safe.
+
+              No key, no button state to guess at: the bridge holds the key, this only says
+              start or stop.
+            */}
+            <button
+              type="button"
+              disabled={busy === "stream" || restarting}
+              onClick={() => {
+                if (
+                  !streaming &&
+                  !window.confirm(
+                    "Go live on YouTube? The waterfall and the receiver audio start " +
+                      "broadcasting to your channel, and anything heard on the air goes out " +
+                      "with them. YouTube takes about 20 seconds to show it.",
+                  )
+                ) {
+                  return;
+                }
+                setBusy("stream");
+                setActionError(null);
+                void apiPost("/api/bridge/control", { action: "stream", enable: !streaming })
+                  .catch((e: Error) => setActionError(e.message))
+                  .finally(() => {
+                    setBusy(null);
+                    reload();
+                  });
+              }}
+              title={
+                streaming
+                  ? "Stop the YouTube stream."
+                  : "Stream the waterfall and the receiver audio to YouTube Live. Needs a stream key in Settings → YouTube Live."
+              }
+              className={cn(
+                "px-2 py-1 text-xs rounded-sm border",
+                streaming
+                  ? "border-danger text-danger"
+                  : "border-line text-fg-muted hover:text-fg hover:border-fg-muted",
+              )}
+            >
+              {busy === "stream" ? "…" : streaming ? "Live ●" : "Go live"}
             </button>
             <button
               type="button"

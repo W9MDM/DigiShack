@@ -30,6 +30,7 @@ const bodySchema = z.object({
     "time/sync",
     "voice",
     "pan-span",
+    "stream",
   ]),
   /** Which radio to drive. Changing it stops any automatic mode. */
   kind: z.enum(["flex", "icom", "wsjtx"]).optional(),
@@ -74,6 +75,14 @@ const bodySchema = z.object({
   takeOver: z.boolean().optional(),
   /** FT-0: true stops everything, false brings the radio back. */
   engage: z.boolean().optional(),
+  /**
+   * Start or stop the YouTube stream, for action "stream".
+   *
+   * The STREAM KEY IS NOT IN THIS REQUEST and must never be: it lives in encrypted
+   * settings and is read by the bridge, the same way the Club Log key is. A browser that
+   * could send it is a browser that could be made to leak it.
+   */
+  enable: z.boolean().optional(),
   /**
    * Panadapter span in hertz, for action "pan-span". Bounded by what the radio itself
    * accepts — the bridge clamps and reports back what was actually applied.
