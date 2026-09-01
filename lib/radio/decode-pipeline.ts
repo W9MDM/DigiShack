@@ -17,7 +17,8 @@
 import { nowMs } from "@/lib/time/clock";
 import { EventEmitter } from "node:events";
 
-import { decodeFT4, decodeFT8, HashCallBook } from "@e04/ft8ts";
+import { HashCallBook } from "@e04/ft8ts";
+import { DecodeThread } from "@/lib/radio/decode-thread";
 
 import { ft2DecodeAudio } from "@/lib/digital/ft2demod";
 import { HashCallBook as Ft2HashCallBook } from "@/lib/digital/pack77";
@@ -435,6 +436,19 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
    */
   private linkLatencyMs = 0;
 
+  /**
+   * The decoder, on its own thread.
+   *
+   * See lib/radio/decode-worker.mjs. Everything FT8 and FT4 goes through here; FT2 is our
+   * own port in lib/digital and still runs inline, which is a much shorter decode.
+   */
+  private readonly thread = new DecodeThread((line) => this.emit("error", new Error(line)));
+  /**
+   * KEPT ONLY FOR FT2, which decodes on this thread.
+   *
+   * The FT8/FT4 book now lives inside the worker, because it is stateful across windows and
+   * shipping it across a thread boundary every window would cost more than the decode.
+   */
   private readonly hashBook = new HashCallBook();
   private readonly ft2Book = new Ft2HashCallBook();
 
@@ -445,11 +459,10 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
    * The one full-band pass waiting for the transmitter, if any.
    *
    * At most one, ever. A second window cannot be cut while one is outstanding without
-   * the outstanding one being run first — see `drainDeferred` — so decodes are never
+   * the outstanding one being run first, so decodes are never
    * dropped and never reordered relative to their windows.
    */
-  private deferred: DeferredPass | null = null;
-  private deferTimer: NodeJS.Timeout | null = null;
+
 
   constructor(opts: DecodePipelineOptions) {
     super();
@@ -505,7 +518,6 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
     if (mode === this.mode) return false;
     // Anything still waiting on the transmitter was decoded under the OLD mode and is
     // still that mode's window. Run it before the switch rather than throwing it away.
-    this.drainDeferred();
     this.mode = mode;
     this.buffer = [];
     if (this.timer) {
@@ -568,10 +580,9 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
     this.buffer = [];
-    // Decodes already paid for. Emitting them on the way down is strictly better than
-    // discarding them — nothing downstream cares that the pipeline has stopped, and the
-    // window they belong to is stamped on every one of them.
-    this.drainDeferred();
+    // The decoder thread is NOT unref'd — see decode-thread.ts — so it has to be closed
+    // explicitly or the process will not exit. Anything mid-decode resolves empty.
+    void this.thread.close();
   }
 
   /**
@@ -645,7 +656,12 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
       this.dropUntil = windowStart.getTime() + period + lagNow;
 
       this.scheduleNextWindow(windowStart.getTime());
-      this.processWindow(samples, windowStart);
+      // Fire-and-forget by design: the cut schedule must not wait on a decode, which is
+      // the entire point of moving decoding off this thread. Rejections are caught so an
+      // unhandled one can never take the bridge down.
+      void this.processWindow(samples, windowStart).catch((err) =>
+        this.emit("error", err instanceof Error ? err : new Error("decode window failed")),
+      );
     }, delay);
     this.timer.unref?.();
   }
@@ -656,12 +672,11 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
    * Public so it can be driven directly by the golden test, which is the only way to
    * assert this behaviour without waiting out real T/R periods.
    */
-  processWindow(samples: number[], windowStart: Date): void {
+  async processWindow(samples: number[], windowStart: Date): Promise<void> {
     // A window from a LATER cut must never overtake decodes still waiting on the
     // transmitter. Bounded to one outstanding pass by construction: the deferral's own
     // deadline is the next cut, so in practice this fires only when the two race by a
     // few milliseconds.
-    this.drainDeferred();
 
     // A partial window (startup, or packet loss) cannot contain a whole transmission.
     // The buffer covers the transmission span plus the cut margin, so the floor is
@@ -719,7 +734,7 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
       const started = Date.now();
       let found: Decode[] = [];
       try {
-        found = this.decodeFT8Range(audio, windowStart, slice.loHz, slice.hiHz);
+        found = await this.decodeFT8Range(audio, windowStart, slice.loHz, slice.hiHz);
       } catch (err) {
         // NEVER FATAL, unlike a failure of the full pass. This is an optimisation on top
         // of a search that is about to happen anyway, so the only correct response to it
@@ -752,42 +767,20 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
       if (!anotherSliceFits(spentMs, sliceMs)) break;
     }
 
-    // TWO CONDITIONS, AND BOTH MATTER.
+    // NO DEFERRAL ANY MORE, and its removal is the point of the change.
     //
-    // `priority.length > 0` is the "what if the slice finds nothing" case, and it is not
-    // a corner: the slice is empty whenever the partner drifted, went quiet or was
-    // stepped on, and in every one of those the full pass is all there is. An empty
-    // slice therefore costs the ~110 ms of having looked and changes nothing else — no
-    // event, no deferral, no delay. It CANNOT replace the full pass and it CANNOT
-    // postpone it.
+    // The full pass used to WAIT here whenever a priority slice had found our partner and
+    // that reply had taken the transmitter — because the decode is 2.1-2.8 s of synchronous
+    // work, and running it on the main thread would have held the event loop straight
+    // through the instant we needed to key. Decoding and transmitting on time could not
+    // both happen, so one had to lose, and the operator saw the cost as decodes arriving
+    // 30 s after their window instead of 16.
     //
-    // `transmitPending` is the "did that actually make us key" case. `emit` is
-    // synchronous all the way down, so by the time control reaches this line the
-    // controller's handler has run, `runTick` has fired and the transmitter either took
-    // the reply or did not. Only if it did is there anything to protect, and only then
-    // does the full pass wait.
-    if (priority.length > 0 && this.transmitPendingFn?.() === true) {
-      this.deferred = {
-        audio,
-        windowStart,
-        rms,
-        priority,
-        spentMs,
-        // A safety valve, not the normal end of the wait — the transmitter clearing its
-        // flag is. The two are ordered on purpose and the arithmetic is exact: our FT8
-        // transmission ends 14,300 ms after this cut (15,000 - 13,840 to the next
-        // boundary, plus 500 to the start of the transmission, plus 12,640 of it), and
-        // this deadline is 15,000 ms, which is also the next window's cut. So a healthy
-        // transmission always releases the wait first with 700 ms to spare, and the
-        // deadline only ever fires for a flag that got stuck — where the lesser evil is
-        // delaying the NEXT window's decode rather than losing this one.
-        deadline: Date.now() + this.periodMs,
-      };
-      this.pollDeferred();
-      return;
-    }
-
-    this.runFullPass({ audio, windowStart, rms, priority, spentMs, deadline: 0 });
+    // The decode is on its own thread now. It cannot delay a key, so there is nothing to
+    // protect and nothing to postpone: every window is decoded, in the window it belongs
+    // to, whether or not we are about to transmit. Which is what WSJT-X does, for the same
+    // reason — `jt9` is a separate process.
+    await this.runFullPass({ audio, windowStart, rms, priority, spentMs, deadline: 0 });
   }
 
   /**
@@ -796,7 +789,7 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
    * Extracted from `processWindow` unchanged in behaviour — same options, same mapping,
    * same event — so that it can also be reached from the deferral timer.
    */
-  private runFullPass(p: DeferredPass): void {
+  private async runFullPass(p: DeferredPass): Promise<void> {
     const started = Date.now();
     let decoded: { freq: number; snr: number; dt: number; msg: string }[];
     try {
@@ -813,13 +806,19 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
           msg: d.message,
         }));
       } else {
-        const opts = {
+        // OFF THIS THREAD. The audio buffer is transferred rather than copied — nothing
+        // here needs it again, and the slice pass above already took its own copy.
+        const r = await this.thread.decode({
+          audio: p.audio,
+          mode: this.mode === "FT4" ? "FT4" : "FT8",
           sampleRate: DECODE_SAMPLE_RATE,
           depth: this.depth,
-          hashCallBook: this.hashBook,
           freqHigh: this.maxHz,
-        };
-        decoded = this.mode === "FT4" ? decodeFT4(p.audio, opts) : decodeFT8(p.audio, opts);
+        });
+        if (r.error) {
+          this.emit("error", new Error(`decode worker: ${r.error}`));
+        }
+        decoded = r.decodes.map((d) => ({ freq: d.freq, snr: d.snr, dt: d.dt, msg: d.msg }));
       }
     } catch (err) {
       this.emit("error", err instanceof Error ? err : new Error("decode failed"));
@@ -932,58 +931,31 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
   }
 
   /** One bounded FT8 search. Separate so the priority pass cannot drift from the full one. */
-  private decodeFT8Range(
+  private async decodeFT8Range(
     audio: Float32Array,
     windowStart: Date,
     loHz: number,
     hiHz: number,
-  ): Decode[] {
-    return decodeFT8(audio, {
+  ): Promise<Decode[]> {
+    // A COPY, because the buffer is TRANSFERRED to the worker and the caller still needs
+    // the audio for the full-band pass afterwards. ~330 kB against a decode measured in
+    // seconds; the alternative is decoding the band twice.
+    const r = await this.thread.decode({
+      audio: audio.slice(),
+      mode: this.mode === "FT4" ? "FT4" : "FT8",
       sampleRate: DECODE_SAMPLE_RATE,
       depth: this.depth,
-      // The SAME book as the full pass, deliberately: a hashed callsign resolved here is
-      // resolved for the rest of the band a moment later, which is the whole reason the
-      // library asks for one instance rather than one per call.
-      hashCallBook: this.hashBook,
       freqLow: loHz,
       freqHigh: hiHz,
-    }).map((d) => ({
-      freqOffset: Math.round(d.freq),
-      snr: Math.round(d.snr),
+    });
+    return r.decodes.map((d) => ({
+      freqOffset: d.freq,
+      snr: d.snr,
       dt: d.dt,
-      message: d.msg.trim(),
+      message: d.msg,
       mode: this.mode,
       windowStart,
     }));
-  }
-
-  /** Ask again shortly whether the transmitter has finished. */
-  private pollDeferred(): void {
-    if (this.deferTimer) return;
-    this.deferTimer = setTimeout(() => {
-      this.deferTimer = null;
-      const p = this.deferred;
-      if (!p) return;
-      if (Date.now() < p.deadline && this.transmitPendingFn?.() === true) {
-        this.pollDeferred();
-        return;
-      }
-      this.deferred = null;
-      this.runFullPass(p);
-    }, DEFER_POLL_MS);
-    this.deferTimer.unref?.();
-  }
-
-  /** Run any outstanding full pass now. Safe to call when there is none. */
-  private drainDeferred(): void {
-    if (this.deferTimer) {
-      clearTimeout(this.deferTimer);
-      this.deferTimer = null;
-    }
-    const p = this.deferred;
-    if (!p) return;
-    this.deferred = null;
-    this.runFullPass(p);
   }
 }
 
@@ -1002,6 +974,13 @@ interface PrioritySlice {
 }
 
 /** A full-band pass that has been paid for but not yet run. See `transmitPending`. */
+/**
+ * One full-band pass, and what the slice pass already found.
+ *
+ * Named for a deferral that no longer exists: the pass used to WAIT for the transmitter,
+ * because decoding blocked the event loop. It runs on its own thread now and waits for
+ * nothing. Kept as a type because it is still the shape `runFullPass` takes.
+ */
 interface DeferredPass {
   audio: Float32Array;
   windowStart: Date;

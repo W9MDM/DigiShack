@@ -44,6 +44,19 @@ export interface HistoryReport {
   continents: CountRow[];
   modes: CountRow[];
   bands: CountRow[];
+  /**
+   * The most contacts ever made in one day, and which day.
+   *
+   * A UTC day, not a local one, and that is the whole reason this is a stat rather than
+   * something anybody can eyeball. Amateur radio counts days in UTC - every award, every
+   * contest and every duplicate rule in this application does - and 00:00 UTC is 19:00 or
+   * 20:00 local here, so a local-day count would split one evening's operating across two
+   * days and under-report the best of them. `DATE(startTime)` in MySQL over a column
+   * stored in UTC is the UTC day.
+   *
+   * Null on an empty log rather than a zero with an invented date.
+   */
+  bestDay: { date: string; qsos: number } | null;
   /** The whole log, for context under the per-year table. */
   totals: {
     qsos: number;
@@ -101,10 +114,33 @@ function fillYearGaps(rows: YearRow[]): YearRow[] {
   return out;
 }
 
+/**
+ * The UTC day a `DATE()` result names, as `YYYY-MM-DD`.
+ *
+ * MySQL's `DATE()` arrives through Prisma as a Date at midnight UTC, or as a string,
+ * depending on the driver. Both are handled rather than one assumed: the failure mode of
+ * guessing is a record dated "Invalid Date" on the page, which looks like a bug in the
+ * log rather than in the reader.
+ *
+ * `toISOString()` and not `getFullYear()`: the local getters would shift a midnight-UTC
+ * Date back into the PREVIOUS day for every station west of Greenwich, which is exactly
+ * the off-by-one this whole stat is careful about. Exported so that is assertable.
+ */
+export function utcDayOf(value: unknown): string | null {
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? null : value.toISOString().slice(0, 10);
+  }
+  if (typeof value === "string") {
+    const m = /^(\d{4}-\d{2}-\d{2})/.exec(value.trim());
+    return m ? m[1]! : null;
+  }
+  return null;
+}
+
 export async function computeHistory(opts: { topCalls?: number } = {}): Promise<HistoryReport> {
   const topCalls = Math.min(100, Math.max(1, opts.topCalls ?? 25));
 
-  const [yearRows, workedRows, contRows, modeRows, bandRows, totalRow] = await Promise.all([
+  const [yearRows, workedRows, contRows, modeRows, bandRows, bestDayRow, totalRow] = await Promise.all([
     prisma.$queryRawUnsafe<Record<string, unknown>[]>(
       `SELECT YEAR(startTime) AS y,
               COUNT(*) AS qsos,
@@ -141,6 +177,16 @@ export async function computeHistory(opts: { topCalls?: number } = {}): Promise<
       `SELECT band AS label, COUNT(*) AS qsos FROM Qso GROUP BY band ORDER BY qsos DESC`,
     ),
     prisma.$queryRawUnsafe<Record<string, unknown>[]>(
+      // One row: the busiest UTC day. `DATE()` rather than any local conversion — see
+      // HistoryReport.bestDay. Ties break on the earlier date, because the first time a
+      // record was set is when it was set.
+      `SELECT DATE(startTime) AS d, COUNT(*) AS qsos
+         FROM Qso
+        GROUP BY DATE(startTime)
+        ORDER BY qsos DESC, d ASC
+        LIMIT 1`,
+    ),
+    prisma.$queryRawUnsafe<Record<string, unknown>[]>(
       `SELECT COUNT(*) AS qsos,
               SUM(${CONFIRMED_SQL}) AS confirmed,
               COUNT(DISTINCT callsign) AS callsigns,
@@ -172,6 +218,12 @@ export async function computeHistory(opts: { topCalls?: number } = {}): Promise<
     continents: contRows.map((r) => ({ label: String(r.label), qsos: num(r.qsos) })),
     modes: modeRows.map((r) => ({ label: String(r.label), qsos: num(r.qsos) })),
     bands: bandRows.map((r) => ({ label: String(r.label), qsos: num(r.qsos) })),
+    bestDay: (() => {
+      const r = bestDayRow[0];
+      if (!r || num(r.qsos) === 0) return null;
+      const date = utcDayOf(r.d);
+      return date === null ? null : { date, qsos: num(r.qsos) };
+    })(),
     totals: {
       qsos: num(t.qsos),
       confirmed: num(t.confirmed),

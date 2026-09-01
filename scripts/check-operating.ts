@@ -204,6 +204,14 @@ interface FactoryDeps {
 async function makeOperating(deps: FactoryDeps): Promise<Operating> {
   return buildOperating({
     kind: deps.kind,
+    // TWO WINDOWS, as this whole scenario was written against.
+    //
+    // Production listens 90 s before judging a band, which is 6 FT8 windows — the fix for
+    // a station that hopped every 15 s in FT4 without ever hearing anything. This fixture
+    // is not testing the warmup's LENGTH (check:band-hop asserts that arithmetic
+    // directly); it is testing what happens after it, and feeding four more windows of
+    // nothing to every case would only make it slower and no more truthful.
+    warmupMs: 30_000,
     // The fake emits `decodes` and `window` and reports a period and a mode, which is
     // the entire surface the operating layer uses. Casting says so out loud rather than
     // making the fake implement an EventEmitter generic it does not need.

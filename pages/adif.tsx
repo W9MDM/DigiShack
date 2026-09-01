@@ -389,6 +389,9 @@ function ImportCard({ stations }: { stations: Station[] }) {
   const [stationId, setStationId] = useState("");
   const [operatorId, setOperatorId] = useState("");
   const [dedupe, setDedupe] = useState(true);
+  // OFF by default: an imported log is history and is already wherever it was
+  // going to be. See the checkbox below for what turning it on once cost.
+  const [uploadImported, setUploadImported] = useState(false);
   const [text, setText] = useState<string | null>(null);
   const [filename, setFilename] = useState("");
   const [busy, setBusy] = useState(false);
@@ -413,6 +416,7 @@ function ImportCard({ stations }: { stations: Station[] }) {
       const params = new URLSearchParams({ stationId });
       if (operatorId) params.set("operatorId", operatorId);
       if (!dedupe) params.set("dedupe", "0");
+      if (uploadImported) params.set("uploadImported", "1");
       if (dryRun) params.set("dryRun", "1");
 
       // Raw text body rather than JSON or multipart — see the API route.
@@ -535,6 +539,37 @@ function ImportCard({ stations }: { stations: Station[] }) {
             className="accent-accent size-3.5"
           />
           Skip QSOs already in the log
+        </label>
+
+        {/*
+          THE ONE THAT COST SOMEBODY 7,000 DUPLICATE CONTACTS.
+
+          An operator imported his QRZ log and DigiShack pushed all 7,384 records to N3FJP,
+          which already held every one of them: his N3FJP log went to 14,347. ADIF carries
+          LOTW_QSL_SENT and EQSL_QSL_SENT so those are read from the file; there is no such
+          field for QRZ, Club Log, Cloudlog or N3FJP, so all four looked unsent.
+
+          Off unless asked for, and the label says the consequence rather than the setting.
+          The damage lands on a service this application cannot clean up.
+        */}
+        <label className="flex items-start gap-2 text-sm text-fg-muted">
+          <input
+            type="checkbox"
+            checked={uploadImported}
+            onChange={(e) => {
+              setUploadImported(e.target.checked);
+              reset();
+            }}
+            className="accent-accent size-3.5 mt-0.5"
+          />
+          <span>
+            Also upload these to QRZ, Club Log, Cloudlog and N3FJP
+            <span className="block text-xs text-fg-subtle">
+              Leave this off for a log exported from one of those services — they already
+              have these contacts, and re-sending them creates duplicates nobody can remove
+              from here. Only turn it on for a log that has never been uploaded anywhere.
+            </span>
+          </span>
         </label>
 
         <div className="flex gap-2">

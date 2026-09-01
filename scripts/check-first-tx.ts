@@ -237,28 +237,31 @@ async function main(): Promise<void> {
   // MEASURED, one station placed late in the ten-signal window, everyone else on time.
   // This is the ceiling the arithmetic above is capped by, and it differs per mode by
   // more than the arithmetic ever would.
-  function readsAt(mode: TxMode, lateMs: number, target: string): boolean {
+  // ASYNC SINCE THE DECODER MOVED TO ITS OWN THREAD. `processWindow` resolves when the
+  // worker answers; reading `found` on the next line reads it before there is an answer.
+  async function readsAt(mode: TxMode, lateMs: number, target: string): Promise<boolean> {
     const p = new DecodePipeline({ mode, inputSampleRate: DAX_SAMPLE_RATE, silenceRms: 1e-5 });
     let found = false;
     p.on("decodes", (d) => {
       found = d.decodes.some((x) => x.message === target);
     });
-    p.processWindow(liveWindow(mode, { lateMs, lateFor: target }), new Date(0));
+    await p.processWindow(liveWindow(mode, { lateMs, lateFor: target }), new Date(0));
+    p.stop();
     return found;
   }
   const TARGET = "K5AAA W6BBB R-09";
 
-  ok(readsAt("FT8", lateTxToleranceMs("FT8"), TARGET), "FT8 at its tolerance (1,488 ms late) decodes");
-  ok(readsAt("FT8", slack.FT8, TARGET), "FT8 at its FULL slack (1,860 ms) still decodes — no cliff inside the window");
-  ok(readsAt("FT4", lateTxToleranceMs("FT4"), TARGET), "FT4 at its tolerance (800 ms late) decodes");
-  ok(!readsAt("FT4", 1_000, TARGET), "FT4 at 1,000 ms does NOT — the cliff is real and 800 sits inside it");
-  ok(readsAt("FT2", 400, TARGET), "FT2 at 400 ms late decodes");
+  ok(await readsAt("FT8", lateTxToleranceMs("FT8"), TARGET), "FT8 at its tolerance (1,488 ms late) decodes");
+  ok(await readsAt("FT8", slack.FT8, TARGET), "FT8 at its FULL slack (1,860 ms) still decodes — no cliff inside the window");
+  ok(await readsAt("FT4", lateTxToleranceMs("FT4"), TARGET), "FT4 at its tolerance (800 ms late) decodes");
+  ok(!(await readsAt("FT4", 1_000, TARGET)), "FT4 at 1,000 ms does NOT — the cliff is real and 800 sits inside it");
+  ok(await readsAt("FT2", 400, TARGET), "FT2 at 400 ms late decodes");
   ok(
-    !readsAt("FT2", 500, TARGET),
+    !await readsAt("FT2", 500, TARGET),
     "FT2 at 500 ms does NOT — its DT search spans half a second, which is why its tolerance is zero",
   );
   ok(
-    !readsAt("FT2", Math.floor(slack.FT2 / 2), TARGET),
+    !await readsAt("FT2", Math.floor(slack.FT2 / 2), TARGET),
     "and a slack-only derivation would have given FT2 901 ms, which is unreadable — the pin is load-bearing",
   );
 
@@ -359,7 +362,7 @@ async function main(): Promise<void> {
   // The baseline: nothing supplied at all.
   const plain = new DecodePipeline({ mode: "FT8", inputSampleRate: DAX_SAMPLE_RATE, silenceRms: 1e-5 });
   const plainRun = watch(plain);
-  plain.processWindow(samples, WINDOW_AT);
+  await plain.processWindow(samples, WINDOW_AT);
   const baseline = (plainRun.full ?? []).map((d) => d.message).sort();
   ok(plainRun.slices.length === 0, "no partner and no candidates, no priority pass at all");
   ok(baseline.length >= 8, "the fixture is a busy band, not one signal", `${baseline.length} decodes`);
@@ -373,7 +376,7 @@ async function main(): Promise<void> {
       candidateOffsetsHz: () => [CQ_B.offsetHz],
     });
     const run = watch(pipe);
-    pipe.processWindow(samples, WINDOW_AT);
+    await pipe.processWindow(samples, WINDOW_AT);
     eq(run.slices.length, 1, "one candidate, one slice");
     eq(run.slices[0]?.loHz, CQ_B.offsetHz - PRIORITY_HALF_WIDTH_HZ, "centred on them, 100 Hz below");
     eq(run.slices[0]?.hiHz, CQ_B.offsetHz + PRIORITY_HALF_WIDTH_HZ, "and 100 Hz above");
@@ -396,7 +399,7 @@ async function main(): Promise<void> {
       candidateOffsetsHz: () => [CQ_A.offsetHz, CQ_B.offsetHz, CQ_C.offsetHz],
     });
     const run = watch(pipe);
-    pipe.processWindow(samples, WINDOW_AT);
+    await pipe.processWindow(samples, WINDOW_AT);
     ok(
       run.slices.length >= 1 && run.slices.length <= MAX_CANDIDATE_SLICES,
       "several candidates are searched, never more than the cap",
@@ -420,7 +423,7 @@ async function main(): Promise<void> {
       candidateOffsetsHz: () => [1_450, 1_500, 1_520],
     });
     const run = watch(pipe);
-    pipe.processWindow(samples, WINDOW_AT);
+    await pipe.processWindow(samples, WINDOW_AT);
     eq(run.slices.length, 1, "three candidates inside 100 Hz of each other are ONE slice, not three");
     eq(run.slices[0]?.loHz, 1_350, "widened down to the lowest");
     eq(run.slices[0]?.hiHz, 1_620, "and up to the highest");
@@ -442,7 +445,7 @@ async function main(): Promise<void> {
       candidateOffsetsHz: () => [1_000, 1_150, 1_300, 1_450, 1_600],
     });
     const run = watch(pipe);
-    pipe.processWindow(samples, WINDOW_AT);
+    await pipe.processWindow(samples, WINDOW_AT);
     const widest = Math.max(...run.slices.map((x) => x.hiHz - x.loHz));
     ok(
       widest <= MAX_SLICE_WIDTH_HZ,
@@ -467,7 +470,7 @@ async function main(): Promise<void> {
       candidateOffsetsHz: () => [CQ_A.offsetHz, CQ_B.offsetHz, CQ_C.offsetHz],
     });
     const run = watch(pipe);
-    pipe.processWindow(samples, WINDOW_AT);
+    await pipe.processWindow(samples, WINDOW_AT);
     eq(run.slices.length, 1, "a contact in progress searches exactly one slice");
     eq(run.slices[0]?.centreHz, 1_450, "and it is the partner's, not any candidate's");
   }
@@ -487,7 +490,7 @@ async function main(): Promise<void> {
       },
     });
     const run = watch(pipe);
-    pipe.processWindow(samples, WINDOW_AT);
+    await pipe.processWindow(samples, WINDOW_AT);
     eq(run.slices.length, 0, "a candidate who is not transmitting emits no event at all");
     ok(run.full !== null, "and the full pass ran synchronously, in the same call");
     ok(!pending, "the transmitter was never even asked — there is nothing to defer behind");
@@ -506,7 +509,7 @@ async function main(): Promise<void> {
       candidateOffsetsHz: () => [4_500, -20, Number.NaN],
     });
     const run = watch(pipe);
-    pipe.processWindow(samples, WINDOW_AT);
+    await pipe.processWindow(samples, WINDOW_AT);
     eq(run.slices.length, 0, "offsets outside the passband are refused, not clamped into a nonsense slice");
     ok((run.full ?? []).length >= 8, "and the band still decodes normally");
   }
@@ -523,7 +526,7 @@ async function main(): Promise<void> {
       transmitPending: () => true,
     });
     const run = watch(pipe);
-    pipe.processWindow(liveWindow(mode), new Date(0));
+    await pipe.processWindow(liveWindow(mode), new Date(0));
     eq(run.slices.length, 0, `${mode}: no candidate pass, even with offsets supplied`);
     ok((run.full ?? []).length >= 5, `${mode}: and the full pass runs exactly as before`);
   }
@@ -634,6 +637,12 @@ async function makeOperating(
 ): Promise<Operating> {
   return buildOperating({
     kind: "flex",
+    // TWO WINDOWS, which is what this whole scenario was written against — its own comment
+    // below says so. Production listens 90 s before judging a band (6 FT8 windows), which
+    // is the fix for a station that hopped every 15 s in FT4 without ever hearing
+    // anything. What is being measured here is what happens AFTER the warm-up; its length
+    // is asserted directly in check:band-hop.
+    warmupMs: 30_000,
     source: source as unknown as OperatingDeps["source"],
     tx,
     station: STATION,

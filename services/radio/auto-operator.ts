@@ -5,6 +5,7 @@ import type { FlexDaxTransmitter } from "@/lib/flex/tx";
 import type { OperatingGuards } from "@/lib/digital/qso";
 import { parseMessage, standardMessages, type MayCallChecks } from "@/lib/digital/qso";
 import { rankCandidates, type Candidate, type WorkedIndex } from "@/lib/digital/worth";
+import { cqIsForUs } from "@/lib/digital/cq-modifier";
 import type { QsoController } from "./qso-controller";
 import {
   bandHasNobodyToCall,
@@ -121,6 +122,16 @@ export interface AutoOperatorOptions {
   resolveEntity: (
     call: string,
   ) => Promise<{ adif: number; name: string; cqZone: number | null; continent: string | null } | null>;
+  /**
+   * How long to listen before judging a band, ms. Defaults to `WARMUP_MS`.
+   *
+   * Injectable because it is a POLICY value, not a constant of the protocol, and because
+   * an integration fixture should not silently depend on its exact size. When it changed
+   * from two windows to ninety seconds, every scenario built around "the window after the
+   * second warm-up window" broke at once - which is a test coupled to a number rather than
+   * to the behaviour it means to check.
+   */
+  warmupMs?: number;
   /** Hunt preferences from settings. */
   huntPrefs: () => Promise<{ newOnly: boolean; minSnr: number }>;
   /** Current POTA activators on the digital modes. */
@@ -189,8 +200,48 @@ const ENTITY_CACHE_MS = 30 * 60_000;
 /** Callsigns remembered at once. A busy evening on 20 m is a few hundred. */
 const ENTITY_CACHE_MAX = 2_000;
 
-/** Listen this many windows after enabling a mode or changing band. */
-const WARMUP_WINDOWS = 2;
+/**
+ * Listen at least this long after enabling a mode or changing band, ms.
+ *
+ * WAS TWO WINDOWS, AND TWO WINDOWS IS NOT A HEARING. Observed live on 2026-08-31 in FT4,
+ * where two windows is FIFTEEN SECONDS:
+ *
+ *     19:15:51  band too quiet (0 decodes) - hopping on   -> 20M
+ *     19:16:06  band too quiet (0 decodes) - hopping on   -> 40M
+ *     19:16:21  band too quiet (0 decodes) - hopping on   -> 20M
+ *     19:16:36  band too quiet (0 decodes) - hopping on   -> 40M
+ *
+ * It ran until the audio watchdog restarted the bridge. The loop is self-sustaining: the
+ * station hops, judges the new band on almost no listening, hops again, and so never stays
+ * anywhere long enough to hear the thing that would let it stay. Zero decodes was not
+ * evidence the band was dead - it was evidence we had just arrived.
+ *
+ * Of those two windows, ONE is spent on the retune itself: the radio moves mid-window and
+ * the DAX stream is rebuilt behind it ("DAX stream rebuilt" appears in that same log). So
+ * the band was being asked for HOP_MIN_DECODES in roughly one usable window.
+ *
+ * A DURATION, NOT A WINDOW COUNT, because a band's activity is a property of propagation
+ * and not of our T/R period. Two windows means 30 s in FT8, 15 s in FT4 and 7.5 s in FT2 -
+ * the same rule getting four times stricter as the mode gets faster, which is exactly
+ * backwards from what those modes need. Ninety seconds is the same hearing in every mode:
+ * enough for the retune to settle, for both transmit parities to come round, and for a
+ * genuinely quiet band to prove it.
+ */
+const WARMUP_MS = 90_000;
+
+/** Never fewer than this, however long a period gets. */
+const WARMUP_MIN_WINDOWS = 2;
+
+/**
+ * Consecutive quiet hops before the rotation stops and the station stays put.
+ *
+ * The backstop to the loop above. If the warmup is ever misconfigured again, or a receiver
+ * is genuinely deaf on every band in the list, thrashing between them decodes nothing and
+ * eventually trips the audio watchdog. Staying on one band decodes nothing either - but it
+ * stops moving the radio, keeps the audio stream up, and leaves a station that can recover
+ * the moment anything is heard.
+ */
+const MAX_QUIET_HOPS = 4;
 
 /** Fewer decodes than this after a hop means the band is no better — move on. */
 const HOP_MIN_DECODES = 3;
@@ -320,6 +371,40 @@ export class AutoOperator {
   private cqParity: 0 | 1 | null = null;
   private cqOffsetHz: number | null = null;
   private warmup = 0;
+  /**
+   * Bands hopped through in a row that heard nothing. Reset by any band that settles.
+   *
+   * See MAX_QUIET_HOPS. This exists so a receiver problem reads as a receiver problem
+   * rather than as a radio that will not stop retuning itself.
+   */
+  private quietHops = 0;
+  /** Callsigns whose directed CQ we have already declined, so the log says it once. */
+  private readonly skippedCqs = new Set<string>();
+
+  /**
+   * Is anybody waiting for us to call them back?
+   *
+   * Checked by every path that would move the radio. Pruned first, so a queue full of
+   * stations who gave up ten minutes ago does not pin the station to a dead band.
+   */
+  private hasWaitingCallers(): boolean {
+    this.pruneCallbacks();
+    return this.callbacks.length > 0;
+  }
+
+  /**
+   * `WARMUP_MS` expressed in windows of the mode currently running.
+   *
+   * Read fresh each time rather than cached: the period changes with the mode, and a
+   * warmup counted in FT8 windows would be four times too short if the operator switched
+   * to FT2 while it was running.
+   */
+  private warmupWindows(): number {
+    const period = this.o.source.periodMs;
+    const target = this.o.warmupMs ?? WARMUP_MS;
+    if (!Number.isFinite(period) || period <= 0) return WARMUP_MIN_WINDOWS;
+    return Math.max(WARMUP_MIN_WINDOWS, Math.ceil(target / period));
+  }
   private lastAction: string | null = null;
   private cqedLastWindow = false;
   private seenWindows = new Set<number>();
@@ -519,7 +604,7 @@ export class AutoOperator {
 
   setMode(mode: AutoMode): void {
     this.mode = mode;
-    this.warmup = mode === "off" ? 0 : WARMUP_WINDOWS;
+    this.warmup = mode === "off" ? 0 : this.warmupWindows();
     this.cqParity = null; // chosen at the first CQ, from the clock
     this.cqOffsetHz = null;
     this.cqedLastWindow = false;
@@ -802,7 +887,30 @@ export class AutoOperator {
     // guard fault are all irrelevant to it — and each of those returns early below.
     // Placed after them, a tail-ender calling during the two warm-up windows of a
     // fresh band, or while the guards were paused, was heard and forgotten.
-    if (this.o.controller.hasActive || this.startingCall) this.noteCallbacks(answers, windowStartMs);
+    //
+    // ALWAYS, not only while busy. That condition used to be
+    // `hasActive || startingCall`, which contradicted the paragraph above it: remembering
+    // a station costs no transmission, so there is no reason to be selective about when we
+    // are willing to remember one.
+    //
+    // What it cost, measured 2026-08-31 with the operator watching:
+    //
+    //     00:40:00  COMPLETE with KC3LVG          <- the station goes idle
+    //     00:40:07  K9XYZ W8PP EM89               <- calling us
+    //     00:40:07  K9XYZ KC1UVP FN42             <- calling us
+    //     00:40:22  K9XYZ W8PP EM89               <- calling again
+    //     00:40:22  K9XYZ KC1UVP FN42             <- calling again
+    //     00:40:36  [auto] 20M is running 52 stations against 12 - moving
+    //
+    // Seven seconds after a contact ended, two stations answered - and because the
+    // station was IDLE by then, neither was recorded. The hunt only ranks CQs
+    // (`p.kind === "cq"`), so a directed call to us is invisible there too: not queued,
+    // not hunted, not worked. The status line read "no callable CQs (dupes / cooling
+    // down)" with an empty queue while two people called. Then it changed band.
+    //
+    // `answers` is already filtered to `p.to === me`, so this only ever remembers
+    // somebody genuinely calling US.
+    this.noteCallbacks(answers, windowStartMs);
 
     // A paused guard is where band-hopping takes over — otherwise wait for the
     // operator to re-arm.
@@ -831,6 +939,35 @@ export class AutoOperator {
       return;
     }
 
+    // ANSWERING SOMEBODY WHO CALLED US COMES BEFORE THE WARMUP, and that ordering is the
+    // fix rather than an optimisation.
+    //
+    // The warmup exists to judge a BAND - it listens before deciding whether this one is
+    // worth staying on. A station calling us needs none of that decided: they are already
+    // here, on frequency, with our callsign in their message. Making them wait while we
+    // work out whether we like the band is the same fault as never queuing them at all,
+    // and it is how the queue behaved for the 90 seconds after every band change once the
+    // warmup became a duration rather than two windows.
+    //
+    // Caught by check:callback-queue, which failed on six assertions the moment the
+    // warmup got longer. The test was right and the code was wrong.
+    // THE LENGTH IS CHECKED SYNCHRONOUSLY FIRST, and that matters more than it looks.
+    //
+    // `await` yields a microtask even when the function returns immediately, and this runs
+    // on EVERY window while the queue is almost always empty. The candidate list built
+    // further down is read by the decode pipeline for the next window, so an extra tick
+    // here moves a real deadline — check:first-tx failed on seven assertions when this was
+    // awaited unconditionally.
+    if (
+      this.callbacks.length > 0 &&
+      !this.o.controller.hasActive &&
+      !this.startingCall &&
+      (await this.callBackWaiting())
+    ) {
+      this.broadcastState();
+      return;
+    }
+
     if (this.warmup > 0) {
       this.warmup--;
       // A fresh band that stays this quiet is not worth CQing into.
@@ -841,11 +978,28 @@ export class AutoOperator {
       // with 42. Two hops and one ATU cycle each, in 31 seconds, exactly as designed.
       if (this.warmup === 0 && this.hopping) {
         if (this.hopDecodeCount < HOP_MIN_DECODES) {
-          this.lastAction = `band too quiet (${this.hopDecodeCount} decodes) — hopping on`;
-          this.o.log(`[auto] ${this.lastAction}`);
-          await this.hopNext();
+          this.quietHops++;
+          // THE BACKSTOP. Hopping decodes nothing while the radio is moving, and a
+          // rotation that never finds anything moves it for ever — measured on
+          // 2026-08-31 as a hop every 15 s until the audio watchdog restarted the
+          // bridge. Staying put decodes nothing either, but it stops retuning, keeps
+          // the audio stream up, and leaves a station that recovers the moment
+          // anything is heard. The rotation resumes on the next band change or the
+          // next decode.
+          if (this.quietHops >= MAX_QUIET_HOPS) {
+            this.hopping = false;
+            this.lastAction =
+              `${this.quietHops} bands in a row heard nothing — staying put rather than ` +
+              `hopping on. Nothing is being decoded anywhere; check the antenna and the receiver.`;
+            this.o.log(`[auto] ${this.lastAction}`);
+          } else {
+            this.lastAction = `band too quiet (${this.hopDecodeCount} decodes) — hopping on`;
+            this.o.log(`[auto] ${this.lastAction}`);
+            await this.hopNext();
+          }
         } else {
           this.hopping = false;
+          this.quietHops = 0;
           this.lastAction = `settled on new band (${this.hopDecodeCount} decodes)`;
           this.o.log(`[auto] ${this.lastAction}`);
         }
@@ -914,6 +1068,9 @@ export class AutoOperator {
 
     // Anyone who called while we were busy gets worked before we go looking for
     // someone new. They asked first, and they are still on frequency.
+    //
+    // Reached only when the warmup has already passed - the check above answers callers
+    // during it - so this is the ordinary idle path rather than a duplicate of it.
     if (await this.callBackWaiting()) {
       this.broadcastState();
       return;
@@ -1081,6 +1238,60 @@ export class AutoOperator {
           ? (x.p as { modifier: string | null }).modifier === "POTA"
           : true,
       );
+
+    // A DIRECTED CQ IS NOT AN INVITATION. "CQ KH KD2TC" is calling Hawaii; answering it
+    // from Indiana is rude and futile, and the four transmit cycles spent finding that out
+    // produced nothing. Reported live, with the station calling KD2TC twice.
+    //
+    // FILTERED HERE AND ONLY HERE, because this list is the one source of truth — the
+    // candidate fast path reads it rather than re-deriving its own, so a CQ refused here is
+    // refused everywhere the hunt can reach.
+    //
+    // Deliberately NOT applied to the other ways a call starts: a station calling US has
+    // chosen us and carries no modifier at all; a POTA chase is aimed at a named activator
+    // from the spot feed; and a manual Call is the operator's decision, which this has no
+    // business overruling.
+    // OUR OWN ENTITY IS RESOLVED LAZILY, and that is not a micro-optimisation.
+    //
+    // Awaiting it unconditionally put an extra await on EVERY window, including the
+    // overwhelming majority that carry no directed CQ at all — and the candidate list is
+    // read by the decode pipeline for the NEXT window, so moving when it is populated
+    // moves a real deadline. check:first-tx failed on five assertions the moment it was
+    // added: the list was empty when the pipeline asked for it.
+    //
+    // Nothing is looked up unless a modifier actually needs judging.
+    let mine: Awaited<ReturnType<typeof this.entityFor>> | undefined;
+    const addressed: typeof cqs = [];
+    for (const x of cqs) {
+      // Narrowed rather than cast: the filter above has already established these are CQs,
+      // but the compiler cannot see through it and a cast would hide a real change to the
+      // filter from ever being caught here.
+      if (x.p.kind !== "cq") continue;
+      const modifier = x.p.modifier;
+      if (!modifier) {
+        addressed.push(x);
+        continue;
+      }
+      if (mine === undefined) mine = await this.entityFor(me);
+      const theirs = await this.entityFor(x.p.from);
+      const verdict = cqIsForUs(modifier, {
+        myCall: me,
+        myContinent: mine?.continent ?? null,
+        myDxcc: mine?.adif ?? null,
+        theirDxcc: theirs?.adif ?? null,
+      });
+      if (verdict.forUs) {
+        addressed.push(x);
+      } else if (!this.skippedCqs.has(x.p.from)) {
+        // Once per callsign, because a directed CQ repeats every cycle and the log is
+        // read by people looking for faults.
+        this.skippedCqs.add(x.p.from);
+        if (this.skippedCqs.size > 200) this.skippedCqs.clear();
+        this.o.log(`[auto] not answering ${x.p.from}: ${verdict.reason}`);
+      }
+    }
+    cqs.length = 0;
+    cqs.push(...addressed);
     if (cqs.length === 0) {
       // Recorded as an EMPTY list rather than left alone, so `candidateOffsetsHz` can
       // tell "this parity had nobody" from "this parity was never listened to". Without
@@ -1320,7 +1531,7 @@ export class AutoOperator {
         since: Date.now(),
         reference: spot.reference,
       };
-      this.warmup = WARMUP_WINDOWS;
+      this.warmup = this.warmupWindows();
       this.lastAction = `tuned ${(spot.freqHz / 1e6).toFixed(3)} for ${spot.activator} (${spot.reference})`;
       this.o.log(`[auto] ${this.lastAction}`);
       return;
@@ -1333,7 +1544,7 @@ export class AutoOperator {
       const home = this.chaseHome;
       if (await this.o.retune(home.band, home.mode)) {
         this.chaseParkedHz = null;
-        this.warmup = WARMUP_WINDOWS;
+        this.warmup = this.warmupWindows();
         this.lastAction = `no POTA activators on ${scope} — back to ${home.band} ${home.mode}`;
         this.o.log(`[auto] ${this.lastAction}`);
         return;
@@ -1605,7 +1816,11 @@ export class AutoOperator {
         message: d.message,
         at: Date.now(),
       });
-      this.o.log(`[auto] ${call} called during the QSO — queued for a call back`);
+      this.o.log(
+        busyWith
+          ? `[auto] ${call} called during the QSO — queued for a call back`
+          : `[auto] ${call} is calling us — queued`,
+      );
     }
     this.lastAction =
       this.callbacks.length > 0
@@ -1687,6 +1902,12 @@ export class AutoOperator {
     const cfg = await this.o.bandHop();
     if (!cfg.enabled || cfg.whenBetterRatio <= 1 || cfg.bands.length === 0) return false;
     if (this.hopping || this.warmup > 0 || this.o.controller.hasActive) return false;
+    if (this.hasWaitingCallers()) return false;
+    // NEVER LEAVE PEOPLE WHO ARE CALLING US. Observed 2026-08-31: two stations answered,
+    // and 29 seconds later the station changed band on network figures. A caller is the
+    // best contact available anywhere - they have already heard us and are on frequency
+    // now - and no number about another band outranks that.
+    if (this.hasWaitingCallers()) return false;
 
     // Never leave a band we have not measured.
     //
@@ -1745,7 +1966,7 @@ export class AutoOperator {
     this.lastAction = `moved to ${better.band} (${better.to} stations vs ${better.from}), listening`;
     this.hopping = true;
     this.hopDecodeCount = 0;
-    this.warmup = WARMUP_WINDOWS;
+    this.warmup = this.warmupWindows();
     this.cqParity = null;
     this.cqOffsetHz = null;
     this.cqedLastWindow = false;
@@ -1804,6 +2025,7 @@ export class AutoOperator {
     const cfg = await this.o.bandHop();
     if (!cfg.enabled || cfg.bands.length === 0) return false;
     if (this.hopping || this.warmup > 0 || this.o.controller.hasActive) return false;
+    if (this.hasWaitingCallers()) return false;
 
     const now = Date.now();
     if (now - this.lastProductivityCheck < PRODUCTIVITY_CHECK_MS) return false;
@@ -1897,7 +2119,7 @@ export class AutoOperator {
     this.lastAction = `left ${current} — ${reason}`;
     this.hopping = true;
     this.hopDecodeCount = 0;
-    this.warmup = WARMUP_WINDOWS;
+    this.warmup = this.warmupWindows();
     this.cqParity = null;
     this.cqOffsetHz = null;
     this.cqedLastWindow = false;
@@ -1963,6 +2185,7 @@ export class AutoOperator {
     // reached the bar.
     if (this.mode !== "hunt" && this.mode !== "hunt-pota") return false;
     if (this.hopping || this.warmup > 0) return false;
+    if (this.hasWaitingCallers()) return false;
     if (this.o.controller.hasActive || this.startingCall) return false;
     if (this.returnIfWorse) return false;
     if (this.nobodyWindows < NOBODY_TO_CALL_WINDOWS) return false;
@@ -2097,7 +2320,7 @@ export class AutoOperator {
     // there is nothing to re-judge when the warm-up ends.
     this.hopping = false;
     this.hopDecodeCount = 0;
-    this.warmup = WARMUP_WINDOWS;
+    this.warmup = this.warmupWindows();
     this.cqParity = null;
     this.cqOffsetHz = null;
     this.cqedLastWindow = false;
@@ -2175,7 +2398,7 @@ export class AutoOperator {
     this.lastAction = `high SWR on ${current ?? "?"} — moved to ${target}`;
     this.hopping = true;
     this.hopDecodeCount = 0;
-    this.warmup = WARMUP_WINDOWS;
+    this.warmup = this.warmupWindows();
     this.cqParity = null;
     this.cqOffsetHz = null;
     this.cqedLastWindow = false;
@@ -2256,7 +2479,7 @@ export class AutoOperator {
     this.lastAction = `hopped to ${target}, listening`;
     this.hopping = true;
     this.hopDecodeCount = 0;
-    this.warmup = WARMUP_WINDOWS;
+    this.warmup = this.warmupWindows();
     this.cqParity = null;
     this.cqOffsetHz = null;
     // The outstanding CQ went out on the band we have just left.

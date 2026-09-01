@@ -1,6 +1,6 @@
 {
   "name": "digishack",
-  "version": "1.162.0",
+  "version": "1.169.1",
   "license": "GPL-3.0-or-later",
   "private": true,
   "description": "Web-based amateur radio logging platform — Cloudlog-level parity with native FT4/FT8 and FlexRadio support",
@@ -101,7 +101,10 @@
     "check:tables": "tsx scripts/check-tables.ts",
     "check:activation": "tsx scripts/check-activation.ts",
     "check:clublog": "tsx scripts/check-clublog.ts",
-    "check:headers": "tsx scripts/check-headers.ts"
+    "check:headers": "tsx scripts/check-headers.ts",
+    "check:best-day": "tsx scripts/check-best-day.ts",
+    "check:decode-worker": "tsx scripts/check-decode-worker.ts",
+    "check:cq-modifier": "tsx scripts/check-cq-modifier.ts"
   },
   "dependencies": {
     "@e04/ft8ts": "^0.0.14",

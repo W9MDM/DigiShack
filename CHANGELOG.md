@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.162.0 - public release
+## 1.169.1 - public release
 
 Development happens in a private repository; this is where the public history starts.
 Earlier entries are not reproduced - they quote real operators by callsign, include
@@ -22,6 +22,17 @@ Notes for anyone running this:
 
 ## Release history
 
+- **1.169.1** — What the full suite caught that the checks I chose did not
+- **1.169.0** — An imported log is history, not a queue of things to upload
+- **1.168.0** — A directed CQ is not an invitation
+- **1.167.0** — The decoder moved to its own thread, and the deferral is gone
+- **1.166.0** — People were calling, and the station was not listening for it
+- **1.165.0** — A band judged before it had been heard
+- **1.164.2** — Repairing a changelog entry the shell ate
+- **1.164.1** — The typecheck that does not check what the build checks
+- **1.164.0** — The frequency guard never knew which mode it was guarding
+- **1.163.1** — "2% of the whole log in one day?????"
+- **1.163.0** — The best day, counted in UTC
 - **1.162.0** — Taking control of the slice the operator is actually looking at
 - **1.161.1** — Hamlib, researched rather than assumed
 - **1.161.0** — Two refusals that were caught and thrown away, and a wrong slice nobody looked at

@@ -13,6 +13,23 @@ export interface ImportOptions {
   operatorId?: string;
   dryRun: boolean;
   dedupe: boolean;
+  /**
+   * Push the imported contacts out to QRZ, Club Log, Cloudlog and N3FJP.
+   *
+   * DEFAULTS TO FALSE, AND THE DEFAULT IS THE WHOLE POINT. An imported log is HISTORY: it
+   * is already wherever it was going to be, which is usually the very service it was
+   * exported from.
+   *
+   * WHAT HAPPENED WITHOUT IT. An operator imported his QRZ log — 7,384 contacts — and the
+   * upload sweep pushed every one of them to N3FJP, which already had them. His N3FJP log
+   * went to 14,347. ADIF carries LOTW_QSL_SENT and EQSL_QSL_SENT so those two were read
+   * from the file and honoured; there is no such field for QRZ, Club Log, Cloudlog or
+   * N3FJP, so all four defaulted to "not sent yet" and the sweep believed it.
+   *
+   * The damage lands on somebody ELSE'S service and cannot be undone from here, which is
+   * why this is off unless asked for rather than on unless refused.
+   */
+  uploadImported?: boolean;
 }
 
 export type ImportOutcome =
@@ -22,6 +39,8 @@ export type ImportOutcome =
 export interface ImportReport {
   dryRun: boolean;
   dedupe: boolean;
+  /** True when the imported contacts were queued for upload rather than treated as history. */
+  uploadImported: boolean;
   station: { id: string; callsign: string };
   parsed: number;
   valid: number;
@@ -169,6 +188,14 @@ export async function importAdifDocument(
           lotwRcvd: q.lotwRcvd,
           eqslSent: q.eqslSent,
           eqslRcvd: q.eqslRcvd,
+          // MARKED AS ALREADY SENT unless the operator asked for the opposite. See
+          // ImportOptions.uploadImported: LoTW and eQSL come from the file because ADIF
+          // has fields for them; these four have no ADIF field at all, so without this
+          // they read as "never uploaded" and the sweep re-sends the entire history.
+          qrzSent: !opts.uploadImported,
+          clublogSent: !opts.uploadImported,
+          cloudlogSent: !opts.uploadImported,
+          n3fjpSent: !opts.uploadImported,
           notes: q.notes,
           stationId: station.id,
           operatorId:
@@ -225,6 +252,7 @@ export async function importAdifDocument(
     report: {
       dryRun: opts.dryRun,
       dedupe: opts.dedupe,
+      uploadImported: Boolean(opts.uploadImported),
       station: { id: station.id, callsign: station.callsign },
       parsed: qsos.length + problems.length,
       valid: qsos.length,

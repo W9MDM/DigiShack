@@ -15,6 +15,18 @@ export const importOptionsSchema = z.object({
   dryRun: boolQuery(false),
   /** Skip QSOs already in the log. Off means import everything. */
   dedupe: boolQuery(true),
+  /**
+   * Queue the imported contacts for upload to QRZ, Club Log, Cloudlog and N3FJP.
+   *
+   * DEFAULTS TO FALSE. An imported log is history and is already wherever it was going to
+   * be — usually the very service it was exported from. Defaulting the other way sent one
+   * operator's 7,384-contact QRZ log to N3FJP, which already had every one of them, and
+   * left him with 14,347. See ImportOptions.uploadImported.
+   *
+   * The default matters more here than in most places, because the damage lands on
+   * somebody else's service and cannot be undone from this application.
+   */
+  uploadImported: boolQuery(false),
 });
 
 export type ImportOptionsInput = z.infer<typeof importOptionsSchema>;

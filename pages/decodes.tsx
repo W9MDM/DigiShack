@@ -618,6 +618,9 @@ export default function DigitalPage({ wsUrl }: Props) {
    * every message, up to a dozen a second, and the once-a-second `now` tick is when
    * the reader needs it.
    */
+  /** When we last saw the radio transmitting, so a decode gap can be attributed to it. */
+  const txSeenRef = useRef(0);
+
   const linkStats = useRef({
     msgAt: 0,
     counts: {} as Record<string, number>,
@@ -948,6 +951,27 @@ export default function DigitalPage({ wsUrl }: Props) {
     linkStats.current.msgAt > 0 ? Math.floor((now - linkStats.current.msgAt) / 1000) : null;
   // Spectrum alone flows several times a second, so anything past a few seconds is a
   // real stall rather than jitter. 8 s is chosen to never fire on a healthy link.
+  // DID WE TRANSMIT DURING THIS GAP?
+  //
+  // "decodes arnet up to date on the screen again", then "just went another full minute".
+  // Measured at the source at the same moment: of eleven windows, five were OUR OWN
+  // TRANSMISSIONS and five decoded normally. Working somebody in an automatic mode means
+  // transmitting on alternate cycles, so decodes can only arrive every 30 s - and with one
+  // deferred pass that is a minute with nothing new on screen.
+  //
+  // The list was right and the page was not saying so. "quiet 45s - link ok" reads like a
+  // dead band; the truth was a station in the middle of a contact. A gap the operator
+  // caused is not a gap the operator should be investigating.
+  if (status?.transmitting) txSeenRef.current = Date.now();
+  const txAgeSeconds =
+    txSeenRef.current > 0 ? Math.floor((now - txSeenRef.current) / 1000) : null;
+  // Within one cycle of a transmission, the silence is ours. Two periods of slack, because
+  // the decode for the window before a transmission lands about 16 s after it started.
+  const gapIsOurs =
+    txAgeSeconds !== null &&
+    staleSeconds !== null &&
+    txAgeSeconds <= Math.max(45, Math.round((scale.periodMs * 2) / 1000));
+
   const linkStalled = connected && msgAgeSeconds !== null && msgAgeSeconds >= 8;
   if (linkStalled && now - linkStats.current.stallLoggedAt > 30_000) {
     linkStats.current.stallLoggedAt = now;
@@ -1572,8 +1596,15 @@ export default function DigitalPage({ wsUrl }: Props) {
                   {linkStalled && (
                     <Badge tone="warn">{`link stalled ${msgAgeSeconds}s`}</Badge>
                   )}
+                  {/* A gap WE caused, named as ours. Shown sooner than the quiet badge:
+                      half a minute of nothing is alarming, and "we are transmitting" is
+                      the answer the operator needs immediately rather than after 90 s. */}
+                  {!linkStalled && connected && gapIsOurs && staleSeconds !== null && staleSeconds >= 20 && (
+                    <Badge tone="info">{`${staleSeconds}s — we are transmitting`}</Badge>
+                  )}
                   {!linkStalled &&
                     connected &&
+                    !gapIsOurs &&
                     staleSeconds !== null &&
                     staleSeconds >= 90 && (
                       <Badge tone="neutral">{`quiet ${staleSeconds}s — link ok`}</Badge>

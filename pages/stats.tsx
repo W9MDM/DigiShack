@@ -37,6 +37,8 @@ interface CountRow {
 
 interface History {
   years: YearRow[];
+  /** Most contacts in one UTC day, and which day. Null on an empty log. */
+  bestDay: { date: string; qsos: number } | null;
   mostWorked: WorkedRow[];
   continents: CountRow[];
   modes: CountRow[];
@@ -51,8 +53,23 @@ interface History {
   };
 }
 
-const pct = (part: number, whole: number) =>
-  whole > 0 ? `${Math.round((part / whole) * 100)}%` : "—";
+/**
+ * A share of the log, rounded to a precision the number can carry.
+ *
+ * WHOLE NUMBERS ARE WRONG BELOW 10%. The best-day record is 488 of 30,083 contacts -
+ * 1.62% - and rounding that to "2%" overstates it by nearly a quarter, on a page whose
+ * entire job is being accurate about the log. The operator caught it reading the card.
+ *
+ * One decimal below 10%, none above: at 47% a decimal is noise, at 1.6% it is the
+ * difference between a true statement and a flattering one. Sub-0.05% shows "<0.1%"
+ * rather than "0.0%", because a band with three contacts in it has not got none.
+ */
+const pct = (part: number, whole: number) => {
+  if (whole <= 0) return "—";
+  const p = (part / whole) * 100;
+  if (p > 0 && p < 0.05) return "<0.1%";
+  return p < 10 ? `${p.toFixed(1)}%` : `${Math.round(p)}%`;
+};
 
 /**
  * A proportional bar behind a row.
@@ -133,6 +150,33 @@ export default function StatsPage() {
 
       {data && (
         <div className="flex flex-col gap-6">
+          {/*
+            THE BEST DAY, on its own line above the totals.
+
+            Not one of the four cards below, because it is a different KIND of number: those
+            are the log's size, this is a record. Reading "488" beside "30,082 contacts"
+            invites the eye to compare them, and they are not comparable.
+
+            The date is a UTC day — every award, contest and duplicate rule in this
+            application counts days in UTC, and 00:00 UTC is 19:00 local here, so a
+            local-day count would split one evening across two days and under-report the
+            best of them. Labelled so nobody has to guess which convention was used.
+          */}
+          {data.bestDay && (
+            <Card title="Best day">
+              <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+                <span className="font-display text-2xl tnum">
+                  {data.bestDay.qsos.toLocaleString()}
+                </span>
+                <span className="text-sm text-fg-muted">contacts on</span>
+                <span className="font-display text-lg tnum">{data.bestDay.date}</span>
+                <span className="text-xs text-fg-subtle">
+                  UTC · {pct(data.bestDay.qsos, t!.qsos)} of the whole log in one day
+                </span>
+              </div>
+            </Card>
+          )}
+
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             {[
               { label: "Contacts", value: t!.qsos },

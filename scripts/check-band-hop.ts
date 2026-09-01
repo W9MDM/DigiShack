@@ -630,8 +630,17 @@ async function endToEnd() {
     eq(retuned[0], "20M", "the network says 20M is 3x busier, so it moves");
     eq(band, "20M", "and the radio is there");
 
-    // ...and 20M is deaf from here. Four windows to build a real sample.
-    for (let i = 0; i < 6; i++) await feed();
+    // ...and 20M is deaf from here. Enough windows to clear the arrival warmup AND then
+    // build a real sample on top of it.
+    //
+    // WAS 6, WHICH IS NOW EXACTLY THE WARMUP AND NOTHING MORE. The warmup after a band
+    // change became a DURATION (WARMUP_MS, 90 s) rather than a fixed two windows, because
+    // two windows in FT4 is fifteen seconds and the station thrashed between bands on
+    // almost no listening. At an FT8 period that is six windows, so a fixture feeding six
+    // spent every one of them warming up and measured nothing. The behaviour under test —
+    // going home when the new band turns out worse — is unchanged; it just cannot be
+    // judged before the station has finished listening.
+    for (let i = 0; i < 14; i++) await feed();
     eq(retuned[1], "40M", "5 a cycle against 20 clears the old floor but still goes back");
     eq(band, "40M", "the radio is home");
   } finally {
@@ -641,7 +650,7 @@ async function endToEnd() {
   // And it must not immediately bounce back to 20M on the same network figures.
   try {
     Date.now = () => realNow() + 12 * 60_000;
-    for (let i = 0; i < 6; i++) await feed();
+    for (let i = 0; i < 14; i++) await feed();
     eq(retuned.length, 2, "20M is marked deaf, so the same figures do not send us back");
   } finally {
     Date.now = realNow;
@@ -840,9 +849,78 @@ async function nobodyToCall() {
   }
 }
 
+
+// ---------------------------------------------------------------------------
+// The warmup is a HEARING, not a formality
+// ---------------------------------------------------------------------------
+
+/**
+ * THE FAULT, from the live log on 2026-08-31 in FT4:
+ *
+ *     19:15:51  band too quiet (0 decodes) - hopping on   -> 20M
+ *     19:16:06  band too quiet (0 decodes) - hopping on   -> 40M
+ *     19:16:21  band too quiet (0 decodes) - hopping on   -> 20M
+ *     19:16:36  band too quiet (0 decodes) - hopping on   -> 40M
+ *
+ * A hop every fifteen seconds until the audio watchdog restarted the bridge. The warmup
+ * was two WINDOWS, and two windows in FT4 is fifteen seconds - of which one is spent on
+ * the retune itself, with the DAX stream rebuilding behind it. The band was being asked to
+ * prove itself in about one usable window, could not, and was abandoned; the next band got
+ * the same treatment, for ever.
+ *
+ * Asserted as arithmetic rather than through a running operator, because the property that
+ * was wrong is arithmetic: how much LISTENING a warmup buys, in each mode.
+ */
+function warmupIsAHearing(): void {
+  console.log("");
+  console.log("the warmup is a hearing, not a formality");
+
+  const WARMUP_MS = 90_000;
+  const WARMUP_MIN_WINDOWS = 2;
+  const windowsFor = (periodMs: number) =>
+    Math.max(WARMUP_MIN_WINDOWS, Math.ceil(WARMUP_MS / periodMs));
+  const secondsFor = (periodMs: number) => (windowsFor(periodMs) * periodMs) / 1000;
+
+  // The three modes this station runs.
+  const FT8 = 15_000;
+  const FT4 = 7_500;
+  const FT2 = 3_750;
+
+  // THE POINT: the same hearing in every mode. A band's activity is a property of
+  // propagation, not of our T/R period.
+  eq(secondsFor(FT8), 90, "FT8 listens 90 s before judging a band");
+  eq(secondsFor(FT4), 90, "FT4 listens 90 s too, not 15");
+  eq(secondsFor(FT2), 90, "and FT2, not 7.5");
+
+  // The old rule, asserted as the fault it was: two windows got FOUR TIMES stricter as the
+  // mode got faster, which is backwards from what those modes need.
+  ok(2 * (FT4 / 1000) === 15, "the old two-window rule gave FT4 only 15 s");
+  ok(secondsFor(FT4) > 2 * (FT4 / 1000), "and the new rule gives it materially more");
+
+  // Enough windows to survive the retune AND hear both transmit parities. One window is
+  // lost to the move itself; stations alternate cycles, so a single remaining window can
+  // only ever hear half the band.
+  ok(windowsFor(FT8) >= 4, `FT8 gets ${windowsFor(FT8)} windows — the move, then both parities`);
+  ok(windowsFor(FT4) >= 4, `FT4 gets ${windowsFor(FT4)} windows`);
+
+  // A floor, so an implausibly long period cannot produce a zero-window warmup.
+  eq(windowsFor(10 * 60_000), WARMUP_MIN_WINDOWS, "a very long period still warms up at all");
+
+  // THE BACKSTOP. Four quiet hops in a row stops the rotation. At the FT4 rate that fault
+  // was observed at, that is about a minute of hopping rather than an unbounded run into
+  // the audio watchdog.
+  const MAX_QUIET_HOPS = 4;
+  ok(MAX_QUIET_HOPS >= 2, "more than one quiet band is allowed before giving up");
+  ok(
+    MAX_QUIET_HOPS * secondsFor(FT4) < 10 * 60,
+    "and the whole rotation gives up well inside ten minutes",
+  );
+}
+
 void (async () => {
   await endToEnd();
   await nobodyToCall();
+  warmupIsAHearing();
   console.log(`\n${pass} passed, ${fail} failed\n`);
   if (fail > 0) process.exit(1);
 })();

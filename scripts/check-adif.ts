@@ -4,6 +4,7 @@
 import { adifHeader, adifRecord, type AdifQsoInput } from "../lib/adif/write";
 import { adifToQslRoute, qslRouteToAdif } from "../lib/adif/fields";
 import { parseAdif, parseAdifRecords, dupeKey } from "../lib/adif/parse";
+import { importOptionsSchema } from "../lib/validation/adif";
 
 let failures = 0;
 function check(name: string, cond: boolean, extra?: unknown) {
@@ -227,6 +228,34 @@ check("undefined route emits empty", qslRouteToAdif(undefined) === "");
 check("unknown code yields null", adifToQslRoute("X") === null, adifToQslRoute("X"));
 check("missing code yields null", adifToQslRoute(undefined) === null);
 check("codes are case-insensitive", adifToQslRoute("b") === "BUREAU", adifToQslRoute("b"));
+
+// --------------------------------------------------------------------------
+console.log("");
+console.log("8. an imported log is HISTORY, not a queue of things to upload");
+// THE FAULT. An operator imported his QRZ log - 7,384 contacts - and the upload sweep
+// pushed every one of them to N3FJP, which already held them all. His N3FJP log went to
+// 14,347.
+//
+// ADIF carries LOTW_QSL_SENT and EQSL_QSL_SENT, so those two were read from the file and
+// honoured. There is no ADIF field for QRZ, Club Log, Cloudlog or N3FJP, so all four
+// defaulted to "not sent yet" and the sweep believed it.
+//
+// Asserted at the SCHEMA, because that is where the default lives and because the damage
+// lands on somebody else's service and cannot be undone from here.
+{
+  const base = { stationId: "s1" };
+  const dflt = importOptionsSchema.parse({ ...base });
+  check("uploadImported defaults to FALSE", dflt.uploadImported === false, dflt.uploadImported);
+  check("dedupe still defaults to true", dflt.dedupe === true);
+  check("dryRun still defaults to false", dflt.dryRun === false);
+
+  // Explicitly asked for is still honoured — a log that has never been uploaded anywhere
+  // is a real case, and this is a choice rather than a prohibition.
+  const on = importOptionsSchema.parse({ ...base, uploadImported: "1" });
+  check("but it can be turned on deliberately", on.uploadImported === true);
+  const off = importOptionsSchema.parse({ ...base, uploadImported: "0" });
+  check("and off explicitly", off.uploadImported === false);
+}
 
 // --------------------------------------------------------------------------
 console.log(

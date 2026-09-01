@@ -115,6 +115,14 @@ export interface OperatingData {
 export interface OperatingDeps {
   /** Which radio this is. Only affects log lines and the band-hop warning. */
   kind: RadioKind;
+  /**
+   * Override how long the auto operator listens before judging a band, ms.
+   *
+   * For the bench only. Production leaves it unset and gets the measured 90 seconds; a
+   * fixture that would otherwise have to feed ninety seconds of simulated windows to reach
+   * the behaviour it is actually testing can shorten it.
+   */
+  warmupMs?: number;
   source: DigitalSource & { readonly mode: DigitalMode };
   tx: DigitalTransmitter;
   station: { id: string; callsign: string; grid: string };
@@ -567,6 +575,7 @@ export async function buildOperating(deps: OperatingDeps): Promise<Operating> {
     source,
     tx,
     guards,
+    warmupMs: deps.warmupMs,
     controller: qsoController,
     identity,
     getBandMode,

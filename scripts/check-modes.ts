@@ -4,6 +4,7 @@
 // picker springs back; a data flag set the wrong way produces a radio that keys and transmits
 // nothing; the wrong sideband is inaudible rather than wrong-looking. None of it throws.
 
+import type { TxMode } from "@/lib/radio/waveform";
 import {
   digitalCallingFrequency,
   fromCivMode,
@@ -109,6 +110,44 @@ console.log("\nis this a frequency an automatic mode may run on");
   // FT4 lives elsewhere, so the mode is part of the question.
   ok(digitalCallingFrequency(14_080_000, "FT4") !== null, "14.080 is FT4");
   ok(digitalCallingFrequency(14_080_000, "FT8") === null, "and is not FT8");
+
+  // WHICH MODE THE GUARD ASKS ABOUT, resolved from radio status the way the auto-mode
+  // endpoint resolves it.
+  //
+  // THE BUG THIS PINS. That endpoint read `status.mode`, which is the RADIO'S MODULATION -
+  // "DIGU" on a Flex, "USB-D" on an Icom - and never the digital sub-mode. `mode === "FT4"`
+  // was therefore false whatever the station was doing, and the guard checked FT8 every
+  // time. Reported on switching to FT4: 14.080 MHz, which IS the 20 m FT4 calling
+  // frequency, refused as "not FT8".
+  //
+  // Asserted as a resolution rule rather than through the endpoint, because the endpoint
+  // needs a radio. The rule is the part that was wrong.
+  const resolveMode = (st: { subMode: string | null; mode: string | null }): TxMode => {
+    const m = (st.subMode || st.mode || "FT8").toUpperCase();
+    return m === "FT4" ? "FT4" : m === "FT2" ? "FT2" : "FT8";
+  };
+
+  eq(resolveMode({ subMode: "FT4", mode: "DIGU" }), "FT4", "a Flex in FT4 resolves to FT4");
+  eq(resolveMode({ subMode: "FT8", mode: "DIGU" }), "FT8", "and in FT8, to FT8");
+  eq(resolveMode({ subMode: "FT2", mode: "DIGU" }), "FT2", "and in FT2, to FT2");
+  eq(resolveMode({ subMode: "FT4", mode: "USB-D" }), "FT4", "an Icom in FT4 resolves to FT4");
+  // The old behaviour, asserted as a NON-match so it cannot come back: a modulation-only
+  // status must not silently become FT8 while the station runs FT4.
+  ok(
+    resolveMode({ subMode: "FT4", mode: "DIGU" }) !== "FT8",
+    "reading the modulation instead of the sub-mode would say FT8 — it must not",
+  );
+  eq(resolveMode({ subMode: null, mode: "DIGU" }), "FT8", "no sub-mode reported falls back to FT8");
+
+  // BOTH DIRECTIONS OF THE FAULT, at the frequencies that showed it.
+  ok(
+    digitalCallingFrequency(14_080_000, resolveMode({ subMode: "FT4", mode: "DIGU" })) !== null,
+    "THE REPORT: 14.080 in FT4 is accepted, not refused as 'not FT8'",
+  );
+  ok(
+    digitalCallingFrequency(14_074_000, resolveMode({ subMode: "FT4", mode: "DIGU" })) === null,
+    "THE DANGEROUS HALF: 14.074 in FT4 is REFUSED — it is the FT8 calling frequency",
+  );
 
   // A refusal that names somewhere to go beats one that only says no.
   eq(nearestDigitalFrequency(7_200_000), 7_074_000, "the nearest FT8 to 7.200 is 7.074");

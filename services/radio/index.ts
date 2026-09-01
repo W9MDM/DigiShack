@@ -3176,7 +3176,22 @@ async function main(): Promise<void> {
         // leaving a machine to do it.
         if (mode !== "off") {
           const dialHz = status.dialFrequency;
-          const digitalMode = (status.mode ?? "FT8").toUpperCase();
+          // `subMode` FIRST, and that is the whole bug this line had.
+          //
+          // `status.mode` is the RADIO'S MODULATION - "DIGU" on a Flex, "USB-D" on an Icom -
+          // and never the digital sub-mode. So `mode === "FT4"` was false whatever the
+          // station was actually doing, and this guard fell through to FT8 every single
+          // time. Reported on switching to FT4: 14.080 MHz, which IS the 20 m FT4 calling
+          // frequency, refused with "14.080 MHz is not FT8".
+          //
+          // The false refusal is the visible half. The dangerous half is the other
+          // direction: in FT4 the guard checked 14.074 - an FT8 frequency - and PASSED it,
+          // so an automatic FT4 mode could have been started on top of the FT8 calling
+          // frequency with the one check meant to prevent exactly that saying yes.
+          //
+          // The `subMode || mode` fallback is the same one `onWsjtxStatus` already uses;
+          // this line simply never learned it.
+          const digitalMode = (status.subMode || status.mode || "FT8").toUpperCase();
           const forMode = digitalMode === "FT4" ? "FT4" : digitalMode === "FT2" ? "FT2" : "FT8";
           if (dialHz === null) {
             sendJson(res, 409, {
