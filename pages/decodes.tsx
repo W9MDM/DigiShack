@@ -23,6 +23,7 @@ import { bridgeWsUrl } from "@/lib/bridge/ws-url";
 import { ApiError, apiPost, useApi } from "@/lib/client/api";
 import { useCan } from "@/lib/client/session";
 import { formatFreqMHz } from "@/lib/ham/bands";
+import { callableFrom } from "@/lib/digital/callable";
 import { gridFromMessage } from "@/lib/ham/grid-message";
 import {
   DIGITAL_FREQUENCIES,
@@ -505,7 +506,7 @@ export default function DigitalPage({ wsUrl }: Props) {
   const [attempts, setAttempts] = useState(0);
   const [paused, setPaused] = useState(false);
   const [filter, setFilter] = useState<
-    "all" | "cq" | "cq-pota" | "cq-dx" | "worth" | "me"
+    "all" | "cq" | "cq-free" | "cq-pota" | "cq-dx" | "worth" | "me"
   >("all");
   /**
    * Free-text search across the decode list.
@@ -862,12 +863,21 @@ export default function DigitalPage({ wsUrl }: Props) {
     // a directed message that happens to mention it.
     return searched.filter((r) => {
       const p = parseMessage(r.message);
+      // "CQ + just finished" asks the SAME function the hunt asks, so what the operator
+      // filters to and what Auto Hunt would pick cannot disagree — which is the stated
+      // design rule for this list. A station mid-exchange with somebody else is refused
+      // here for the same reason it is refused there.
+      if (filter === "cq-free") {
+        return callableFrom(p, { myCall: myCall ?? "", treatClosingAsCallable: true }).callable;
+      }
       if (p.kind !== "cq") return false;
+      // POTA AND DX STAY CQ-ONLY. A closing token carries no modifier at all, so widening
+      // these two would empty them rather than widen them.
       if (filter === "cq-pota") return p.modifier === "POTA";
       if (filter === "cq-dx") return p.modifier === "DX";
       return true;
     });
-  }, [rows, filter, search, mentionsMe, worth]);
+  }, [rows, filter, search, mentionsMe, worth, myCall]);
 
   /** Markers for the most recent cycle only — older ones aren't on screen. */
   const markers = useMemo<WaterfallMarker[]>(() => {
@@ -1719,6 +1729,9 @@ export default function DigitalPage({ wsUrl }: Props) {
                 >
                   <option value="all">Everything</option>
                   <option value="cq">CQ only</option>
+                  <option value="cq-free" title="CQs, plus stations that just sent RR73, RRR or 73 — they have finished and are free to call">
+                    CQ + just finished
+                  </option>
                   <option value="cq-pota">CQ POTA</option>
                   <option value="cq-dx">CQ DX</option>
                   <option value="worth">Worth working</option>

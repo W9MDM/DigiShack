@@ -634,6 +634,7 @@ async function makeOperating(
   source: FakeSource,
   tx: FakeTx,
   entityLookups?: { n: number },
+  settingRows: Record<string, string> = {},
 ): Promise<Operating> {
   return buildOperating({
     kind: "flex",
@@ -653,7 +654,7 @@ async function makeOperating(
     tuneHz: async () => true,
     broadcast: () => {},
     log: () => {},
-    settings: new FakeSettings(),
+    settings: new FakeSettings(settingRows),
     data: {
       wasWorked: async () => false,
       workedOnBandEver: async () => false,
@@ -1020,6 +1021,66 @@ async function autoOperatorChecks(): Promise<void> {
     source.window(target, [{ message: "CQ OA4ENG FH17", snr: -7, freqOffset: 1_180 }]);
     await settle();
     eq(tx.sent.length, before + 1, "the full pass calls them, exactly as it did before candidates existed");
+  }
+
+  // =========================================================================
+  console.log("");
+  console.log("auto.callFinishedStations: the WIRING, not just the rule");
+  // =========================================================================
+  // scripts/check-callable.ts asserts the rule exhaustively as a pure function. This
+  // asserts that `rankWindow` actually CONSULTS it, which is a different claim and the one
+  // that has repeatedly been the gap here: a correct rule that nothing calls.
+  //
+  // Two warm-up windows first, matching every other scenario in this file - the hunt ranks
+  // nothing until it has listened.
+  async function huntOne(
+    rows: Record<string, string>,
+    decode: { message: string; snr: number; freqOffset: number },
+  ): Promise<FakeTx> {
+    const source = new FakeSource();
+    const tx = new FakeTx();
+    const op = await makeOperating(source, tx, undefined, rows);
+    const auto = op.autoOperator;
+    auto.setMode("hunt");
+    source.window(BASE, [decode]);
+    await settle();
+    source.window(BASE + PERIOD, [decode]);
+    await settle();
+    source.window(BASE + 2 * PERIOD, [decode]);
+    await settle();
+    return tx;
+  }
+
+  {
+    const tx = await huntOne({}, { message: "G4EEE F5FFF 73", snr: -5, freqOffset: 2_560 });
+    eq(tx.sent.length, 0, "with the setting OFF, a station that just sent 73 is not called");
+  }
+  {
+    const tx = await huntOne(
+      { "auto.callFinishedStations": "true" },
+      { message: "G4EEE F5FFF 73", snr: -5, freqOffset: 2_560 },
+    );
+    ok(tx.sent.length > 0, "with it ON, a station that just sent 73 IS called", String(tx.sent.length));
+    ok(
+      tx.sent[0]?.message.includes("F5FFF") === true,
+      "and the call goes to the SENDER, not the station they were working",
+      tx.sent[0]?.message ?? "(nothing sent)",
+    );
+    ok(
+      !tx.sent.some((m) => m.message.includes("G4EEE")),
+      "G4EEE is never called - they were the one being signed off to",
+      tx.sent.map((m) => m.message).join(" | "),
+    );
+  }
+  {
+    // THE ASSERTION THAT MATTERS. The feature must not trade the rudeness it fixes for a
+    // worse one: a station mid-exchange with a stranger is committed for several windows
+    // and is not listening.
+    const tx = await huntOne(
+      { "auto.callFinishedStations": "true" },
+      { message: "K5AAA W6BBB R-09", snr: -5, freqOffset: 1_450 },
+    );
+    eq(tx.sent.length, 0, "a station mid-exchange with a stranger is STILL not called");
   }
 }
 

@@ -955,6 +955,20 @@ export const SETTINGS: SettingDef[] = [
     default: "false",
   },
   {
+    key: "auto.callFinishedStations",
+    label: "Also call stations that just finished a contact",
+    type: "boolean",
+    group: "auto",
+    help:
+      "A station sending RR73, RRR or 73 has just finished and is free — often the best "
+      + "moment on the band to call, ahead of everyone waiting for their next CQ. Off by "
+      + "default because it widens what the automatic modes will call. A station mid-exchange "
+      + "with somebody else is still refused: a grid or a report means they are committed for "
+      + "several windows and are not listening, and calling then would be doubling on another "
+      + "operator's contact.",
+    default: "false",
+  },
+  {
     key: "auto.huntNewOnly",
     legacyKeys: ["flex.huntNewOnly"],
     label: "Hunt only new ones",

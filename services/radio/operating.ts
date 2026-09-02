@@ -615,6 +615,12 @@ export async function buildOperating(deps: OperatingDeps): Promise<Operating> {
     huntPrefs: async () => ({
       newOnly: await s.getBoolean("auto.huntNewOnly", false),
       minSnr: await s.getNumber("auto.huntMinSnr", -22),
+      // HERE AND NOT IN THE GUARDS CONSTRUCTOR, deliberately. `huntPrefs` is awaited fresh
+      // on every hunted window, so this takes effect within the settings cache TTL and
+      // needs no bridge restart. A setting that changes who the transmitter calls — and
+      // whose risk is doubling on a stranger's contact — is one an operator will want to
+      // switch off mid-session and see obeyed on the next cycle.
+      callFinished: await s.getBoolean("auto.callFinishedStations", false),
     }),
     resolveEntity: data.resolveEntity,
     workedIndex: data.workedIndex,

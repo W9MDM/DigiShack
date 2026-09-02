@@ -36,7 +36,7 @@ be read: `DATABASE_URL`, `SETTINGS_KEY` and `PORT`.
 - [Issue alerts](#issue-alerts) — 4 settings
 - [Software updates](#software-updates) — 1 setting
 - [Outgoing email](#outgoing-email) — 7 settings
-- [Automatic operating limits](#automatic-operating-limits) — 18 settings
+- [Automatic operating limits](#automatic-operating-limits) — 19 settings
 - [Automatic uploading](#automatic-uploading) — 13 settings
 - [POTA chasing](#pota-chasing) — 7 settings
 - [QSL card and email](#qsl-card-and-email) — 31 settings
@@ -300,6 +300,7 @@ Brakes on the autonomous modes. The wall-clock and QSO limits are the only ones 
 
 | Setting | Key | Type | Default | What it does |
 |---|---|---|---|---|
+| Also call stations that just finished a contact | `auto.callFinishedStations` | on/off | `false` | A station sending RR73, RRR or 73 has just finished and is free — often the best moment on the band to call, ahead of everyone waiting for their next CQ. Off by default because it widens what the automatic modes will call. A station mid-exchange with somebody else is still refused: a grid or a report means they are committed for several windows and are not listening, and calling then would be doubling on another operator's contact. |
 | Hunt only new ones | `auto.huntNewOnly` | on/off | `false` | Auto Hunt calls only stations that offer something new (DXCC entity, band slot, state, CQ zone, grid). Off by default — on a quiet band you usually want the contact. |
 | Hunt minimum SNR (dB) | `auto.huntMinSnr` | number | `-22` | Do not call stations weaker than this; the QSO is unlikely to complete and the cycles are better spent elsewhere. |
 | Auto band-hop | `auto.bandHop` | on/off | `false` | When an auto mode stalls (dead band, no answers), retune to the next band on the hop list, listen two cycles, and either resume or hop again. |

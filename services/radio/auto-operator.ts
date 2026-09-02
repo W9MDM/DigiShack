@@ -4,6 +4,7 @@ import type { DigitalMode } from "@/lib/ham/digital-freqs";
 import type { FlexDaxTransmitter } from "@/lib/flex/tx";
 import type { OperatingGuards } from "@/lib/digital/qso";
 import { parseMessage, standardMessages, type MayCallChecks } from "@/lib/digital/qso";
+import { callableFrom } from "@/lib/digital/callable";
 import { rankCandidates, type Candidate, type WorkedIndex } from "@/lib/digital/worth";
 import { cqIsForUs } from "@/lib/digital/cq-modifier";
 import type { QsoController } from "./qso-controller";
@@ -133,7 +134,7 @@ export interface AutoOperatorOptions {
    */
   warmupMs?: number;
   /** Hunt preferences from settings. */
-  huntPrefs: () => Promise<{ newOnly: boolean; minSnr: number }>;
+  huntPrefs: () => Promise<{ newOnly: boolean; minSnr: number; callFinished?: boolean }>;
   /** Current POTA activators on the digital modes. */
   potaSpots: () => Promise<
     { activator: string; freqHz: number; band: string | null; mode: string; reference: string; parkName: string | null }[]
@@ -529,7 +530,12 @@ export class AutoOperator {
     heardCq: boolean;
     list: HuntCandidate[];
     /**
-     * Everyone who called CQ in that window, ranked or not.
+     * Everyone CALLABLE in that window, ranked or not.
+     *
+     * Named `cqCalls` still, because `scripts/check-band-hop.ts` reads these semantics and
+     * renaming the field is a larger change than the honesty it buys. With
+     * `auto.callFinishedStations` on it also holds stations admitted on a closing token, so
+     * read it as "callable", not "called CQ".
      *
      * `list` is post-filter: with `huntNewOnly` on, or a station under the SNR floor, a
      * window where twenty stations called can rank to nothing. The streak's log line has
@@ -1142,7 +1148,10 @@ export class AutoOperator {
     const cqs =
       this.candidates?.at === windowStartMs ? this.candidates.cqCalls : ([] as string[]);
     if (ranked === null) {
-      this.lastAction = "no CQs heard this window";
+      // "callable" rather than "CQs": with `auto.callFinishedStations` on, a station that
+      // just sent RR73 counts too, and a status line saying "no CQs" would be false on a
+      // window where one was heard and admitted.
+      this.lastAction = "nobody callable this window";
       return { callable: false, cqs, refused: 0 };
     }
     if (ranked.length === 0) {
@@ -1194,7 +1203,7 @@ export class AutoOperator {
     const prefs = await this.o.huntPrefs();
     this.lastAction = prefs.newOnly
       ? "nothing new on frequency"
-      : "no callable CQs (dupes / cooling down)";
+      : "nobody callable (dupes / cooling down)";
     return { callable, cqs, refused };
   }
 
@@ -1230,12 +1239,24 @@ export class AutoOperator {
     const { band } = this.o.getBandMode();
     const me = this.o.identity.myCall.toUpperCase();
 
+    // PREFS BEFORE THE FILTER, because the filter now depends on them. Awaited here rather
+    // than at its old position further down; it is the same call and `rankWindow` runs it
+    // once per window.
+    const prefs = await this.o.huntPrefs();
+
     const cqs = decodes
       .map((d) => ({ d, p: parseMessage(d.message) }))
-      .filter((x) => x.p.kind === "cq" && x.p.from !== me)
+      // CALLABILITY IS NOW A FUNCTION, not a condition. `lib/digital/callable.ts` decides
+      // it, so the rule that admits a station which has just sent RR73 — and refuses one
+      // that is mid-exchange with a stranger — is one testable thing rather than a
+      // lengthening boolean here. See scripts/check-callable.ts for both directions.
+      .filter((x) => callableFrom(x.p, { myCall: me, treatClosingAsCallable: prefs.callFinished === true }).callable)
       .filter((x) =>
+        // POTA HUNT STAYS CQ-ONLY. "CQ POTA" is the activator announcing a park contact;
+        // an RR73 carries no modifier, so admitting closings here would turn a park hunt
+        // into a general one the moment the operator enabled the wider rule.
         this.mode === "hunt-pota"
-          ? (x.p as { modifier: string | null }).modifier === "POTA"
+          ? x.p.kind === "cq" && (x.p as { modifier: string | null }).modifier === "POTA"
           : true,
       );
 
@@ -1266,7 +1287,21 @@ export class AutoOperator {
       // Narrowed rather than cast: the filter above has already established these are CQs,
       // but the compiler cannot see through it and a cast would hide a real change to the
       // filter from ever being caught here.
-      if (x.p.kind !== "cq") continue;
+      //
+      // AND THAT IS EXACTLY WHAT HAPPENED. This was `continue`, written when the only way
+      // into this list was a CQ. `auto.callFinishedStations` made a directed closing token
+      // a candidate too, and this line then dropped every one of them silently — the
+      // candidate list came out empty and the status line said "nobody callable" on a
+      // window that had somebody. Caught by the wiring assertion in check:first-tx, not by
+      // the rule's own tests, which were all passing.
+      //
+      // A closing token carries no CQ modifier, so there is nothing for `cqIsForUs` to
+      // judge and it is admitted directly. The comment above was right that a cast would
+      // have hidden this; the `continue` hid it instead.
+      if (x.p.kind !== "cq") {
+        addressed.push(x);
+        continue;
+      }
       const modifier = x.p.modifier;
       if (!modifier) {
         addressed.push(x);
@@ -1302,7 +1337,6 @@ export class AutoOperator {
     }
 
     const worked = await this.workedFor(band);
-    const prefs = await this.o.huntPrefs();
 
     const candidates: Candidate[] = [];
     const byCall = new Map<
@@ -1317,13 +1351,17 @@ export class AutoOperator {
       }
     >();
     for (const { d, p } of cqs) {
-      if (p.kind !== "cq") continue;
+      // `other` cannot reach here — `callableFrom` refuses it — but the narrowing has to be
+      // written for the compiler, and this replaces an `if (p.kind !== "cq") continue` that
+      // would have silently dropped every closing-token candidate the filter just admitted.
+      if (p.kind === "other") continue;
+      const isClosing = p.kind === "directed";
       // "CQ POTA" is the activator telling us this is a park contact. Which park is
       // not in the message — there is no room for it — so the reference comes from
       // the spot feed when it agrees on callsign AND band, and is left empty
       // otherwise. SIG without SIG_INFO is valid ADIF and is honestly what we know;
       // taking a reference from a spot on a different band would be inventing data.
-      const mod = (p as { modifier: string | null }).modifier;
+      const mod = p.kind === "cq" ? (p as { modifier: string | null }).modifier : null;
       const isPota = mod === "POTA";
       const park = isPota ? this.parkFor(p.from, band) : null;
       byCall.set(p.from, {
@@ -1336,7 +1374,10 @@ export class AutoOperator {
       candidates.push({
         call: p.from,
         snr: d.snr,
-        grid: p.grid,
+        // A closing token carries no grid — `lib/digital/qso.ts` gives `{type:"rr73"}` with
+        // no locator, and RR73 must never be read as one. So a station admitted this way
+        // simply forgoes the new-grid awards, which is correct: we do not know their grid.
+        grid: isClosing ? null : p.grid,
         dxcc: await this.entityFor(p.from),
         // The same park the contact would be logged against, so an unworked
         // reference ranks an activator up — this is the scoring the decode list's

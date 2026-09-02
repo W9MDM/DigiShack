@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.170.7 - public release
+## 1.171.0 - public release
 
 Development happens in a private repository; this is where the public history starts.
 Earlier entries are not reproduced - they quote real operators by callsign, include
@@ -22,6 +22,7 @@ Notes for anyone running this:
 
 ## Release history
 
+- **1.171.0** — A station that just sent 73 is the best one on the band to call
 - **1.170.7** — The worked chip nobody had ever seen
 - **1.170.6** — The public repo shipped install.sh non-executable
 - **1.170.5** — Three log entries per callsign, from a guard keyed on the wrong value
