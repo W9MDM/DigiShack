@@ -405,9 +405,17 @@ function useCompactLayout(): boolean {
  *
  *   entity   gold, 12px, full row  a new DXCC or a new continent. Unmissable on purpose.
  *   award    blue, 11px            a real slot: park, state, zone, entity-on-this-band.
- *   minor    grey, 10px            a new grid, or simply never worked before.
+ *   minor    grey, 10px            a new grid. (It also covered "never worked" until
+ *                                  1.170.7, which stopped DISPLAYING that one: it fires on
+ *                                  most rows of a busy band, so it could not be made
+ *                                  prominent without shouting nor quiet without vanishing,
+ *                                  and operators reported both. Not-worked is the default
+ *                                  state; the exception is what earns a chip now.)
  *   CQ       green (unchanged)     "this station is callable", which is not the same claim.
- *   worked   dim grey (was green)  finished this session — the row the eye should skip.
+ *   worked   dim amber             worked on this band and mode today — the row the eye
+ *                                  should skip, and the row Auto Hunt will refuse. Was dim
+ *                                  grey and session-scoped, which an operator reported as
+ *                                  never having seen fire at all.
  *
  * Gold rather than a brighter green because green is already spoken for twice over, and
  * because a new one IS the gold on this screen. `accent-bright` is spoken for as well —
@@ -474,6 +482,14 @@ export default function DigitalPage({ wsUrl }: Props) {
   // Why each station is worth calling — the same scoring Auto Hunt ranks by, so the
   // badges an operator sees and the choices the software makes cannot disagree.
   const [worth, setWorth] = useState<Map<string, string[]>>(new Map());
+  /**
+   * Stations the dupe rule would refuse — already worked on this band and mode inside
+   * `auto.dupeWindowHours`, or already today.
+   *
+   * From the server, which asks the same boundary the transmit guard asks. The old
+   * `workedNow` below is page-local session state and answers a narrower question.
+   */
+  const [workedDupe, setWorkedDupe] = useState<Set<string>>(new Set());
 
   // Contacts today. A single indexed COUNT behind /api/stats/today, refreshed on
   // every logged contact and on a slow poll so the day rolls over at 00:00 UTC
@@ -901,13 +917,23 @@ export default function DigitalPage({ wsUrl }: Props) {
       if (grid && !grids[r.callsign]) grids[r.callsign] = grid;
     }
     let cancelled = false;
-    void apiPost<{ entries: { callsign: string; reasons: string[] }[] }>(
-      "/api/digital/worth",
-      { band: status?.band ?? null, calls, grids },
-    )
+    void apiPost<{
+      entries: { callsign: string; reasons: string[]; workedRecently?: boolean }[];
+    }>("/api/digital/worth", {
+      band: status?.band ?? null,
+      // MODE, because the dupe rule is per band AND mode. Sending only the band would mark
+      // a station worked on 20 m FT8 as a duplicate while running 20 m FT4, which is a
+      // contact the guard would happily allow.
+      mode: status?.subMode ?? status?.mode ?? null,
+      calls,
+      grids,
+    })
       .then((r) => {
         if (cancelled) return;
         setWorth(new Map(r.entries.map((e) => [e.callsign, e.reasons])));
+        setWorkedDupe(
+          new Set(r.entries.filter((e) => e.workedRecently).map((e) => e.callsign)),
+        );
       })
       .catch(() => {
         /* scoring is an enhancement; the decode list works without it */
@@ -918,7 +944,7 @@ export default function DigitalPage({ wsUrl }: Props) {
     // Deliberately keyed on the newest decode rather than on `rows`: re-scoring on
     // every array change would fire a request per decode within a cycle.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rows[0]?.timestamp, status?.band]);
+  }, [rows[0]?.timestamp, status?.band, status?.subMode, status?.mode]);
 
   const clock = useMemo(() => assessClock(rows.slice(0, 200).map((r) => r.deltaTime)), [rows]);
 
@@ -1801,7 +1827,27 @@ export default function DigitalPage({ wsUrl }: Props) {
                         const mine = mentionsMe(d.message);
                         const done =
                           d.callsign !== null && workedNow.has(d.callsign.toUpperCase());
-                        const reasons = d.callsign ? (worth.get(d.callsign) ?? []) : [];
+                        /**
+                         * NOT WORKED IS THE DEFAULT STATE, so it stopped being a chip.
+                         *
+                         * "never worked" fires on most rows of a busy band — which is why
+                         * 1.152.0 demoted it to grey in the first place, and why operators
+                         * then reported it as invisible. Both are true: a chip that appears
+                         * on nearly every row cannot be made prominent without shouting,
+                         * and cannot be quiet without disappearing. The way out is not to
+                         * colour it but to stop drawing it, and mark the EXCEPTION instead —
+                         * the `worked` chip below.
+                         *
+                         * lib/digital/worth.ts still scores it at 12 points and still
+                         * returns the reason; scripts/check-worth.ts still pins the literal.
+                         * Only the display drops it, so the ranking is untouched.
+                         */
+                        const reasons = (
+                          d.callsign ? (worth.get(d.callsign) ?? []) : []
+                        ).filter((r) => r !== "never worked");
+                        /** The dupe rule would refuse them: worked this band+mode today. */
+                        const dupe =
+                          d.callsign !== null && workedDupe.has(d.callsign.toUpperCase());
                         /**
                          * The loudest thing this station is worth — what the ROW is
                          * allowed to shout, as opposed to what its chips say.
@@ -1949,10 +1995,24 @@ export default function DigitalPage({ wsUrl }: Props) {
                                   skip" were the same green rectangle. It is the one label
                                   here that means "nothing to do", and it now reads that
                                   way at a glance. */}
-                              {done && (
+                              {(done || dupe) && (
                                 <span
-                                  className="ml-2 rounded-sm border border-line bg-surface-2 px-1 py-0.5 text-[10px] uppercase tracking-wide text-fg-subtle align-middle"
-                                  title="Contact completed and logged this session."
+                                  className={cn(
+                                    "ml-2 rounded-sm border px-1 py-0.5 text-[10px] uppercase tracking-wide align-middle",
+                                    // WARM, not neutral. The old chip was grey on grey and
+                                    // an operator reported never having seen it — grey at
+                                    // 8.2:1 is perfectly legible and still invisible,
+                                    // because luminance makes text readable once you look
+                                    // at it and only HUE makes it findable without looking.
+                                    // Warm enough to separate from the chrome, dim enough
+                                    // not to compete with the gold a new entity gets.
+                                    "border-warn/35 bg-warn/10 text-warn/80",
+                                  )}
+                                  title={
+                                    done
+                                      ? "Contact completed and logged this session."
+                                      : "Already worked on this band and mode today — the automatic modes will not call them again."
+                                  }
                                 >
                                   worked
                                 </span>

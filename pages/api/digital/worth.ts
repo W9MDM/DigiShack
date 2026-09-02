@@ -4,6 +4,8 @@ import { sendError, sendJson } from "@/lib/api/respond";
 import { authedRoute } from "@/lib/auth/guard";
 import { resolveDxcc } from "@/lib/dxcc/resolve";
 import { buildWorkedIndex } from "@/lib/digital/worked-index";
+import { workedRecently } from "@/lib/digital/worked-recently";
+import { getNumberSetting } from "@/lib/settings";
 import { scoreCandidate, type Candidate } from "@/lib/digital/worth";
 import { cachedPotaSpots } from "@/lib/pota/spots";
 
@@ -43,6 +45,15 @@ export interface WorthEntry {
   reasons: string[];
   /** Nothing new about this station — the common case, and worth saying plainly. */
   routine: boolean;
+  /**
+   * The dupe rule would refuse to call them: already worked on this band and mode inside
+   * `auto.dupeWindowHours`, or already today.
+   *
+   * The SAME question the transmit guard asks, from the same boundary function, so the chip
+   * on the screen and the refusal in the log cannot disagree. The old chip was page-local
+   * session state and an operator reported never having seen it fire.
+   */
+  workedRecently: boolean;
 }
 
 async function post(req: NextApiRequest, res: NextApiResponse) {
@@ -50,6 +61,14 @@ async function post(req: NextApiRequest, res: NextApiResponse) {
 
   const band =
     typeof body.band === "string" && body.band.trim() ? body.band.trim().toUpperCase() : null;
+  // MODE MATTERS AND WAS NOT ASKED FOR. The dupe rule is per band AND mode — a station
+  // worked on 20 m FT8 is not a duplicate on 20 m FT4 — so a chip decided on band alone
+  // would talk an operator out of contacts they are entitled to make.
+  const mode =
+    typeof (body as { mode?: unknown }).mode === "string" &&
+    (body as { mode: string }).mode.trim()
+      ? (body as { mode: string }).mode.trim().toUpperCase()
+      : null;
 
   if (!Array.isArray(body.calls)) {
     sendError(res, 400, "calls must be an array of callsigns");
@@ -79,6 +98,11 @@ async function post(req: NextApiRequest, res: NextApiResponse) {
   }
 
   const worked = await buildWorkedIndex(band);
+
+  // Read from the setting rather than hardcoded, so turning the guard down (or off) changes
+  // the chips in step with what the station will actually do.
+  const dupeHours = await getNumberSetting("auto.dupeWindowHours", 24);
+  const dupes = await workedRecently(calls, band, mode, dupeHours * 3_600_000);
 
   // Park reference and state for anyone currently spotted as an activator.
   //
@@ -132,10 +156,11 @@ async function post(req: NextApiRequest, res: NextApiResponse) {
       score: scored.score,
       reasons: scored.reasons,
       routine: scored.routine,
+      workedRecently: dupes.has(call),
     });
   }
 
-  sendJson(res, 200, { band, entries });
+  sendJson(res, 200, { band, mode, entries });
 }
 
 export default authedRoute({ POST: { role: "VIEWER", handler: post } });
