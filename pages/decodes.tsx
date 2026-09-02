@@ -20,7 +20,7 @@ import {
 import { SourcePicker } from "@/components/radio/SourcePicker";
 import { withPageAuth } from "@/lib/auth/guard";
 import { bridgeWsUrl } from "@/lib/bridge/ws-url";
-import { ApiError, apiPost, useApi } from "@/lib/client/api";
+import { ApiError, apiGet, apiPatch, apiPost, useApi } from "@/lib/client/api";
 import { useCan } from "@/lib/client/session";
 import { formatFreqMHz } from "@/lib/ham/bands";
 import { callableFrom } from "@/lib/digital/callable";
@@ -491,6 +491,31 @@ export default function DigitalPage({ wsUrl }: Props) {
    * `workedNow` below is page-local session state and answers a narrower question.
    */
   const [workedDupe, setWorkedDupe] = useState<Set<string>>(new Set());
+
+  /**
+   * Whether Auto Hunt will call stations that have just finished a contact.
+   *
+   * From `/api/digital/hunt-prefs` — a narrow VIEWER-readable route, because
+   * `/api/settings` is ADMIN-only for both reads and writes and this page must be able to
+   * say whether the hunt agrees with what the filter is showing. A list offering
+   * "CQ + just finished" while the automatic modes would refuse those stations is exactly
+   * the badge-versus-guard disagreement this page is built to avoid.
+   */
+  const [callFinished, setCallFinished] = useState<boolean | null>(null);
+  const [callFinishedBusy, setCallFinishedBusy] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    void apiGet<{ prefs: Record<string, boolean> }>("/api/digital/hunt-prefs")
+      .then((r) => {
+        if (!cancelled) setCallFinished(r.prefs["auto.callFinishedStations"] === true);
+      })
+      .catch(() => {
+        /* null keeps the control out of the way rather than showing a wrong state */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Contacts today. A single indexed COUNT behind /api/stats/today, refreshed on
   // every logged contact and on a slow poll so the day rolls over at 00:00 UTC
@@ -1739,6 +1764,55 @@ export default function DigitalPage({ wsUrl }: Props) {
                     {myCall ? `Mentions ${myCall}` : "Mentions me"}
                   </option>
                 </Select>
+                {/*
+                  BESIDE THE FILTER IT AFFECTS, not buried in Settings.
+
+                  The filter above can SHOW stations that have just finished; this decides
+                  whether the automatic modes will CALL them. Those are two halves of one
+                  decision and an operator changes them in the same breath, so they belong
+                  in the same place — and the page can then never offer a view the station
+                  will not act on.
+
+                  Hidden entirely until the preference has loaded: a checkbox that renders
+                  unticked and then flips is a checkbox that has lied once.
+                */}
+                {callFinished !== null && (
+                  <label
+                    className="flex items-center gap-1.5 text-xs text-fg-muted cursor-pointer select-none"
+                    title={
+                      "Auto Hunt also calls stations that have just sent RR73, RRR or 73 — they have " +
+                      "finished and are free, which is often the best moment on the band. A station " +
+                      "mid-exchange with somebody else is still never called. Takes effect within " +
+                      "about 30 seconds; no restart."
+                    }
+                  >
+                    <input
+                      type="checkbox"
+                      checked={callFinished}
+                      disabled={callFinishedBusy}
+                      onChange={(e) => {
+                        const next = e.target.checked;
+                        setCallFinishedBusy(true);
+                        // OPTIMISTIC, then corrected from the response, which echoes the
+                        // STORED value rather than what was sent — so a rejected write
+                        // snaps back rather than leaving the page claiming something the
+                        // station is not doing.
+                        setCallFinished(next);
+                        void apiPatch<{ prefs: Record<string, boolean> }>(
+                          "/api/digital/hunt-prefs",
+                          { "auto.callFinishedStations": next },
+                        )
+                          .then((r) =>
+                            setCallFinished(r.prefs["auto.callFinishedStations"] === true),
+                          )
+                          .catch(() => setCallFinished(!next))
+                          .finally(() => setCallFinishedBusy(false));
+                      }}
+                      className="accent-accent"
+                    />
+                    Call finished stations
+                  </label>
+                )}
                 </div>
               }
             >
