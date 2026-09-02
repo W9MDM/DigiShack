@@ -1651,6 +1651,57 @@ export default function DigitalPage({ wsUrl }: Props) {
               title={
                 <span className="inline-flex items-center gap-2">
                   {`Decodes (${visible.length})`}
+                  {/*
+                    NEXT TO THE COUNT, which is where the operator asked for it.
+
+                    It began beside the filter, on the reasoning that the filter shows these
+                    stations and this decides whether the automatic modes call them. That
+                    reasoning was sound and the placement was still wrong: the filter row is
+                    four controls wide already, and a checkbox at the end of it reads as a
+                    fifth filter rather than as a statement about what the station will do.
+                    Here it sits with the decode count — the other thing on this card that
+                    describes the station rather than the view.
+
+                    Hidden entirely until the preference has loaded: a checkbox that renders
+                    unticked and then flips is a checkbox that has lied once.
+                  */}
+                  {callFinished !== null && (
+                  <label
+                    className="flex items-center gap-1.5 text-xs text-fg-muted cursor-pointer select-none"
+                    title={
+                      "Auto Hunt also calls stations that have just sent RR73, RRR or 73 — they have " +
+                      "finished and are free, which is often the best moment on the band. A station " +
+                      "mid-exchange with somebody else is still never called. Takes effect within " +
+                      "about 30 seconds; no restart."
+                    }
+                  >
+                    <input
+                      type="checkbox"
+                      checked={callFinished}
+                      disabled={callFinishedBusy}
+                      onChange={(e) => {
+                        const next = e.target.checked;
+                        setCallFinishedBusy(true);
+                        // OPTIMISTIC, then corrected from the response, which echoes the
+                        // STORED value rather than what was sent — so a rejected write
+                        // snaps back rather than leaving the page claiming something the
+                        // station is not doing.
+                        setCallFinished(next);
+                        void apiPatch<{ prefs: Record<string, boolean> }>(
+                          "/api/digital/hunt-prefs",
+                          { "auto.callFinishedStations": next },
+                        )
+                          .then((r) =>
+                            setCallFinished(r.prefs["auto.callFinishedStations"] === true),
+                          )
+                          .catch(() => setCallFinished(!next))
+                          .finally(() => setCallFinishedBusy(false));
+                      }}
+                      className="accent-accent"
+                    />
+                    Call finished stations
+                  </label>
+                  )}
                   {/* The two-number verdict, shown only when something is wrong.
                       "link" names the transport; "quiet" names a live link with no
                       decode traffic - our own TX window, a hop, or a dead band. */}
@@ -1764,55 +1815,6 @@ export default function DigitalPage({ wsUrl }: Props) {
                     {myCall ? `Mentions ${myCall}` : "Mentions me"}
                   </option>
                 </Select>
-                {/*
-                  BESIDE THE FILTER IT AFFECTS, not buried in Settings.
-
-                  The filter above can SHOW stations that have just finished; this decides
-                  whether the automatic modes will CALL them. Those are two halves of one
-                  decision and an operator changes them in the same breath, so they belong
-                  in the same place — and the page can then never offer a view the station
-                  will not act on.
-
-                  Hidden entirely until the preference has loaded: a checkbox that renders
-                  unticked and then flips is a checkbox that has lied once.
-                */}
-                {callFinished !== null && (
-                  <label
-                    className="flex items-center gap-1.5 text-xs text-fg-muted cursor-pointer select-none"
-                    title={
-                      "Auto Hunt also calls stations that have just sent RR73, RRR or 73 — they have " +
-                      "finished and are free, which is often the best moment on the band. A station " +
-                      "mid-exchange with somebody else is still never called. Takes effect within " +
-                      "about 30 seconds; no restart."
-                    }
-                  >
-                    <input
-                      type="checkbox"
-                      checked={callFinished}
-                      disabled={callFinishedBusy}
-                      onChange={(e) => {
-                        const next = e.target.checked;
-                        setCallFinishedBusy(true);
-                        // OPTIMISTIC, then corrected from the response, which echoes the
-                        // STORED value rather than what was sent — so a rejected write
-                        // snaps back rather than leaving the page claiming something the
-                        // station is not doing.
-                        setCallFinished(next);
-                        void apiPatch<{ prefs: Record<string, boolean> }>(
-                          "/api/digital/hunt-prefs",
-                          { "auto.callFinishedStations": next },
-                        )
-                          .then((r) =>
-                            setCallFinished(r.prefs["auto.callFinishedStations"] === true),
-                          )
-                          .catch(() => setCallFinished(!next))
-                          .finally(() => setCallFinishedBusy(false));
-                      }}
-                      className="accent-accent"
-                    />
-                    Call finished stations
-                  </label>
-                )}
                 </div>
               }
             >
