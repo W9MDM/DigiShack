@@ -53,7 +53,7 @@ import {
   columnChars,
 } from "@/lib/stream/layout";
 import { SETTINGS } from "@/lib/settings/registry";
-import { YouTubeStream, videoFilter } from "@/lib/stream/youtube";
+import { YouTubeStream, videoFilter, AUDIO_GAP_MS } from "@/lib/stream/youtube";
 import { overlayText, WaterfallCanvas } from "@/lib/stream/frame";
 import { DEFAULT_TICKER } from "@/lib/stream/panels";
 import { SPECTRUM_INTERVAL_MS } from "@/lib/radio/spectrum";
@@ -637,6 +637,153 @@ console.log("ANYTHING PAINTED INTO THE CANVAS BELOW THE MARGIN ACQUIRES A VELOCI
       "with a border, so the box is wider than the glyphs rather than hugging them",
     );
   }
+}
+
+// ---------------------------------------------------------------------------
+console.log("PAUSING KEEPS THE CONNECTION, WHICH IS THE WHOLE POINT");
+// ---------------------------------------------------------------------------
+
+// "can we pause the stream for a second and not disconnect it so the daily stream doesnt
+// die?" — and the worry is justified. Stopping drops the RTMP session, YouTube ends the
+// broadcast, and a COMPLETED BROADCAST CANNOT BE REUSED. Measured on the real channel the
+// same day this was written:
+//
+//     0ssC_QvaTk8 | complete   <- was live; the bridge restarted and it died
+//     HQdV-N_UFIQ | live       <- the replacement YouTube minted afterwards
+//
+// A new broadcast is a new URL: viewers dropped, the day's watch count split in two.
+//
+// SO THE ASSERTION THAT MATTERS IS NOT "paused is true". It is that bytes KEEP FLOWING while
+// paused, because a paused stream that stops writing starves ffmpeg, ffmpeg stops producing
+// output, and YouTube ends the broadcast anyway — the failure this feature exists to avoid,
+// arrived at by a different route.
+{
+  // A fake write stream, so this needs no ffmpeg, no fifo and no network.
+  class FakeSink {
+    written = 0;
+    writableLength = 0;
+    destroyed = false;
+    write(b: Buffer): boolean {
+      this.written += b.length;
+      return true;
+    }
+    destroy(): void {
+      this.destroyed = true;
+    }
+  }
+
+  const rig = (): { s: YouTubeStream; video: FakeSink; audio: FakeSink } => {
+    const s = new YouTubeStream({ streamKey: "", width: 64, height: 36, fps: 10 });
+    const video = new FakeSink();
+    const audio = new FakeSink();
+    // Reaching in deliberately: the alternative is spawning ffmpeg to test a rule about
+    // whether bytes are written, which would make the assertion depend on the thing it is
+    // meant to be independent of.
+    (s as unknown as { video: FakeSink }).video = video;
+    (s as unknown as { audio: FakeSink }).audio = audio;
+    return { s, video, audio };
+  };
+
+  const FRAME = Buffer.alloc(64 * 36 * 3, 200);
+
+  {
+    const { s, video } = rig();
+    s.writeFrame(FRAME);
+    const live = video.written;
+    ok(live > 0, "a live frame is written", { live });
+
+    s.pause("testing");
+    eq(s.status.paused, "testing", "the reason is recorded, not just a boolean");
+
+    const before = video.written;
+    for (let i = 0; i < 5 ; i++) s.writeFrame(FRAME);
+    const during = video.written - before;
+    // THE ASSERTION THIS FILE EXISTS FOR.
+    ok(during > 0, "frames KEEP being written while paused — the pipe is never starved", {
+      bytes: during,
+    });
+    eq(during, live * 5, "and at the same rate, so the encoder's clock does not slip");
+
+    s.resume();
+    eq(s.status.paused, null, "resuming clears the reason");
+  }
+
+  {
+    // THE PICTURE IS VISIBLY HELD, not merely repeated. A still frame that looks live is
+    // worse than an obviously halted one: it raises the question "is this broken?" without
+    // answering it. The frozen copy is dimmed, so the answer is on the screen.
+    const { s, video } = rig();
+    const bright = Buffer.alloc(64 * 36 * 3, 240);
+    s.writeFrame(bright);
+    s.pause("standing by");
+    // Capture what a paused write actually emits.
+    const emitted: Buffer[] = [];
+    (video as unknown as { write: (b: Buffer) => boolean }).write = (b: Buffer) => {
+      emitted.push(Buffer.from(b));
+      return true;
+    };
+    s.writeFrame(bright);
+    ok(emitted.length === 1, "exactly one frame was emitted for one call");
+    const px = emitted[0]![0]!;
+    ok(px < 240, "the held frame is dimmed rather than sent through unchanged", { px });
+    ok(px > 0, "but not black, so the last picture is still readable underneath", { px });
+
+    // AND IT DOES NOT KEEP DIMMING. Re-dimming each frame would fade to black over a few
+    // seconds, which reads as a dead stream.
+    s.writeFrame(bright);
+    const second = emitted[1]![0]!;
+    eq(second, px, "a second paused frame is identical, not dimmed again");
+  }
+
+  {
+    // PAUSE IS IDEMPOTENT and resume-without-pause is harmless. Both get called from an
+    // HTTP handler, so both will be called twice by someone double-clicking.
+    const { s } = rig();
+    s.writeFrame(FRAME);
+    s.pause("first");
+    s.pause("second");
+    eq(s.status.paused, "first", "a second pause does not overwrite the first reason");
+    s.resume();
+    s.resume();
+    eq(s.status.paused, null, "and a second resume is harmless");
+  }
+
+  {
+    // STOPPING CLEARS IT. Otherwise a stream stopped while paused comes back paused, with a
+    // frozen picture and no obvious cause.
+    const { s } = rig();
+    s.writeFrame(FRAME);
+    s.pause("held");
+    void s.stop();
+    eq(s.status.paused, null, "stopping clears the pause rather than carrying it forward");
+  }
+}
+
+// ---------------------------------------------------------------------------
+console.log("A GAP IN RECEIVER AUDIO IS COVERED WITH SILENCE");
+// ---------------------------------------------------------------------------
+
+// WHY THIS IS NOT COSMETIC. ffmpeg muxes two live inputs and can only emit output as fast as
+// the SLOWER one arrives. When DAX died today the video pipe kept filling, the audio pipe
+// went quiet, and the muxer had nothing to pace against:
+//
+//     11:49:47  no receiver audio for 33s — rebuilding the DAX stream
+//     11:50:32  no receiver audio for 78s — rebuilding the DAX stream
+//     11:50:51  WATCHDOG: no receiver audio for 96s — Exiting so PM2 restarts it
+//
+// The watchdog is right to give up on the RADIO. But the BROADCAST did not have to die with
+// it, and it did.
+{
+  ok(AUDIO_GAP_MS > 0, "there is a gap threshold at all");
+  // Longer than a DAX packet interval, so a healthy stream never triggers it. DAX delivers
+  // 24 kHz in small packets; anything under ~100 ms would fire constantly.
+  ok(
+    AUDIO_GAP_MS >= 200,
+    "and it is longer than a healthy packet interval, so silence is not injected into a working stream",
+    AUDIO_GAP_MS,
+  );
+  // Short enough that a real dropout is covered before a muxer notices.
+  ok(AUDIO_GAP_MS <= 1000, "but under a second, so a real dropout is covered promptly", AUDIO_GAP_MS);
 }
 
 console.log(

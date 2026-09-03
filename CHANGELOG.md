@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.177.1 - public release
+## 1.178.0 - public release
 
 Development happens in a private repository; this is where the public history starts.
 Earlier entries are not reproduced - they quote real operators by callsign, include
@@ -22,6 +22,7 @@ Notes for anyone running this:
 
 ## Release history
 
+- **1.178.0** — Pause the stream without killing the broadcast
 - **1.177.1** — What 1080p actually costs, measured
 - **1.177.0** — The stream is 1080p, because 720p had no rung that could look right
 - **1.176.2** — Pushing video is not going live
@@ -235,4 +236,3 @@ Notes for anyone running this:
 - **0.8.0** — Phase 2: public REST API with API keys
 - **0.7.0** — Phase 2: award tracking for DXCC, WAS, WAZ, WAC, grid and IOTA
 - **0.6.1** — Fix git invocation on Windows in the update runner
-- **0.6.0** — Add update-from-the-UI with git token auth

@@ -100,7 +100,39 @@ export interface StreamStatus {
   lastFfmpegLine: string | null;
   restarts: number;
   lastError: string | null;
+  /**
+   * Why the picture is frozen, or null when it is live.
+   *
+   * PAUSED IS NOT STOPPED, and the difference is the whole point. Stopping drops the RTMP
+   * connection, and a dropped connection ENDS the broadcast — permanently, because a
+   * completed broadcast cannot be reused. Measured on the operator's own channel:
+   *
+   *     0ssC_QvaTk8 | complete   <- was live; the bridge restarted and it died
+   *     HQdV-N_UFIQ | live       <- the replacement YouTube minted afterwards
+   *
+   * A new broadcast is a new URL, so anybody watching is dropped and the day's view count
+   * splits in two. Pausing keeps the connection and keeps both pipes fed, so the broadcast
+   * stays live with a frozen picture and a note.
+   */
+  paused: string | null;
+  /** Silence written to cover a gap in receiver audio, in samples. */
+  silenceSamples: number;
 }
+
+/**
+ * How long a gap in receiver audio may go uncovered before silence is written for it.
+ *
+ * WHY SILENCE MATTERS AT ALL. ffmpeg is muxing two live inputs, and it can only produce
+ * output as fast as the SLOWER one arrives. If DAX stops — which it did today, twice, before
+ * the watchdog gave up — the video pipe keeps filling, the audio pipe goes quiet, and the
+ * muxer stalls. YouTube then sees a stream that has stopped delivering and eventually ends
+ * the broadcast, which is the outcome pausing exists to avoid.
+ *
+ * 400 ms is comfortably longer than the 24 kHz DAX packet interval, so a healthy stream
+ * never triggers it, and short enough that a real dropout is covered before the muxer
+ * notices.
+ */
+export const AUDIO_GAP_MS = 400;
 
 /**
  * A stream key in a log line is a stream key in a bug report.
@@ -174,7 +206,14 @@ export class YouTubeStream {
     lastFfmpegLine: null,
     restarts: 0,
     lastError: null,
+    paused: null,
+    silenceSamples: 0,
   };
+  /** When receiver audio last arrived, so a gap can be covered with silence. */
+  private lastAudioAt = 0;
+  /** The last live picture, frozen and dimmed while paused. */
+  private frozen: Buffer | null = null;
+  private keepAlive: NodeJS.Timeout | null = null;
 
   constructor(options: StreamOptions) {
     this.opts = {
@@ -444,6 +483,10 @@ export class YouTubeStream {
     const blank = Buffer.alloc(width * height * 3);
     const silence = new Float32Array(Math.round(audioRate / 2));
     for (let i = 0; i < Math.max(2, Math.round(fps / 2)); i++) this.video.write(blank);
+    // The gap-filler starts with the stream. Primed to "now" so the first real DAX packet,
+    // which is a second or two away, is not mistaken for a dropout and covered with silence.
+    this.lastAudioAt = Date.now();
+    this.startKeepAlive();
     this.audio.write(Buffer.alloc(silence.length * 2));
 
     try {
@@ -469,6 +512,68 @@ export class YouTubeStream {
   }
 
   /**
+   * Freeze the picture WITHOUT dropping the connection.
+   *
+   * "can we pause the stream for a second and not disconnect it so the daily stream doesnt
+   * die?" — and the concern is exactly right. `stop()` ends the RTMP session, YouTube ends
+   * the broadcast, and a completed broadcast can never be reused: the next start is a new
+   * broadcast at a new URL with the viewers gone. That happened today.
+   *
+   * So this changes only what is SENT, never whether anything is sent. The frozen frame is
+   * dimmed so a viewer can tell a paused stream from a stalled one — a still picture that
+   * looks live is worse than an obviously halted one, because the second answers the
+   * question the first raises.
+   */
+  pause(reason: string): void {
+    if (this.stat.paused) return;
+    this.stat.paused = reason || "paused";
+    // DIMMED ONCE, not per frame. Copying and dimming 6.2 MB ten times a second would be
+    // 62 MB/s of work to display a picture that is not changing.
+    if (this.frozen) {
+      for (let i = 0; i < this.frozen.length; i++) this.frozen[i] = (this.frozen[i]! * 45) >> 8;
+    }
+    this.log(`[stream] paused: ${this.stat.paused} — connection held, broadcast stays live`);
+  }
+
+  /** Resume sending the live picture. */
+  resume(): void {
+    if (!this.stat.paused) return;
+    this.log(`[stream] resumed after: ${this.stat.paused}`);
+    this.stat.paused = null;
+    this.frozen = null;
+  }
+
+  /**
+   * Cover a gap in receiver audio with silence.
+   *
+   * Runs on its own timer rather than being driven by the caller, BECAUSE the caller is the
+   * thing that has stopped. Audio arrives from DAX; when DAX dies there is no callback left
+   * to notice, so anything depending on one would go quiet exactly when it was needed.
+   */
+  private startKeepAlive(): void {
+    this.stopKeepAlive();
+    const rate = this.opts.audioRate;
+    this.keepAlive = setInterval(() => {
+      if (!this.audio || this.audio.destroyed) return;
+      const gap = Date.now() - this.lastAudioAt;
+      if (gap < AUDIO_GAP_MS) return;
+      // Write exactly the gap, so the muxer's clocks stay together rather than drifting by
+      // whatever the timer happened to fire at.
+      const samples = Math.round((gap / 1000) * rate);
+      if (samples <= 0) return;
+      this.lastAudioAt = Date.now();
+      this.audio.write(Buffer.alloc(samples * 2));
+      this.stat.silenceSamples += samples;
+    }, Math.round(AUDIO_GAP_MS / 2));
+    this.keepAlive.unref?.();
+  }
+
+  private stopKeepAlive(): void {
+    if (this.keepAlive) clearInterval(this.keepAlive);
+    this.keepAlive = null;
+  }
+
+  /**
    * Hand one frame to the encoder.
    *
    * DROPPED WHEN THE PIPE IS FULL rather than queued. A waterfall row is worthless late and
@@ -479,6 +584,22 @@ export class YouTubeStream {
   writeFrame(rgb: Buffer): void {
     const v = this.video;
     if (!v || v.destroyed) return;
+    // PAUSED STILL WRITES. Returning here would starve the video pipe, ffmpeg would stop
+    // producing output, and YouTube would end the broadcast — which is the exact thing
+    // pausing exists to prevent. Only the CONTENT changes.
+    if (this.stat.paused) {
+      if (!this.frozen) {
+        this.frozen = Buffer.from(rgb);
+        for (let i = 0; i < this.frozen.length; i++) this.frozen[i] = (this.frozen[i]! * 45) >> 8;
+      }
+      if (v.writableLength > this.frozen.length * 3) return;
+      v.write(v.writableLength > 0 ? Buffer.from(this.frozen) : this.frozen);
+      this.stat.frames++;
+      return;
+    }
+    // Kept while live, so a pause has something to freeze. One buffer, reused.
+    if (!this.frozen || this.frozen.length !== rgb.length) this.frozen = Buffer.allocUnsafe(rgb.length);
+    rgb.copy(this.frozen);
     if (v.writableLength > rgb.length * 3) return;
     // COPIED ONLY WHEN SOMETHING IS ALREADY QUEUED. The canvas reuses one buffer, and a
     // stream queues the reference rather than the bytes — so two queued writes would both
@@ -497,6 +618,8 @@ export class YouTubeStream {
     // continuous stream to keep sync. The cap is high enough never to be reached by a
     // healthy pipe and low enough to bound the damage if ffmpeg wedges.
     if (a.writableLength > 4 * 1024 * 1024) return;
+    // Recorded BEFORE the conversion below, so a slow write does not look like a gap.
+    this.lastAudioAt = Date.now();
     const pcm = Buffer.alloc(samples.length * 2);
     for (let i = 0; i < samples.length; i++) {
       const v = Math.max(-1, Math.min(1, samples[i]!));
@@ -546,6 +669,9 @@ export class YouTubeStream {
   private teardown(): void {
     this.stat.running = false;
     this.stat.since = null;
+    this.stat.paused = null;
+    this.frozen = null;
+    this.stopKeepAlive();
     try {
       this.video?.destroy();
       this.audio?.destroy();

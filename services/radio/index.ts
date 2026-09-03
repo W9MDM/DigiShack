@@ -3131,7 +3131,14 @@ async function main(): Promise<void> {
         // opaque bar crawling up the waterfall for 157 s against a 120 s ticker period.
         // `drawtext` paints its own box over the finished video every frame, so it can do
         // neither. Nothing this function draws may sit below TOP_MARGIN.
-        liveStream.setTickerOverlay(ticker ? ticker + "\n" : "");
+        // NOT WHILE PAUSED. This timer runs every second, so without the guard it would
+        // wipe the STANDING BY note one second after `/stream-pause` wrote it — and the
+        // viewer would be left with a frozen, dimmed picture and no explanation, which is
+        // indistinguishable from a broken stream.
+        const held = liveStream.status.paused;
+        liveStream.setTickerOverlay(
+          held ? `STANDING BY — ${held}\n` : ticker ? ticker + "\n" : "",
+        );
 
         // TRUNCATED TO THE COLUMN, which it was not. `SIDE_CHARS` was computed and asserted
         // and then read by nothing, so the right-hand column had a budget with no
@@ -3453,6 +3460,51 @@ async function main(): Promise<void> {
         } else {
           await stopStream();
           sendJson(res, 200, { ok: true, detail: "Stopped streaming." });
+        }
+        return;
+      }
+
+      /**
+       * PAUSE, WHICH IS NOT STOP.
+       *
+       * "can we pause the stream for a second and not disconnect it so the daily stream
+       * doesnt die?" — and the worry is justified. `/stream {enable:false}` drops the RTMP
+       * session, YouTube ends the broadcast, and a completed broadcast cannot be reused, so
+       * the next start is a NEW broadcast at a new URL with the viewers gone. That is
+       * measured, not feared: 0ssC_QvaTk8 went `complete` when the bridge restarted today
+       * and HQdV-N_UFIQ is the replacement.
+       *
+       * This holds the connection and keeps both pipes fed. The picture freezes and dims;
+       * the broadcast stays live.
+       */
+      if (url.pathname === "/stream-pause") {
+        const body = await readJson(req);
+        if (!liveStream || !liveStream.status.running) {
+          sendJson(res, 400, {
+            ok: false,
+            detail: "The stream is not running, so there is nothing to pause.",
+          });
+          return;
+        }
+        const pause = body.pause !== false;
+        if (pause) {
+          const reason = typeof body.reason === "string" && body.reason.trim()
+            ? body.reason.trim().slice(0, 80)
+            : "standing by";
+          liveStream.pause(reason);
+          // SAY SO ON THE FRAME. A frozen picture with no explanation reads as a broken
+          // stream, which is worse than an obviously halted one — the viewer cannot tell
+          // whether to wait or leave.
+          liveStream.setTickerOverlay(`STANDING BY — ${reason}\n`);
+          sendJson(res, 200, {
+            ok: true,
+            paused: reason,
+            detail: "Picture frozen. The connection is held, so the broadcast stays live.",
+          });
+        } else {
+          liveStream.resume();
+          liveStream.setTickerOverlay("");
+          sendJson(res, 200, { ok: true, paused: null, detail: "Live picture resumed." });
         }
         return;
       }
