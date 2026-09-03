@@ -22,6 +22,7 @@ import {
 import { HelpTip } from "@/components/ui/HelpTip";
 import { DoNotCallList } from "@/components/digital/DoNotCallList";
 import { LotwCertificate } from "@/components/settings/LotwCertificate";
+import { YouTubeConnect } from "@/components/settings/YouTubeConnect";
 import { Schedules } from "@/components/settings/Schedules";
 import { QslCardDesigner } from "@/components/settings/QslCardDesigner";
 import { SETTINGS_TABS, settingsTabFor } from "@/lib/settings/tabs";
@@ -399,6 +400,7 @@ export default function SettingsPage() {
                         only way to judge a change was to email yourself a QSL. */}
                     {group.id === "qsl" && <QslCardDesigner draft={draft} />}
                     {group.id === "lotw" && <LotwCertificate />}
+                    {group.id === "youtube" && <YouTubeConnect />}
 
                     {group.id === "schedule" && (
                       <Field

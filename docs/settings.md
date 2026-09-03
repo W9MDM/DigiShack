@@ -32,7 +32,7 @@ be read: `DATABASE_URL`, `SETTINGS_KEY` and `PORT`.
 - [Operating schedule](#operating-schedule) — 5 settings
 - [Bridge watchdog](#bridge-watchdog) — 2 settings
 - [Icom (network)](#icom-network) — 13 settings
-- [YouTube Live](#youtube-live) — 2 settings
+- [YouTube Live](#youtube-live) — 10 settings
 - [Issue alerts](#issue-alerts) — 4 settings
 - [Software updates](#software-updates) — 1 setting
 - [Outgoing email](#outgoing-email) — 7 settings
@@ -259,7 +259,15 @@ Stream the waterfall and the receiver audio to YouTube. The audio is the actual 
 | Setting | Key | Type | Default | What it does |
 |---|---|---|---|---|
 | YouTube stream key | `youtube.streamKey` | secret | — | From YouTube Studio → Go Live → Stream key. THIS IS A CREDENTIAL: anyone holding it can broadcast to your channel as you. Stored encrypted like any other secret here, never sent to the browser, and rewritten out of log lines before anything prints them — including ffmpeg’s own command line. |
-| Stream video bitrate (kbps) | `youtube.videoBitrateKbps` | limit | `2500` | 2500 suits 720p at ten frames a second, which is what a waterfall needs — it is a picture that scrolls, not a camera. Raising it costs encoder CPU on the same machine that decodes FT8, and the decoder has the better claim on it. |
+| YouTube OAuth client ID | `youtube.clientId` | multi-line text | — | From Google Cloud Console → APIs & Services → Credentials → OAuth client ID, type Web application, with this server's /api/youtube/callback as an authorised redirect URI. Needed only for renaming the broadcast and reading live chat — streaming itself needs just the stream key. An API key will not work for either: both act as the channel, which Google only permits against OAuth. |
+| YouTube OAuth client secret | `youtube.clientSecret` | secret | — | The secret issued beside the client ID. Stored encrypted and never sent to the browser. PUBLISH the OAuth consent screen in Google Cloud Console rather than leaving it in Testing: Google expires refresh tokens from a testing app after seven days, and the connection would then fail every week with nothing to say why. |
+| YouTube refresh token | `youtube.refreshToken` | secret | — | Written by Connect to YouTube — there is nothing to type here. It is a standing grant to act as the channel until revoked, so it is stored encrypted and never leaves this server. Revoke it at myaccount.google.com/permissions. |
+| Stream on the operating schedule | `youtube.followSchedule` | on/off | `false` | Start the broadcast when a schedule block opens and stop it when the last one closes, so the stream runs exactly when the station does. Off by default — a channel should not go live because a schedule block opened unless its owner asked for that. Uses the same blocks as Working hours; there is no second schedule to keep in step. |
+| Read live chat for callsign requests | `youtube.readChat` | on/off | `false` | Watch the broadcast's chat for viewers posting a callsign and optionally a band, and show them on the stream and the Decodes page as requests. It NEVER calls anyone by itself: a callsign typed by a stranger must not key a transmitter, so the list is for the operator to act on. Needs a connected account. |
+| Chat poll interval (seconds) | `youtube.chatPollSeconds` | limit | `30` | How often to ask YouTube for new chat. The Data API charges units per call against a daily quota, and following YouTube's own suggested interval would exhaust a default allowance long before an operating day ended. 30 seconds is quota-safe; lower it only if you have checked your quota in Google Cloud Console. |
+| Broadcast title | `youtube.titleTemplate` | multi-line text | `Live FT8 & FT4 — {callsign} {grid} — {date}` | Set on the broadcast each time the stream starts, if an account is connected. Placeholders: {date} {callsign} {grid} {band} {mode} {qsos}. YouTube truncates a title past 100 characters, so a long template is silently cut rather than refused. |
+| Broadcast description | `youtube.description` | multi-line text | — | Set alongside the title. The same placeholders work here. Left empty, whatever the broadcast already carries is kept — an empty description overwriting a good one is a worse default than doing nothing. |
+| Stream video bitrate (kbps) | `youtube.videoBitrateKbps` | limit | `4500` | 4500 is YouTube's own figure for 1080p, which is what the stream now sends — at ten frames a second, because a waterfall is a picture that scrolls, not a camera. Do not lower this to save bandwidth without lowering the resolution too: more pixels sharing fewer bits is worse per pixel than a smaller frame would have been, and the frame was raised to 1080p precisely because the decode text was not legible. Raising it costs encoder CPU on the same machine that decodes FT8, and the decoder has the better claim on it. |
 
 ## Issue alerts
 
@@ -477,6 +485,8 @@ page shows whether one is set, not what it is.
 - `hrdlog.code` — HRDLOG upload code
 - `dxcc.ctyApiKey` — Club Log cty API key
 - `youtube.streamKey` — YouTube stream key
+- `youtube.clientSecret` — YouTube OAuth client secret
+- `youtube.refreshToken` — YouTube refresh token
 - `icom.password` — Network password
 - `bridge.token` — Bridge shared secret
 - `smtp.password` — SMTP password

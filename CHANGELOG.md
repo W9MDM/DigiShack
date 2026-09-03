@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.171.2 - public release
+## 1.177.1 - public release
 
 Development happens in a private repository; this is where the public history starts.
 Earlier entries are not reproduced - they quote real operators by callsign, include
@@ -22,6 +22,19 @@ Notes for anyone running this:
 
 ## Release history
 
+- **1.177.1** — What 1080p actually costs, measured
+- **1.177.0** — The stream is 1080p, because 720p had no rung that could look right
+- **1.176.2** — Pushing video is not going live
+- **1.176.1** — Six changelog entries that were never written
+- **1.176.0** — The stream follows the station, and the chat talks back
+- **1.175.1** — The title on air, and three things the column got wrong
+- **1.175.0** — Connect a YouTube account
+- **1.174.2** — Centred labels, whole entity counts, decodes to the bottom
+- **1.174.1** — Four things the live stream showed that no assertion could
+- **1.174.0** — The layout the operator drew
+- **1.173.0** — The empty two thirds of the frame
+- **1.172.1** — YouTube was not receiving enough video
+- **1.172.0** — The stream says who we are working
 - **1.171.2** — Call finished stations moves next to the decode count
 - **1.171.1** — The checkbox where the decision is made
 - **1.171.0** — A station that just sent 73 is the best one on the band to call
@@ -223,11 +236,3 @@ Notes for anyone running this:
 - **0.7.0** — Phase 2: award tracking for DXCC, WAS, WAZ, WAC, grid and IOTA
 - **0.6.1** — Fix git invocation on Windows in the update runner
 - **0.6.0** — Add update-from-the-UI with git token auth
-- **0.5.0** — Phase 2: DXCC entity resolution from Club Log cty.xml
-- **0.4.1** — Fix ADIF parser dropping records with multi-byte characters
-- **0.4.0** — Add encrypted settings UI, install and update scripts
-- **0.3.1** — Add dev seed data
-- **0.3.0** — Phase 2: ADIF 3.x import and export
-- **0.2.0** — Add authentication: users, roles, server-side sessions
-- **0.1.1** — Normalize line endings to LF via .gitattributes
-- **0.1.0** — Phase 1: rewrite as DigiShack logbook on Pages Router + MySQL

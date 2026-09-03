@@ -24,9 +24,33 @@ import { createWriteStream, mkdirSync, renameSync, writeFileSync, type WriteStre
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+// A `export ... from` re-export creates no local binding, so the filter graph below needs
+// a real import as well as the re-export further down.
+import {
+  FRAME_W,
+  FRAME_H,
+  FONT_SIZE,
+  LINE_SPACING,
+  LEFT_X,
+  LEFT_Y,
+  SIDE_X,
+  SIDE_Y,
+  TICKER_FONT,
+  TICKER_TEXT_Y,
+  TICKER_X,
+  TICKER_W,
+  BOX_BORDER,
+} from "@/lib/stream/layout";
 
 /** YouTube's ingest endpoint. The key is appended; it is a credential, not a URL. */
 export const YOUTUBE_RTMP = "rtmp://a.rtmp.youtube.com/live2";
+
+// THE LAYOUT LIVES IN `lib/stream/layout.ts` and is re-exported here so existing importers
+// keep working. It was moved because none of it could be asserted while half sat in this
+// file — which imports `child_process` — and half sat in `const`s inside a function body in
+// `services/radio/index.ts`. Every geometry fault so far was found by the operator looking
+// at his own stream rather than by a check.
+export { LINE_H, TICKER_H, TICKER_Y } from "@/lib/stream/layout";
 
 export interface StreamOptions {
   /** YouTube stream key. NEVER logged — see `redact`. */
@@ -63,6 +87,15 @@ export interface StreamStatus {
   samples: number;
   /** Frames ffmpeg says it has actually ENCODED, from its own progress output. */
   encoded: number;
+  /**
+   * The bitrate ffmpeg reports actually going out, in kbps.
+   *
+   * The number to compare against the DECLARED rate. YouTube buffers when the two disagree,
+   * and until this existed nothing here could tell them apart.
+   */
+  bitrateKbps: number | null;
+  /** Bytes pushed so far, from the same progress block. */
+  totalBytes: number | null;
   /** The last thing ffmpeg printed, with the stream key removed. */
   lastFfmpegLine: string | null;
   restarts: number;
@@ -81,6 +114,49 @@ export function redact(text: string, key: string): string {
   return text.split(key).join("<stream key>");
 }
 
+/**
+ * The video filter graph, as a pure function of the four file paths.
+ *
+ * EXTRACTED SO IT CAN BE ASSERTED. The ticker's backing is a `box` on its own drawtext
+ * rather than pixels in the canvas, and that is not a style choice — it is the fix for an
+ * artifact no assertion could see while this string was built inside `start()`, halfway
+ * through an argv array, next to a `spawn`. `scripts/check-stream-layout.ts` now reads it.
+ */
+export function videoFilter(paths: {
+  font: string;
+  overlay: string;
+  side: string;
+  ticker: string;
+}): string {
+  const { font, overlay, side, ticker } = paths;
+  // `reload=1` re-reads the file every frame, which is how the decode list updates without
+  // restarting ffmpeg or rebuilding the filter graph.
+  //
+  // THREE TEXT BLOCKS, chained. The left column is the station and the decode feed; the
+  // right is band conditions beside the map; the third is the ticker. Every size comes from
+  // the exported layout constants rather than a literal, so the labels `drawtext` paints
+  // cannot drift away from the boxes `lib/stream/panels.ts` paints under them.
+  return (
+    `drawtext=fontfile=${font}:textfile=${overlay}:reload=1:fontcolor=white:` +
+    `fontsize=${FONT_SIZE}:line_spacing=${LINE_SPACING}:x=${LEFT_X}:y=${LEFT_Y}:` +
+    `box=1:boxcolor=black@0.45:boxborderw=${BOX_BORDER},` +
+    `drawtext=fontfile=${font}:textfile=${side}:reload=1:fontcolor=white:` +
+    `fontsize=${FONT_SIZE}:line_spacing=${LINE_SPACING}:x=${SIDE_X}:y=${SIDE_Y},` +
+    // THE TICKER, centred IN ITS BAR rather than in the frame — the bar starts at
+    // `TICKER_X` so centring on the whole frame would push the text left of its own
+    // background. `text_w` is ffmpeg's own expression, so it stays centred as the message
+    // changes length; a fixed x would need the character width and would drift.
+    `drawtext=fontfile=${font}:textfile=${ticker}:reload=1:fontcolor=white:` +
+    // VERTICALLY CENTRED by `TICKER_TEXT_Y`, derived from the two heights rather than
+    // nudged — "the words are still to high they should be centered" was the report the
+    // first time this was a hand-picked offset.
+    `fontsize=${TICKER_FONT}:x=${TICKER_X}+(${TICKER_W}-text_w)/2:y=${TICKER_TEXT_Y}:` +
+    // THE BACKING IS THE FILTER'S. Painted over finished video every frame, so unlike the
+    // rectangle this replaces it cannot be dragged upward by the waterfall's scroll.
+    `box=1:boxcolor=0x0a0a10@0.88:boxborderw=14`
+  );
+}
+
 export class YouTubeStream {
   private ff: ChildProcess | null = null;
   private video: WriteStream | null = null;
@@ -93,6 +169,8 @@ export class YouTubeStream {
     frames: 0,
     samples: 0,
     encoded: 0,
+    bitrateKbps: null,
+    totalBytes: null,
     lastFfmpegLine: null,
     restarts: 0,
     lastError: null,
@@ -101,10 +179,14 @@ export class YouTubeStream {
   constructor(options: StreamOptions) {
     this.opts = {
       streamKey: options.streamKey,
-      width: options.width ?? 1280,
-      height: options.height ?? 720,
+      width: options.width ?? FRAME_W,
+      height: options.height ?? FRAME_H,
       fps: options.fps ?? 10,
-      videoBitrateKbps: options.videoBitrateKbps ?? 2500,
+      // RAISED WITH THE RESOLUTION. 2500 kbps was YouTube's own recommendation for 720p;
+      // sending 1080p at that rate invites the transcoder to treat it as an over-large
+      // picture on a thin pipe, which is the situation this change exists to get out of.
+      // 4500 is the 1080p figure, and at ten frames a second it is generous per frame.
+      videoBitrateKbps: options.videoBitrateKbps ?? 4500,
       audioRate: options.audioRate ?? 24_000,
       workDir: options.workDir ?? join(tmpdir(), "digishack-stream"),
       destination: options.destination ?? "",
@@ -118,6 +200,19 @@ export class YouTubeStream {
     return { ...this.stat };
   }
 
+  /**
+   * The RESOLVED encode settings, after defaults have been applied.
+   *
+   * Exists so the caller's log line reports what ffmpeg was actually given rather than what
+   * the caller happened to pass. The bridge used to log its own local variable, which went
+   * `undefined` the moment the default moved in here — a log that lies about the bitrate is
+   * worse than no log on a fault that is ABOUT the bitrate.
+   */
+  get encoding(): { width: number; height: number; fps: number; videoBitrateKbps: number } {
+    const { width, height, fps, videoBitrateKbps } = this.opts;
+    return { width, height, fps, videoBitrateKbps };
+  }
+
   private log(line: string): void {
     this.opts.onLog?.(redact(line, this.opts.streamKey));
   }
@@ -129,10 +224,30 @@ export class YouTubeStream {
    * same filesystem and a half-written file read mid-frame shows the viewer a torn line.
    */
   setOverlay(text: string): void {
+    this.writeOverlayFile("overlay", text);
+  }
+
+  /**
+   * The right-hand text block: solar indices and the band list.
+   *
+   * A SECOND `drawtext` rather than more lines in the first, because the two columns are
+   * different widths and different subjects, and one block cannot be in two places. ffmpeg
+   * chains filters, so a second instance costs a filter and nothing else.
+   */
+  setSideOverlay(text: string): void {
+    this.writeOverlayFile("side", text);
+  }
+
+  /** The invitation along the bottom. Empty for the quiet part of its cycle. */
+  setTickerOverlay(text: string): void {
+    this.writeOverlayFile("ticker", text);
+  }
+
+  private writeOverlayFile(name: string, text: string): void {
     try {
-      const tmp = join(this.dir, "overlay.next");
+      const tmp = join(this.dir, `${name}.next`);
       writeFileSync(tmp, text, "utf8");
-      renameSync(tmp, join(this.dir, "overlay.txt"));
+      renameSync(tmp, join(this.dir, `${name}.txt`));
     } catch {
       /* an overlay that fails to write is a cosmetic fault, never a reason to drop a stream */
     }
@@ -158,10 +273,14 @@ export class YouTubeStream {
       }
     }
     this.setOverlay("");
+    this.setSideOverlay("");
+    this.setTickerOverlay("");
 
     const { width, height, fps, videoBitrateKbps, audioRate } = this.opts;
     const font = "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf";
     const overlay = join(this.dir, "overlay.txt");
+    const side = join(this.dir, "side.txt");
+    const ticker = join(this.dir, "ticker.txt");
 
     const args = [
       "-hide_banner",
@@ -192,9 +311,13 @@ export class YouTubeStream {
       "-i", audioPipe,
       // `reload=1` re-reads the file every frame, which is how the decode list updates
       // without restarting ffmpeg or rebuilding the filter graph.
+      // TWO TEXT BLOCKS, chained. The left column is the station and the decode feed; the
+      // right is band conditions beside the map. `SIDE_X` and `SIDE_Y` are shared with
+      // lib/stream/panels.ts through the caller, which draws the colour swatches at the
+      // same line pitch. Every size here comes from the exported constants rather than a
+      // literal, so the swatches cannot drift away from their labels.
       "-vf",
-      `drawtext=fontfile=${font}:textfile=${overlay}:reload=1:fontcolor=white:fontsize=17:` +
-        `line_spacing=4:x=18:y=14:box=1:boxcolor=black@0.45:boxborderw=10`,
+      videoFilter({ font, overlay, side, ticker }),
       // CONSTANT FRAME RATE at the output, so a dropped frame holds the previous picture
       // rather than shortening the video. Without it the stream runs slowly behind real
       // time and the gap grows all day — which on a twelve-second test looks like a
@@ -206,9 +329,29 @@ export class YouTubeStream {
       "-preset", "veryfast",
       "-tune", "zerolatency",
       "-pix_fmt", "yuv420p",
+      // TRUE CBR, WITH FILLER. This is the fix for YouTube's
+      //
+      //     "YouTube is not receiving enough video to maintain smooth streaming.
+      //      As such, viewers will experience buffering."
+      //
+      // `-b:v` and `-maxrate` are a TARGET and a CEILING, never a floor. A waterfall is a
+      // nearly static picture at ten frames a second, so x264 encoded it to a small
+      // fraction of the 2500 kbps we had declared and YouTube saw a trickle where it had
+      // been promised a stream.
+      //
+      // Measured before changing anything: frames fed 9.99/s against a declared 10, frames
+      // encoded 9.84/s, audio 24,034 Hz against 24,000. The input side was exactly right,
+      // which is what ruled out the other explanation — a starved encoder — and left this
+      // one.
+      //
+      // `-minrate` equal to `-maxrate` asks for CBR; `nal-hrd=cbr` is what makes x264
+      // actually pad with filler NAL units to reach it. Without the second half the first
+      // is advisory and low-motion content still undershoots.
       "-b:v", `${videoBitrateKbps}k`,
+      "-minrate", `${videoBitrateKbps}k`,
       "-maxrate", `${videoBitrateKbps}k`,
       "-bufsize", `${videoBitrateKbps * 2}k`,
+      "-x264-params", "nal-hrd=cbr:force-cfr=1",
       // YouTube wants a keyframe every 2 s or it re-buffers viewers.
       "-g", String(fps * 2),
       "-c:a", "aac", "-b:a", "128k", "-ar", "44100",
@@ -235,8 +378,19 @@ export class YouTubeStream {
     // The progress stream, once the startup gate has had its first block. Kept DRAINED: an
     // unread pipe fills at 64 KB and then blocks its writer, which here is the encoder.
     ff.stdout?.on("data", (d: Buffer) => {
-      const m = /frame=(\d+)/.exec(d.toString());
+      const text = d.toString();
+      const m = /frame=(\d+)/.exec(text);
       if (m) this.stat.encoded = Number(m[1]);
+      // WHAT WE ARE ACTUALLY SENDING, which nothing measured until YouTube complained.
+      //
+      // The declared bitrate was in the ffmpeg arguments and in the settings page, and the
+      // real one was nowhere — so "is the stream healthy" could only be answered by asking
+      // YouTube. ffmpeg reports it in the same progress block the frame count comes from;
+      // it cost one more regular expression.
+      const b = /bitrate=\s*([\d.]+)kbits\/s/.exec(text);
+      if (b) this.stat.bitrateKbps = Math.round(Number(b[1]));
+      const t = /total_size=(\d+)/.exec(text);
+      if (t) this.stat.totalBytes = Number(t[1]);
     });
     ff.on("error", (err) => {
       this.stat.lastError = err.message;
@@ -310,6 +464,8 @@ export class YouTubeStream {
     this.stat.frames = 0;
     this.stat.samples = 0;
     this.stat.encoded = 0;
+    this.stat.bitrateKbps = null;
+    this.stat.totalBytes = null;
   }
 
   /**

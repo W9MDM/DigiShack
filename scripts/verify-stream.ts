@@ -24,9 +24,20 @@ import { tmpdir } from "node:os";
 
 import { WaterfallCanvas, overlayText } from "../lib/stream/frame";
 import { YouTubeStream } from "../lib/stream/youtube";
+import {
+  FRAME_W,
+  FRAME_H,
+  MAX_DECODES,
+  DECODE_CHARS,
+  TOP_MARGIN,
+  LEFT_MARGIN,
+} from "../lib/stream/layout";
 
-const W = 1280;
-const H = 720;
+// TAKEN FROM THE LAYOUT, not restated. These were hardcoded 1280x720, so after the frame
+// grew to 1080p this script would have gone on cheerfully verifying a size the real path
+// no longer uses — a verifier that passes while testing the wrong thing is worse than none.
+const W = FRAME_W;
+const H = FRAME_H;
 const FPS = 10;
 const SECONDS = 30;
 const AUDIO_RATE = 24_000;
@@ -131,7 +142,15 @@ async function main(): Promise<void> {
     onLog: (l) => logs.push(l),
   });
 
-  const canvas = new WaterfallCanvas({ width: W, height: H }, { topMargin: 280 });
+  // THE MARGINS COME FROM THE LAYOUT TOO. W and H were repointed and these were not, so the
+  // verifier built a canvas with the retired 720p top margin and NO left margin at all —
+  // its waterfall spanned the full 1920 px and scrolled straight through the region the
+  // decode column occupies, which is the exact arrangement the left margin exists to
+  // prevent. It passed the whole time.
+  const canvas = new WaterfallCanvas(
+    { width: W, height: H },
+    { topMargin: TOP_MARGIN, leftMargin: LEFT_MARGIN },
+  );
 
   const t0 = Date.now();
   await stream.start();
@@ -157,11 +176,31 @@ async function main(): Promise<void> {
           mode: "FT8",
           dialHz: 14_074_000,
           qsosToday: second,
-          decodes: Array.from({ length: 8 }, (_, k) => ({
+          // A FULL COLUMN, not eight lines. Eight filled a quarter of it and would have
+          // hidden a budget that overran the frame — the fault the operator reported as
+          // "your still not running decodes all the way to the bottom either".
+          decodes: Array.from({ length: MAX_DECODES }, (_, k) => ({
             at: `14:3${second % 10}:${String(k * 7).padStart(2, "0")}`,
-            message: `CQ TEST${k} AA00`,
-            snr: -5 - k,
+            message: `CQ TEST${String(k).padStart(2, "0")} AA00`,
+            snr: -5 - (k % 20),
           })),
+          maxDecodes: MAX_DECODES,
+          columnChars: DECODE_CHARS,
+          // A CONTACT IN PROGRESS for part of the run, so the frame extracted at the end
+          // actually carries the working block rather than only the decode list.
+          working:
+            second % 8 < 5
+              ? {
+                  theirCall: "K5MGY",
+                  phase: ["calling", "report-sent", "rreport-sent", "rr73-sent"][second % 4]!,
+                  transcript: [
+                    { dir: "tx" as const, message: "K5MGY K9XYZ EN61" },
+                    { dir: "rx" as const, message: "K9XYZ K5MGY -09", snr: -5 },
+                    { dir: "tx" as const, message: "K5MGY K9XYZ R-05" },
+                  ],
+                  hunting: null,
+                }
+              : { theirCall: null, phase: null, transcript: [], hunting: "hunting K1ABC (-7 dB)" },
         }),
       );
       stream.writeAudio(tone(1));

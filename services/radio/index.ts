@@ -65,6 +65,46 @@ import {
 import { spectrumMessage } from "@/lib/radio/spectrum";
 import { logDedupKey, normaliseCallsign, normaliseMode } from "@/lib/radio/log-dedup";
 import { WaterfallCanvas, overlayText } from "@/lib/stream/frame";
+import {
+  drawBandStrip,
+  drawMap,
+
+  tickerLine,
+  type BandChip,
+  type MapPoint,
+} from "@/lib/stream/panels";
+import { youtubeConnected, renderTitle, renderTemplate } from "@/lib/integrations/youtube-api";
+import {
+  setBroadcastDetails,
+  goLive,
+  liveChatIdForStream,
+  fetchChatPage,
+} from "@/lib/integrations/youtube-broadcast";
+import {
+  parseChatRequest,
+  mergeRequests,
+  nextPollDelay,
+  type ChatRequest,
+} from "@/lib/integrations/youtube-chat";
+import {
+  FRAME_W,
+  FRAME_H,
+  FONT_SIZE,
+  LINE_H,
+  SIDE_X,
+  SIDE_Y,
+  SIDE_CHARS,
+  TOP_MARGIN,
+  LEFT_MARGIN,
+  MAP_AREA,
+  BAND_X,
+  BAND_Y,
+  BAND_PER_ROW,
+  BAND_CHARS,
+  MAX_DECODES,
+  DECODE_CHARS,
+} from "@/lib/stream/layout";
+import { fetchSolar, fetchPskActivity, estimateUsability, gridToLatLon } from "@/lib/propagation";
 import { YouTubeStream } from "@/lib/stream/youtube";
 import { broadcastAction } from "@/lib/radio/broadcast-policy";
 import { panadapterMessage } from "@/lib/radio/panadapter";
@@ -467,6 +507,16 @@ let streamOverlayTimer: NodeJS.Timeout | null = null;
  * thing a status can say.
  */
 let lastStreamError: string | null = null;
+
+/**
+ * The schedule's hook into the stream, assigned once `main()` has built the streamer.
+ *
+ * A module-level indirection because `runSchedule` is module scope and `startStream` lives
+ * inside `main()`, and the alternative — hoisting the streamer out — would put an encoder's
+ * lifetime in the same scope as the radio's. A no-op until wired, so a schedule tick during
+ * startup does nothing rather than throwing.
+ */
+let followScheduleWithStream: (mode: string) => Promise<void> = async () => {};
 
 /**
  * Did the radio report any real forward power during the transmission in progress?
@@ -2338,6 +2388,36 @@ function runSchedule(opts: {
       broadcast({ kind: "status", status });
     },
     onDecision: (d) => {
+      // THE STREAM FOLLOWS THE STATION, when the operator asks it to.
+      //
+      // Hooked to the schedule's DECISION rather than to a timer of its own, so one clock
+      // decides when the station operates and the broadcast simply agrees with it. A second
+      // schedule would be a second answer to the same question, and the two would drift the
+      // first time either was edited.
+      //
+      // CALLED BEFORE THE CHANGE CHECK BELOW, and that placement is the whole fix.
+      //
+      // It sat after it, and the operator asked exactly the right question: "i enabled the
+      // schedule after the start of the schedule will it still go live?" It did not, and the
+      // reason was two faults stacked:
+      //
+      //   * The check below returns when the decision has not CHANGED — every tick after
+      //     the first. So the hook could only ever fire on a boundary crossing.
+      //   * The schedule runner starts inside the source-attach path, which runs EARLIER in
+      //     `main()` than the line that arms this hook. So the one call that could have
+      //     started the stream went to the no-op stub, and every tick after it returned
+      //     early. Enabling the setting mid-block did nothing until 06:00 the next morning
+      //     — and not even then, because the first tick after a restart is also the only one
+      //     that gets through.
+      //
+      // De-duplication belongs in ONE place, and it is already in the hook:
+      // `streamFollowingSchedule` makes it idempotent, so calling it every thirty seconds
+      // is correct and costs a settings-cache read.
+      //
+      // Fire-and-forget: starting an encoder must never delay or fail the schedule tick
+      // that also decides whether the radio transmits.
+      void followScheduleWithStream(d.mode);
+
       const cur = status.schedule;
       // Reasons tick over on their own ("PA cooling down for another 4 min"), so
       // compare content, not identity — and only say something when it changed.
@@ -2682,17 +2762,190 @@ async function main(): Promise<void> {
 
   /** Frames a second. Ten is plenty for a waterfall — it is a scrolling picture, not a camera. */
   const STREAM_FPS = 10;
-  const STREAM_W = 1280;
-  const STREAM_H = 720;
+  // THE GEOMETRY IS IMPORTED, not declared here. It used to be a block of `const`s in this
+  // function body, which meant no check could see it while `drawtext` painted labels from
+  // the other half of it in lib/stream/youtube.ts. Every mismatch was found by the operator
+  // looking at his own stream. It now lives in lib/stream/layout.ts, asserted by
+  // `npm run check:stream-layout`.
+  const STREAM_W = FRAME_W;
+  const STREAM_H = FRAME_H;
+  const STREAM_TOP_MARGIN = TOP_MARGIN;
+  const STREAM_LEFT_MARGIN = LEFT_MARGIN;
+
   /**
-   * Room at the top for the decode list ffmpeg draws over the frame.
+   * The right column: band conditions beside a small map of the last day.
    *
-   * MEASURED FROM THE FONT, not chosen: `drawtext` starts at y=14 and each line is
-   * fontsize 17 plus line_spacing 4, so a header, a blank and ten decodes need
-   * 14 + 12 x 21 = 266. 280 leaves a margin without spending more of a 720-line frame on
-   * text than the waterfall can afford.
+   * "the whole top right is empty" — and it was. The text sat in a column down the left of
+   * a 1280-pixel frame and the other 60% was black, against a previous stream that carried
+   * WSJT-X, GridTracker's map and a solar panel at once.
    */
-  const STREAM_TOP_MARGIN = 280;
+
+
+  /**
+   * Everything on the right, refreshed slowly.
+   *
+   * Solar indices move on a scale of hours, band activity on minutes, and the day's
+   * contacts change a few times an hour. Redrawing them at ten frames a second would mean
+   * a PSKReporter query and a database scan per frame; once a minute is generous for all
+   * three. Held here so the frame timer only ever copies pixels.
+   */
+  let sideBands: BandChip[] = [];
+  let sideSolar: { sfi: number | null; ssn: number | null; kp: number | null } | null = null;
+  let sideContacts: MapPoint[] = [];
+  let sideHeardBy: MapPoint[] = [];
+  let sideHome: MapPoint | null = null;
+  let sideAt = 0;
+  /** Recently worked, for the panel under the chips. */
+  let sideRecent: { call: string; band: string }[] = [];
+  /** How many stations heard US, and in how many entities. */
+  let sideHeardSummary: { stations: number; entities: number } | null = null;
+
+  /**
+   * Callsigns viewers have asked us to work.
+   *
+   * NEVER CALLED AUTOMATICALLY. A callsign typed by a stranger on the internet must not key
+   * a transmitter — this is a list for the operator, which is exactly what was asked for:
+   * "people can comment what band they are on or their callsign and i will go hunt them".
+   */
+  let chatRequests: ChatRequest[] = [];
+  let chatId: string | null = null;
+  let chatPageToken: string | null = null;
+  let chatNextPollAt = 0;
+  /** Whether chat reading is on, refreshed with the panels so the ticker can honour it. */
+  let chatReadEnabled = false;
+
+  async function pollChat(): Promise<void> {
+    if (Date.now() < chatNextPollAt) return;
+    // Set BEFORE the work, so a slow or failing call cannot be re-entered on the next tick
+    // and spend quota twice.
+    chatNextPollAt = Date.now() + 30_000;
+    try {
+      chatReadEnabled = await getBooleanSetting("youtube.readChat", false);
+      if (!chatReadEnabled) return;
+      if (!(await youtubeConnected())) return;
+      const key = (await getSetting("youtube.streamKey"))?.trim();
+      if (!key) return;
+
+      if (!chatId) {
+        chatId = await liveChatIdForStream(key);
+        if (!chatId) return;
+      }
+      const page = await fetchChatPage(chatId, chatPageToken);
+      chatPageToken = page.nextPageToken;
+
+      const found: ChatRequest[] = [];
+      for (const m of page.messages) {
+        const r = parseChatRequest(m.text, m.author, m.at);
+        if (r) found.push(r);
+      }
+      if (found.length > 0) {
+        chatRequests = mergeRequests(chatRequests, found);
+        for (const r of found) {
+          console.log(`[chat] ${r.from} asked for ${r.callsign}${r.band ? " on " + r.band : ""}`);
+        }
+      } else {
+        chatRequests = mergeRequests(chatRequests, []);
+      }
+
+      const seconds = await getNumberSetting("youtube.chatPollSeconds", 30);
+      chatNextPollAt = Date.now() + nextPollDelay(page.pollingIntervalMillis, seconds);
+    } catch (e) {
+      // A chat failure must never touch the broadcast. Backed off hard rather than retried:
+      // the likeliest cause is an exhausted quota, and retrying spends what is left of it.
+      chatId = null;
+      chatNextPollAt = Date.now() + 5 * 60_000;
+      console.log(`[chat] paused 5 min: ${(e as Error).message}`);
+    }
+  }
+
+  async function refreshSidePanels(): Promise<void> {
+    if (Date.now() - sideAt < 60_000) return;
+    sideAt = Date.now();
+    try {
+      const solar = await fetchSolar();
+      sideSolar = solar ? { sfi: solar.sfi, ssn: solar.ssn, kp: solar.kp } : null;
+
+      const lon = sideHome?.lon ?? -87;
+      const hour = new Date().getUTCHours();
+      // The bands the station actually works, graded by the same estimator the Decodes
+      // page uses — so the stream and the page cannot disagree about whether 20 m is open.
+      // PSKREPORTER, which fills the two columns that shipped empty in 1.173.0: the entity
+      // count per band, and the stations that heard US. Its own cache and a shared on-disk
+      // record keep the bridge and the web tier from asking twice per interval from one
+      // address — see lib/propagation.
+      let psk: Awaited<ReturnType<typeof fetchPskActivity>> = null;
+      try {
+        psk = await fetchPskActivity({
+          mode: (status.subMode ?? status.mode ?? "FT8").toUpperCase(),
+          contact: "digishack",
+          ourCallsign: status.deCall ?? null,
+        });
+      } catch {
+        /* the entity columns stay at their previous values rather than dropping to zero */
+      }
+      const byBand = new Map((psk ?? []).map((p) => [p.band.toUpperCase(), p]));
+
+      const wanted = ["80M", "40M", "30M", "20M", "17M", "15M", "12M", "10M"];
+      const since = new Date(Date.now() - 24 * 3600 * 1000);
+      const rows = await prisma.qso.groupBy({
+        by: ["band"],
+        where: { startTime: { gte: since } },
+        _count: { _all: true },
+      });
+      const counts = new Map(rows.map((r) => [r.band.toUpperCase(), r._count._all]));
+      sideBands = wanted.map((band) => {
+        const a = byBand.get(band);
+        return {
+          band,
+          // STATIONS ON THE AIR, not contacts we made. The chips answer "is this band
+          // alive", and our own QSO count answers a different question the header already
+          // carries. Falls back to our count only when PSKReporter has nothing.
+          count: a?.transmitting ?? counts.get(band) ?? 0,
+          entities: a?.entities ?? 0,
+          usability: estimateUsability(band, solar, hour, lon),
+        };
+      });
+
+      // CONTACTS OF THE LAST 24 HOURS, placed by their grid. A contact without one is
+      // simply not plotted rather than dropped at 0,0 — the Gulf of Guinea is where every
+      // missing coordinate goes, and a cluster there is a lie the map tells confidently.
+      const qsos = await prisma.qso.findMany({
+        where: { startTime: { gte: since }, gridSquare: { not: null } },
+        select: { gridSquare: true },
+        take: 2_000,
+      });
+      const pts: MapPoint[] = [];
+      for (const q of qsos) {
+        const ll = q.gridSquare ? gridToLatLon(q.gridSquare) : null;
+        if (ll) pts.push(ll);
+      }
+      sideContacts = pts;
+
+      // THE GAP UNDER THE CHIPS: what we have just worked, and who is hearing us. Both
+      // answer a question a viewer actually has while watching a station operate, and both
+      // come from data already fetched a few lines above.
+      const lastFew = await prisma.qso.findMany({
+        where: { startTime: { gte: new Date(Date.now() - 6 * 3600 * 1000) } },
+        orderBy: { startTime: "desc" },
+        select: { callsign: true, band: true },
+        take: 6,
+      });
+      sideRecent = lastFew.map((q) => ({ call: q.callsign, band: q.band }));
+
+      const heard = (psk ?? []).reduce(
+        (acc, b) => ({ stations: acc.stations + (b.heardUsBy ?? 0), entities: acc.entities }),
+        { stations: 0, entities: 0 },
+      );
+      sideHeardSummary = heard.stations > 0 ? heard : null;
+
+      if (!sideHome && status.deGrid) {
+        const ll = gridToLatLon(status.deGrid);
+        if (ll) sideHome = ll;
+      }
+    } catch {
+      /* the panels keep their previous values; a failed refresh is not worth a stream */
+    }
+  }
 
   /**
    * QSOs today, for the overlay.
@@ -2728,7 +2981,16 @@ async function main(): Promise<void> {
           "No YouTube stream key is set. Settings → YouTube Live, then copy the key from YouTube Studio → Go Live.",
       };
     }
-    const bitrate = Number((await getSetting("youtube.videoBitrateKbps")) ?? 2500) || 2500;
+    // THE DEFAULT LIVES IN ONE PLACE, and it did not a moment ago. This read hardcoded
+    // `?? 2500) || 2500`, which is the figure YouTube recommends for 720p — so raising the
+    // default in `lib/stream/youtube.ts` to the 1080p figure changed NOTHING, because the
+    // bridge always passed an explicit 2500 and an explicit argument wins over a default.
+    // The result would have been 1080p carried at a 720p bitrate: MORE pixels sharing the
+    // SAME bits, which is worse per pixel than the 720p it replaced, on a change whose
+    // entire purpose was legibility. `undefined` now means "no setting", and the one
+    // default that exists is the encoder's own.
+    const configured = Number(await getSetting("youtube.videoBitrateKbps"));
+    const bitrate = Number.isFinite(configured) && configured > 0 ? configured : undefined;
 
     const stream = new YouTubeStream({
       streamKey: key,
@@ -2742,6 +3004,7 @@ async function main(): Promise<void> {
     });
     const canvas = new WaterfallCanvas({ width: STREAM_W, height: STREAM_H }, {
       topMargin: STREAM_TOP_MARGIN,
+      leftMargin: STREAM_LEFT_MARGIN,
     });
 
     try {
@@ -2775,11 +3038,124 @@ async function main(): Promise<void> {
     // for a list that changes once a cycle.
     const overlayTimer = setInterval(() => {
       if (!liveStream) return;
-      const recent = recentDecodes.slice(-12).reverse() as {
+      // ENOUGH TO FILL THE COLUMN, and TIED TO THE COLUMN so it cannot fall behind it.
+      // This was 12 while the list shared a 280-pixel margin with the waterfall, and 12
+      // left two thirds of a full-height column blank on the live stream. Taking the
+      // budget itself rather than a number beside it means a taller frame cannot silently
+      // starve the feed the way a hardcoded 36 would.
+      const recent = recentDecodes.slice(-MAX_DECODES).reverse() as {
         timestamp: string;
         message: string;
         snr: number;
       }[];
+      // WHO WE ARE WORKING, from the controller that is working them. `activeQso()` is the
+      // same state the Decodes page renders, so the stream and the page cannot tell a
+      // viewer and the operator different stories about one contact.
+      const q = activeQso()?.state ?? null;
+      const a = activeAuto()?.state ?? null;
+      // THE RIGHT COLUMN. Drawn into the canvas's top margin, which the waterfall never
+      // scrolls through — so this survives every frame until it is redrawn, and the frame
+      // timer stays a pure buffer copy.
+      void refreshSidePanels();
+      // On the overlay tick, but paced entirely by its own clock — quota, not seconds, is
+      // what limits this.
+      void pollChat();
+      if (liveCanvas) {
+        const surface = { rgb: liveCanvas.rgb, width: STREAM_W, height: STREAM_H };
+        // Two rows of chips, with the labels aligned to them by a shared character width —
+        // the rectangles and the text are drawn by different systems and this is the only
+        // thing that keeps them together across a row.
+        const bandText = drawBandStrip(surface, sideBands, {
+          x: BAND_X,
+          // The SAME y the drawtext filter is given, and the line the first chip row lands
+          // on: line 0 is the solar readout, line 1 is blank, line 2 is the first row.
+          textY: BAND_Y,
+          firstLine: 2,
+          fontSize: FONT_SIZE,
+          lineH: LINE_H,
+          perRow: BAND_PER_ROW,
+          charsPerChip: BAND_CHARS,
+        });
+        drawMap(surface, MAP_AREA, {
+          contacts: sideContacts,
+          heardBy: sideHeardBy,
+          home: sideHome,
+        });
+        const sol = sideSolar;
+        const solarLine = sol
+          ? `SFI ${sol.sfi ?? "--"}   SSN ${sol.ssn ?? "--"}   Kp ${sol.kp ?? "--"}`
+          : "SFI --   SSN --   Kp --";
+        // Line 0 solar, line 1 blank, then the chip rows — matching `firstLine: 2` above.
+        // Then the gap under them, which was black: what we have just worked, who is
+        // hearing us, and anything a viewer has asked for in chat.
+        const extra: string[] = [];
+        if (sideRecent.length > 0) {
+          extra.push(
+            "WORKED  " + sideRecent.map((r) => `${r.call} ${r.band}`).slice(0, 3).join("   "),
+          );
+        }
+        if (sideHeardSummary) {
+          extra.push(`HEARD BY ${sideHeardSummary.stations} stations`);
+        }
+        if (chatRequests.length > 0) {
+          extra.push(
+            "REQUESTS  " +
+              chatRequests
+                .slice(0, 3)
+                .map((r) => `${r.callsign}${r.band ? " " + r.band : ""}`)
+                .join("   "),
+          );
+        }
+        // THE INVITATION, along the bottom, now and then.
+        //
+        // A viewer who does not already know they can ask to be worked never will, because
+        // nothing else on the frame says so. A permanent banner would sit across the thing
+        // people came to watch, so it appears, stays long enough to be read, and goes.
+        //
+        // Only offered when chat is actually being read — inviting people to type a
+        // callsign into a chat nobody is watching is worse than saying nothing.
+        const ticker = chatReadEnabled
+          ? tickerLine(
+              [
+                "Type your CALLSIGN and BAND in chat  —  e.g.  W1AW 20m  —  and I will call you",
+                "Want a contact?  Put your callsign in the chat, with the band you are on",
+                `${status.deCall ?? "This station"} is calling automatically — comment your callsign to be worked`,
+              ],
+              Date.now(),
+            )
+          : null;
+        // THE TICKER'S BACKING IS THE FILTER'S, NOT OURS. Painting it into the canvas was
+        // wrong in both positions it was tried: full-width it covered the decode column
+        // permanently, because `push` never repaints x < leftMargin; moved clear of the
+        // column it landed wholly inside the region `push` DOES scroll, and became a 57 px
+        // opaque bar crawling up the waterfall for 157 s against a 120 s ticker period.
+        // `drawtext` paints its own box over the finished video every frame, so it can do
+        // neither. Nothing this function draws may sit below TOP_MARGIN.
+        liveStream.setTickerOverlay(ticker ? ticker + "\n" : "");
+
+        // TRUNCATED TO THE COLUMN, which it was not. `SIDE_CHARS` was computed and asserted
+        // and then read by nothing, so the right-hand column had a budget with no
+        // enforcement — while the left column has clamped every line since the day
+        // "waiting for RR73" printed over the band chips. `drawtext` does not wrap and has
+        // no width to wrap at, so a long WORKED line ran straight over the map.
+        //
+        // The band block is exempt: `drawBandStrip` pads each label to exactly its own
+        // character budget, so clipping it here would cut a chip's label off inside a
+        // rectangle that is drawn to the full width.
+        const fitSide = (l: string): string =>
+          l.length <= SIDE_CHARS ? l : l.slice(0, SIDE_CHARS - 1) + "…";
+        liveStream.setSideOverlay(
+          [
+            fitSide(solarLine),
+            "",
+            bandText,
+            ...(extra.length ? [""] : []),
+            ...extra.map(fitSide),
+            "",
+          ].join("\n"),
+        );
+      }
+
       liveStream.setOverlay(
         overlayText({
           callsign: status.deCall ?? "",
@@ -2793,14 +3169,96 @@ async function main(): Promise<void> {
             message: d.message,
             snr: d.snr,
           })),
+          maxDecodes: MAX_DECODES,
+          columnChars: DECODE_CHARS,
+          working: {
+            theirCall: q?.active ? (q.theirCall ?? null) : null,
+            phase: q?.active ? (q.state ?? null) : null,
+            transcript: (q?.transcript ?? []).map((t) => ({
+              dir: t.dir,
+              message: t.message,
+              snr: t.snr ?? null,
+            })),
+            // The fallback when no contact is running. `lastAction` already reads
+            // "hunting K5MGY (-5 dB)" or "nobody callable this window", which is exactly
+            // what a viewer wants to know during the gaps.
+            hunting: a?.lastAction ?? null,
+          },
         }),
       );
     }, 1_000);
     streamOverlayTimer = overlayTimer;
 
-    console.log(`[stream] live at ${STREAM_W}x${STREAM_H} ${STREAM_FPS}fps ${bitrate}kbps`);
+    {
+      // FROM THE ENCODER, not from a local variable: this used to print the caller's own
+      // `bitrate`, which is now undefined when no setting is stored.
+      const e = stream.encoding;
+      console.log(
+        `[stream] live at ${e.width}x${e.height} ${e.fps}fps ${e.videoBitrateKbps}kbps` +
+          `${bitrate === undefined ? " (default)" : " (from settings)"}`,
+      );
+    }
+
+    // NAME THE DAY'S BROADCAST, if an account is connected. Deliberately after the encoder
+    // is up and NOT awaited into the caller's response: a title is cosmetic and a Data API
+    // call that is slow, rate-limited or unauthorised must never delay or fail going live.
+    void (async () => {
+      try {
+        if (!(await youtubeConnected())) return;
+        const template = (await getSetting("youtube.titleTemplate")) ?? "";
+        if (!template.trim()) return;
+        const facts = {
+          callsign: status.deCall ?? "",
+          grid: status.deGrid ?? "",
+          band: status.band,
+          mode: status.subMode ?? status.mode,
+          qsos: streamQsosToday,
+          date: new Date(),
+        };
+        const r = await setBroadcastDetails(
+          key,
+          renderTitle(template, facts),
+          renderTemplate((await getSetting("youtube.description")) ?? "", facts),
+        );
+        console.log(`[stream] ${r.detail}`);
+      } catch (e) {
+        // Named, not swallowed: a title that silently stops updating is the fault this
+        // whole integration exists to avoid.
+        console.log(`[stream] could not set the broadcast title: ${(e as Error).message}`);
+      }
+    })();
     return { ok: true, detail: "Streaming to YouTube. It takes YouTube about 20 seconds to show it." };
   }
+
+  /**
+   * Start or stop the broadcast with the operating schedule.
+   *
+   * OFF BY DEFAULT. An operator who has never asked for this must not find their channel
+   * going live because a schedule block opened.
+   *
+   * Only acts on a CHANGE it cares about: the schedule ticks every 30 seconds and decides a
+   * mode every time, so calling start on each tick would be a stream restart every half
+   * minute. `startStream` is already idempotent while running, but the title update it
+   * fires is a Data API call and those are quota.
+   */
+  let streamFollowingSchedule = false;
+  followScheduleWithStream = async (mode: string) => {
+    try {
+      if (!(await getBooleanSetting("youtube.followSchedule", false))) return;
+      const shouldRun = mode !== "off";
+      if (shouldRun === streamFollowingSchedule) return;
+      streamFollowingSchedule = shouldRun;
+      if (shouldRun) {
+        const r = await startStream();
+        console.log(`[stream] schedule opened (${mode}) — ${r.detail}`);
+      } else {
+        await stopStream();
+        console.log("[stream] schedule closed — stopped");
+      }
+    } catch (e) {
+      console.log(`[stream] schedule hook failed: ${(e as Error).message}`);
+    }
+  };
 
   async function stopStream(): Promise<void> {
     const why = liveStream?.status.lastError ?? null;

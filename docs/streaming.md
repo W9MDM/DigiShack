@@ -50,14 +50,21 @@ Check what you have:
     ffmpeg -hide_banner -encoders | grep -E 'libx264|aac'
     ffmpeg -hide_banner -filters | grep drawtext
 
-**Upstream bandwidth.** 2500 kbps by default, which is roughly 1.1 GB an hour. On a
-connection that cannot sustain it, YouTube shows buffering rather than dropping the
-stream; lower **Stream video bitrate** in settings.
+**Upstream bandwidth.** 4500 kbps by default, which is roughly 2.0 GB an hour, or about
+12 GB over a six-hour operating day. On a connection that cannot sustain it, YouTube
+shows buffering rather than dropping the stream.
 
-**CPU.** Measured on the reference container (6 cores), `libx264` at `veryfast` and ten
-frames a second costs well under one core. The preset is deliberately not slower: this
-shares a machine with an FT8 decoder, and a prettier picture is not worth a late
-transmission.
+If you need to lower it, **lower the resolution too**. The frame is 1080p because the
+decode text was not legible at 720p — YouTube was serving viewers a low rendition and
+the player was enlarging it — and 1080p carried at a 720p bitrate is more pixels sharing
+the same bits, which is worse per pixel than the 720p it replaced. 4500 is YouTube's own
+figure for this frame size.
+
+**CPU.** `libx264` at `veryfast` and ten frames a second. Measured on the reference
+container (6 cores): about **1.2 cores** at 1080p, against well under one at 720p — the
+2.25x pixel ratio, arriving where expected. Load sat at 3.5 of 6 with the FT8 decoder
+running. The preset is deliberately not slower: this shares a machine with a decoder, and
+a prettier picture is not worth a late transmission.
 
 ## Why the picture is drawn rather than screenshotted
 

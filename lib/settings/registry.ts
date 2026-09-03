@@ -922,15 +922,114 @@ export const SETTINGS: SettingDef[] = [
       "ffmpeg’s own command line.",
   },
   {
+    key: "youtube.clientId",
+    label: "YouTube OAuth client ID",
+    type: "text",
+    group: "youtube",
+    help:
+      "From Google Cloud Console → APIs & Services → Credentials → OAuth client ID, type "
+      + "Web application, with this server's /api/youtube/callback as an authorised redirect "
+      + "URI. Needed only for renaming the broadcast and reading live chat — streaming "
+      + "itself needs just the stream key. An API key will not work for either: both act as "
+      + "the channel, which Google only permits against OAuth.",
+  },
+  {
+    key: "youtube.clientSecret",
+    label: "YouTube OAuth client secret",
+    type: "secret",
+    group: "youtube",
+    help:
+      "The secret issued beside the client ID. Stored encrypted and never sent to the "
+      + "browser. PUBLISH the OAuth consent screen in Google Cloud Console rather than "
+      + "leaving it in Testing: Google expires refresh tokens from a testing app after "
+      + "seven days, and the connection would then fail every week with nothing to say why.",
+  },
+  {
+    key: "youtube.refreshToken",
+    label: "YouTube refresh token",
+    type: "secret",
+    group: "youtube",
+    help:
+      "Written by Connect to YouTube — there is nothing to type here. It is a standing "
+      + "grant to act as the channel until revoked, so it is stored encrypted and never "
+      + "leaves this server. Revoke it at myaccount.google.com/permissions.",
+  },
+  {
+    key: "youtube.followSchedule",
+    label: "Stream on the operating schedule",
+    type: "boolean",
+    group: "youtube",
+    help:
+      "Start the broadcast when a schedule block opens and stop it when the last one "
+      + "closes, so the stream runs exactly when the station does. Off by default — a "
+      + "channel should not go live because a schedule block opened unless its owner asked "
+      + "for that. Uses the same blocks as Working hours; there is no second schedule to "
+      + "keep in step.",
+    default: "false",
+  },
+  {
+    key: "youtube.readChat",
+    label: "Read live chat for callsign requests",
+    type: "boolean",
+    group: "youtube",
+    help:
+      "Watch the broadcast's chat for viewers posting a callsign and optionally a band, and "
+      + "show them on the stream and the Decodes page as requests. It NEVER calls anyone by "
+      + "itself: a callsign typed by a stranger must not key a transmitter, so the list is "
+      + "for the operator to act on. Needs a connected account.",
+    default: "false",
+  },
+  {
+    key: "youtube.chatPollSeconds",
+    label: "Chat poll interval (seconds)",
+    type: "limit",
+    group: "youtube",
+    help:
+      "How often to ask YouTube for new chat. The Data API charges units per call against a "
+      + "daily quota, and following YouTube's own suggested interval would exhaust a default "
+      + "allowance long before an operating day ended. 30 seconds is quota-safe; lower it "
+      + "only if you have checked your quota in Google Cloud Console.",
+    default: "30",
+  },
+  {
+    key: "youtube.titleTemplate",
+    label: "Broadcast title",
+    type: "text",
+    group: "youtube",
+    help:
+      "Set on the broadcast each time the stream starts, if an account is connected. "
+      + "Placeholders: {date} {callsign} {grid} {band} {mode} {qsos}. YouTube truncates a "
+      + "title past 100 characters, so a long template is silently cut rather than refused.",
+    default: "Live FT8 & FT4 — {callsign} {grid} — {date}",
+  },
+  {
+    key: "youtube.description",
+    label: "Broadcast description",
+    type: "text",
+    group: "youtube",
+    help:
+      "Set alongside the title. The same placeholders work here. Left empty, whatever the "
+      + "broadcast already carries is kept — an empty description overwriting a good one "
+      + "is a worse default than doing nothing.",
+  },
+  {
     key: "youtube.videoBitrateKbps",
     label: "Stream video bitrate (kbps)",
     type: "limit",
     group: "youtube",
     help:
-      "2500 suits 720p at ten frames a second, which is what a waterfall needs — it is a picture " +
-      "that scrolls, not a camera. Raising it costs encoder CPU on the same machine that decodes FT8, " +
-      "and the decoder has the better claim on it.",
-    default: "2500",
+      "4500 is YouTube's own figure for 1080p, which is what the stream now sends — at ten frames " +
+      "a second, because a waterfall is a picture that scrolls, not a camera. Do not lower this to " +
+      "save bandwidth without lowering the resolution too: more pixels sharing fewer bits is worse " +
+      "per pixel than a smaller frame would have been, and the frame was raised to 1080p precisely " +
+      "because the decode text was not legible. Raising it costs encoder CPU on the same machine " +
+      "that decodes FT8, and the decoder has the better claim on it.",
+    // THIS IS THE DEFAULT THAT WINS, and that is the whole reason it is worth a comment.
+    // `getSetting` falls through to this when no row exists, so the bridge always receives a
+    // number and the encoder's own `?? 4500` is never reached. Raising the encoder's default
+    // alone changed nothing — an explicit argument beats a default — and would have shipped
+    // 1080p at a 720p bitrate. `scripts/check-stream-layout.ts` asserts the two agree.
+    default: "4500",
   },
   {
     key: "flex.controlMainSlice",

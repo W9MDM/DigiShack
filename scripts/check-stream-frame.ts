@@ -13,6 +13,12 @@
 // narrow FT8 carrier survives or does not.
 
 import { paletteFor, WaterfallCanvas, overlayText } from "../lib/stream/frame";
+import {
+  DECODE_CHARS,
+  MAX_DECODES,
+  HEADER_LINES,
+} from "../lib/stream/layout";
+import type { WorkingNow } from "../lib/stream/frame";
 
 let failures = 0;
 function check(name: string, cond: boolean, extra?: unknown): void {
@@ -184,6 +190,50 @@ function main(): void {
   }
 
   console.log("");
+  console.log("5b. THE LEFT COLUMN is left alone too");
+  {
+    // The decode list runs the full height of the frame down the left, so the waterfall
+    // takes the narrower space beside it. A scroll that block-copied whole rows would drag
+    // the decode column upward with it — which is invisible in a still and obvious the
+    // moment it moves.
+    const w = 20;
+    const h = 10;
+    const left = 8;
+    const c = new WaterfallCanvas({ width: w, height: h }, { leftMargin: left });
+    for (let i = 0; i < h * 3; i++) {
+      c.push({ bins: new Uint8Array(w).fill(255), binHz: 10, maxHz: 100 });
+    }
+    let intruded = false;
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < left; x++) if (px(c, w, x, y)[0] > 20) intruded = true;
+    }
+    check("the left column stays black however long it scrolls", !intruded);
+    check("and the waterfall fills everything right of it", px(c, w, left, h - 1)[0] > 200);
+    check(
+      "the column boundary is exact — one pixel left of the margin is still black",
+      px(c, w, left - 1, h - 1)[0] === 0,
+      px(c, w, left - 1, h - 1),
+    );
+
+    // The bins must span the NARROWER area, not the full width, or the spectrum is
+    // squeezed and every signal lands at the wrong frequency.
+    const c2 = new WaterfallCanvas({ width: 100, height: 3 }, { leftMargin: 50 });
+    const bins = new Uint8Array(10);
+    bins[9] = 255;
+    c2.push({ bins, binHz: 10, maxHz: 100 });
+    let lastLit = -1;
+    for (let x = 0; x < 100; x++) if (px(c2, 100, x, 2)[0] > 200) lastLit = x;
+    check("the highest bin lands at the RIGHT edge of the narrowed area", lastLit >= 97, lastLit);
+    const bins2 = new Uint8Array(10);
+    bins2[0] = 255;
+    const c3 = new WaterfallCanvas({ width: 100, height: 3 }, { leftMargin: 50 });
+    c3.push({ bins: bins2, binHz: 10, maxHz: 100 });
+    let firstLit = -1;
+    for (let x = 0; x < 100; x++) if (px(c3, 100, x, 2)[0] > 200 && firstLit < 0) firstLit = x;
+    check("and the lowest at its LEFT edge, not the frame's", firstLit === 50, firstLit);
+  }
+
+  console.log("");
   console.log("6. the overlay text");
   {
     const text = overlayText({
@@ -223,7 +273,11 @@ function main(): void {
         snr: -10,
       })),
     });
-    check("eighty decodes do not produce eighty lines", many.split("\n").length <= 14, {
+    // THE COLUMN HAS A CAPACITY and the text must never exceed it. It runs the full height
+    // of the frame now — 26 decode lines beside a waterfall that gave up the left side — so
+    // the number changed, but the property did not: text that overflows draws over the
+    // bottom of the frame, and there is nothing below it to notice.
+    check("eighty decodes do not produce eighty lines", many.split("\n").length <= 34, {
       lines: many.split("\n").length,
     });
 
@@ -243,6 +297,176 @@ function main(): void {
       empty.includes("K9XYZ") && empty.includes("--"),
     );
     check("and it does not print null", !/null|undefined|NaN/.test(empty), empty);
+  }
+
+  console.log("");
+  console.log("7. WHO WE ARE WORKING, and the exchange");
+  {
+    // Asked for after seeing the operator's previous stream — an OBS composite carrying
+    // WSJT-X, GridTracker and a QRZ lookup of the station being worked. A bare waterfall
+    // tells a viewer a contact is happening somewhere in it; this tells them who.
+    const base = {
+      callsign: "K9XYZ",
+      grid: "EN61AA",
+      band: "20m",
+      mode: "FT8",
+      dialHz: 14_074_000,
+      qsosToday: 146,
+      decodes: Array.from({ length: 20 }, (_, i) => ({
+        at: "14:30:00",
+        message: `CQ TEST${i} AA00`,
+        snr: -10,
+      })),
+    };
+    const working: WorkingNow = {
+      theirCall: "K5MGY",
+      phase: "rreport-sent",
+      transcript: [
+        { dir: "tx", message: "K5MGY K9XYZ EN61" },
+        { dir: "rx", message: "K9XYZ K5MGY -09", snr: -5 },
+        { dir: "tx", message: "K5MGY K9XYZ R-05" },
+      ],
+      hunting: null,
+    };
+    const t = overlayText({ ...base, working });
+    check("the station being worked is named", t.includes("WORKING K5MGY"), t.split("\n")[2]);
+    check(
+      "the phase is in words a viewer follows, not the state machine's",
+      t.includes("waiting for RR73") && !t.includes("rreport-sent"),
+      t.split("\n")[2],
+    );
+    check("our transmissions are marked", t.includes("▲ K5MGY K9XYZ R-05"));
+    check("theirs are marked differently", t.includes("▼ K9XYZ K5MGY -09"));
+    check("their report carries their signal", t.includes("▼ K9XYZ K5MGY -09  -5"), t);
+    // OLDEST FIRST, unlike the decode list. An exchange read backwards is nonsense.
+    check(
+      "the exchange reads in the order it happened",
+      t.indexOf("K5MGY K9XYZ EN61") < t.indexOf("K5MGY K9XYZ R-05"),
+    );
+
+    // THE LAYOUT BUDGET. The top margin is a fixed 280 px and the waterfall begins below
+    // it, so a working block that simply ADDED lines would push the decode list down over
+    // the spectrum — which is the fault 1.170.7 already fixed once, from the other side.
+    const idle = overlayText(base);
+    check(
+      "an idle frame shows every decode the column has room for",
+      idle.split("\n").filter((l) => l.includes("CQ TEST")).length === 20,
+      idle.split("\n").filter((l) => l.includes("CQ TEST")).length,
+    );
+    // THE INVARIANT, restated for a taller column. A busy frame may now be LONGER than an
+    // idle one — the column holds 26 and this fixture only supplies 20 — so the old
+    // comparison no longer expresses the property. What must hold is that the frame never
+    // runs off the bottom, and that the working block is paid for by the decode list rather
+    // than by the frame.
+    check("a busy frame stays inside the column", t.split("\n").length <= 34, {
+      busy: t.split("\n").length,
+    });
+    check(
+      "and the working block costs the decode list, not the frame",
+      t.split("\n").filter((l) => l.includes("CQ TEST")).length <=
+        idle.split("\n").filter((l) => l.includes("CQ TEST")).length,
+      {
+        busy: t.split("\n").filter((l) => l.includes("CQ TEST")).length,
+        idle: idle.split("\n").filter((l) => l.includes("CQ TEST")).length,
+      },
+    );
+    const long = overlayText({
+      ...base,
+      working: {
+        ...working,
+        transcript: Array.from({ length: 12 }, (_, i) => ({
+          dir: (i % 2 === 0 ? "tx" : "rx") as "tx" | "rx",
+          message: `MSG${i}`,
+          snr: -3,
+        })),
+      },
+    });
+    check("a long exchange is trimmed to the last four", long.split("MSG").length - 1 === 4, long);
+    check(
+      "and at least six decodes always survive",
+      long.split("\n").filter((l) => l.includes("CQ TEST")).length >= 6,
+      long.split("\n").filter((l) => l.includes("CQ TEST")).length,
+    );
+    // A SHORTER COLUMN must still be obeyed. The caller owns the budget — a future layout
+    // with a different height must not have to know how this function counts.
+    const small = overlayText({ ...base, maxDecodes: 5 });
+    check(
+      "a caller-set budget is obeyed",
+      small.split("\n").filter((l) => l.includes("CQ TEST")).length === 5,
+      small.split("\n").filter((l) => l.includes("CQ TEST")).length,
+    );
+  }
+
+  console.log("");
+  console.log("8. the gaps between contacts");
+  {
+    const base = {
+      callsign: "K9XYZ",
+      grid: "EN61AA",
+      band: "20m",
+      mode: "FT8",
+      dialHz: 14_074_000,
+      qsosToday: 146,
+      decodes: [{ at: "14:30:00", message: "CQ K1ABC FN42", snr: -7 }],
+    };
+    // THE DAY'S COUNT IS ALWAYS THERE, and this is what keeps it there. It lived in the
+    // no-contact branch at first, so it appeared BETWEEN contacts and vanished DURING them
+    // — backwards, since a viewer arriving mid-contact is the one most likely to wonder how
+    // the day is going.
+    const idleFrame = overlayText({
+      ...base,
+      working: { theirCall: null, phase: null, transcript: [], hunting: "hunting K5MGY (-5 dB)" },
+    });
+    check("the day's count shows between contacts", idleFrame.includes("QSOs today 146"));
+    check("and does not claim to be working anyone", !idleFrame.includes("WORKING"), idleFrame);
+
+    const busyFrame = overlayText({
+      ...base,
+      working: {
+        theirCall: "K5MGY",
+        phase: "calling",
+        transcript: [{ dir: "tx", message: "K5MGY K9XYZ EN61" }],
+        hunting: null,
+      },
+    });
+    check("and DURING a contact too", busyFrame.includes("QSOs today 146"));
+    check(
+      "on the line under the header, not in it",
+      busyFrame.split("\n")[1]?.startsWith("QSOs today") === true,
+      busyFrame.split("\n")[1],
+    );
+    // Which is WHY it moved out of the header: carrying both ran the header into the solar
+    // readout in the next column.
+    check(
+      "keeping the header short enough for the column",
+      (busyFrame.split("\n")[0] ?? "").length <= 41,
+      (busyFrame.split("\n")[0] ?? "").length,
+    );
+
+    // NOTHING MAY EXCEED THE COLUMN. "WORKING K7YHX — sent R+report, waiting for RR73" was
+    // 48 characters in a 41-character column and printed straight over the band chips.
+    // `drawtext` does not wrap and has no width to wrap at.
+    const wide = overlayText({
+      ...base,
+      working: {
+        theirCall: "VK9/W1ABCDEF/QRP",
+        phase: "report-sent",
+        transcript: [{ dir: "rx", message: "K9XYZ VK9/W1ABCDEF/QRP -05", snr: -5 }],
+        hunting: null,
+      },
+      decodes: [{ at: "14:30:00", message: "X".repeat(90), snr: -7 }],
+    });
+    const longest = Math.max(...wide.split("\n").map((l) => l.length));
+    check(`no line exceeds the column (longest ${longest})`, longest <= DECODE_CHARS, longest);
+    check("and an over-long line is marked as cut", wide.includes("…"));
+
+    const done = overlayText({
+      ...base,
+      working: { theirCall: null, phase: null, transcript: [], hunting: null },
+    });
+    check("nothing running shows no working block", !done.includes("WORKING"));
+    check("and leaves no stray blank block", !/\n\n\n/.test(done), JSON.stringify(done.slice(0, 60)));
+    check("omitting `working` entirely still renders", overlayText(base).includes("K9XYZ"));
   }
 
   console.log("");
