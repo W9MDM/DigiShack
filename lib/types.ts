@@ -239,3 +239,21 @@ export interface DupeCheckResponse {
    */
   scope?: "session" | "all-time";
 }
+
+/**
+ * One "forgot password" request as the admin UI sees it.
+ *
+ * `email` is what somebody TYPED, not a relation — the interesting rows are the ones that
+ * matched no account. `ip` is nullable because nothing upstream is guaranteed to tell us;
+ * see lib/auth/client-ip.ts for why every stored address used to be loopback.
+ */
+export interface ResetAttempt {
+  id: string;
+  email: string;
+  ip: string | null;
+  /** sent | no-account | throttled | send-failed */
+  outcome: string;
+  detail: string | null;
+  userAgent: string | null;
+  createdAt: string;
+}

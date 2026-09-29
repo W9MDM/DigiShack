@@ -21,6 +21,12 @@ import { SourcePicker } from "@/components/radio/SourcePicker";
 import { withPageAuth } from "@/lib/auth/guard";
 import { bridgeWsUrl } from "@/lib/bridge/ws-url";
 import { ApiError, apiGet, apiPatch, apiPost, useApi } from "@/lib/client/api";
+import {
+  CONNECT_TIMEOUT_MS,
+  FIRST_BACKOFF_MS,
+  linkLabel,
+  nextBackoff,
+} from "@/lib/client/socket-retry";
 import { useCan } from "@/lib/client/session";
 import { formatFreqMHz } from "@/lib/ham/bands";
 import { callableFrom } from "@/lib/digital/callable";
@@ -740,7 +746,7 @@ export default function DigitalPage({ wsUrl }: Props) {
   useEffect(() => {
     let closed = false;
     let retry: ReturnType<typeof setTimeout> | null = null;
-    let backoff = 1_000;
+    let backoff = FIRST_BACKOFF_MS;
     // Held OUTSIDE connect() so the cleanup can actually close it.
     //
     // This used to be a `let ws` inside connect(), unreachable from the returned
@@ -753,6 +759,7 @@ export default function DigitalPage({ wsUrl }: Props) {
     // the row list is capped, cut the number of DISTINCT stations visible to a
     // third.
     let socket: WebSocket | null = null;
+    let connectTimer: ReturnType<typeof setTimeout> | null = null;
 
     const connect = () => {
       if (closed) return;
@@ -765,9 +772,34 @@ export default function DigitalPage({ wsUrl }: Props) {
       }
       socket = ws;
 
+      // THE TIMER THE SOCKET CANNOT SUPPRESS. A browser WebSocket has no connect timeout:
+      // if the TCP connection is accepted but the handshake never completes — exactly what
+      // a proxy does while the origin behind it is down — the socket sits in CONNECTING for
+      // ever, `onopen` and `onclose` both stay silent, and the retry that lives in
+      // `onclose` is never scheduled. That is the page stuck on "Reconnecting (235)".
+      // Closing a CONNECTING socket DOES fire `onclose`, which puts the retry path back in
+      // charge.
+      if (connectTimer) clearTimeout(connectTimer);
+      connectTimer = setTimeout(() => {
+        if (ws.readyState === WebSocket.CONNECTING) {
+          try {
+            ws.close();
+          } catch {
+            /* already gone */
+          }
+        }
+      }, CONNECT_TIMEOUT_MS);
+
       ws.onopen = () => {
+        if (connectTimer) clearTimeout(connectTimer);
+        connectTimer = null;
         setConnected(true);
-        backoff = 1_000;
+        backoff = FIRST_BACKOFF_MS;
+        // RESET, and it never was. `attempts` only ever counted up, so a page left open
+        // across a few bridge restarts showed a lifetime total — "Reconnecting (235)" — and
+        // once the socket really did stick there was no way to tell a stuck retry loop from
+        // an old tally by looking at it.
+        setAttempts(0);
       };
 
       ws.onmessage = (ev) => {
@@ -787,7 +819,34 @@ export default function DigitalPage({ wsUrl }: Props) {
             setSpectrum({ bins: decodeBins(s.bins), at: s.at });
             setScale({ binHz: s.binHz, maxHz: s.maxHz, periodMs: s.periodMs });
           } else if (msg.kind === "backlog" && Array.isArray(msg.decodes)) {
-            setRows((prev) => (prev.length === 0 ? [...msg.decodes].reverse() : prev));
+            // MERGED, NOT DISCARDED. This used to keep the backlog only when the list was
+            // empty, which is right on a first connection and wrong on every reconnect: a
+            // socket that was down for two minutes missed everything decoded in those two
+            // minutes, and the bridge replays exactly that on connect. Dropping it left a
+            // permanent hole in the middle of the list with nothing to show one was there.
+            //
+            // The same identity `push` uses — window, audio offset and text — so a decode
+            // that arrived by both paths appears once. Its comment already anticipated this
+            // case: "a bridge restart replaying its backlog is another" source of duplicates.
+            if (!pausedRef.current) {
+              const incoming = [...(msg.decodes as DecodeEvent[])];
+              setRows((prev) => {
+                if (prev.length === 0) return incoming.reverse().slice(0, MAX_ROWS);
+                const seen = new Set(
+                  prev.map((r) => `${r.timestamp}|${r.freqOffset}|${r.message}`),
+                );
+                const missing = incoming.filter(
+                  (d) => !seen.has(`${d.timestamp}|${d.freqOffset}|${d.message}`),
+                );
+                if (missing.length === 0) return prev;
+                // Sorted rather than prepended: the gap being filled is OLDER than the rows
+                // already on screen in the usual case, but a slow backlog can overlap, and
+                // pushing them all to the top would put stale decodes above live ones.
+                return [...missing, ...prev]
+                  .sort((a, b) => (a.timestamp < b.timestamp ? 1 : a.timestamp > b.timestamp ? -1 : 0))
+                  .slice(0, MAX_ROWS);
+              });
+            }
           } else if (msg.kind === "smeter") {
             setSmeter({
               dbm: msg.dbm as number,
@@ -821,11 +880,13 @@ export default function DigitalPage({ wsUrl }: Props) {
       };
 
       ws.onclose = () => {
+        if (connectTimer) clearTimeout(connectTimer);
+        connectTimer = null;
         setConnected(false);
         if (closed) return;
         setAttempts((a) => a + 1);
         retry = setTimeout(connect, backoff);
-        backoff = Math.min(backoff * 2, 15_000);
+        backoff = nextBackoff(backoff);
       };
 
       ws.onerror = () => ws.close();
@@ -835,6 +896,7 @@ export default function DigitalPage({ wsUrl }: Props) {
     return () => {
       closed = true;
       if (retry) clearTimeout(retry);
+      if (connectTimer) clearTimeout(connectTimer);
       // Drop the handlers before closing: onclose would otherwise fire during
       // teardown and schedule a reconnect for a socket nobody is listening to.
       if (socket) {
@@ -1226,13 +1288,9 @@ export default function DigitalPage({ wsUrl }: Props) {
                 </Badge>
               </span>
             )}
-            {connected ? (
-              <Badge tone="ok">Live</Badge>
-            ) : (
-              <Badge tone="warn">
-                {attempts > 0 ? `Reconnecting (${attempts})` : "Connecting"}
-              </Badge>
-            )}
+            <Badge tone={connected ? "ok" : "warn"}>
+              {linkLabel(connected, attempts)}
+            </Badge>
             <Button
               variant={paused ? "primary" : "secondary"}
               onClick={() => setPaused((p) => !p)}

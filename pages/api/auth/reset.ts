@@ -1,4 +1,5 @@
 import type { NextApiRequest, NextApiResponse } from "next";
+import { clientIp } from "@/lib/auth/client-ip";
 
 import { route, sendError, sendJson } from "@/lib/api/respond";
 import { consumePasswordReset } from "@/lib/auth/reset";
@@ -40,9 +41,10 @@ async function post(req: NextApiRequest, res: NextApiResponse) {
 
 /** X-Real-IP first — same reasoning, same trap, as login's clientKey. */
 function clientKey(req: NextApiRequest): string {
-  const real = req.headers["x-real-ip"];
-  const fromProxy = (Array.isArray(real) ? real[0] : real)?.trim();
-  return fromProxy || req.socket.remoteAddress || "unknown";
+  // SHARED HELPER — see lib/auth/client-ip.ts. This read only `x-real-ip`, which
+  // cloudflared does not set, so every request through the tunnel keyed on the loopback
+  // address and gave the whole internet one shared budget.
+  return clientIp({ headers: req.headers, socketAddress: req.socket.remoteAddress }) ?? "unknown";
 }
 
 export default route({ POST: post });

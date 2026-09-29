@@ -2855,6 +2855,42 @@ async function main(): Promise<void> {
       chatId = null;
       chatNextPollAt = Date.now() + 5 * 60_000;
       console.log(`[chat] paused 5 min: ${(e as Error).message}`);
+
+      // AN EXPIRED TOKEN IS NOT A CHAT PROBLEM, and treating it as one cost ten days of
+      // broadcasting. Every YouTube call shares this credential: when it dies, the daily
+      // broadcast is never created, never renamed, never put on air. ffmpeg carries on
+      // pushing 4500 kbps into an ingest with nothing attached, `stream.running` stays
+      // true, the rig page says "live", and the only symptom is that nobody can watch.
+      //
+      // MEASURED, not imagined. The refresh token was stored 2026-09-03 11:21 and a
+      // consent screen left in Testing expires one after SEVEN DAYS, so it died around the
+      // 10th. This exact sentence — which names its own fix — was then written to the log
+      // every five minutes for ten days and reached nobody, because the catch that
+      // produced it treated it as a chat hiccup and backed off. The operator found it by
+      // noticing his channel had been dark for eleven days.
+      //
+      // So the auth case is separated from the transient one and raised. It is the whole
+      // integration failing, not one poller.
+      const why = (e as Error).message;
+      if (/invalid_grant|refresh token|reconnect/i.test(why)) {
+        void raiseAlert(
+          "youtube-auth",
+          "YouTube has stopped accepting our credentials",
+          [
+            why,
+            "",
+            "Until this is fixed nothing on the channel updates: no broadcast is created for",
+            "the day, the title is never set, and nothing is put on air. The encoder keeps",
+            "running and the rig page keeps saying the stream is live, because it is still",
+            "pushing video — into an ingest with no broadcast attached, which nobody can see.",
+            "",
+            "Two steps, and the first is the one that stops it happening again:",
+            "  1. Google Cloud Console, APIs & Services, OAuth consent screen: PUBLISH APP.",
+            "     While it is in Testing, Google expires every refresh token after 7 days.",
+            "  2. DigiShack, Settings, YouTube: Connect, to store a fresh token.",
+          ],
+        );
+      }
     }
   }
 
@@ -3228,10 +3264,55 @@ async function main(): Promise<void> {
           renderTemplate((await getSetting("youtube.description")) ?? "", facts),
         );
         console.log(`[stream] ${r.detail}`);
+
+        // PUSHING IS NOT BROADCASTING, and the gap between them is invisible from here.
+        //
+        // `r.ok` is false when no live or ready broadcast is bound to our stream key. That
+        // is not a cosmetic failure to rename something: it means YouTube is receiving
+        // 4500 kbps and has nowhere to show it. Every broadcast on a reusable key goes
+        // `complete` when the day ends, and YouTube does NOT mint a replacement — measured
+        // on 2026-09-08, when four complete broadcasts were bound to this key and the
+        // encoder had been feeding an ingest nobody could watch since the previous evening.
+        //
+        // The encoder keeps running, `stream.running` stays true and the rig page keeps
+        // saying "live", so there is no symptom on this side at all. Somebody has to be
+        // told.
+        if (!r.ok) {
+          void raiseAlert(
+            "youtube-no-broadcast",
+            "The stream is running but nobody can watch it",
+            [
+              r.detail,
+              "",
+              "The encoder is connected and pushing video, so the rig page shows the stream",
+              "as live — but no broadcast on the channel is bound to this stream key and",
+              "waiting, so there is nothing for a viewer to open.",
+              "",
+              "A broadcast goes 'complete' when it ends and can never be reused, and YouTube",
+              "does not always create the next one. Start one in YouTube Studio (Go Live),",
+              "or check Settings, YouTube if the account has become disconnected.",
+            ],
+          );
+        }
       } catch (e) {
         // Named, not swallowed: a title that silently stops updating is the fault this
         // whole integration exists to avoid.
         console.log(`[stream] could not set the broadcast title: ${(e as Error).message}`);
+        // AND ALERTED, for the same reason as the auth case below the chat poller: this
+        // catch is the only place that learns the daily broadcast was never set up, and
+        // for ten days it wrote that fact to a log nobody reads.
+        void raiseAlert(
+          "youtube-broadcast-failed",
+          "The day's broadcast could not be set up",
+          [
+            (e as Error).message,
+            "",
+            "The encoder is running regardless, so the stream looks live on the rig page.",
+            "If this is an expired credential, Settings, YouTube, Connect will fix it — and",
+            "publishing the OAuth consent screen in Google Cloud Console stops Google",
+            "expiring the token every 7 days.",
+          ],
+        );
       }
     })();
     return { ok: true, detail: "Streaming to YouTube. It takes YouTube about 20 seconds to show it." };

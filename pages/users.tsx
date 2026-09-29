@@ -19,7 +19,7 @@ import { MIN_PASSWORD_LENGTH } from "@/lib/auth/password-policy";
 import { ApiError, apiDelete, apiPatch, apiPost, useApi } from "@/lib/client/api";
 import { useUser } from "@/lib/client/session";
 import { formatUtc } from "@/lib/time";
-import type { ListResponse, Role, User } from "@/lib/types";
+import type { ListResponse, ResetAttempt, Role, User } from "@/lib/types";
 import { ROLES } from "@/lib/validation/station";
 
 const ROLE_HELP: Record<Role, string> = {
@@ -206,9 +206,117 @@ export default function UsersPage() {
           <NewUserCard onCreated={reload} onError={handle} />
         </div>
       </div>
+
+      {/* Reset requests, under the accounts they are about. Full width rather than beside
+          the form: the IP and user-agent columns are the point and they need the room. */}
+      <div className="mt-5">
+        <ResetAttemptsCard />
+      </div>
     </>
   );
 }
+
+/**
+ * Every "forgot password" request, and where it came from.
+ *
+ * "in the admin UI log password reset requests and the ip they came from" — asked after an
+ * afternoon spent establishing over SSH, through pm2, that four requests had reached the
+ * server that day and all four were mine. That evidence should have been this table.
+ *
+ * WHY IT SHOWS THE OUTCOME AND NOT JUST THE REQUEST. The endpoint's HTTP response is
+ * identical for every case by design, so that nobody can use the login page to discover
+ * which addresses have accounts. That makes the server the only place the truth exists, and
+ * the four outcomes are four completely different faults:
+ *
+ *   sent         the mail left the building — if it did not arrive, look at the mailbox
+ *   no-account   the address does not match an active account, so nothing was ever sent
+ *   throttled    eight attempts spent the budget; nothing was sent and nothing used to
+ *                be logged either, which is what made this take an afternoon
+ *   send-failed  SMTP refused it, and `detail` says what it said
+ *
+ * The IP is here because "my clicks do nothing" and "somebody is probing us" look identical
+ * in a list of email addresses and completely different once you can see where they came
+ * from. The user agent is here for the same reason: a browser fault is invisible from the
+ * server except as the absence of a row, and a row with a strange agent is a clue.
+ */
+function ResetAttemptsCard() {
+  const { data, error, reload } = useApi<ListResponse<ResetAttempt>>(
+    "/api/auth/reset-attempts?limit=100",
+  );
+  const rows = data?.rows ?? [];
+
+  const TONE: Record<string, "ok" | "warn" | "danger" | "info"> = {
+    sent: "ok",
+    "no-account": "info",
+    throttled: "warn",
+    "send-failed": "danger",
+  };
+
+  return (
+    <Card
+      title="Password reset requests"
+      // The count is the first thing worth knowing: an empty table answers "did my click
+      // reach the server at all", which was the actual question.
+      actions={
+        <button type="button" className="text-xs text-fg-subtle hover:text-accent-bright" onClick={reload}>
+          Refresh
+        </button>
+      }
+    >
+      {error && <ErrorBanner>{error.message}</ErrorBanner>}
+      {!error && rows.length === 0 && (
+        <p className="text-sm text-fg-muted">
+          No reset requests recorded. If someone has just used the &ldquo;Forgot
+          password?&rdquo; link and nothing appears here, the request never reached the
+          server &mdash; look at the browser rather than at the mail.
+        </p>
+      )}
+      {rows.length > 0 && (
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm border-collapse">
+            <thead>
+              <tr className="bg-surface-2 text-left">
+                {["When", "Address", "From", "Outcome", "Detail"].map((h) => (
+                  <Th key={h}>{h}</Th>
+                ))}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-line">
+              {rows.map((r) => (
+                <tr key={r.id}>
+                  <Td className="tnum whitespace-nowrap text-fg-subtle">
+                    {formatUtc(r.createdAt)}
+                  </Td>
+                  <Td className="text-fg-muted break-all">{r.email}</Td>
+                  {/* tnum so a column of addresses lines up, break-all because IPv6 is long
+                      and must not widen the table past a phone. Em dash rather than
+                      "unknown": nothing upstream told us, and a word invites someone to
+                      search for a host by that name. */}
+                  <Td className="tnum whitespace-nowrap">
+                    {r.ip ?? <span className="text-fg-subtle">&mdash;</span>}
+                  </Td>
+                  <Td>
+                    <Badge tone={TONE[r.outcome] ?? "info"}>{r.outcome}</Badge>
+                  </Td>
+                  <Td className="text-fg-subtle break-all" title={r.userAgent ?? undefined}>
+                    {r.detail ?? <span>&mdash;</span>}
+                  </Td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <p className="mt-3 text-xs text-fg-subtle">
+        Kept for 30 days, newest 5,000. The response the caller sees never varies between
+        these outcomes &mdash; that is deliberate, so the login page cannot be used to find
+        out which addresses have accounts. This table is the only place the difference
+        exists, which is why it is admin-only.
+      </p>
+    </Card>
+  );
+}
+
 
 function NewUserCard({
   onCreated,

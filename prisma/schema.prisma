@@ -84,6 +84,38 @@ model PasswordReset {
 // Bearer tokens for the public REST API (third-party clients: GridTracker,
 // fldigi, scripts). Separate from Session because the trust model differs — a key
 // is long-lived, non-interactive, and belongs to a program rather than a person.
+// Every "forgot password" request, whatever came of it.
+//
+// SEPARATE FROM PasswordReset, which records issued TOKENS and therefore only ever holds
+// the successful case for a real account. The rows an operator debugging "no email arrived"
+// actually needs are the other ones: an address with no account, a throttled request, an
+// SMTP failure. None of those creates a token, so none of them was recorded anywhere.
+//
+// THE RESPONSE THIS ENDPOINT GIVES IS DELIBERATELY IDENTICAL for every outcome, so it
+// cannot be used to discover which addresses have accounts. That makes the server side the
+// ONLY place the truth exists, and until now that was a console line nobody reads.
+//
+// `email` is what the caller TYPED, not a foreign key: the interesting rows are the ones
+// where it matched nothing. Bounded in length because it is unauthenticated input.
+model PasswordResetAttempt {
+  id        String   @id @default(cuid())
+  /// The address as submitted, lower-cased. Not a relation - most rows match no user.
+  email     String   @db.VarChar(190)
+  /// Where it came from. Null when nothing upstream told us - see lib/auth/client-ip.ts.
+  ip        String?  @db.VarChar(45)
+  /// sent | no-account | throttled | send-failed
+  outcome   String   @db.VarChar(16)
+  /// The SMTP reason on a failure, or the seconds remaining on a throttle. Never a secret.
+  detail    String?  @db.VarChar(255)
+  /// Kept because "my clicks do nothing" is a browser fault and this is the only clue to it.
+  userAgent String?  @db.VarChar(255)
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([email])
+  @@index([ip])
+}
+
 model ApiKey {
   id   String @id @default(cuid())
   name String @db.VarChar(120)
@@ -348,11 +380,11 @@ model Qso {
   // because ADIF, LoTW and eQSL all need exactly one value per contact, and
   // deriving it on every export would be needless work for the common case.
   /// ADIF SIG — special activity programme, e.g. "POTA".
-  sig            String?              @db.VarChar(32)
+  sig     String?     @db.VarChar(32)
   /// ADIF SIG_INFO — the PRIMARY reference. See `sigRefs` for all of them.
-  sigInfo        String?              @db.VarChar(32)
+  sigInfo String?     @db.VarChar(32)
   /// Every special-activity reference for this contact, primary included.
-  sigRefs        QsoSigRef[]
+  sigRefs QsoSigRef[]
 
   // OUR OWN activation. The other half of the pair above, and the reason this log
   // could not produce a POTA activation at all.

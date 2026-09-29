@@ -1,4 +1,5 @@
 import type { NextApiRequest, NextApiResponse } from "next";
+import { clientIp } from "@/lib/auth/client-ip";
 
 import { route, sendError, sendJson } from "@/lib/api/respond";
 import { hashPassword, needsRehash, verifyPassword } from "@/lib/auth/password";
@@ -90,9 +91,10 @@ async function get(_req: NextApiRequest, res: NextApiResponse) {
  * Falls back to the socket address, which is correct when nothing is in front.
  */
 function clientKey(req: NextApiRequest): string {
-  const real = req.headers["x-real-ip"];
-  const fromProxy = (Array.isArray(real) ? real[0] : real)?.trim();
-  return fromProxy || req.socket.remoteAddress || "unknown";
+  // SHARED HELPER — see lib/auth/client-ip.ts. This read only `x-real-ip`, which
+  // cloudflared does not set, so every request through the tunnel keyed on the loopback
+  // address and gave the whole internet one shared budget.
+  return clientIp({ headers: req.headers, socketAddress: req.socket.remoteAddress }) ?? "unknown";
 }
 
 export default route({ POST: post, GET: get });

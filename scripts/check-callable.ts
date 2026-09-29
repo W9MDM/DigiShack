@@ -24,7 +24,7 @@
 // a missed contact costs one QSO, and doubling on a stranger's exchange costs the station's
 // manners on a band where everyone can hear it.
 
-import { callableFromMessage } from "../lib/digital/callable";
+import { callableFrom, callableFromMessage, isClosing } from "../lib/digital/callable";
 import { parseMessage } from "../lib/digital/qso";
 
 const ME = "K9XYZ";
@@ -39,6 +39,9 @@ function ok(cond: boolean, what: string, extra?: unknown): void {
     failed++;
     console.log(`  FAIL  ${what}`, extra ?? "");
   }
+}
+function eq(a: unknown, b: unknown, what: string): void {
+  ok(Object.is(a, b), what, `expected ${String(b)}, got ${String(a)}`);
 }
 
 function callable(msg: string, opts: typeof ON): boolean {
@@ -157,6 +160,129 @@ console.log("\nrubbish in, refusal out");
   for (const m of ["", "   ", "?", "TU 73 GL", "K1ABC"]) {
     ok(!callable(m, ON), `"${m}" is not callable`, why(m, ON));
   }
+}
+
+// ---------------------------------------------------------------------------
+console.log("A SIGN-OFF ADDRESSED TO US IS NOT SOMEBODY CALLING US");
+// ---------------------------------------------------------------------------
+
+// THE FAULT, from W9ABC's station, which runs Auto CQ and not Auto Hunt: "when we get their
+// 73, we send them a signal report ... and then they respond and do the whole qso again".
+//
+// `noteCallbacks` admitted any message directed at us as a caller, excluding only the
+// station being worked at that instant. Their 73 arrives AFTER the controller has completed
+// the contact, so that exclusion no longer matched:
+//
+//     us     K1ABC K9XYZ RR73
+//     them   K9XYZ K1ABC 73      <- admitted as a fresh caller
+//     us     K1ABC K9XYZ -10     <- and away it goes again
+//
+// Their WSJT-X answers an unsolicited report because answering a report is what it does, so
+// the whole exchange runs a second time and the log gets two rows for one contact.
+{
+  const ME = "K9XYZ";
+
+  // EVERY CLOSING TOKEN, addressed to us. All three end an exchange; none is a call.
+  for (const msg of [`${ME} K1ABC 73`, `${ME} K1ABC RR73`, `${ME} K1ABC RRR`]) {
+    ok(isClosing(parseMessage(msg)), `"${msg}" is a sign-off, not a call`);
+  }
+
+  // AND EVERY REAL CALL IS STILL ADMITTED. A guard that refused these would stop the station
+  // answering anybody, which is a far worse fault than the one being fixed — so the negative
+  // cases matter more than the positive ones here.
+  for (const msg of [
+    `${ME} K1ABC FN42`, // answering our CQ with a grid
+    `${ME} K1ABC -10`, // answering with a report
+    `${ME} K1ABC R-10`, // rogered report
+    `${ME} K1ABC R FN42`, // rogered grid
+  ]) {
+    ok(!isClosing(parseMessage(msg)), `"${msg}" is a genuine caller and is still admitted`);
+  }
+
+  // A CQ IS NOT A CLOSING EITHER — it is not directed at anyone.
+  ok(!isClosing(parseMessage("CQ K1ABC FN42")), "a CQ is not a sign-off");
+  ok(!isClosing(parseMessage("CQ POTA K1ABC FN42")), "nor is a CQ POTA");
+
+  // A SIGN-OFF BETWEEN TWO OTHER STATIONS is also a closing by this test, which is correct:
+  // the question here is only "is this message a sign-off", and WHO it is addressed to is
+  // the caller's business. `noteCallbacks` never sees those — it is handed messages already
+  // filtered to ones naming us — and the hunt path wants the opposite answer for them,
+  // which is why one rule cannot serve both.
+  ok(isClosing(parseMessage("KO4OIG N5MIG RR73")), "a third-party sign-off is still a sign-off");
+}
+
+{
+  // THE WHOLE SEQUENCE, walked the way it actually happened. The assertion is that exactly
+  // one message in a complete contact would be admitted as a new caller — the opening one.
+  const ME = "K9XYZ";
+  const THEM = "K1ABC";
+  const exchange = [
+    { from: "us", msg: `CQ ${ME} EN61` },
+    { from: "them", msg: `${ME} ${THEM} FN42` },
+    { from: "us", msg: `${THEM} ${ME} -10` },
+    { from: "them", msg: `${ME} ${THEM} R-12` },
+    { from: "us", msg: `${THEM} ${ME} RR73` },
+    { from: "them", msg: `${ME} ${THEM} 73` },
+  ];
+
+  // What `noteCallbacks` actually does, including the part the first version of this fixture
+  // left out and got a wrong answer for: it also skips the station being worked RIGHT NOW.
+  //
+  // Modelling `busyWith` is what makes this a reproduction rather than a restatement. It is
+  // set for the middle of the contact and NULL again once the controller has completed —
+  // which is exactly why it caught their R-12 and could never have caught their 73.
+  const busyWithAt = (i: number): string | null => {
+    const started = i > 1; // after we answered their first call
+    const finished = i >= 5; // our RR73 completed it
+    return started && !finished ? THEM : null;
+  };
+
+  const run = (guard: boolean): string[] =>
+    exchange
+      .map((e, i) => ({ ...e, busyWith: busyWithAt(i) }))
+      .filter((e) => e.from === "them")
+      .filter((e) => {
+        const p = parseMessage(e.msg);
+        if (p.kind !== "directed") return false;
+        if (p.from.toUpperCase() === e.busyWith) return false;
+        if (guard && isClosing(p)) return false;
+        return true;
+      })
+      .map((e) => e.msg);
+
+  const admitted = run(true);
+  eq(admitted.length, 1, "exactly one message in the contact is a caller");
+  eq(admitted[0], `${ME} ${THEM} FN42`, "and it is their opening answer to the CQ");
+
+  // WITHOUT THE GUARD the fault reproduces exactly as reported — which is what makes this
+  // fixture worth keeping rather than one that only confirms the fix.
+  const broken = run(false);
+  eq(broken.length, 2, "without the guard, TWO of their messages read as callers");
+  eq(broken[1], `${ME} ${THEM} 73`, "and the second is their sign-off — one contact, two QSOs");
+  ok(
+    busyWithAt(3) === THEM && busyWithAt(5) === null,
+    "the old exclusion covered their R-12 and could never have covered their 73",
+  );
+}
+
+{
+  // THE TWO READINGS ARE OPPOSITE AND BOTH CORRECT, which is the part most likely to be
+  // "simplified" later by someone noticing they look contradictory.
+  //
+  //   a closing to SOMEBODY ELSE  -> that station is free, call them   (hunt)
+  //   a closing to US             -> an exchange we were in has ended  (cq)
+  const theirSignOffToUs = parseMessage("K9XYZ K1ABC 73");
+  const someoneElseFinishing = parseMessage("KO4OIG N5MIG RR73");
+
+  ok(isClosing(theirSignOffToUs), "a sign-off to us is a closing");
+  ok(
+    !callableFrom(theirSignOffToUs, { myCall: "K9XYZ", treatClosingAsCallable: true }).callable,
+    "and is NOT callable, even with the closing-as-callable feature on",
+  );
+  ok(
+    callableFrom(someoneElseFinishing, { myCall: "K9XYZ", treatClosingAsCallable: true }).callable,
+    "while somebody else finishing IS callable with it on — the feature still works",
+  );
 }
 
 console.log("");

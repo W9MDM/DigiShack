@@ -57,6 +57,7 @@ import { YouTubeStream, videoFilter, AUDIO_GAP_MS } from "@/lib/stream/youtube";
 import { overlayText, WaterfallCanvas } from "@/lib/stream/frame";
 import { DEFAULT_TICKER } from "@/lib/stream/panels";
 import { SPECTRUM_INTERVAL_MS } from "@/lib/radio/spectrum";
+import { quietProgress } from "@/lib/radio/band-hop";
 
 let failures = 0;
 
@@ -784,6 +785,95 @@ console.log("A GAP IN RECEIVER AUDIO IS COVERED WITH SILENCE");
   );
   // Short enough that a real dropout is covered before a muxer notices.
   ok(AUDIO_GAP_MS <= 1000, "but under a second, so a real dropout is covered promptly", AUDIO_GAP_MS);
+}
+
+// ---------------------------------------------------------------------------
+console.log("THE QUIET-WINDOW VERDICT SAYS HOW CLOSE IT IS TO MOVING");
+// ---------------------------------------------------------------------------
+
+// THE COMPLAINT: "nobody callable so why havent you canged bands?" — asked of a station
+// that had made 183 contacts that day and one five minutes earlier, on a band that produced
+// 34 of them. Nothing was wrong. Leaving a band needs twenty CONSECUTIVE nobody-callable
+// windows and the contacts kept resetting the streak, which is the correct behaviour.
+//
+// The fault was the LINE: it reported a verdict about one window and read as a standing
+// state, with no way to tell window 1 from window 19. So a normal gap between contacts was
+// indistinguishable from a band the station would never leave.
+{
+  eq(quietProgress("nobody callable: dupes", 3, 20), "nobody callable: dupes (3/20)",
+    "the streak is shown alongside the verdict");
+
+  // ZERO IS NOT "0/20". A station that has just made a contact is working, not one
+  // twentieth of the way to giving up on the band.
+  eq(quietProgress("nobody callable: dupes", 0, 20), "nobody callable: dupes",
+    "a streak of zero shows no counter at all");
+  eq(quietProgress("x", -5, 20), "x", "and a negative streak cannot produce a counter");
+
+  // CLAMPED. The streak keeps counting after the bar is reached — when every band on the
+  // hop list is marked poor there is nowhere to go, the hop declines, and the streak runs
+  // on. "47/20" would read as a broken counter rather than a station with no options.
+  eq(quietProgress("nobody callable: dupes", 47, 20), "nobody callable: dupes (20/20)",
+    "a streak past the bar clamps rather than printing 47/20");
+  eq(quietProgress("x", 20, 20), "x (20/20)", "and exactly at the bar it reads full");
+
+  // Degenerate limit: no counter rather than a division by zero or "(3/0)".
+  eq(quietProgress("x", 3, 0), "x", "a zero limit shows no counter");
+}
+
+{
+  // THE COLUMN BUDGET, which is why the verdicts had to be shortened at all.
+  //
+  // "nobody callable (dupes / cooling down)" is 38 characters against a 39-character
+  // column, so appending " (3/20)" truncated it to an ellipsis — the operator would have
+  // seen even less than before. Every verdict the hunt can produce is checked here at its
+  // WORST case: the longest streak rendering, which is the two-digit one.
+  const VERDICTS = [
+    "no CQs heard",
+    "nothing new here",
+    "all below the SNR floor",
+    "nobody callable: dupes",
+  ];
+  for (const v of VERDICTS) {
+    const worst = quietProgress(v, 20, 20);
+    ok(
+      worst.length <= DECODE_CHARS,
+      `"${worst}" fits the ${DECODE_CHARS}-character column (${worst.length})`,
+    );
+  }
+
+  // AND THE RETIRED WORDING WOULD NOT HAVE. This is the assertion that justifies the
+  // rewording rather than leaving it as a matter of taste.
+  const old = quietProgress("nobody callable (dupes / cooling down)", 20, 20);
+  ok(
+    old.length > DECODE_CHARS,
+    "the previous wording plus a counter genuinely did not fit, which is why it changed",
+    { length: old.length, DECODE_CHARS },
+  );
+
+  // AND IT SURVIVES THE FRAME. The column truncates with an ellipsis, so a verdict that
+  // fits the budget in isolation must also survive being rendered as the hunt line.
+  const frame = overlayText({
+    callsign: "K9XYZ",
+    grid: "EN61AA",
+    band: "15M",
+    mode: "FT8",
+    dialHz: 21_074_000,
+    qsosToday: 183,
+    decodes: [],
+    maxDecodes: MAX_DECODES,
+    columnChars: DECODE_CHARS,
+    working: {
+      theirCall: null,
+      phase: null,
+      transcript: [],
+      hunting: quietProgress("nobody callable: dupes", 20, 20),
+    },
+  });
+  ok(
+    frame.includes("nobody callable: dupes (20/20)"),
+    "the full verdict and counter reach the frame without being truncated",
+  );
+  ok(!frame.includes("…"), "and nothing on that frame needed an ellipsis");
 }
 
 console.log(

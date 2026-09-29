@@ -2,6 +2,8 @@ import type { NextApiRequest, NextApiResponse } from "next";
 
 import { route, sendJson } from "@/lib/api/respond";
 import { createPasswordReset, RESET_TTL_MS } from "@/lib/auth/reset";
+import { clientIp } from "@/lib/auth/client-ip";
+import { recordResetAttempt } from "@/lib/auth/reset-audit";
 import { checkThrottle, recordFailure } from "@/lib/auth/throttle";
 import { prisma } from "@/lib/db/prisma";
 import { sendSystemEmail } from "@/lib/qsl/email";
@@ -21,14 +23,46 @@ const NEUTRAL =
 async function post(req: NextApiRequest, res: NextApiResponse) {
   const { email } = forgotSchema.parse(req.body);
 
+  // ONE EXTRACTION, USED BY BOTH the throttle key and the audit row, so the address the
+  // operator sees in the UI is the same one the lockout was applied to. They were different
+  // before only because nothing displayed either of them.
+  const ip = clientIp({ headers: req.headers, socketAddress: req.socket.remoteAddress });
+  const userAgent = (() => {
+    const ua = req.headers["user-agent"];
+    return (Array.isArray(ua) ? ua[0] : ua) ?? null;
+  })();
+
   // Same budget as failed logins, and every request spends from it: this endpoint
   // sends mail, and an unthrottled mail-sender aimed at a real inbox is a nuisance
   // weapon regardless of what it discloses.
   const key = `forgot|${clientKey(req)}|${email}`;
   const throttle = checkThrottle(key);
   if (throttle.locked) {
-    // Still the neutral answer. A 429 that only appears for real addresses would
-    // leak; this one appears for any address asked about too often, which is fine.
+    // LOGGED, and it was not — which made this the one branch that could swallow a
+    // request without trace. The header above promises the true outcome reaches the
+    // server log "where the operator debugging 'no email arrived' can read it", and this
+    // path broke that promise in precisely the situation the promise was written for: the
+    // caller sees "a reset link is on its way", no mail is sent, and nothing is recorded.
+    //
+    // It cost an afternoon. "ive entered my email address of k9xyz@example.com twice today"
+    // against a log whose last reset line was a month old — and the silence had to be
+    // eliminated as a suspect by reasoning about MAX_FAILURES rather than by reading it,
+    // because a locked throttle and a request that never arrived look identical from here.
+    //
+    // Still the neutral RESPONSE. A 429 that only appears for real addresses would leak;
+    // logging is server-side and discloses nothing to the caller.
+    console.log(
+      `[auth] reset requested for ${email} — THROTTLED, nothing sent. ` +
+        `${throttle.retryAfterSeconds}s left of the lock; the budget is spent by every ` +
+        `request, successful ones included.`,
+    );
+    await recordResetAttempt({
+      email,
+      ip,
+      outcome: "throttled",
+      detail: `${throttle.retryAfterSeconds}s left of the lock`,
+      userAgent,
+    });
     sendJson(res, 200, { ok: true, detail: NEUTRAL });
     return;
   }
@@ -41,6 +75,17 @@ async function post(req: NextApiRequest, res: NextApiResponse) {
 
   if (!user || !user.active) {
     console.log(`[auth] reset requested for ${email} — no active account, nothing sent`);
+    await recordResetAttempt({
+      email,
+      ip,
+      outcome: "no-account",
+      // WHICH of the two is deliberately NOT stored. "no account" and "account disabled"
+      // are different facts, and a table an admin reads is still a table; but the neutral
+      // response exists because that distinction is exactly what must not escape, and an
+      // audit row is one screenshot away from escaping. The operator can see the account.
+      detail: null,
+      userAgent,
+    });
     sendJson(res, 200, { ok: true, detail: NEUTRAL });
     return;
   }
@@ -75,15 +120,27 @@ async function post(req: NextApiRequest, res: NextApiResponse) {
       ? `[auth] reset link emailed to ${user.email}`
       : `[auth] reset link for ${user.email} NOT sent: ${result.reason} — check Settings → QSL → SMTP`,
   );
+  await recordResetAttempt({
+    email,
+    ip,
+    outcome: result.sent ? "sent" : "send-failed",
+    detail: result.sent ? null : (result.reason ?? "send failed"),
+    userAgent,
+  });
 
   sendJson(res, 200, { ok: true, detail: NEUTRAL });
 }
 
-/** X-Real-IP first — same reasoning, same trap, as login's clientKey. */
+/**
+ * The throttle's notion of "who".
+ *
+ * Delegates to `clientIp` so the address the lockout is keyed on is the same one the audit
+ * row shows. It read only `x-real-ip` before, which `cloudflared` does not set — so every
+ * request through the tunnel keyed on the loopback address, giving every visitor on the
+ * internet one shared budget per email.
+ */
 function clientKey(req: NextApiRequest): string {
-  const real = req.headers["x-real-ip"];
-  const fromProxy = (Array.isArray(real) ? real[0] : real)?.trim();
-  return fromProxy || req.socket.remoteAddress || "unknown";
+  return clientIp({ headers: req.headers, socketAddress: req.socket.remoteAddress }) ?? "unknown";
 }
 
 export default route({ POST: post });

@@ -439,3 +439,33 @@ export function pickBusiestBand(
   }
   return best?.band ?? null;
 }
+
+/**
+ * The hunt's per-window verdict, with how close it is to leaving the band.
+ *
+ * THE COMPLAINT, and it was fair: the frame said
+ *
+ *     nobody callable (dupes / cooling down)
+ *
+ * and the operator asked "nobody callable so why havent you canged bands?" Nothing was
+ * wrong — `NOBODY_TO_CALL_WINDOWS` needs twenty CONSECUTIVE such windows and his contacts
+ * kept resetting the streak, which is correct, because the band was producing. The station
+ * had made 183 contacts that day and one five minutes earlier.
+ *
+ * The fault was that the line reports a verdict about ONE WINDOW and reads as a standing
+ * state. There is no way to tell window 1 from window 19, so a normal gap between contacts
+ * is indistinguishable from a band the station will never leave. Showing the count answers
+ * the question the line previously raised.
+ *
+ * SHORT BY NECESSITY, not taste. The decode column is a hard 39 characters and
+ * "nobody callable (dupes / cooling down)" is already 38, so appending anything at all
+ * truncated it. The bases had to shrink to make room for the number, which is why they are
+ * terse; `scripts/check-stream-layout.ts` asserts the longest possible result still fits.
+ *
+ * Returns the base unchanged at a streak of zero: a station that just made a contact is not
+ * "0/20" of the way to leaving, it is working.
+ */
+export function quietProgress(base: string, windows: number, limit: number): string {
+  if (windows <= 0 || limit <= 0) return base;
+  return `${base} (${Math.min(windows, limit)}/${limit})`;
+}

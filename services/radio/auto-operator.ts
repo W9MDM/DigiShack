@@ -4,7 +4,7 @@ import type { DigitalMode } from "@/lib/ham/digital-freqs";
 import type { FlexDaxTransmitter } from "@/lib/flex/tx";
 import type { OperatingGuards } from "@/lib/digital/qso";
 import { parseMessage, standardMessages, type MayCallChecks } from "@/lib/digital/qso";
-import { callableFrom } from "@/lib/digital/callable";
+import { callableFrom, isClosing } from "@/lib/digital/callable";
 import { rankCandidates, type Candidate, type WorkedIndex } from "@/lib/digital/worth";
 import { cqIsForUs } from "@/lib/digital/cq-modifier";
 import type { QsoController } from "./qso-controller";
@@ -16,6 +16,7 @@ import {
   shouldHopForBetterBand,
   shouldReturnToPreviousBand,
   type BandActivity,
+  quietProgress,
 } from "@/lib/radio/band-hop";
 
 // The automated operating modes, layered over the QSO controller:
@@ -1151,12 +1152,12 @@ export class AutoOperator {
       // "callable" rather than "CQs": with `auto.callFinishedStations` on, a station that
       // just sent RR73 counts too, and a status line saying "no CQs" would be false on a
       // window where one was heard and admitted.
-      this.lastAction = "nobody callable this window";
+      this.lastAction = "no CQs heard";
       return { callable: false, cqs, refused: 0 };
     }
     if (ranked.length === 0) {
       const prefs = await this.o.huntPrefs();
-      this.lastAction = prefs.newOnly ? "nothing new on frequency" : "nothing above the SNR floor";
+      this.lastAction = prefs.newOnly ? "nothing new here" : "all below the SNR floor";
       return { callable: false, cqs, refused: 0 };
     }
 
@@ -1201,9 +1202,7 @@ export class AutoOperator {
       }
     }
     const prefs = await this.o.huntPrefs();
-    this.lastAction = prefs.newOnly
-      ? "nothing new on frequency"
-      : "nobody callable (dupes / cooling down)";
+    this.lastAction = prefs.newOnly ? "nothing new here" : "nobody callable: dupes";
     return { callable, cqs, refused };
   }
 
@@ -1355,7 +1354,12 @@ export class AutoOperator {
       // written for the compiler, and this replaces an `if (p.kind !== "cq") continue` that
       // would have silently dropped every closing-token candidate the filter just admitted.
       if (p.kind === "other") continue;
-      const isClosing = p.kind === "directed";
+      // NAMED FOR WHAT IT MEANS, not for what it resembles. This is "admitted by the
+      // closing-token rule", which here is the same test as `p.kind === "directed"` only
+      // because `callableFrom` has already refused every other directed message. It is NOT
+      // the general question `isClosing()` answers, and while it carried that name it
+      // shadowed the import of exactly that function.
+      const admittedByClosingToken = p.kind === "directed";
       // "CQ POTA" is the activator telling us this is a park contact. Which park is
       // not in the message — there is no room for it — so the reference comes from
       // the spot feed when it agrees on callsign AND band, and is left empty
@@ -1377,7 +1381,7 @@ export class AutoOperator {
         // A closing token carries no grid — `lib/digital/qso.ts` gives `{type:"rr73"}` with
         // no locator, and RR73 must never be read as one. So a station admitted this way
         // simply forgoes the new-grid awards, which is correct: we do not know their grid.
-        grid: isClosing ? null : p.grid,
+        grid: admittedByClosingToken ? null : p.grid,
         dxcc: await this.entityFor(p.from),
         // The same park the contact would be logged against, so an unworked
         // reference ranks an activator up — this is the scoring the decode list's
@@ -1830,6 +1834,21 @@ export class AutoOperator {
       const call = p.from.toUpperCase();
       if (call === busyWith) continue;
 
+      // A SIGN-OFF IS NOT A CALL, and admitting one restarted the contact that had just
+      // ended. Reported from W9ABC's station, which runs Auto CQ: "when we get their 73, we
+      // send them a signal report ... and then they respond and do the whole qso again."
+      //
+      // The exclusion above only covers the station we are working RIGHT NOW. Their 73
+      // arrives after the controller has completed the contact, so `busyWith` is already
+      // null and the sign-off was admitted as a fresh caller — we opened a new QSO and sent
+      // a report, their WSJT-X answered it because answering a report is what it does, and
+      // the whole exchange ran again. Two log rows, one contact.
+      //
+      // Only ever seen in CQ mode because that is the only mode that answers callers; the
+      // hunt path reaches the same stations through `callableFrom`, which has refused a
+      // sign-off addressed to us since it was written.
+      if (isClosing(p)) continue;
+
       const grid = p.payload.type === "grid" ? p.payload.grid : null;
       const existing = this.callbacks.find((c) => c.call === call);
       if (existing) {
@@ -2272,6 +2291,19 @@ export class AutoOperator {
     }
     this.nobodyWindows++;
     this.nobodyRefused += outcome.refused;
+    // SAY HOW CLOSE THIS IS TO MOVING. The verdict above is about ONE window, and without
+    // the count it reads as a standing state — which is exactly how it was read: "nobody
+    // callable so why havent you canged bands?", asked of a station that had made 183
+    // contacts that day and one five minutes earlier. Nothing was wrong; the line simply
+    // could not distinguish window 1 from window 19.
+    // `lastAction` is nullable, and a null here would print "null (3/20)" on the frame.
+    if (this.lastAction) {
+      this.lastAction = quietProgress(
+        this.lastAction,
+        this.nobodyWindows,
+        NOBODY_TO_CALL_WINDOWS,
+      );
+    }
     for (const call of outcome.cqs) {
       if (this.nobodyCqs.size >= NOBODY_CQ_TALLY_MAX) break;
       this.nobodyCqs.add(call);

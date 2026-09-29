@@ -36,6 +36,41 @@ import { parseMessage, type ParsedMessage } from "@/lib/digital/qso";
  */
 const CLOSING = new Set(["rr73", "rrr", "73"]);
 
+/**
+ * Is this message a SIGN-OFF rather than a call?
+ *
+ * THE FAULT IT EXISTS FOR, reported from W9ABC's station, which runs Auto CQ and not Auto
+ * Hunt: "when we get their 73, we send them a signal report ... and then they respond and do
+ * the whole qso again". Exactly so, and the log showed the pairs.
+ *
+ *     us     CQ W9ABC EN61
+ *     them   W9ABC K1ABC FN42
+ *     us     K1ABC W9ABC -10
+ *     them   W9ABC K1ABC R-12
+ *     us     K1ABC W9ABC RR73
+ *     them   W9ABC K1ABC 73      <- the end of the contact, addressed to us
+ *     us     K1ABC W9ABC -10     <- read as a NEW caller, and away it goes again
+ *
+ * `noteCallbacks` admitted any message directed at us as somebody calling, excluding only
+ * the station currently being worked. By the time their 73 arrives the contact has already
+ * completed, so that exclusion no longer matches and the sign-off is admitted as a fresh
+ * caller. Their WSJT-X then answers our unsolicited report, because answering a report is
+ * what it is for, and the whole exchange runs a second time.
+ *
+ * THE SAME SET AS `CLOSING` ABOVE, deliberately not a second copy. This file argues in its
+ * own header that a second admission rule must be one pure function rather than a condition
+ * bolted onto a filter, "which is how two paths come to disagree about one question" — and
+ * the CQ path disagreeing with the hunt path about what a 73 means is precisely that fault.
+ *
+ * Note this is the OPPOSITE reading from `treatClosingAsCallable`, and both are right: a
+ * closing sent to SOMEBODY ELSE frees that station to be called, while a closing sent to US
+ * ends an exchange we were already in. The difference is who it is addressed to, which is
+ * why one rule cannot serve both and neither may be inferred from the other.
+ */
+export function isClosing(p: ParsedMessage): boolean {
+  return p.kind === "directed" && CLOSING.has(p.payload.type);
+}
+
 export interface CallableOptions {
   /** Our own callsign, so we never treat our own transmission as an invitation. */
   myCall: string;

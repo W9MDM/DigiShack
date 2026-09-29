@@ -1,4 +1,5 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { clientIp } from "@/lib/auth/client-ip";
 import type { IncomingMessage, ServerResponse } from "node:http";
 
 import type { Role } from "@prisma/client";
@@ -144,7 +145,7 @@ export async function createSession(
       userId,
       expiresAt,
       userAgent: (req.headers["user-agent"] ?? "").slice(0, 255) || null,
-      ip: clientIp(req),
+      ip: sessionIp(req),
     },
   });
 
@@ -264,16 +265,18 @@ export async function needsSetup(): Promise<boolean> {
 // Misc
 // ---------------------------------------------------------------------------
 
-function clientIp(req: IncomingMessage): string | null {
-  // Behind NGINX the socket address is always 127.0.0.1, so a forwarded header is
-  // the only way to see the real client. X-Real-IP, NOT X-Forwarded-For: the
-  // shipped config sets `$proxy_add_x_forwarded_for`, which APPENDS the real
-  // address to whatever the client sent, making element 0 attacker-controlled. This
-  // value is recorded on Session rows, so trusting it meant an attacker could write
-  // whatever origin they liked into the audit trail.
-  const real = req.headers["x-real-ip"];
-  const fromProxy = (Array.isArray(real) ? real[0] : real)?.trim();
-  return (fromProxy || req.socket.remoteAddress || "").slice(0, 64) || null;
+/**
+ * The address recorded on Session rows.
+ *
+ * MOVED to lib/auth/client-ip.ts, which carries the reasoning this comment used to hold —
+ * including why X-Forwarded-For is not consulted, which was worked out here first and is
+ * the more important half. What was ADDED there is `cf-connecting-ip`: this read only
+ * `x-real-ip`, cloudflared does not set it, and so every session ever recorded stored the
+ * tunnel's own loopback address rather than the visitor's.
+ */
+function sessionIp(req: IncomingMessage): string | null {
+  const ip = clientIp({ headers: req.headers, socketAddress: req.socket.remoteAddress });
+  return ip ? ip.slice(0, 64) : null;
 }
 
 /** Timing-safe string compare, for anything token-shaped outside sessions. */

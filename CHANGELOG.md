@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.178.0 - public release
+## 1.180.4 - public release
 
 Development happens in a private repository; this is where the public history starts.
 Earlier entries are not reproduced - they quote real operators by callsign, include
@@ -22,6 +22,14 @@ Notes for anyone running this:
 
 ## Release history
 
+- **1.180.4** — The scrub caught me putting the operator's LAN in a comment
+- **1.180.3** — A sign-off is not somebody calling us
+- **1.180.2** — Ten days dark, logged every five minutes, reported to nobody
+- **1.180.1** — A socket with no connect timeout waits for ever
+- **1.180.0** — Something outside the process has to check whether it still works
+- **1.179.0** — Password reset requests, and where they came from
+- **1.178.2** — The one branch that swallowed a reset request without trace
+- **1.178.1** — "nobody callable" now says how close it is to moving
 - **1.178.0** — Pause the stream without killing the broadcast
 - **1.177.1** — What 1080p actually costs, measured
 - **1.177.0** — The stream is 1080p, because 720p had no rung that could look right
@@ -228,11 +236,3 @@ Notes for anyone running this:
 - **0.14.0** — Add waterfall display and a full digital page
 - **0.13.0** — FT4 in the self-contained path, plus a live band-activity page
 - **0.12.1** — Exit cleanly when the bridge port is already in use
-- **0.12.0** — Self-contained FT8/FT4 decoding from FlexRadio DAX audio
-- **0.11.0** — Add native FlexRadio path with selectable digital source
-- **0.10.0** — Phase 4a: wsjtx-omega UDP bridge
-- **0.9.1** — Fix LoTW full-history sync: semantics, chunking and backoff
-- **0.9.0** — Phase 2: QRZ logbook and LoTW integration
-- **0.8.0** — Phase 2: public REST API with API keys
-- **0.7.0** — Phase 2: award tracking for DXCC, WAS, WAZ, WAC, grid and IOTA
-- **0.6.1** — Fix git invocation on Windows in the update runner

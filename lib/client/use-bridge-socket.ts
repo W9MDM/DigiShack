@@ -12,8 +12,12 @@
 
 import { useEffect, useRef, useState } from "react";
 
+import { CONNECT_TIMEOUT_MS, FIRST_BACKOFF_MS, nextBackoff } from "@/lib/client/socket-retry";
+
 export interface BridgeSocket {
   connected: boolean;
+  /** Failed attempts SINCE the last successful open — reset on connect, not a lifetime tally. */
+  attempts: number;
 }
 
 /**
@@ -28,6 +32,7 @@ export function useBridgeSocket(
   onMessage: (msg: Record<string, unknown>) => void,
 ): BridgeSocket {
   const [connected, setConnected] = useState(false);
+  const [attempts, setAttempts] = useState(0);
   const handler = useRef(onMessage);
   handler.current = onMessage;
 
@@ -35,9 +40,10 @@ export function useBridgeSocket(
     if (!wsUrl) return;
     let closed = false;
     let retry: ReturnType<typeof setTimeout> | null = null;
-    let backoff = 1_000;
+    let backoff = FIRST_BACKOFF_MS;
     // Declared HERE, not inside connect(), so the cleanup below can reach it.
     let socket: WebSocket | null = null;
+    let connectTimer: ReturnType<typeof setTimeout> | null = null;
 
     const connect = () => {
       if (closed) return;
@@ -50,9 +56,27 @@ export function useBridgeSocket(
       }
       socket = ws;
 
+      // THE SAME CONNECT TIMEOUT the decodes page needed, for the same reason: a browser
+      // WebSocket left in CONNECTING fires neither `onopen` nor `onclose`, so the retry
+      // below is never scheduled and the page waits for ever. A proxy in front of a dead
+      // origin produces exactly that state, and this bridge restarts several times a day.
+      if (connectTimer) clearTimeout(connectTimer);
+      connectTimer = setTimeout(() => {
+        if (ws.readyState === WebSocket.CONNECTING) {
+          try {
+            ws.close();
+          } catch {
+            /* already gone */
+          }
+        }
+      }, CONNECT_TIMEOUT_MS);
+
       ws.onopen = () => {
+        if (connectTimer) clearTimeout(connectTimer);
+        connectTimer = null;
         setConnected(true);
-        backoff = 1_000;
+        setAttempts(0);
+        backoff = FIRST_BACKOFF_MS;
       };
       ws.onmessage = (ev) => {
         try {
@@ -62,12 +86,13 @@ export function useBridgeSocket(
         }
       };
       ws.onclose = () => {
+        if (connectTimer) clearTimeout(connectTimer);
+        connectTimer = null;
         setConnected(false);
         if (closed) return;
+        setAttempts((a) => a + 1);
         retry = setTimeout(connect, backoff);
-        // Backing off to half a minute: the bridge restarts in seconds, but a radio at the
-        // end of a VPN can be gone for a while and a page left open must not hammer it.
-        backoff = Math.min(30_000, backoff * 2);
+        backoff = nextBackoff(backoff);
       };
       ws.onerror = () => ws.close();
     };
@@ -77,9 +102,10 @@ export function useBridgeSocket(
     return () => {
       closed = true;
       if (retry) clearTimeout(retry);
+      if (connectTimer) clearTimeout(connectTimer);
       socket?.close();
     };
   }, [wsUrl]);
 
-  return { connected };
+  return { connected, attempts };
 }
