@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.181.7 - public release
+## 1.181.8 - public release
 
 Development happens in a private repository; this is where the public history starts.
 Earlier entries are not reproduced - they quote real operators by callsign, include
@@ -22,6 +22,7 @@ Notes for anyone running this:
 
 ## Release history
 
+- **1.181.8** — A queued station is lost to a mode switch, and nobody is told
 - **1.181.7** — I pushed past a refusing scrub
 - **1.181.6** — Warm-up stops us CQing into a dead band, not answering a live one
 - **1.181.5** — A repeated sign-off means they are stuck, not free

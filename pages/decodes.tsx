@@ -594,7 +594,15 @@ export default function DigitalPage({ wsUrl }: Props) {
    * through the panel needs somewhere to put a refusal — "transmit is off" arriving
    * nowhere is the same silent-button problem in a new place.
    */
-  const [rowCallNote, setRowCallNote] = useState<string | null>(null);
+  /**
+   * What the Call button answered, shown over the decode list — and only while it is
+   * still true. "Working K8HTL/QRP — KB1RCC is next in the queue" was still on screen two
+   * contacts later with K4ELI in the panel above it, because nothing ever cleared it. The
+   * note names the contact it was written during; when that contact ends, so does the note.
+   */
+  const [rowCallNote, setRowCallNote] = useState<{ text: string; whileWorking: string | null } | null>(
+    null,
+  );
 
   /**
    * Stations whose contact COMPLETED, so their later decodes read differently.
@@ -625,7 +633,11 @@ export default function DigitalPage({ wsUrl }: Props) {
       setTarget(d);
       setRowCallNote(null);
       try {
-        const r = await apiPost<{ queued?: boolean; reason?: string }>(
+        const r = await apiPost<{
+          queued?: boolean;
+          reason?: string;
+          qso?: { theirCall?: string | null };
+        }>(
           "/api/bridge/control",
           {
             action: "call",
@@ -637,9 +649,14 @@ export default function DigitalPage({ wsUrl }: Props) {
             message: d.message,
           },
         );
-        if (r?.queued && r.reason) setRowCallNote(r.reason);
+        if (r?.queued && r.reason) {
+          setRowCallNote({ text: r.reason, whileWorking: r.qso?.theirCall ?? null });
+        }
       } catch (err) {
-        setRowCallNote(err instanceof ApiError ? err.message : "Could not start the call");
+        setRowCallNote({
+          text: err instanceof ApiError ? err.message : "Could not start the call",
+          whileWorking: null,
+        });
       }
     },
     [],
@@ -712,6 +729,11 @@ export default function DigitalPage({ wsUrl }: Props) {
   // The tx-result line belongs to one QSO; a new target must not inherit the
   // previous one's last transmission.
   const qsoCall = qso?.theirCall ?? null;
+  // The note described a contact in progress; once that contact is over it is stale.
+  useEffect(() => {
+    if (!rowCallNote?.whileWorking) return;
+    if (rowCallNote.whileWorking !== qsoCall || !qso?.active) setRowCallNote(null);
+  }, [qsoCall, qso?.active, rowCallNote]);
   useEffect(() => {
     setLastTx(null);
   }, [qsoCall]);
@@ -1984,7 +2006,7 @@ export default function DigitalPage({ wsUrl }: Props) {
               }
             >
               {rowCallNote && (
-                <p className="mb-2 text-xs text-accent-bright">{rowCallNote}</p>
+                <p className="mb-2 text-xs text-accent-bright">{rowCallNote.text}</p>
               )}
               {visible.length === 0 ? (
                 // "Nothing heard" and "nothing MATCHED" are different problems, and

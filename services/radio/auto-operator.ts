@@ -266,6 +266,11 @@ const CALLBACK_TTL_MS = 10 * 60_000;
  * still be calling by the time we get through the rest.
  */
 const MAX_CALLBACKS = 8;
+/**
+ * The automatic modes that stay on the band the operator chose. A switch among them
+ * changes nothing about who is waiting, so the call-back queue survives it.
+ */
+const SAME_BAND_MODES: ReadonlySet<AutoMode> = new Set(["cq", "hunt", "hunt-pota"]);
 
 /**
  * How often to ask whether another band has overtaken this one.
@@ -610,6 +615,7 @@ export class AutoOperator {
   }
 
   setMode(mode: AutoMode): void {
+    const was = this.mode;
     this.mode = mode;
     this.warmup = mode === "off" ? 0 : this.warmupWindows();
     this.cqParity = null; // chosen at the first CQ, from the clock
@@ -623,10 +629,17 @@ export class AutoOperator {
     this.decodesOnBand = 0;
     this.resetNobodyStreak();
     this.returnIfWorse = null;
-    // Anyone waiting was waiting for the operating this mode change just ended.
-    // Carrying them across a switch to Off — or to another band via chase — would
-    // call someone back minutes later from somewhere they never heard us.
-    this.callbacks = [];
+    // Anyone waiting is waiting on THIS band at THIS parity, and a switch between the
+    // automatic modes that stay on it — hunt, hunt-pota, cq — changes neither. Off ends
+    // the only thing that drains the queue, and chase may leave the band, so those two
+    // drop it: calling someone back minutes later from a band they never heard us on is
+    // worse than not calling. It used to drop on EVERY change, silently: the log went
+    // "KB1RCC queued by the operator — calling them next", then "mode = hunt" three
+    // seconds later, then "hunting K4ELI" — and the operator, who had pressed Queue and
+    // watched the hunt call a CQ POTA instead, had no way to know why.
+    if (!(SAME_BAND_MODES.has(was) && SAME_BAND_MODES.has(mode))) {
+      this.dropCallbacks(mode === "off" ? "automation turned off" : "mode changed to " + mode);
+    }
     // Same argument, and the band case is the sharper one: a candidate list is a claim
     // about who is transmitting on this band at this parity, and after a hop every part
     // of that is wrong. Warm-up would suppress it anyway; clearing it says why.
@@ -1911,6 +1924,20 @@ export class AutoOperator {
         : this.lastAction;
   }
 
+  /**
+   * Empty the queue for a reason, and say who was lost.
+   *
+   * Every site that cleared it did so silently, which is why losing a request the operator
+   * had just made looked like the hunt ignoring a button: the log went straight from
+   * "queued by the operator — calling them next" to "hunting K4ELI" with nothing between.
+   */
+  private dropCallbacks(reason: string): void {
+    if (this.callbacks.length === 0) return;
+    const who = this.callbacks.map((c) => c.call).join(", ");
+    this.o.log("[auto] dropped " + this.callbacks.length + " waiting (" + who + ") — " + reason);
+    this.callbacks = [];
+  }
+
   /** Drop anyone who has been waiting too long to still be there. */
   private pruneCallbacks(now = Date.now()): void {
     const before = this.callbacks.length;
@@ -2054,7 +2081,7 @@ export class AutoOperator {
     this.cqOffsetHz = null;
     this.cqedLastWindow = false;
     // Anyone waiting called us on the band we have just left.
-    this.callbacks = [];
+    this.dropCallbacks("left the band they called us on");
     const at = cfg.bands.indexOf(better.band);
     if (at >= 0) this.hopIndex = at;
     return true;
@@ -2206,7 +2233,7 @@ export class AutoOperator {
     this.cqParity = null;
     this.cqOffsetHz = null;
     this.cqedLastWindow = false;
-    this.callbacks = [];
+    this.dropCallbacks("left the band they called us on");
     const at = cfg.bands.indexOf(target);
     if (at >= 0) this.hopIndex = at;
     return true;
@@ -2420,7 +2447,7 @@ export class AutoOperator {
     this.cqParity = null;
     this.cqOffsetHz = null;
     this.cqedLastWindow = false;
-    this.callbacks = [];
+    this.dropCallbacks("left the band they called us on");
     return true;
   }
 
@@ -2498,7 +2525,7 @@ export class AutoOperator {
     this.cqParity = null;
     this.cqOffsetHz = null;
     this.cqedLastWindow = false;
-    this.callbacks = [];
+    this.dropCallbacks("left the band they called us on");
     const at = cfg.bands.indexOf(target);
     if (at >= 0) this.hopIndex = at;
     return true;

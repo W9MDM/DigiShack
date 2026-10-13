@@ -36,6 +36,8 @@ const PERIOD = 15_000;
 interface Harness {
   auto: AutoOperator;
   called: string[];
+  /** Everything the operator logged, so a silent drop can be asserted against. */
+  logs: string[];
   /** Feed one receive window. */
   window(messages: { message: string; snr: number; freqOffset: number }[], at: number): Promise<void>;
   /** Feed the two warm-up windows so the operator will transmit. */
@@ -55,6 +57,7 @@ function harness(): Harness {
     mode: "FT8" as DigitalMode,
   };
   const called: string[] = [];
+  const logs: string[] = [];
   let active = false;
   let working: string | null = null;
   let refused: string[] = [];
@@ -113,7 +116,9 @@ function harness(): Harness {
     potaSpots: async () => [],
     potaPrefs: async () => ({}) as never,
     broadcast: () => {},
-    log: () => {},
+    log: (line: string) => {
+      logs.push(line);
+    },
   } as unknown as AutoOperatorOptions;
 
   const auto = new AutoOperator(options);
@@ -130,6 +135,7 @@ function harness(): Harness {
   return {
     auto,
     called,
+    logs,
     async window(messages, at) {
       await feed(messages, at);
     },
@@ -245,18 +251,45 @@ async function main() {
     }
   }
 
-  console.log("\nchanging mode clears the queue");
+  console.log("\nchanging mode: the queue survives a switch that stays on the band");
   {
     const h = harness();
     await h.settle(900_000);
     h.setActive(true);
     h.setWorking("K1AAA");
     await h.window([dm("K9XYZ K2BBB EN61")], 1_000_000);
-    eqArr(h.auto.state.waiting, ["K2BBB"], "queued");
-    // Turning the automation off, or moving band via chase, means anyone waiting was
-    // waiting for operating that has now ended.
+    const kb1rcc = { call: "KB1RCC", grid: null, snr: -10, offsetHz: 1200, windowStart: 1_000_000, message: "" };
+    h.auto.queueOperatorCall(kb1rcc);
+    eqArr(h.auto.state.waiting, ["KB1RCC", "K2BBB"], "a caller and the request the operator made are queued");
+
+    // The operator flips hunt → hunt-pota three seconds after queueing KB1RCC. Same band,
+    // same parity, same people waiting. This used to empty the queue without a word, and
+    // the hunt then called a CQ POTA while the operator wondered what the button had done.
+    h.auto.setMode("hunt-pota");
+    eqArr(h.auto.state.waiting, ["KB1RCC", "K2BBB"], "hunt → hunt-pota keeps everyone, in order");
+    h.auto.setMode("cq");
+    eqArr(h.auto.state.waiting, ["KB1RCC", "K2BBB"], "and so does → cq");
+    ok(!h.logs.some((l) => l.includes("dropped")), "nothing is logged as dropped");
+
+    // Off ends the only thing that drains the queue, so it goes — and the log says who was
+    // lost, because losing them silently is how this was found.
     h.auto.setMode("off");
-    eqArr(h.auto.state.waiting, [], "switching mode drops them rather than calling later");
+    eqArr(h.auto.state.waiting, [], "off drops them rather than calling later");
+    const dropped = h.logs.find((l) => l.includes("dropped"));
+    ok(
+      !!dropped &&
+        dropped.includes("KB1RCC") &&
+        dropped.includes("K2BBB") &&
+        dropped.includes("automation turned off"),
+      "and the log names them and why",
+      dropped ?? "(no drop line)",
+    );
+
+    // Chase may leave the band, so entering it drops the queue too.
+    h.auto.setMode("hunt");
+    h.auto.queueOperatorCall(kb1rcc);
+    h.auto.setMode("pota-chase");
+    eqArr(h.auto.state.waiting, [], "entering chase drops them: the band may change");
   }
 
   console.log("\nthe operator names a station while a contact is running");
