@@ -696,8 +696,9 @@ export const SETTINGS: SettingDef[] = [
     help:
       "Where to send it. 127.0.0.1 is right only when the receiving program is on the SAME " +
       "machine as DigiShack — a container or a separate server needs the desktop PC's LAN " +
-      "address, which is the thing that catches people out. A broadcast address such as " +
-      "192.168.1.255 reaches every listener on the subnet at once.",
+      "address, which is the thing that catches people out. Your subnet's broadcast " +
+      "address (the one ending in .255 on a typical home network) reaches every listener " +
+      "at once.",
     placeholder: "127.0.0.1",
     default: "127.0.0.1",
   },
