@@ -944,12 +944,20 @@ async function autoOperatorChecks(): Promise<void> {
       { message: "CQ JA1DDD PM95", snr: -14, freqOffset: 2_290 },
       { message: "CQ VK3GGG QF22", snr: -18, freqOffset: 2_790 },
     ];
-    // Two warm-up windows, which rank nothing, then six that do.
+    // Two warm-up windows, then six more. THE WARM-UP WINDOWS RANK TOO, since 1.181.6: the
+    // hunt used to be skipped for the whole warm-up, and the operator watched two strong
+    // CQ POTAs with a new park go by uncalled while the status said "listening, 5 more
+    // cycles". A decoded CQ is exactly the proof-of-life warm-up was waiting for.
     source.window(BASE, band);
     await settle();
+    ok(op.qsoController.hasActive, "a CQ decoded during warm-up is answered, not waited out");
+    await op.qsoController.halt();
     source.window(BASE + PERIOD, band);
     await settle();
-    eq(lookups.n, 0, "warm-up ranks nothing, so it asks the database nothing");
+    if (op.qsoController.hasActive) await op.qsoController.halt();
+    // And the memo has already done its job: four stations, four lookups, however many
+    // windows ranked them. This is the same assertion the block below makes after eight.
+    eq(lookups.n, band.length, "warm-up ranks, and the memo caps lookups at one per callsign");
 
     let ranked = 0;
     for (let i = 2; i < 8; i++) {

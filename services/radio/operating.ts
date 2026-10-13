@@ -25,6 +25,7 @@
 // moved out of a 2,100-line service safely.
 
 import { prisma } from "@/lib/db/prisma";
+import { broadcastLoggedQso } from "@/lib/logging/adif-udp";
 import {
   DEFAULT_GUARDS,
   OperatingGuards,
@@ -331,6 +332,14 @@ export function databaseOperatingData(opts: {
       if (created.sig && created.sigInfo) {
         await setSigRefs(prisma, created.id, created.sig, [created.sigInfo]);
       }
+
+      // ANNOUNCE IT, the way WSJT-X does, so every logger on the network sees it.
+      //
+      // AFTER the row exists and deliberately NOT awaited: this is a side-channel over UDP,
+      // which has no delivery guarantee, and a contact must never fail or wait because a
+      // logger on somebody's desk is switched off. The QSO is already saved by this point,
+      // so the worst case is a datagram nobody receives.
+      void broadcastLoggedQso(created.id);
 
       // Attach the decodes of this contact to it.
       //

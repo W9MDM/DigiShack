@@ -18,7 +18,10 @@ import {
 // count — which matters for any non-ASCII in a name or comment field, so
 // Buffer.byteLength is used rather than String.length.
 
-function field(name: string, value: string | null | undefined): string {
+// Exported so lib/logging/adif-udp.ts can build its own leaner record without a second
+// implementation of the byte-length prefix - the one detail that is easy to get wrong and
+// silently garbles every field after it.
+export function field(name: string, value: string | null | undefined): string {
   if (value === null || value === undefined) return "";
   const s = String(value);
   if (s.length === 0) return "";

@@ -404,6 +404,15 @@ export interface QsoOptions {
  * never transmits on its own — it only answers the question "what would a
  * competent operator send right now?"
  */
+/**
+ * How many identical closings from them to the same third party before we give up.
+ *
+ * TWO, not three. The first is the signal that frees them, so the second is the earliest
+ * moment the evidence can mean anything else — and by then we have already spent a
+ * transmission on a conversation that had not ended. Waiting for a third would spend two.
+ */
+const CLOSING_REPEAT_LIMIT = 2;
+
 export class QsoSequencer {
   readonly theirCall: string;
   private readonly o: Required<Omit<QsoOptions, "theirGrid">> & {
@@ -437,6 +446,32 @@ export class QsoSequencer {
    * QRM to them.
    */
   private theirPartner: string | null = null;
+
+  /**
+   * A closing token they have sent more than once, and to whom.
+   *
+   * WHY ONE CLOSING MEANS THE OPPOSITE OF TWO. `KO4OIG N5MIG/P RR73` ends their exchange and
+   * frees them — that is the rule below, and it is right. But a station REPEATING a closing
+   * is not finished: their partner has not acknowledged it, and they will keep sending it
+   * until one of them gives up. They are the least available station on the band, not the
+   * most.
+   *
+   * Caught from the live station, calling K1MFD while he tried to finish with K5HS:
+   *
+   *     39:45  K5HS K1MFD RRR        <- read as "free", so we called
+   *     40:30  K1MFD K9XYZ EN61
+   *     40:15  K5HS K1MFD RRR        <- still trying
+   *     40:45  K5HS K1MFD RRR
+   *     41:00  K1MFD K9XYZ EN61      <- called again
+   *     41:15  K5HS K1MFD RRR
+   *     41:30  K1MFD K9XYZ EN61      <- and again
+   *
+   * Three transmissions into a conversation that had not ended, which is the same waste the
+   * `theirPartner` rule above exists to stop — reached through the one branch that rule
+   * returns early from.
+   */
+  private theirClosingTo: string | null = null;
+  private theirClosingCount = 0;
 
   /**
    * An abandonment decided at DECODE time, waiting for the next tick to report it.
@@ -572,6 +607,28 @@ export class QsoSequencer {
       // the best possible moment to be calling rather than a reason to stop — the next
       // window is the one to be in, ahead of everyone else who was waiting.
       if (p.payload.type === "rr73" || p.payload.type === "rrr" || p.payload.type === "73") {
+        // ONCE FREES THEM. TWICE MEANS THEY ARE STUCK. See `theirClosingTo` above: a
+        // repeated closing is a station whose partner has not acknowledged, and they will
+        // keep sending it. The first reading is the 1.171.0 feature working; the second is
+        // the same evidence meaning the opposite thing.
+        if (this.theirClosingTo === p.to) {
+          this.theirClosingCount += 1;
+        } else {
+          this.theirClosingTo = p.to;
+          this.theirClosingCount = 1;
+        }
+
+        if (this.theirClosingCount >= CLOSING_REPEAT_LIMIT) {
+          // Treated exactly as mid-exchange, because that is what it is — they are still in
+          // the previous contact, just at the end of it. Same release of the transmitter, so
+          // the next window goes to a station that might actually answer.
+          this.theirPartner = p.to;
+          if (this.state !== "complete" && this.state !== "abandoned") {
+            this.abandonFor(`They are still trying to finish with ${p.to}`, at);
+          }
+          return;
+        }
+
         this.theirPartner = null;
         return;
       }
@@ -598,6 +655,12 @@ export class QsoSequencer {
 
     // Addressed to us, so whoever they were working, they are working us now.
     this.theirPartner = null;
+    // AND THE CLOSING STREAK IS OVER. They have spoken to us, so whatever they were failing
+    // to finish with somebody else is no longer the reason to walk away. Without this, a
+    // station who repeated a closing and THEN answered us would carry the count into our own
+    // exchange and be abandoned on their next sign-off — to us.
+    this.theirClosingTo = null;
+    this.theirClosingCount = 0;
 
     // ONLY PROGRESS RESETS THE REPEAT BUDGET.
     //

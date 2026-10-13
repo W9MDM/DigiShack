@@ -21,6 +21,7 @@ import { SourcePicker } from "@/components/radio/SourcePicker";
 import { withPageAuth } from "@/lib/auth/guard";
 import { bridgeWsUrl } from "@/lib/bridge/ws-url";
 import { ApiError, apiGet, apiPatch, apiPost, useApi } from "@/lib/client/api";
+import { rankByPoints, scoreContact } from "@/lib/contest/ft8battle";
 import {
   CONNECT_TIMEOUT_MS,
   FIRST_BACKOFF_MS,
@@ -497,6 +498,37 @@ export default function DigitalPage({ wsUrl }: Props) {
    * `workedNow` below is page-local session state and answers a narrower question.
    */
   const [workedDupe, setWorkedDupe] = useState<Set<string>>(new Set());
+  /**
+   * FT8 Battle Royale scoring: rank the band by what a contact is WORTH over there.
+   *
+   * A VIEW, NOT AN OPERATING MODE. FT8BR bans automated operation outright - "auto-CQ bots,
+   * or any program that makes QSOs without operator interaction", detected automatically,
+   * permanent ban - so this changes what the list shows and nothing about what the station
+   * does. The banner below says so when the auto operator is running, rather than switching
+   * it off: silently changing station state because a display option was toggled is the
+   * wrong trade, and an operator who means to play will stop it themselves.
+   *
+   * localStorage, because it is a per-browser preference and nobody else's business.
+   */
+  const [brMode, setBrMode] = useState(false);
+  useEffect(() => {
+    try {
+      setBrMode(window.localStorage.getItem("digishack.brMode") === "1");
+    } catch {
+      /* private window, blocked storage - the default is off and that is fine */
+    }
+  }, []);
+  const toggleBr = useCallback(() => {
+    setBrMode((on) => {
+      const next = !on;
+      try {
+        window.localStorage.setItem("digishack.brMode", next ? "1" : "0");
+      } catch {
+        /* nothing to do - the toggle still works for this page view */
+      }
+      return next;
+    });
+  }, []);
 
   /**
    * Whether Auto Hunt will call stations that have just finished a contact.
@@ -921,6 +953,37 @@ export default function DigitalPage({ wsUrl }: Props) {
     [myCall],
   );
 
+  /**
+   * What each row would be worth in FT8 Battle Royale, keyed by callsign.
+   *
+   * Computed from what this station can actually know. The First Contact bonus and the
+   * steal value both depend on what every OTHER player has done today, which lives on
+   * FT8BR's servers with no public feed - so `scoreContact` returns a range and this sorts
+   * on the floor. A guessed steal value would order the operator's screen by a number with
+   * nothing behind it.
+   *
+   * `workedDupe` is the server's answer to "already worked on this band and mode today",
+   * asked of the same boundary the transmit guard uses. It is the closest thing this station
+   * has to FT8BR's duplicate rule, and the penalty it drives is the whole reason the view is
+   * worth having: the operator cannot see their own day's log on the waterfall.
+   */
+  const brScores = useMemo(() => {
+    const out = new Map<string, ReturnType<typeof scoreContact>>();
+    if (!brMode) return out;
+    const band = status?.band ?? "";
+    const mode = status?.subMode ?? status?.mode ?? "FT8";
+    const at = new Date();
+    for (const d of rows) {
+      const call = d.callsign?.toUpperCase();
+      if (!call || out.has(call)) continue;
+      out.set(
+        call,
+        scoreContact({ band, mode, at, alreadyWorkedToday: workedDupe.has(call) }),
+      );
+    }
+    return out;
+  }, [brMode, rows, status?.band, status?.mode, status?.subMode, workedDupe]);
+
   const visible = useMemo(() => {
     // Search first, then the category filter, and the two AND together — a search that
     // silently widened the filter would be a different list from the one on screen.
@@ -964,7 +1027,22 @@ export default function DigitalPage({ wsUrl }: Props) {
       if (filter === "cq-dx") return p.modifier === "DX";
       return true;
     });
-  }, [rows, filter, search, mentionsMe, worth, myCall]);
+
+    // BATTLE ROYALE ORDER, applied AFTER the filters rather than inside them. The filters
+    // answer "should this row be on screen"; this answers "in what order", and keeping them
+    // separate means a search still searches the same set whichever way it is sorted.
+    //
+    // Chronological order is the default and stays the default: a decode list is a feed, and
+    // re-ordering it by anything is a deliberate choice the operator makes.
+    if (!brMode) return searched;
+    return rankByPoints(searched, (d) => {
+      const s = d.callsign ? brScores.get(d.callsign.toUpperCase()) : undefined;
+      // A row with no parsed callsign cannot be scored and must not be promoted by the
+      // absence of a score. Zero floor, zero ceiling, no penalty - it sinks below anything
+      // worth calling and sits above the duplicates, which is where "unknown" belongs.
+      return s ?? { min: 0, max: 0, penalty: 0, multiplier: 1, reasons: [] };
+    }).map((r) => r.item);
+  }, [rows, filter, search, mentionsMe, worth, myCall, brMode, brScores]);
 
   /** Markers for the most recent cycle only — older ones aren't on screen. */
   const markers = useMemo<WaterfallMarker[]>(() => {
@@ -1217,6 +1295,24 @@ export default function DigitalPage({ wsUrl }: Props) {
 
   return (
     <>
+      {/* THE ONE THING THAT MUST NOT BE MISSABLE.
+          FT8 Battle Royale bans automated operation - "auto-CQ bots, or any program that
+          makes QSOs without operator interaction" - detected automatically, with a permanent
+          ban as the stated penalty. Turning on a points view while the auto operator is
+          transmitting is the exact combination that gets a callsign banned.
+          It WARNS rather than switching anything off: silently changing what the station is
+          doing because a display option was toggled is the wrong trade, and an operator who
+          means to play will stop it themselves. But it cannot be quiet about it either. */}
+      {brMode && (auto?.mode ?? "off") !== "off" && (
+        <div
+          role="alert"
+          className="mb-4 border border-danger/50 bg-danger/10 text-danger text-sm px-3 py-2 rounded-sm"
+        >
+          <strong>The auto operator is running ({auto?.mode}).</strong> FT8 Battle Royale
+          requires human-operated contacts — automated operation is detected and carries a
+          permanent ban. Stop auto before logging contacts you intend to score.
+        </div>
+      )}
       <PageHeader
         title="Digital"
         subtitle={
@@ -1291,6 +1387,17 @@ export default function DigitalPage({ wsUrl }: Props) {
             <Badge tone={connected ? "ok" : "warn"}>
               {linkLabel(connected, attempts)}
             </Badge>
+            <Button
+              variant={brMode ? "primary" : "secondary"}
+              onClick={toggleBr}
+              title={
+                "Rank the list by FT8 Battle Royale points. A VIEW ONLY - it changes what " +
+                "this page shows and nothing about what the station does. FT8BR requires " +
+                "human-operated contacts, so stop the auto operator before playing."
+              }
+            >
+              {brMode ? "BR: on" : "BR points"}
+            </Button>
             <Button
               variant={paused ? "primary" : "secondary"}
               onClick={() => setPaused((p) => !p)}
@@ -1955,7 +2062,10 @@ export default function DigitalPage({ wsUrl }: Props) {
                         were reliably somewhere above the viewport. */}
                     <thead className="bg-surface-2 lg:sticky lg:top-0">
                       <tr className="text-left">
-                        {["UTC", "dB", "Hz", "dt", "Mode", "Message"].map((h) => (
+                        {(brMode
+                          ? ["UTC", "Pts", "dB", "Hz", "dt", "Mode", "Message"]
+                          : ["UTC", "dB", "Hz", "dt", "Mode", "Message"]
+                        ).map((h) => (
                           <th
                             key={h}
                             // `em`, not a fixed step: the header has to track the body
@@ -2064,6 +2174,42 @@ export default function DigitalPage({ wsUrl }: Props) {
                             >
                               {formatUtcTime(d.timestamp)}
                             </td>
+                            {/* FT8 BATTLE ROYALE POINTS, only when the view is on.
+                                A RANGE, because the First Contact bonus depends on whether
+                                anybody else worked them first today and that lives on
+                                FT8BR's servers. "4-24" is honest; a single invented number
+                                would not be. A duplicate shows its penalty instead, in the
+                                danger colour, because that is the one the operator needs to
+                                see before clicking rather than after. */}
+                            {brMode &&
+                              (() => {
+                                const sc = d.callsign
+                                  ? brScores.get(d.callsign.toUpperCase())
+                                  : undefined;
+                                return (
+                                  <td
+                                    className={cn(
+                                      "px-2.5 py-1.5 lg:py-0.5 tnum text-right whitespace-nowrap",
+                                      !sc
+                                        ? "text-fg-subtle"
+                                        : sc.penalty < 0
+                                          ? "text-danger font-semibold"
+                                          : sc.max >= 12
+                                            ? "text-ok font-semibold"
+                                            : "text-fg-muted",
+                                    )}
+                                    title={sc?.reasons.join(" · ") || undefined}
+                                  >
+                                    {!sc
+                                      ? "—"
+                                      : sc.penalty < 0
+                                        ? sc.penalty
+                                        : sc.min === sc.max
+                                          ? sc.min
+                                          : `${sc.min}–${sc.max}`}
+                                  </td>
+                                );
+                              })()}
                             <td
                               className={cn(
                                 "px-2.5 py-1.5 lg:py-0.5 tnum text-right whitespace-nowrap",
