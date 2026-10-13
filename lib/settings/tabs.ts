@@ -39,7 +39,7 @@ export const SETTINGS_TABS: SettingsTab[] = [
   {
     id: "logbooks",
     label: "Logbooks",
-    groups: ["uploads", "qrz", "lotw", "eqsl", "clublog", "cloudlog", "hrdlog", "pskreporter"],
+    groups: ["uploads", "qrz", "lotw", "eqsl", "clublog", "cloudlog", "hrdlog", "pskreporter", "n3fjp", "udplog"],
   },
   {
     id: "qsl",

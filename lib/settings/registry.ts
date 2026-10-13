@@ -180,6 +180,17 @@ export const SETTING_GROUPS: SettingGroup[] = [
       "Ham Radio Deluxe's online logbook. Needs the callsign the account logs under plus its upload code, which is not the website password.",
   },
   {
+    id: "udplog",
+    title: "Broadcast logged contacts (UDP)",
+    blurb:
+      "Sends every logged contact as the same UDP datagram WSJT-X sends when 'Enable logged " +
+      "contact ADIF broadcast' is ticked. That one message is how GridTracker, Log4OM, " +
+      "JTAlert, N1MM and the live scoring sites learn a contact happened, so turning this on " +
+      "makes all of them work without any of them knowing DigiShack exists. It is one-way " +
+      "and unauthenticated: your log goes onto the network in clear, so point it at a " +
+      "machine you control.",
+  },
+  {
     id: "n3fjp",
     doc: "logbook-sync",
     docLabel: "Setting up the TCP API, and why 127.0.0.1 is usually wrong",
@@ -662,6 +673,98 @@ export const SETTINGS: SettingDef[] = [
       "Enabled (Server)\". Contacts made while the program is closed are not lost — they " +
       "stay flagged unsent and go out on the next sweep after it comes back.",
     default: "false",
+  },
+  {
+    key: "udpLog.enabled",
+    label: "Broadcast logged contacts over UDP",
+    type: "boolean",
+    group: "udplog",
+    help:
+      "Sends each logged contact as the same UDP datagram WSJT-X sends when 'Enable logged " +
+      "contact ADIF broadcast' is ticked. That one message is how GridTracker, Log4OM, " +
+      "JTAlert, N1MM and the live scoring sites learn a contact happened, so turning this " +
+      "on makes all of them work without any of them knowing DigiShack exists. OFF by " +
+      "default because it puts your log — callsigns, grids, times — on the network as " +
+      "cleartext UDP to whatever address you type below.",
+    default: "false",
+  },
+  {
+    key: "udpLog.host",
+    label: "UDP log destination",
+    type: "string",
+    group: "udplog",
+    help:
+      "Where to send it. 127.0.0.1 is right only when the receiving program is on the SAME " +
+      "machine as DigiShack — a container or a separate server needs the desktop PC's LAN " +
+      "address, which is the thing that catches people out. A broadcast address such as " +
+      "192.168.1.255 reaches every listener on the subnet at once.",
+    placeholder: "127.0.0.1",
+    default: "127.0.0.1",
+  },
+  {
+    key: "udpLog.port",
+    label: "UDP log port",
+    type: "number",
+    group: "udplog",
+    help:
+      "The port the receiving program listens on. GridTracker and most loggers default to " +
+      "2333 for the ADIF broadcast; WSJT-X's own status protocol is 2237 and is a different " +
+      "thing. Check the receiving program rather than guessing — nothing reports a datagram " +
+      "sent to a port nobody is listening on.",
+    default: "2333",
+  },
+  {
+    key: "udpLog.programId",
+    label: "ADIF program id",
+    type: "string",
+    group: "udplog",
+    help:
+      "The PROGRAMID written inside the ADIF document. Separate from the station id above: " +
+      "that one is the protocol envelope, this one is a field in the record, and receivers " +
+      "check different ones. Several only accept a document whose PROGRAMID reads WSJT-X, " +
+      "which is why that is the default.",
+    placeholder: "WSJT-X",
+    default: "WSJT-X",
+  },
+  {
+    key: "udpLog.extraFields",
+    label: "Extra ADIF fields",
+    type: "string",
+    group: "udplog",
+    help:
+      "Added to every broadcast record, as NAME=value separated by commas or newlines. For " +
+      "things that describe the STATION rather than the contact: MY_ANTENNA=EFHW, " +
+      "MY_RIG=FLEX-6400, CONTEST_ID=CQ-WW-DIGI. Fields that come from the contact itself — " +
+      "the callsign worked, the reports, the time, the band, and your own STATION_CALLSIGN — " +
+      "are refused here and the panel says which line was dropped and why: those are what " +
+      "make the log a record of what actually happened.",
+    placeholder: "MY_ANTENNA=EFHW, MY_RIG=FLEX-6400",
+    default: "",
+  },
+  {
+    key: "udpLog.comment",
+    label: "Comment sent with each contact",
+    type: "string",
+    group: "udplog",
+    help:
+      "Goes in the ADIF COMMENT field. Left empty, no comment is sent at all — which is the " +
+      "right default, because DigiShack's own note about how the contact was made would " +
+      "otherwise go out with every QSO. This is also the field the live scoring sites read " +
+      "for their own commands, so POTA or a park reference belongs here if you are using one.",
+    placeholder: "(empty)",
+    default: "",
+  },
+  {
+    key: "udpLog.stationId",
+    label: "UDP station id",
+    type: "string",
+    group: "udplog",
+    help:
+      "The program name inside the datagram. Leave it as WSJT-X unless you know the " +
+      "receiver cares: several match on it literally and ignore anything else, so a more " +
+      "honest value here is a good way to have your contacts silently discarded.",
+    placeholder: "WSJT-X",
+    default: "WSJT-X",
   },
   {
     key: "n3fjp.host",

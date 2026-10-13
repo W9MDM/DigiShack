@@ -820,8 +820,13 @@ async function nobodyToCall() {
     // hop away from a band it had just worked somebody on.
     const b = bench({ allow: false, messages: TRICKLE });
     b.auto.setMode("hunt");
-    for (let i = 0; i < 22; i++) await b.feed();
-    eq(b.retuned.length, 0, "22 windows in, still deciding");
+    // TWENTY, not twenty-two. The hunt runs during the two warm-up windows since 1.181.6,
+    // so those count toward the nobody-to-call streak like any other window with nobody in
+    // it. The bar is NOBODY_TO_CALL_WINDOWS consecutive, and the check runs before the
+    // window's own outcome is folded in — so window 20 sees a streak of 19 and holds, and
+    // window 21 would be the first that could leave.
+    for (let i = 0; i < 20; i++) await b.feed();
+    eq(b.retuned.length, 0, "20 windows in, still deciding");
     b.auto.noteContactOutcome("lost");
     for (let i = 0; i < 18; i++) await b.feed();
     eq(b.retuned.length, 0, "a contact — even an abandoned one — starts the count again");

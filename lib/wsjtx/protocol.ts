@@ -648,6 +648,26 @@ export function encodeClear(id: string, window = 0): Buffer {
 }
 
 /** FreeText — set (and optionally send) an arbitrary message. */
+/**
+ * A logged contact, as WSJT-X announces it to anything listening.
+ *
+ * THIS IS THE ONE WSJT-X FEATURE OTHER SOFTWARE ACTUALLY DEPENDS ON. "Enable logged contact
+ * ADIF broadcast" in WSJT-X's Reporting settings sends exactly this datagram on every
+ * logged QSO, and it is how GridTracker, Log4OM, JTAlert, N1MM and the scoring sites all
+ * learn that a contact happened. Emitting it means every one of those works with DigiShack
+ * without any of them needing to know DigiShack exists.
+ *
+ * Deliberately the SAME wire format rather than a DigiShack-shaped message: the value here
+ * is entirely in being indistinguishable to a receiver that was written for WSJT-X.
+ *
+ * The payload is one ADIF record. WSJT-X sends a full ADIF document — header, <EOH>, then
+ * the record — and receivers vary in how much they tolerate, so `lib/logging/adif-udp.ts`
+ * builds the document rather than this function guessing at it.
+ */
+export function encodeLoggedADIF(id: string, adif: string): Buffer {
+  return header(WsjtxType.LoggedADIF, id).utf8(adif).build();
+}
+
 export function encodeFreeText(id: string, text: string, send = false): Buffer {
   return header(WsjtxType.FreeText, id).utf8(text).bool(send).build();
 }

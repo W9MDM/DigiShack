@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.180.4 - public release
+## 1.181.6 - public release
 
 Development happens in a private repository; this is where the public history starts.
 Earlier entries are not reproduced - they quote real operators by callsign, include
@@ -22,6 +22,13 @@ Notes for anyone running this:
 
 ## Release history
 
+- **1.181.6** — Warm-up stops us CQing into a dead band, not answering a live one
+- **1.181.5** — A repeated sign-off means they are stuck, not free
+- **1.181.4** — A pasted URL, failing once per contact, in a log nobody reads
+- **1.181.3** — Every field it sends, and which of them are yours to change
+- **1.181.2** — Those settings were filed under the wrong program
+- **1.181.1** — The points view, and the banner that has to go with it
+- **1.181.0** — Logged contacts on the wire, and what one is worth
 - **1.180.4** — The scrub caught me putting the operator's LAN in a comment
 - **1.180.3** — A sign-off is not somebody calling us
 - **1.180.2** — Ten days dark, logged every five minutes, reported to nobody
@@ -232,7 +239,3 @@ Notes for anyone running this:
 - **1.60.2** — The Work station panel at half height
 - **1.60.1** — Self-update: untracked files do not block, token enterable on /update
 - **1.60.0** — The schedule shows its hand, and a contact can be skipped
-- **0.14.1** — Fix waterfall palette and dynamic range
-- **0.14.0** — Add waterfall display and a full digital page
-- **0.13.0** — FT4 in the self-contained path, plus a live band-activity page
-- **0.12.1** — Exit cleanly when the bridge port is already in use

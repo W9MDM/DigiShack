@@ -1260,7 +1260,78 @@ async function main(): Promise<void> {
     }
   }
 
-  console.log(`\n${pass} passed, ${fail} failed\n`);
+  
+console.log("\nA REPEATED CLOSING MEANS THEY ARE STUCK, NOT FREE");
+{
+  // CAUGHT ON THE AIR, calling K1MFD while he was trying to finish with K5HS:
+  //
+  //     39:45  K5HS K1MFD RRR        <- read as "free", so we called
+  //     40:30  K1MFD K9XYZ EN61
+  //     40:15  K5HS K1MFD RRR        <- still trying
+  //     40:45  K5HS K1MFD RRR
+  //     41:00  K1MFD K9XYZ EN61      <- called again
+  //     41:15  K5HS K1MFD RRR
+  //     41:30  K1MFD K9XYZ EN61      <- and again
+  //
+  // A closing to a third party frees them, which is right the FIRST time and is the whole
+  // point of calling a station the moment it signs off. A station REPEATING one has not been
+  // acknowledged and will keep sending it — the least available station on the band.
+  const q = new QsoSequencer({
+    myCall: "K9XYZ",
+    myGrid: "EN61",
+    theirCall: "K1MFD",
+    theirGrid: null,
+    theirSnr: -5,
+    role: "caller",
+    startedAt: 1000,
+  });
+  let t = q.tick(15_000);
+  eq(t.send, "K1MFD K9XYZ EN61", "we call them");
+
+  // ONE closing still frees them — the feature this must not break.
+  q.onDecode("K5HS K1MFD RRR", 22_000);
+  t = q.tick(30_000);
+  eq(t.send, "K1MFD K9XYZ EN61", "one closing to a third party does NOT abandon");
+  ok(q.currentState !== "abandoned", "and the contact is still live");
+
+  // The SAME closing again: they are stuck, so give the window back.
+  q.onDecode("K5HS K1MFD RRR", 37_000);
+  eq(q.currentState, "abandoned", "the repeat abandons");
+}
+
+console.log("\na closing to a DIFFERENT station is a fresh signal, not a repeat");
+{
+  const q = new QsoSequencer({
+    myCall: "K9XYZ", myGrid: "EN61", theirCall: "K1MFD",
+    theirGrid: null, theirSnr: -5, role: "caller", startedAt: 1000,
+  });
+  q.tick(15_000);
+  // Finishing with one station then another is a BUSY station working a queue, not one stuck
+  // on a single partner. Counting those together would abandon the most productive stations
+  // on the band, which is the opposite of what the rule is for.
+  q.onDecode("K5HS K1MFD RRR", 22_000);
+  q.onDecode("W1ABC K1MFD RR73", 37_000);
+  ok(q.currentState !== "abandoned", "two closings to DIFFERENT stations do not abandon");
+}
+
+console.log("\nand answering us clears the streak");
+{
+  const q = new QsoSequencer({
+    myCall: "K9XYZ", myGrid: "EN61", theirCall: "K1MFD",
+    theirGrid: null, theirSnr: -5, role: "caller", startedAt: 1000,
+  });
+  q.tick(15_000);
+  q.onDecode("K5HS K1MFD RRR", 22_000);
+  // They turn to us. Whatever they were failing to finish is no longer a reason to leave.
+  q.onDecode("K9XYZ K1MFD -09", 37_000);
+  ok(q.currentState !== "abandoned", "their reply to us keeps the contact");
+  // Without the reset, their own sign-off TO US would look like the second repeat and
+  // abandon a contact that was completing normally.
+  q.onDecode("K9XYZ K1MFD RR73", 52_000);
+  ok(q.currentState !== "abandoned", "and their sign-off to US completes rather than abandoning");
+}
+
+console.log(`\n${pass} passed, ${fail} failed\n`);
   if (fail > 0) process.exit(1);
 }
 

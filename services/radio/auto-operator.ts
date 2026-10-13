@@ -760,7 +760,19 @@ export class AutoOperator {
   /** The gates every candidate path shares, so the pipeline and the fast path agree. */
   private candidateReady(windowStartMs: number): boolean {
     if (this.mode !== "hunt" && this.mode !== "hunt-pota") return false;
-    if (this.warmup > 0) return false;
+    // WARMUP DOES NOT GATE ANSWERING. It used to — \`if (this.warmup > 0) return false\` sat
+    // here — and the operator watched this happen on hunt-pota, listening with "5 more
+    // cycles" to go:
+    //
+    //     22:51:45Z  -6   CQ POTA W7SMR DN53   NEW PARK US-6179    <- skipped
+    //     22:53:15Z  -9   CQ POTA W7SMR DN53   NEW PARK US-6179    <- skipped
+    //     22:51:45Z  -12  CQ POTA KD5QJQ EM35                      <- skipped
+    //
+    // Warmup exists so a fresh band is not CQed into before it has proved it is alive. A
+    // decoded CQ IS that proof: the band is open and that station is on it, right now, and
+    // in ninety seconds it may not be. The quiet-band hop that warmup also drives counts
+    // decodes, not calls, and still works exactly as before — it just no longer costs six
+    // windows of silence on a band that is demonstrably busy.
     if (this.o.guards.pausedReason) return false;
     // The partner slice owns a live contact, and a second call must never be started
     // under one. `startingCall` closes the window between deciding and the controller
@@ -1004,6 +1016,11 @@ export class AutoOperator {
             this.o.log(`[auto] ${this.lastAction}`);
             await this.hopNext();
           }
+          // Either we have just left this band or decided nothing is audible anywhere. This
+          // window's decodes belong to a band we are no longer on, so there is nothing here
+          // worth hunting — the only branch that still ends the window early.
+          this.broadcastState();
+          return;
         } else {
           this.hopping = false;
           this.quietHops = 0;
@@ -1012,7 +1029,13 @@ export class AutoOperator {
         }
       }
       this.broadcastState();
-      return;
+      // HUNT MODES KEEP GOING THROUGH WARMUP. This used to be an unconditional return, and
+      // it was the actual cost behind "listening, 5 more cycles": six windows in which the
+      // hunt never ran at all, during which the operator watched two strong CQ POTAs with a
+      // new park go by uncalled. Warmup's purpose is to stop us CQing into a band that has
+      // not proved itself — so CQ mode still waits here — but a CQ we have just DECODED is
+      // the proof, and answering it is the whole point of being on the band.
+      if (this.mode !== "hunt" && this.mode !== "hunt-pota") return;
     }
 
     // WHO WE WOULD CALL, WORKED OUT NOW RATHER THAN WHEN WE NEED IT.
