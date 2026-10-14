@@ -180,13 +180,25 @@ export const SETTING_GROUPS: SettingGroup[] = [
       "Ham Radio Deluxe's online logbook. Needs the callsign the account logs under plus its upload code, which is not the website password.",
   },
   {
+    id: "ft8battle",
+    title: "FT8 Battle Royale",
+    blurb:
+      "BR mode ranks the decode list by what a contact is worth on ft8battle.com and sends " +
+      "each logged contact to the Battle Royale server, as the WSJT-X datagram it expects. " +
+      "Off, nothing is sent there. FT8BR bans automated operation: this is a view and a " +
+      "broadcast, not an operating mode, and the decodes page says so whenever the auto " +
+      "operator is running.",
+  },
+  {
     id: "udplog",
     title: "Broadcast logged contacts (UDP)",
     blurb:
       "Sends every logged contact as the same UDP datagram WSJT-X sends when 'Enable logged " +
       "contact ADIF broadcast' is ticked. That one message is how GridTracker, Log4OM, " +
       "JTAlert, N1MM and the live scoring sites learn a contact happened, so turning this on " +
-      "makes all of them work without any of them knowing DigiShack exists. It is one-way " +
+      "makes all of them work without any of them knowing DigiShack exists. Separate from " +
+      "the Battle Royale broadcast above, with its own destination and its own switch — the " +
+      "UDP button on the decodes page, next to BR mode. It is one-way " +
       "and unauthenticated: your log goes onto the network in clear, so point it at a " +
       "machine you control.",
   },
@@ -675,21 +687,109 @@ export const SETTINGS: SettingDef[] = [
     default: "false",
   },
   {
-    key: "udpLog.enabled",
+    key: "br.enabled",
+    label: "BR mode",
+    type: "boolean",
+    group: "ft8battle",
+    help:
+      "Ranks the decode list by what each contact is worth on ft8battle.com and sends every " +
+      "logged contact to the Battle Royale server below. Also switched from the decodes " +
+      "page. A view and a broadcast, not an operating mode: it changes nothing about what " +
+      "the station does on the air — and FT8BR bans automated operation, so stop the auto " +
+      "operator before playing.",
+    default: "false",
+  },
+  {
+    key: "br.host",
+    label: "Battle Royale server",
+    type: "string",
+    group: "ft8battle",
+    help:
+      "The address ft8battle.com publishes for its UDP log server. Not a machine on your " +
+      "LAN: this one goes out across the internet, which is the point. A pasted URL is " +
+      "tidied down to its host.",
+    placeholder: "the address published on ft8battle.com",
+    legacyKeys: ["udpLog.host"],
+    default: "",
+  },
+  {
+    key: "br.port",
+    label: "Battle Royale port",
+    type: "number",
+    group: "ft8battle",
+    help:
+      "The port published alongside the address. 2237 is what ft8battle.com listed when " +
+      "this was written; trust the site over this text.",
+    legacyKeys: ["udpLog.port"],
+    default: "2237",
+  },
+  {
+    key: "br.programId",
+    label: "ADIF program id",
+    type: "string",
+    group: "ft8battle",
+    help:
+      "The PROGRAMID written inside the ADIF document. Battle Royale accepts a WSJT-X log, " +
+      "which is why that is the default. The station id below is the protocol envelope and " +
+      "is checked separately.",
+    placeholder: "WSJT-X",
+    legacyKeys: ["udpLog.programId"],
+    default: "WSJT-X",
+  },
+  {
+    key: "br.extraFields",
+    label: "Extra ADIF fields",
+    type: "string",
+    group: "ft8battle",
+    help:
+      "Added to every record sent to Battle Royale, as NAME=value separated by commas or " +
+      "newlines. Fields that come from the contact itself are refused, and the panel below " +
+      "says which line was dropped and why.",
+    placeholder: "MY_ANTENNA=EFHW",
+    legacyKeys: ["udpLog.extraFields"],
+    default: "",
+  },
+  {
+    key: "br.comment",
+    label: "Comment sent with each contact",
+    type: "string",
+    group: "ft8battle",
+    help:
+      "Goes in the ADIF COMMENT field, which is the one Battle Royale reads for its own " +
+      "commands — a POTA reference or a /name request belongs here. Left empty, no comment " +
+      "is sent, and DigiShack's own note about the contact never is.",
+    placeholder: "(empty)",
+    legacyKeys: ["udpLog.comment"],
+    default: "",
+  },
+  {
+    key: "br.stationId",
+    label: "UDP station id",
+    type: "string",
+    group: "ft8battle",
+    help:
+      "The program name inside the datagram. Leave it as WSJT-X: the server matches on it " +
+      "literally.",
+    placeholder: "WSJT-X",
+    legacyKeys: ["udpLog.stationId"],
+    default: "WSJT-X",
+  },
+  {
+    key: "udp.enabled",
     label: "Broadcast logged contacts over UDP",
     type: "boolean",
     group: "udplog",
     help:
       "Sends each logged contact as the same UDP datagram WSJT-X sends when 'Enable logged " +
       "contact ADIF broadcast' is ticked. That one message is how GridTracker, Log4OM, " +
-      "JTAlert, N1MM and the live scoring sites learn a contact happened, so turning this " +
-      "on makes all of them work without any of them knowing DigiShack exists. OFF by " +
-      "default because it puts your log — callsigns, grids, times — on the network as " +
-      "cleartext UDP to whatever address you type below.",
+      "JTAlert and N1MM learn a contact happened, so turning this on makes all of them work " +
+      "without any of them knowing DigiShack exists. Also switched from the decodes page, " +
+      "next to BR mode. OFF by default because it puts your log — callsigns, grids, times — " +
+      "on the network as cleartext UDP to whatever address you type below.",
     default: "false",
   },
   {
-    key: "udpLog.host",
+    key: "udp.host",
     label: "UDP log destination",
     type: "string",
     group: "udplog",
@@ -703,7 +803,7 @@ export const SETTINGS: SettingDef[] = [
     default: "127.0.0.1",
   },
   {
-    key: "udpLog.port",
+    key: "udp.port",
     label: "UDP log port",
     type: "number",
     group: "udplog",
@@ -715,12 +815,12 @@ export const SETTINGS: SettingDef[] = [
     default: "2333",
   },
   {
-    key: "udpLog.programId",
+    key: "udp.programId",
     label: "ADIF program id",
     type: "string",
     group: "udplog",
     help:
-      "The PROGRAMID written inside the ADIF document. Separate from the station id above: " +
+      "The PROGRAMID written inside the ADIF document. Separate from the station id below: " +
       "that one is the protocol envelope, this one is a field in the record, and receivers " +
       "check different ones. Several only accept a document whose PROGRAMID reads WSJT-X, " +
       "which is why that is the default.",
@@ -728,7 +828,7 @@ export const SETTINGS: SettingDef[] = [
     default: "WSJT-X",
   },
   {
-    key: "udpLog.extraFields",
+    key: "udp.extraFields",
     label: "Extra ADIF fields",
     type: "string",
     group: "udplog",
@@ -743,20 +843,19 @@ export const SETTINGS: SettingDef[] = [
     default: "",
   },
   {
-    key: "udpLog.comment",
+    key: "udp.comment",
     label: "Comment sent with each contact",
     type: "string",
     group: "udplog",
     help:
       "Goes in the ADIF COMMENT field. Left empty, no comment is sent at all — which is the " +
       "right default, because DigiShack's own note about how the contact was made would " +
-      "otherwise go out with every QSO. This is also the field the live scoring sites read " +
-      "for their own commands, so POTA or a park reference belongs here if you are using one.",
+      "otherwise go out with every QSO.",
     placeholder: "(empty)",
     default: "",
   },
   {
-    key: "udpLog.stationId",
+    key: "udp.stationId",
     label: "UDP station id",
     type: "string",
     group: "udplog",

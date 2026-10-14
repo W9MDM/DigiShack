@@ -13,7 +13,7 @@
 // wire format against the decoder this repo already has — if the encoder and decoder agree,
 // a receiver that speaks the same protocol will agree too.
 
-import { adifDatagramBody, parseExtraFields } from "../lib/logging/adif-udp";
+import { adifDatagramBody, parseExtraFields, sendable } from "../lib/logging/adif-udp";
 import { destinationProblem, normaliseHost } from "../lib/logging/broadcast-fields";
 import { decodePacket, encodeLoggedADIF, WsjtxType, WSJTX_MAGIC } from "../lib/wsjtx/protocol";
 
@@ -138,16 +138,39 @@ console.log("it is off until somebody turns it on");
   // deliberately otherwise, so the default must be off — asserted against the registry
   // rather than trusted, because a default is one careless edit from flipping.
   const { SETTINGS } = require("../lib/settings/registry") as {
-    SETTINGS: { key: string; default?: string }[];
+    SETTINGS: { key: string; default?: string; legacyKeys?: string[] }[];
   };
-  const enabled = SETTINGS.find((s) => s.key === "udpLog.enabled");
-  ok(enabled !== undefined, "the enable setting is registered");
-  eq(enabled?.default, "false", "and defaults to OFF");
+  const def = (key: string) => SETTINGS.find((s) => s.key === key);
 
-  const host = SETTINGS.find((s) => s.key === "udpLog.host");
-  const port = SETTINGS.find((s) => s.key === "udpLog.port");
-  ok(host !== undefined && port !== undefined, "a destination host and port are registered");
-  ok(port?.default !== "2237", "and the port does not default to the status-protocol port");
+  // THE BROADCAST FOR OTHER PROGRAMS: its own switch, off until somebody turns it on.
+  eq(def("udp.enabled")?.default, "false", "the UDP broadcast defaults to OFF");
+  ok(
+    def("udp.host") !== undefined && def("udp.port") !== undefined,
+    "a destination host and port are registered",
+  );
+  ok(def("udp.port")?.default !== "2237", "and the port does not default to the status-protocol port");
+
+  eq(def("br.enabled")?.default, "false", "BR mode defaults to OFF");
+  ok(def("br.udpEnabled") === undefined, "and the BR broadcast has no switch of its own");
+  eq(def("br.port")?.default, "2237", "the BR port defaults to the one FT8BR publishes");
+
+  for (const f of ["host", "port", "programId", "comment", "extraFields", "stationId"]) {
+    ok((def(`br.${f}`)?.legacyKeys ?? []).includes(`udpLog.${f}`), `br.${f} reads the old udpLog.${f}`);
+    ok((def(`udp.${f}`)?.legacyKeys ?? []).length === 0, `udp.${f} starts clean`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+console.log("a broadcast goes out only when it is on AND pointed somewhere");
+// ---------------------------------------------------------------------------
+{
+  const base = { enabled: true, host: "192.0.2.99", port: 2237 };
+  ok(sendable(base), "on, a host and a valid port: sendable");
+  ok(!sendable({ ...base, enabled: false }), "off: not sendable, whatever else is set");
+  ok(!sendable({ ...base, host: "" }), "no host: not sendable");
+  ok(!sendable({ ...base, port: 0 }), "port 0 asks the OS to choose, which for a destination is nowhere");
+  ok(!sendable({ ...base, port: 70000 }), "nor a port above 65535");
+  ok(!sendable({ ...base, port: Number.NaN }), "nor a port that is not a number");
 }
 
 // ---------------------------------------------------------------------------

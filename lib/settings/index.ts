@@ -279,7 +279,16 @@ export async function describeSettings(): Promise<SettingView[]> {
   const views: SettingView[] = [];
 
   for (const def of SETTINGS) {
-    const row = rows.get(def.key);
+    let row = rows.get(def.key);
+    if (!(row && (row.encrypted || row.value !== ""))) {
+      for (const legacy of def.legacyKeys ?? []) {
+        const old = rows.get(legacy);
+        if (old && (old.encrypted || old.value !== "")) {
+          row = old;
+          break;
+        }
+      }
+    }
     const secret = isSecret(def.key);
 
     let source: SettingSource = "unset";

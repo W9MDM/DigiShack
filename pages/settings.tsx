@@ -402,7 +402,8 @@ export default function SettingsPage() {
                     {group.id === "qsl" && <QslCardDesigner draft={draft} />}
                     {group.id === "lotw" && <LotwCertificate />}
                     {group.id === "youtube" && <YouTubeConnect />}
-                    {group.id === "udplog" && <UdpBroadcastPreview />}
+                    {group.id === "ft8battle" && <UdpBroadcastPreview target="br" />}
+                    {group.id === "udplog" && <UdpBroadcastPreview target="udp" />}
 
                     {group.id === "schedule" && (
                       <Field
