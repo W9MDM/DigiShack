@@ -19,6 +19,8 @@ export interface ScoreInput {
   at: Date;
   pota?: boolean;
   alreadyWorkedToday?: boolean;
+  claimedOnBand?: boolean;
+  steal?: { from: string; min: number; max: number };
 }
 
 export interface Score {
@@ -27,6 +29,7 @@ export interface Score {
   penalty: number;
   multiplier: number;
   reasons: string[];
+  steal: { from: string; min: number; max: number } | null;
 }
 
 export function scoreContact(input: ScoreInput): Score {
@@ -42,20 +45,32 @@ export function scoreContact(input: ScoreInput): Score {
 
   const flat = BASE_POINTS + (input.pota ? POTA_BONUS : 0);
 
-  const min = Math.round(flat * multiplier);
-  const max = Math.round((flat + FIRST_CONTACT_BONUS) * multiplier);
+  const own = Math.round(flat * multiplier);
+  const claimed = Boolean(input.claimedOnBand || input.steal);
+  let min = own;
+  let max = claimed ? own : Math.round((flat + FIRST_CONTACT_BONUS) * multiplier);
 
   if (input.pota) reasons.push(`POTA +${POTA_BONUS}`);
   if (bandMult > 1) reasons.push(`${band} x1.5`);
   if (modeMult > 1) reasons.push(`${mode} x2`);
   if (happy) reasons.push("Happy Hour x2");
+  if (claimed && !input.steal) reasons.push("claimed: no First Contact");
 
   if (input.alreadyWorkedToday) {
     reasons.unshift("DUPLICATE");
-    return { min: 0, max: 0, penalty: -2 * min, multiplier, reasons };
+    return { min: 0, max: 0, penalty: -2 * min, multiplier, reasons, steal: null };
   }
 
-  return { min, max, penalty: 0, multiplier, reasons };
+  if (input.steal) {
+    min += input.steal.min;
+    max += input.steal.max;
+    reasons.unshift(
+      `STEAL from ${input.steal.from} +${input.steal.min}` +
+        (input.steal.max !== input.steal.min ? `–${input.steal.max}` : ""),
+    );
+  }
+
+  return { min, max, penalty: 0, multiplier, reasons, steal: input.steal ?? null };
 }
 
 export function rankByPoints<T>(

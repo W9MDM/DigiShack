@@ -137,6 +137,7 @@ import { NoiseFloor } from "@/lib/radio/noise";
 import { UNREAD_RECEIVER, type ReceiverControls } from "@/lib/radio/receiver-controls";
 import { getEqslCredentials, syncEqslInbox } from "@/lib/integrations/eqsl";
 import { reconcileLotwSent } from "@/lib/integrations/lotw-reconcile";
+import { startFt8brTracker } from "@/lib/contest/ft8battle-tracker";
 import { runUploads } from "@/lib/integrations/upload-runner";
 import { collectReceptionReports } from "@/lib/pskreporter/collect";
 import { MIN_QUERY_INTERVAL_MS } from "@/lib/pskreporter/retrieve";
@@ -5006,6 +5007,11 @@ async function main(): Promise<void> {
   };
   setTimeout(() => void pskTick(), 150_000);
   setInterval(() => void pskTick(), MIN_QUERY_INTERVAL_MS);
+
+  startFt8brTracker({
+    brMode: () => getBooleanSetting("br.enabled", false),
+    log: (line) => console.log(line),
+  });
 
   // Poll the gate so the badge is honest without the operator reloading.
   //

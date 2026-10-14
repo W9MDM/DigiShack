@@ -23,6 +23,12 @@ import { bridgeWsUrl } from "@/lib/bridge/ws-url";
 import { ApiError, apiGet, apiPatch, apiPost, useApi } from "@/lib/client/api";
 import { rankByPoints, scoreContact } from "@/lib/contest/ft8battle";
 import {
+  bandKey,
+  claimKey,
+  stealEstimate,
+  type Ft8brFeedResponse,
+} from "@/lib/contest/ft8battle-feed";
+import {
   CONNECT_TIMEOUT_MS,
   FIRST_BACKOFF_MS,
   linkLabel,
@@ -536,6 +542,29 @@ export default function DigitalPage({ wsUrl }: Props) {
   const toggleBr = useCallback(() => void setSwitch({ br: !brMode }), [brMode, setSwitch]);
   const toggleUdp = useCallback(() => void setSwitch({ udp: !udpOn }), [udpOn, setSwitch]);
 
+  const [brFeed, setBrFeed] = useState<Ft8brFeedResponse | null>(null);
+  useEffect(() => {
+    if (!brMode) {
+      setBrFeed(null);
+      return;
+    }
+    let cancelled = false;
+    const load = () =>
+      apiGet<Ft8brFeedResponse>("/api/contest/ft8battle?hours=2")
+        .then((r) => {
+          if (!cancelled) setBrFeed(r);
+        })
+        .catch(() => {
+          /* keep the last answer; the next poll may do better */
+        });
+    void load();
+    const t = setInterval(() => void load(), 20_000);
+    return () => {
+      cancelled = true;
+      clearInterval(t);
+    };
+  }, [brMode]);
+
   /**
    * Whether Auto Hunt will call stations that have just finished a contact.
    *
@@ -984,19 +1013,33 @@ export default function DigitalPage({ wsUrl }: Props) {
   const brScores = useMemo(() => {
     const out = new Map<string, ReturnType<typeof scoreContact>>();
     if (!brMode) return out;
-    const band = status?.band ?? "";
-    const mode = status?.subMode ?? status?.mode ?? "FT8";
+    const band = (status?.band ?? "").toUpperCase();
+    const mode = (status?.subMode ?? status?.mode ?? "FT8").toUpperCase();
     const at = new Date();
+    const claims = new Map(
+      (brFeed?.claims ?? []).map((c) => [claimKey(c.contact, c.band, c.mode), c] as const),
+    );
+    const claimedBands = new Set(brFeed?.claimedBands ?? []);
     for (const d of rows) {
       const call = d.callsign?.toUpperCase();
       if (!call || out.has(call)) continue;
+      const held = claims.get(claimKey(call, band, mode));
+      const steal =
+        held && held.holder !== myCall ? { from: held.holder, ...stealEstimate(held) } : undefined;
       out.set(
         call,
-        scoreContact({ band, mode, at, alreadyWorkedToday: workedDupe.has(call) }),
+        scoreContact({
+          band,
+          mode,
+          at,
+          alreadyWorkedToday: workedDupe.has(call),
+          claimedOnBand: claimedBands.has(bandKey(call, band)),
+          steal,
+        }),
       );
     }
     return out;
-  }, [brMode, rows, status?.band, status?.mode, status?.subMode, workedDupe]);
+  }, [brMode, brFeed, rows, status?.band, status?.mode, status?.subMode, workedDupe, myCall]);
 
   const visible = useMemo(() => {
     // Search first, then the category filter, and the two AND together — a search that
@@ -1048,7 +1091,7 @@ export default function DigitalPage({ wsUrl }: Props) {
       // A row with no parsed callsign cannot be scored and must not be promoted by the
       // absence of a score. Zero floor, zero ceiling, no penalty - it sinks below anything
       // worth calling and sits above the duplicates, which is where "unknown" belongs.
-      return s ?? { min: 0, max: 0, penalty: 0, multiplier: 1, reasons: [] };
+      return s ?? { min: 0, max: 0, penalty: 0, multiplier: 1, reasons: [], steal: null };
     }).map((r) => r.item);
   }, [rows, filter, search, mentionsMe, worth, myCall, brMode, brScores]);
 
@@ -1311,6 +1354,56 @@ export default function DigitalPage({ wsUrl }: Props) {
           <strong>The auto operator is running ({auto?.mode}).</strong> FT8 Battle Royale
           requires human-operated contacts — automated operation is detected and carries a
           permanent ban. Stop auto before logging contacts you intend to score.
+        </div>
+      )}
+      {brMode && (
+        <div className="mb-4 border border-line rounded-sm">
+          <div className="flex items-baseline justify-between gap-3 px-3 py-1.5 bg-surface-2 text-xs">
+            <span className="font-medium">Battle Royale — last 2 hours</span>
+            <span className="text-fg-subtle tnum">
+              {brFeed
+                ? `${brFeed.activity.length} events · ` +
+                  `${brFeed.activity.filter((e) => e.type === "steal").length} steals · ` +
+                  `${brFeed.claims.length} holdings today`
+                : "loading…"}
+            </span>
+          </div>
+          <div className="max-h-44 overflow-y-auto divide-y divide-line text-xs font-mono">
+            {brFeed && brFeed.activity.length === 0 && (
+              <p className="px-3 py-2 text-fg-muted">
+                Nothing tracked yet. The bridge polls ft8battle.com every 20 s while BR mode is on.
+              </p>
+            )}
+            {brFeed?.activity.map((e) => (
+              <div
+                key={`${e.at}|${e.station}|${e.contact}|${e.band}|${e.mode}`}
+                className={cn(
+                  "px-3 py-0.5 flex flex-wrap gap-x-2",
+                  e.type === "steal" ? "text-warn" : e.type === "penalty" ? "text-danger" : "",
+                )}
+              >
+                <span className="text-fg-subtle tnum">{formatUtcTime(e.at)}</span>
+                <span>
+                  {e.station === myCall ? <strong>{e.station}</strong> : e.station}
+                  {e.type === "steal" ? " STOLE " : " → "}
+                  {e.contact}
+                  {e.victim && (
+                    <>
+                      {" from "}
+                      {e.victim === myCall ? <strong>YOU</strong> : e.victim}
+                    </>
+                  )}
+                </span>
+                <span className="text-fg-subtle">
+                  {e.band} {e.mode}
+                </span>
+                <span className="ml-auto tnum">
+                  {e.points === null ? "held" : e.points > 0 ? `+${e.points}` : e.points}
+                  {e.first ? " ★" : ""}
+                </span>
+              </div>
+            ))}
+          </div>
         </div>
       )}
       <PageHeader
@@ -2206,9 +2299,11 @@ export default function DigitalPage({ wsUrl }: Props) {
                                         ? "text-fg-subtle"
                                         : sc.penalty < 0
                                           ? "text-danger font-semibold"
-                                          : sc.max >= 12
-                                            ? "text-ok font-semibold"
-                                            : "text-fg-muted",
+                                          : sc.steal
+                                            ? "text-warn font-semibold"
+                                            : sc.max >= 12
+                                              ? "text-ok font-semibold"
+                                              : "text-fg-muted",
                                     )}
                                     title={sc?.reasons.join(" · ") || undefined}
                                   >
@@ -2216,9 +2311,8 @@ export default function DigitalPage({ wsUrl }: Props) {
                                       ? "—"
                                       : sc.penalty < 0
                                         ? sc.penalty
-                                        : sc.min === sc.max
-                                          ? sc.min
-                                          : `${sc.min}–${sc.max}`}
+                                        : (sc.steal ? "🔥 " : "") +
+                                          (sc.min === sc.max ? String(sc.min) : `${sc.min}–${sc.max}`)}
                                   </td>
                                 );
                               })()}

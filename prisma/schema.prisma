@@ -116,6 +116,26 @@ model PasswordResetAttempt {
   @@index([ip])
 }
 
+model Ft8brActivity {
+  id      String   @id @default(cuid())
+  at      DateTime
+  type    String   @db.VarChar(8)
+  station String   @db.VarChar(20)
+  contact String   @db.VarChar(20)
+  band    String   @db.VarChar(8)
+  mode    String   @db.VarChar(4)
+  points  Int?
+  victim  String?  @db.VarChar(20)
+  stolen  Int?
+  first   Boolean  @default(false)
+  source  String   @db.VarChar(10)
+  createdAt DateTime @default(now())
+
+  @@unique([at, station, contact, band, mode])
+  @@index([at])
+  @@index([contact, band])
+}
+
 model ApiKey {
   id   String @id @default(cuid())
   name String @db.VarChar(120)

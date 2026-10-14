@@ -181,6 +181,8 @@ export const SETTING_GROUPS: SettingGroup[] = [
   },
   {
     id: "ft8battle",
+    doc: "ft8battle",
+    docLabel: "BR mode, the broadcast, the tracker, and what the score can and cannot know",
     title: "FT8 Battle Royale",
     blurb:
       "BR mode ranks the decode list by what a contact is worth on ft8battle.com and sends " +
