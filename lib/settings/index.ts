@@ -279,7 +279,20 @@ export async function describeSettings(): Promise<SettingView[]> {
   const views: SettingView[] = [];
 
   for (const def of SETTINGS) {
-    const row = rows.get(def.key);
+    let row = rows.get(def.key);
+    // A RENAMED KEY SHOWS THE VALUE IT WILL USE. `getSetting` falls back to `legacyKeys`,
+    // and the page has to agree with it: a Battle Royale server that the sender reads from
+    // the old udpLog.host row while the settings page shows the field empty is the kind of
+    // disagreement that gets a destination typed in twice, or a working one "fixed".
+    if (!(row && (row.encrypted || row.value !== ""))) {
+      for (const legacy of def.legacyKeys ?? []) {
+        const old = rows.get(legacy);
+        if (old && (old.encrypted || old.value !== "")) {
+          row = old;
+          break;
+        }
+      }
+    }
     const secret = isSecret(def.key);
 
     let source: SettingSource = "unset";

@@ -20,6 +20,13 @@
 // must never be able to fail a contact: the QSO is in the database before this is called,
 // and if the datagram is lost the log is still right. Errors are logged once and swallowed.
 
+// TWO BROADCASTS, SWITCHED SEPARATELY. The Battle Royale one goes to ft8battle.com's server
+// and is on exactly when BR mode is on - the switch that ranks the list is the switch that
+// reports the contacts, because playing and reporting are one decision. The other goes to
+// whatever program on the desk wants a WSJT-X log - GridTracker, Log4OM, JTAlert, N1MM - and
+// has its own destination and its own button, because "report my contest contacts" and
+// "feed my logger" are different decisions that happen to share a datagram format.
+
 import dgram from "node:dgram";
 
 import { field } from "@/lib/adif/write";
@@ -160,50 +167,99 @@ export function adifDatagramBody(row: QsoRowForAdif, id: BroadcastIdentity): str
   ].join("\n");
 }
 
-/** Where to send, or null when the operator has not turned this on. */
-async function destination(): Promise<
-  | {
-      host: string;
-      port: number;
-      id: string;
-      programId: string;
-      comment: string;
-      extra: ExtraField[];
-    }
-  | null
-> {
-  if (!(await getBooleanSetting("udpLog.enabled", false))) return null;
-  // NORMALISED, because a pasted URL is a reasonable thing to type and used to fail
-  // once per contact in a log nobody reads.
-  const host = normaliseHost(String((await getSetting("udpLog.host")) ?? ""));
-  const port = await getNumberSetting("udpLog.port", 2333);
-  if (!host) return null;
-  // A port of 0 asks the OS to choose, which for a DESTINATION means nowhere.
-  if (!Number.isFinite(port) || port <= 0 || port > 65535) return null;
-  const id = String((await getSetting("udpLog.stationId")) ?? "").trim() || DEFAULT_ID;
-  // The ADIF identity is separate from the datagram's station id: one is the envelope the
-  // protocol carries, the other is a field inside the document. Receivers check different
-  // ones, so neither can be inferred from the other.
-  const programId = String((await getSetting("udpLog.programId")) ?? "").trim() || DEFAULT_ID;
-  const comment = String((await getSetting("udpLog.comment")) ?? "").trim();
-  // Refusals are dropped silently HERE and surfaced in the preview instead: the send path
-  // runs on every contact and must not log the same complaint a thousand times a day.
-  const extra = parseExtraFields(String((await getSetting("udpLog.extraFields")) ?? "")).fields;
-  return { host, port, id, programId, comment, extra };
+/** The two broadcasts. Same datagram, different destination, identity and switch. */
+export type BroadcastTarget = "br" | "udp";
+export const BROADCAST_TARGETS: readonly BroadcastTarget[] = ["br", "udp"];
+
+/** What switches each one on: BR mode for Battle Royale, the UDP button for the rest. */
+export const BROADCAST_SWITCH: Record<BroadcastTarget, string> = {
+  br: "br.enabled",
+  udp: "udp.enabled",
+};
+
+/** FT8BR publishes 2237; GridTracker and most loggers listen on 2333. */
+const DEFAULT_PORT: Record<BroadcastTarget, number> = { br: 2237, udp: 2333 };
+
+export interface BroadcastConfig {
+  target: BroadcastTarget;
+  enabled: boolean;
+  /** As typed, so the preview can show what was tidied. */
+  rawHost: string;
+  host: string;
+  port: number;
+  /** The datagram's station id - the protocol envelope. */
+  id: string;
+  programId: string;
+  comment: string;
+  extra: ExtraField[];
+  /** Extra-field lines that were dropped, and why. Shown in the preview, never logged per contact. */
+  refused: { input: string; reason: string }[];
 }
 
 /**
- * Announce one logged contact. Never throws.
+ * One broadcast's settings, resolved.
  *
- * Called after the QSO row is written, so a failure here cannot lose a contact — which is
+ * Shared by the sender and the preview, so what the panel shows is what leaves the station.
+ * Refusals are carried here rather than logged: the send path runs on every contact and must
+ * not repeat the same complaint a thousand times a day.
+ */
+export async function broadcastConfig(target: BroadcastTarget): Promise<BroadcastConfig> {
+  const key = (name: string) => `${target}.${name}`;
+  const enabled = await getBooleanSetting(BROADCAST_SWITCH[target], false);
+  // NORMALISED, because a pasted URL is a reasonable thing to type and used to fail
+  // once per contact in a log nobody reads.
+  const rawHost = String((await getSetting(key("host"))) ?? "");
+  const host = normaliseHost(rawHost);
+  const port = await getNumberSetting(key("port"), DEFAULT_PORT[target]);
+  const id = String((await getSetting(key("stationId"))) ?? "").trim() || DEFAULT_ID;
+  // The ADIF identity is separate from the datagram's station id: one is the envelope the
+  // protocol carries, the other is a field inside the document. Receivers check different
+  // ones, so neither can be inferred from the other.
+  const programId = String((await getSetting(key("programId"))) ?? "").trim() || DEFAULT_ID;
+  const comment = String((await getSetting(key("comment"))) ?? "").trim();
+  const parsed = parseExtraFields(String((await getSetting(key("extraFields"))) ?? ""));
+  return {
+    target,
+    enabled,
+    rawHost,
+    host,
+    port,
+    id,
+    programId,
+    comment,
+    extra: parsed.fields,
+    refused: parsed.refused,
+  };
+}
+
+/**
+ * Switched on, and pointed somewhere a datagram can go.
+ *
+ * A port of 0 asks the OS to choose, which for a DESTINATION means nowhere. Pure, so the
+ * rule can be asserted without a socket or a database.
+ */
+export function sendable(c: Pick<BroadcastConfig, "enabled" | "host" | "port">): boolean {
+  if (!c.enabled || !c.host) return false;
+  return Number.isFinite(c.port) && c.port > 0 && c.port <= 65535;
+}
+
+/**
+ * Announce one logged contact to every broadcast that is on. Never throws.
+ *
+ * Called after the QSO row is written, so a failure here cannot lose a contact - which is
  * why every path below returns rather than raising.
  */
 export async function broadcastLoggedQso(qsoId: string): Promise<void> {
   try {
-    const to = await destination();
-    // CHECKED BEFORE THE READ. This runs on every contact, and when the feature is off —
-    // which is the default — it must cost nothing at all, not a database round trip.
-    if (!to) return;
+    // THE SWITCHES FIRST. This runs on every contact, and with both off - the default - it
+    // must cost nothing beyond two cached reads, not a database round trip.
+    const on: BroadcastTarget[] = [];
+    for (const t of BROADCAST_TARGETS) {
+      if (await getBooleanSetting(BROADCAST_SWITCH[t], false)) on.push(t);
+    }
+    if (on.length === 0) return;
+    const targets = (await Promise.all(on.map(broadcastConfig))).filter(sendable);
+    if (targets.length === 0) return;
 
     // RE-READ WITH THE RELATIONS. `prisma.qso.create` returns the row's own columns, and an
     // ADIF record needs the station callsign, the operator and any POTA references that
@@ -215,19 +271,21 @@ export async function broadcastLoggedQso(qsoId: string): Promise<void> {
     });
     if (!row) return;
 
-    const datagram = encodeLoggedADIF(to.id, adifDatagramBody(row, {
-      programId: to.programId,
-      comment: to.comment,
-      extra: to.extra,
-    }));
-    sock().send(datagram, to.port, to.host, (err) => {
-      if (!err) return;
-      const now = Date.now();
-      if (now - lastErrorAt > 60_000) {
-        lastErrorAt = now;
-        console.warn(`[udp-log] could not send to ${to.host}:${to.port}: ${err.message}`);
-      }
-    });
+    for (const to of targets) {
+      // Built per target: each has its own program id, comment and extra fields.
+      const datagram = encodeLoggedADIF(
+        to.id,
+        adifDatagramBody(row, { programId: to.programId, comment: to.comment, extra: to.extra }),
+      );
+      sock().send(datagram, to.port, to.host, (err) => {
+        if (!err) return;
+        const now = Date.now();
+        if (now - lastErrorAt > 60_000) {
+          lastErrorAt = now;
+          console.warn(`[udp-log] (${to.target}) could not send to ${to.host}:${to.port}: ${err.message}`);
+        }
+      });
+    }
   } catch (err) {
     console.warn(`[udp-log] skipped: ${err instanceof Error ? err.message : String(err)}`);
   }

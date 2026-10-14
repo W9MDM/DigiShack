@@ -22,6 +22,7 @@ be read: `DATABASE_URL`, `SETTINGS_KEY` and `PORT`.
 - [ClubLog](#clublog) — 5 settings
 - [Cloudlog / Wavelog](#cloudlog-wavelog) — 3 settings
 - [HRDLOG.net](#hrdlog-net) — 2 settings
+- [FT8 Battle Royale](#ft8-battle-royale) — 7 settings
 - [Broadcast logged contacts (UDP)](#broadcast-logged-contacts-udp) — 7 settings
 - [N3FJP Amateur Contact Log](#n3fjp-amateur-contact-log) — 2 settings
 - [DXCC reference data](#dxcc-reference-data) — 2 settings
@@ -125,19 +126,33 @@ Ham Radio Deluxe's online logbook. Needs the callsign the account logs under plu
 | HRDLOG callsign | `hrdlog.callsign` | text | from `HRDLOG_CALLSIGN` | The callsign your HRDLOG.net account logs under. Paired with the upload code below — both are needed. |
 | HRDLOG upload code | `hrdlog.code` | secret | from `HRDLOG_CODE` | HRDLOG.net's upload code, issued in your account settings there. Not your website password. |
 
-## Broadcast logged contacts (UDP)
+## FT8 Battle Royale
 
-Sends every logged contact as the same UDP datagram WSJT-X sends when 'Enable logged contact ADIF broadcast' is ticked. That one message is how GridTracker, Log4OM, JTAlert, N1MM and the live scoring sites learn a contact happened, so turning this on makes all of them work without any of them knowing DigiShack exists. It is one-way and unauthenticated: your log goes onto the network in clear, so point it at a machine you control.
+BR mode ranks the decode list by what a contact is worth on ft8battle.com and sends each logged contact to the Battle Royale server, as the WSJT-X datagram it expects. Off, nothing is sent there. FT8BR bans automated operation: this is a view and a broadcast, not an operating mode, and the decodes page says so whenever the auto operator is running.
 
 | Setting | Key | Type | Default | What it does |
 |---|---|---|---|---|
-| Broadcast logged contacts over UDP | `udpLog.enabled` | on/off | `false` | Sends each logged contact as the same UDP datagram WSJT-X sends when 'Enable logged contact ADIF broadcast' is ticked. That one message is how GridTracker, Log4OM, JTAlert, N1MM and the live scoring sites learn a contact happened, so turning this on makes all of them work without any of them knowing DigiShack exists. OFF by default because it puts your log — callsigns, grids, times — on the network as cleartext UDP to whatever address you type below. |
-| UDP log destination | `udpLog.host` | text | `127.0.0.1` | Where to send it. 127.0.0.1 is right only when the receiving program is on the SAME machine as DigiShack — a container or a separate server needs the desktop PC's LAN address, which is the thing that catches people out. Your subnet's broadcast address (the one ending in .255 on a typical home network) reaches every listener at once. |
-| UDP log port | `udpLog.port` | number | `2333` | The port the receiving program listens on. GridTracker and most loggers default to 2333 for the ADIF broadcast; WSJT-X's own status protocol is 2237 and is a different thing. Check the receiving program rather than guessing — nothing reports a datagram sent to a port nobody is listening on. |
-| ADIF program id | `udpLog.programId` | text | `WSJT-X` | The PROGRAMID written inside the ADIF document. Separate from the station id above: that one is the protocol envelope, this one is a field in the record, and receivers check different ones. Several only accept a document whose PROGRAMID reads WSJT-X, which is why that is the default. |
-| Extra ADIF fields | `udpLog.extraFields` | text | — | Added to every broadcast record, as NAME=value separated by commas or newlines. For things that describe the STATION rather than the contact: MY_ANTENNA=EFHW, MY_RIG=FLEX-6400, CONTEST_ID=CQ-WW-DIGI. Fields that come from the contact itself — the callsign worked, the reports, the time, the band, and your own STATION_CALLSIGN — are refused here and the panel says which line was dropped and why: those are what make the log a record of what actually happened. |
-| Comment sent with each contact | `udpLog.comment` | text | — | Goes in the ADIF COMMENT field. Left empty, no comment is sent at all — which is the right default, because DigiShack's own note about how the contact was made would otherwise go out with every QSO. This is also the field the live scoring sites read for their own commands, so POTA or a park reference belongs here if you are using one. |
-| UDP station id | `udpLog.stationId` | text | `WSJT-X` | The program name inside the datagram. Leave it as WSJT-X unless you know the receiver cares: several match on it literally and ignore anything else, so a more honest value here is a good way to have your contacts silently discarded. |
+| BR mode | `br.enabled` | on/off | `false` | Ranks the decode list by what each contact is worth on ft8battle.com and sends every logged contact to the Battle Royale server below. Also switched from the decodes page. A view and a broadcast, not an operating mode: it changes nothing about what the station does on the air — and FT8BR bans automated operation, so stop the auto operator before playing. |
+| Battle Royale server | `br.host` | text | — | The address ft8battle.com publishes for its UDP log server. Not a machine on your LAN: this one goes out across the internet, which is the point. A pasted URL is tidied down to its host. |
+| Battle Royale port | `br.port` | number | `2237` | The port published alongside the address. 2237 is what ft8battle.com listed when this was written; trust the site over this text. |
+| ADIF program id | `br.programId` | text | `WSJT-X` | The PROGRAMID written inside the ADIF document. Battle Royale accepts a WSJT-X log, which is why that is the default. The station id below is the protocol envelope and is checked separately. |
+| Extra ADIF fields | `br.extraFields` | text | — | Added to every record sent to Battle Royale, as NAME=value separated by commas or newlines. Fields that come from the contact itself are refused, and the panel below says which line was dropped and why. |
+| Comment sent with each contact | `br.comment` | text | — | Goes in the ADIF COMMENT field, which is the one Battle Royale reads for its own commands — a POTA reference or a /name request belongs here. Left empty, no comment is sent, and DigiShack's own note about the contact never is. |
+| UDP station id | `br.stationId` | text | `WSJT-X` | The program name inside the datagram. Leave it as WSJT-X: the server matches on it literally. |
+
+## Broadcast logged contacts (UDP)
+
+Sends every logged contact as the same UDP datagram WSJT-X sends when 'Enable logged contact ADIF broadcast' is ticked. That one message is how GridTracker, Log4OM, JTAlert, N1MM and the live scoring sites learn a contact happened, so turning this on makes all of them work without any of them knowing DigiShack exists. Separate from the Battle Royale broadcast above, with its own destination and its own switch — the UDP button on the decodes page, next to BR mode. It is one-way and unauthenticated: your log goes onto the network in clear, so point it at a machine you control.
+
+| Setting | Key | Type | Default | What it does |
+|---|---|---|---|---|
+| Broadcast logged contacts over UDP | `udp.enabled` | on/off | `false` | Sends each logged contact as the same UDP datagram WSJT-X sends when 'Enable logged contact ADIF broadcast' is ticked. That one message is how GridTracker, Log4OM, JTAlert and N1MM learn a contact happened, so turning this on makes all of them work without any of them knowing DigiShack exists. Also switched from the decodes page, next to BR mode. OFF by default because it puts your log — callsigns, grids, times — on the network as cleartext UDP to whatever address you type below. |
+| UDP log destination | `udp.host` | text | `127.0.0.1` | Where to send it. 127.0.0.1 is right only when the receiving program is on the SAME machine as DigiShack — a container or a separate server needs the desktop PC's LAN address, which is the thing that catches people out. Your subnet's broadcast address (the one ending in .255 on a typical home network) reaches every listener at once. |
+| UDP log port | `udp.port` | number | `2333` | The port the receiving program listens on. GridTracker and most loggers default to 2333 for the ADIF broadcast; WSJT-X's own status protocol is 2237 and is a different thing. Check the receiving program rather than guessing — nothing reports a datagram sent to a port nobody is listening on. |
+| ADIF program id | `udp.programId` | text | `WSJT-X` | The PROGRAMID written inside the ADIF document. Separate from the station id below: that one is the protocol envelope, this one is a field in the record, and receivers check different ones. Several only accept a document whose PROGRAMID reads WSJT-X, which is why that is the default. |
+| Extra ADIF fields | `udp.extraFields` | text | — | Added to every broadcast record, as NAME=value separated by commas or newlines. For things that describe the STATION rather than the contact: MY_ANTENNA=EFHW, MY_RIG=FLEX-6400, CONTEST_ID=CQ-WW-DIGI. Fields that come from the contact itself — the callsign worked, the reports, the time, the band, and your own STATION_CALLSIGN — are refused here and the panel says which line was dropped and why: those are what make the log a record of what actually happened. |
+| Comment sent with each contact | `udp.comment` | text | — | Goes in the ADIF COMMENT field. Left empty, no comment is sent at all — which is the right default, because DigiShack's own note about how the contact was made would otherwise go out with every QSO. |
+| UDP station id | `udp.stationId` | text | `WSJT-X` | The program name inside the datagram. Leave it as WSJT-X unless you know the receiver cares: several match on it literally and ignore anything else, so a more honest value here is a good way to have your contacts silently discarded. |
 
 ## N3FJP Amateur Contact Log
 
@@ -472,6 +487,12 @@ an older database — keeps working. Nothing writes to an old key.
 
 | Was | Is now |
 |---|---|
+| `udpLog.host` | `br.host` |
+| `udpLog.port` | `br.port` |
+| `udpLog.programId` | `br.programId` |
+| `udpLog.extraFields` | `br.extraFields` |
+| `udpLog.comment` | `br.comment` |
+| `udpLog.stationId` | `br.stationId` |
 | `flex.mode` | `digital.mode` |
 | `flex.huntNewOnly` | `auto.huntNewOnly` |
 | `flex.huntMinSnr` | `auto.huntMinSnr` |

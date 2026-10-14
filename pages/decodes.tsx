@@ -508,27 +508,48 @@ export default function DigitalPage({ wsUrl }: Props) {
    * it off: silently changing station state because a display option was toggled is the
    * wrong trade, and an operator who means to play will stop it themselves.
    *
-   * localStorage, because it is a per-browser preference and nobody else's business.
+   * STATION STATE, not a browser preference, since 1.182.0: BR mode is also the switch for
+   * the Battle Royale broadcast, which the bridge sends, so it lives in settings
+   * (`br.enabled`) behind the same narrow route as the UDP button beside it. Operators
+   * switch it; everyone sees it.
    */
   const [brMode, setBrMode] = useState(false);
+  const [udpOn, setUdpOn] = useState(false);
+  const [switchBusy, setSwitchBusy] = useState(false);
+  const canSwitch = useCan("OPERATOR");
+  const loadSwitches = useCallback(
+    () =>
+      apiGet<{ br: boolean; udp: boolean }>("/api/digital/broadcast")
+        .then((r) => {
+          setBrMode(r.br);
+          setUdpOn(r.udp);
+        })
+        .catch(() => {
+          /* the buttons keep their last known state; the next poll corrects them */
+        }),
+    [],
+  );
   useEffect(() => {
+    void loadSwitches();
+    // Polled, so a switch thrown on another screen shows here within half a minute.
+    const t = setInterval(() => void loadSwitches(), 30_000);
+    return () => clearInterval(t);
+  }, [loadSwitches]);
+  const setSwitch = useCallback(async (patch: { br?: boolean; udp?: boolean }) => {
+    setSwitchBusy(true);
     try {
-      setBrMode(window.localStorage.getItem("digishack.brMode") === "1");
+      const r = await apiPatch<{ br: boolean; udp: boolean }>("/api/digital/broadcast", patch);
+      // The STORED values, so the button shows what the station will actually do.
+      setBrMode(r.br);
+      setUdpOn(r.udp);
     } catch {
-      /* private window, blocked storage - the default is off and that is fine */
+      /* refused or offline: the next poll shows what the station is actually doing */
+    } finally {
+      setSwitchBusy(false);
     }
   }, []);
-  const toggleBr = useCallback(() => {
-    setBrMode((on) => {
-      const next = !on;
-      try {
-        window.localStorage.setItem("digishack.brMode", next ? "1" : "0");
-      } catch {
-        /* nothing to do - the toggle still works for this page view */
-      }
-      return next;
-    });
-  }, []);
+  const toggleBr = useCallback(() => void setSwitch({ br: !brMode }), [brMode, setSwitch]);
+  const toggleUdp = useCallback(() => void setSwitch({ udp: !udpOn }), [udpOn, setSwitch]);
 
   /**
    * Whether Auto Hunt will call stations that have just finished a contact.
@@ -1412,13 +1433,32 @@ export default function DigitalPage({ wsUrl }: Props) {
             <Button
               variant={brMode ? "primary" : "secondary"}
               onClick={toggleBr}
+              loading={switchBusy}
+              disabled={!canSwitch}
+              disabledReason={canSwitch ? undefined : "Operators switch BR mode"}
               title={
-                "Rank the list by FT8 Battle Royale points. A VIEW ONLY - it changes what " +
-                "this page shows and nothing about what the station does. FT8BR requires " +
-                "human-operated contacts, so stop the auto operator before playing."
+                "BR mode: rank the list by FT8 Battle Royale points AND send each logged " +
+                "contact to the Battle Royale server (Settings > Logbooks > FT8 Battle " +
+                "Royale). A view plus a broadcast - it changes nothing about what the " +
+                "station does on the air. FT8BR requires human-operated contacts, so stop " +
+                "the auto operator before playing."
               }
             >
-              {brMode ? "BR: on" : "BR points"}
+              {brMode ? "BR: on" : "BR mode"}
+            </Button>
+            <Button
+              variant={udpOn ? "primary" : "secondary"}
+              onClick={toggleUdp}
+              loading={switchBusy}
+              disabled={!canSwitch}
+              disabledReason={canSwitch ? undefined : "Operators switch the UDP broadcast"}
+              title={
+                "Broadcast each logged contact over UDP to the program set in Settings > " +
+                "Logbooks > Broadcast logged contacts - GridTracker, Log4OM, JTAlert, N1MM. " +
+                "Separate from BR mode, with its own destination."
+              }
+            >
+              {udpOn ? "UDP: on" : "UDP"}
             </Button>
             <Button
               variant={paused ? "primary" : "secondary"}

@@ -5,7 +5,7 @@ import { useApi } from "@/lib/client/api";
 import { PROTECTED_FIELDS } from "@/lib/logging/broadcast-fields";
 
 /**
- * Exactly what the UDP broadcast puts on the network, field by field.
+ * Exactly what a UDP broadcast puts on the network, field by field.
  *
  * "i want to see every field its sending" — and that is the right thing to ask of a feature
  * that takes the station's log and sprays it onto a LAN. A settings card that says "broadcast
@@ -16,12 +16,18 @@ import { PROTECTED_FIELDS } from "@/lib/logging/broadcast-fields";
  * shown here cannot drift from what is sent. A preview assembled separately would be a second
  * implementation and would eventually disagree with the first, which is worse than no preview.
  *
+ * ONE PANEL PER BROADCAST. `target="br"` shows what Battle Royale receives, `target="udp"`
+ * what the program on the desk receives; they have different identities, destinations and
+ * switches, so one panel could be right for at most one of them.
+ *
  * Their own callsigns and their own grid, rather than an example: a worked example can hide a
  * field that happens to be empty on this station, which is exactly the thing somebody opens
  * this panel to check.
  */
-export function UdpBroadcastPreview() {
+export function UdpBroadcastPreview({ target }: { target: "br" | "udp" }) {
   const { data, error, reload } = useApi<{
+    target: "br" | "udp";
+    enabled: boolean;
     datagram: string | null;
     detail?: string;
     fields?: { name: string; value: string }[];
@@ -30,14 +36,15 @@ export function UdpBroadcastPreview() {
     destination?: { host: string; port: number; raw: string };
     problem?: string | null;
     forQso?: { callsign: string; band: string; at: string };
-  }>("/api/digital/udp-preview");
+  }>(`/api/digital/udp-preview?target=${target}`);
 
   const [raw, setRaw] = useState(false);
+  const receiver = target === "br" ? "Battle Royale" : "the receiving program";
 
   return (
     <div className="mt-4 border-t border-line pt-4">
       <div className="flex items-baseline justify-between gap-3 mb-2">
-        <h4 className="text-sm font-medium">What gets sent</h4>
+        <h4 className="text-sm font-medium">What {receiver} gets</h4>
         <div className="flex gap-3">
           <button
             type="button"
@@ -58,7 +65,18 @@ export function UdpBroadcastPreview() {
 
       {error && <ErrorBanner>{error.message}</ErrorBanner>}
 
-      {/* THE DESTINATION FIRST, because a perfectly formed record sent nowhere is the
+      {/* WHETHER IT IS ON AT ALL comes before where it goes: a destination shown with no
+          hint that nothing is being sent to it is how an operator spends an evening
+          checking a firewall. */}
+      {data && !data.enabled && (
+        <p className="mb-3 text-xs text-fg-subtle">
+          {target === "br"
+            ? "BR mode is off, so nothing is sent here. Switch it on above or on the decodes page."
+            : "Off, so nothing is sent. Switch it on above or with the UDP button on the decodes page."}
+        </p>
+      )}
+
+      {/* THE DESTINATION NEXT, because a perfectly formed record sent nowhere is the
           failure that actually happened — a pasted URL, failing once per contact, in a log
           the operator had no reason to read. */}
       {data?.problem && (
@@ -68,7 +86,7 @@ export function UdpBroadcastPreview() {
       )}
       {data?.destination && !data.problem && (
         <p className="mb-3 text-xs text-fg-subtle">
-          Sending to{" "}
+          {data.enabled ? "Sending to" : "Would send to"}{" "}
           <code className="font-mono text-fg-muted">
             {data.destination.host}:{data.destination.port}
           </code>
