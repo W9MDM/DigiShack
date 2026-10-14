@@ -586,6 +586,26 @@ export default function DigitalPage({ wsUrl }: Props) {
   }, [brMode]);
 
   /**
+   * Who on the Battle Royale panel is on the air RIGHT NOW: the latest decode per callsign
+   * from the last two minutes - eight FT8 windows. A holding we can hear is one we can take;
+   * one we cannot is a line in a list. Keyed in upper case, as the feed spells callsigns.
+   */
+  const heardNow = useMemo(() => {
+    const out = new Map<string, DecodeEvent>();
+    if (!brMode) return out;
+    const cutoff = Date.now() - 120_000;
+    for (const d of rows) {
+      if (!d.callsign) continue;
+      const t = new Date(d.timestamp).getTime();
+      if (t < cutoff) continue;
+      const call = d.callsign.toUpperCase();
+      const prev = out.get(call);
+      if (!prev || new Date(prev.timestamp).getTime() < t) out.set(call, d);
+    }
+    return out;
+  }, [brMode, rows]);
+
+  /**
    * Whether Auto Hunt will call stations that have just finished a contact.
    *
    * From `/api/digital/hunt-prefs` — a narrow VIEWER-readable route, because
@@ -1440,7 +1460,7 @@ export default function DigitalPage({ wsUrl }: Props) {
                 <span>
                   {e.station === myCall ? <strong>{e.station}</strong> : e.station}
                   {e.type === "steal" ? " STOLE " : " → "}
-                  {e.contact}
+                  {heardNow.has(e.contact) ? <strong>{e.contact}</strong> : e.contact}
                   {e.victim && (
                     <>
                       {" from "}
@@ -1455,6 +1475,51 @@ export default function DigitalPage({ wsUrl }: Props) {
                   {e.points === null ? "held" : e.points > 0 ? `+${e.points}` : e.points}
                   {e.first ? " ★" : ""}
                 </span>
+                {/* THE STEAL BUTTON. "if we hear a decode can we add a call button next to
+                    them to steal the points?" - a holding we can hear right now gets the same
+                    Call the decode list has, labelled with what the contact is worth on OUR
+                    band and mode: "Steal 7" when another player holds them here, "Call 1–5"
+                    when nobody does. A station we already hold today shows "yours" instead:
+                    that call would be a duplicate and cost double. An operator's click, which
+                    is exactly what FT8BR requires. */}
+                {(() => {
+                  const d = heardNow.get(e.contact);
+                  if (!d) return null;
+                  if (workedDupe.has(e.contact)) {
+                    return (
+                      <span
+                        className="text-danger text-[10px] uppercase tracking-wide"
+                        title="Already worked on this band and mode today — working them again costs double."
+                      >
+                        yours
+                      </span>
+                    );
+                  }
+                  const sc = brScores.get(e.contact);
+                  const worth = !sc ? "" : sc.min === sc.max ? ` ${sc.min}` : ` ${sc.min}–${sc.max}`;
+                  return (
+                    <button
+                      type="button"
+                      title={
+                        `Call ${e.contact} now — heard ${formatUtcTime(d.timestamp)} at ` +
+                        `${d.freqOffset} Hz, ${d.snr} dB.` +
+                        (sc?.steal ? ` Takes the points ${sc.steal.from} holds.` : "")
+                      }
+                      onClick={() => void callFromRow(d)}
+                      className={cn(
+                        "tap-inline rounded-sm border px-1.5 py-0.5",
+                        "text-[10px] uppercase tracking-wide transition-colors",
+                        sc?.steal
+                          ? "border-warn text-warn hover:bg-warn/10"
+                          : "border-line-strong text-fg-muted hover:border-accent-bright hover:text-accent-bright",
+                        "focus-visible:outline-2 focus-visible:outline-accent-bright",
+                      )}
+                    >
+                      {sc?.steal ? "Steal" : "Call"}
+                      {worth}
+                    </button>
+                  );
+                })()}
               </div>
             ))}
           </div>

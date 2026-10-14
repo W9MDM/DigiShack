@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.183.0 - public release
+## 1.184.0 - public release
 
 Development happens in a private repository; this is where the public history starts.
 Earlier entries are not reproduced - they quote real operators by callsign, include
@@ -22,6 +22,7 @@ Notes for anyone running this:
 
 ## Release history
 
+- **1.184.0** — A Steal button on the Battle Royale panel, for holdings we can hear
 - **1.183.0** — BR mode reads the Battle Royale feed: who holds what, and what a steal is worth
 - **1.182.0** — Battle Royale gets its own broadcast, switched by BR mode; everyone else gets a UDP button
 - **1.181.8** — A queued station is lost to a mode switch, and nobody is told
