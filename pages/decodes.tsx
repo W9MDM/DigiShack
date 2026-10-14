@@ -565,6 +565,21 @@ export default function DigitalPage({ wsUrl }: Props) {
     };
   }, [brMode]);
 
+  const heardNow = useMemo(() => {
+    const out = new Map<string, DecodeEvent>();
+    if (!brMode) return out;
+    const cutoff = Date.now() - 120_000;
+    for (const d of rows) {
+      if (!d.callsign) continue;
+      const t = new Date(d.timestamp).getTime();
+      if (t < cutoff) continue;
+      const call = d.callsign.toUpperCase();
+      const prev = out.get(call);
+      if (!prev || new Date(prev.timestamp).getTime() < t) out.set(call, d);
+    }
+    return out;
+  }, [brMode, rows]);
+
   /**
    * Whether Auto Hunt will call stations that have just finished a contact.
    *
@@ -1386,7 +1401,7 @@ export default function DigitalPage({ wsUrl }: Props) {
                 <span>
                   {e.station === myCall ? <strong>{e.station}</strong> : e.station}
                   {e.type === "steal" ? " STOLE " : " → "}
-                  {e.contact}
+                  {heardNow.has(e.contact) ? <strong>{e.contact}</strong> : e.contact}
                   {e.victim && (
                     <>
                       {" from "}
@@ -1401,6 +1416,44 @@ export default function DigitalPage({ wsUrl }: Props) {
                   {e.points === null ? "held" : e.points > 0 ? `+${e.points}` : e.points}
                   {e.first ? " ★" : ""}
                 </span>
+                {(() => {
+                  const d = heardNow.get(e.contact);
+                  if (!d) return null;
+                  if (workedDupe.has(e.contact)) {
+                    return (
+                      <span
+                        className="text-danger text-[10px] uppercase tracking-wide"
+                        title="Already worked on this band and mode today — working them again costs double."
+                      >
+                        yours
+                      </span>
+                    );
+                  }
+                  const sc = brScores.get(e.contact);
+                  const worth = !sc ? "" : sc.min === sc.max ? ` ${sc.min}` : ` ${sc.min}–${sc.max}`;
+                  return (
+                    <button
+                      type="button"
+                      title={
+                        `Call ${e.contact} now — heard ${formatUtcTime(d.timestamp)} at ` +
+                        `${d.freqOffset} Hz, ${d.snr} dB.` +
+                        (sc?.steal ? ` Takes the points ${sc.steal.from} holds.` : "")
+                      }
+                      onClick={() => void callFromRow(d)}
+                      className={cn(
+                        "tap-inline rounded-sm border px-1.5 py-0.5",
+                        "text-[10px] uppercase tracking-wide transition-colors",
+                        sc?.steal
+                          ? "border-warn text-warn hover:bg-warn/10"
+                          : "border-line-strong text-fg-muted hover:border-accent-bright hover:text-accent-bright",
+                        "focus-visible:outline-2 focus-visible:outline-accent-bright",
+                      )}
+                    >
+                      {sc?.steal ? "Steal" : "Call"}
+                      {worth}
+                    </button>
+                  );
+                })()}
               </div>
             ))}
           </div>
