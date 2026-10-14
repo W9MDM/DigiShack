@@ -116,6 +116,41 @@ model PasswordResetAttempt {
   @@index([ip])
 }
 
+/// One event from the FT8 Battle Royale activity feed, kept so BR mode can see who holds
+/// what today. Polled by the bridge, seeded from their steal predictor, pruned after two
+/// days. See lib/contest/ft8battle-feed.ts for what the fields mean to the score.
+model Ft8brActivity {
+  id      String   @id @default(cuid())
+  /// When FT8BR recorded it. Their timestamps are UTC.
+  at      DateTime
+  /// qso | steal | penalty
+  type    String   @db.VarChar(8)
+  /// The player who made the contact.
+  station String   @db.VarChar(20)
+  /// The station they worked.
+  contact String   @db.VarChar(20)
+  /// DigiShack spelling: "20M".
+  band    String   @db.VarChar(8)
+  /// FT8 | FT4 | FT2 - read from the breakdown text; the feed has no mode field.
+  mode    String   @db.VarChar(4)
+  /// What the player earned for it, stolen points included. Null when seeded from the
+  /// predictor list, which knows who holds a contact but not what it was worth.
+  points  Int?
+  /// On a steal, who lost the points.
+  victim  String?  @db.VarChar(20)
+  /// On a steal, how much of `points` came from the victim.
+  stolen  Int?
+  /// FT8BR awarded the First Contact bonus for it.
+  first   Boolean  @default(false)
+  /// activity | predictor
+  source  String   @db.VarChar(10)
+  createdAt DateTime @default(now())
+
+  @@unique([at, station, contact, band, mode])
+  @@index([at])
+  @@index([contact, band])
+}
+
 model ApiKey {
   id   String @id @default(cuid())
   name String @db.VarChar(120)

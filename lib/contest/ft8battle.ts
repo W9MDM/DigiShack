@@ -73,6 +73,19 @@ export interface ScoreInput {
    * points and one that costs double.
    */
   alreadyWorkedToday?: boolean;
+  /**
+   * Somebody already worked them on this band today, per the FT8BR feed.
+   *
+   * The First Contact bonus is per band per day and it is gone: the range collapses to its
+   * floor. Known only for stations the tracker has seen - see ft8battle-feed.ts.
+   */
+  claimedOnBand?: boolean;
+  /**
+   * Another player holds this station on this band and mode, and working them takes their
+   * points. `min`/`max` is what they hold - exact when the feed said, a range when only the
+   * holder is known. Never set when WE are the holder: that is a duplicate, not a steal.
+   */
+  steal?: { from: string; min: number; max: number };
 }
 
 export interface Score {
@@ -86,6 +99,8 @@ export interface Score {
   multiplier: number;
   /** Why it scores what it scores, shortest first — for a column in a list. */
   reasons: string[];
+  /** The steal this score includes, when it does — so a list can mark it. */
+  steal: { from: string; min: number; max: number } | null;
 }
 
 /**
@@ -113,13 +128,18 @@ export function scoreContact(input: ScoreInput): Score {
   // applied, so First Contact on 10 m FT4 in Happy Hour is worth 4 x 1.5 x 2 x 2 = 24 and
   // not 4. Applying a multiplier to the base alone would understate a first contact by a
   // factor of six and send the operator after the wrong station.
-  const min = Math.round(flat * multiplier);
-  const max = Math.round((flat + FIRST_CONTACT_BONUS) * multiplier);
+  const own = Math.round(flat * multiplier);
+  // CLAIMED MEANS NO CEILING. First Contact is per band per day, and a station the feed has
+  // seen on this band today is somebody else's first contact. A holding implies it too.
+  const claimed = Boolean(input.claimedOnBand || input.steal);
+  let min = own;
+  let max = claimed ? own : Math.round((flat + FIRST_CONTACT_BONUS) * multiplier);
 
   if (input.pota) reasons.push(`POTA +${POTA_BONUS}`);
   if (bandMult > 1) reasons.push(`${band} x1.5`);
   if (modeMult > 1) reasons.push(`${mode} x2`);
   if (happy) reasons.push("Happy Hour x2");
+  if (claimed && !input.steal) reasons.push("claimed: no First Contact");
 
   // THE DUPLICATE PENALTY IS TWICE WHAT IT WOULD HAVE EARNED, and it is the reason this file
   // is worth having at all. The operator cannot see their own day's log on the waterfall, and
@@ -133,10 +153,23 @@ export function scoreContact(input: ScoreInput): Score {
     // because getting it wrong suppresses a legitimate contact rather than merely
     // mis-scoring one.
     reasons.unshift("DUPLICATE");
-    return { min: 0, max: 0, penalty: -2 * min, multiplier, reasons };
+    return { min: 0, max: 0, penalty: -2 * min, multiplier, reasons, steal: null };
   }
 
-  return { min, max, penalty: 0, multiplier, reasons };
+  // A STEAL IS THEIR POINTS ON TOP OF OURS. "Last person to work the same station on the
+  // same band and mode on the same day gets ALL the points" - what the holder earned, and a
+  // chain's accumulated total. Added to both ends, so a known steal moves the floor and the
+  // list ranks it where it belongs.
+  if (input.steal) {
+    min += input.steal.min;
+    max += input.steal.max;
+    reasons.unshift(
+      `STEAL from ${input.steal.from} +${input.steal.min}` +
+        (input.steal.max !== input.steal.min ? `–${input.steal.max}` : ""),
+    );
+  }
+
+  return { min, max, penalty: 0, multiplier, reasons, steal: input.steal ?? null };
 }
 
 /**

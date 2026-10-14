@@ -23,6 +23,7 @@ and a backup moves the whole installation.
 | [Backup and moving](backup-and-moving.md) | Bundles, restore, and the two traps that break a migration |
 | [Settings reference](settings.md) | Every one of the 175 settings, generated from the code |
 | [Networked Icom](icom.md) | Driving an IC-7300 or IC-705 over the network, with no bridge software |
+| [FT8 Battle Royale](ft8battle.md) | BR mode: points on the waterfall, the broadcast, and tracking who holds what |
 | [Architecture](architecture.md) | What runs where, and why the radio is its own process |
 | [Icom protocol](icom-protocol.md) | The RS-BA1 wire format, for anyone working on the driver |
 | [Troubleshooting](troubleshooting.md) | Symptoms, in the order you are likely to meet them |
