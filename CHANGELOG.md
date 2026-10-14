@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.184.0 - public release
+## 1.185.1 - public release
 
 Development happens in a private repository; this is where the public history starts.
 Earlier entries are not reproduced - they quote real operators by callsign, include
@@ -22,6 +22,8 @@ Notes for anyone running this:
 
 ## Release history
 
+- **1.185.1** — Golden vectors that survive the scrub
+- **1.185.0** — WSPR, part one: the codec, checked against the reference binaries
 - **1.184.0** — A Steal button on the Battle Royale panel, for holdings we can hear
 - **1.183.0** — BR mode reads the Battle Royale feed: who holds what, and what a steal is worth
 - **1.182.0** — Battle Royale gets its own broadcast, switched by BR mode; everyone else gets a UDP button

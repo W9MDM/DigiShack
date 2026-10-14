@@ -6,7 +6,7 @@
 // two halves are checked against each other here rather than by ear.
 
 import { float32ToS16le } from "@/lib/icom/audio-stream";
-import { s16leToFloat } from "@/lib/client/audio-player";
+import { s16leToFloat, StreamingResampler } from "@/lib/client/audio-player";
 
 let pass = 0;
 let fail = 0;
@@ -75,6 +75,25 @@ console.log("\nodd-length and empty frames");
   eq(s16leToFloat(new ArrayBuffer(0)).length, 0, "an empty frame yields no samples");
   // A truncated packet must not read past the end and invent a sample.
   eq(s16leToFloat(new ArrayBuffer(3)).length, 1, "an odd byte count drops the partial sample");
+}
+
+console.log("\ncontinuous resampling across network packets");
+for (const [from, to] of [[24000, 44100], [24000, 48000], [48000, 44100], [48000, 48000]]) {
+  const input = Float32Array.from({ length: from! * 10 }, (_, i) => Math.sin(i * 0.17));
+  const whole = new StreamingResampler(from!, to!).push(input);
+  const stream = new StreamingResampler(from!, to!);
+  const output: number[] = [];
+  for (let offset = 0; offset < input.length; offset += 128) {
+    output.push(...stream.push(input.subarray(offset, offset + 128)));
+    stream.push(new Float32Array(0));
+  }
+  ok(Math.abs(output.length - to! * 10) <= 3,
+    `${from} -> ${to} preserves duration (only interpolation lookahead remains)`);
+  ok(Math.abs(output.length - whole.length) <= 1, "packet boundaries preserve output count");
+  let worst = 0;
+  for (let i = 0; i < Math.min(output.length, whole.length); i++)
+    worst = Math.max(worst, Math.abs(output[i]! - whole[i]!));
+  ok(worst < 1e-5, "packet boundaries preserve waveform, including interpolation across seams", `${worst}`);
 }
 
 console.log(`\n${pass} passed, ${fail} failed\n`);

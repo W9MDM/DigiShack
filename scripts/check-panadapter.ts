@@ -8,6 +8,10 @@
 
 import {
   PAN_MAX_BINS,
+  PAN_MIN_DBM,
+  PAN_MAX_DBM,
+  PAN_Y_PIXELS,
+  panPixelToDb,
   PAN_PACKET_CLASS,
   panNeedsRecentre,
   PanFrameAssembler,
@@ -82,6 +86,17 @@ function noiseBand(
 function pct(bins: Uint8Array, p: number): number {
   const s = Uint8Array.from(bins).sort();
   return s[Math.min(s.length - 1, Math.floor(s.length * p))]!;
+}
+
+{
+  eq("FFT top pixel is strongest", panPixelToDb(0), PAN_MAX_DBM);
+  eq("FFT bottom pixel is weakest", panPixelToDb(PAN_Y_PIXELS - 1), PAN_MIN_DBM);
+  eq("FFT bottom clipping stays at floor", panPixelToDb(PAN_Y_PIXELS), PAN_MIN_DBM);
+  const raw = new Uint16Array(4096).fill(3400);
+  raw.fill(2200, 1900, 1930);
+  const row = new PanadapterScaler(panPixelToDb).row(raw, 14_200_000, 20_000);
+  ok("a real carrier rises above noise through the Flex conversion and scaler",
+    row.bins[1910]! > row.bins[100]! + 150);
 }
 
 function ok(name: string, cond: boolean, detail = ""): void {

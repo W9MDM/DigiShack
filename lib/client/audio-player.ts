@@ -56,20 +56,37 @@ export function s16leToFloat(pcm: ArrayBuffer): Float32Array {
  * something better. The material is a 3 kHz voice passband sampled at 24 kHz — eight times the
  * highest frequency present — so the error it makes sits far above anything audible in it.
  */
-export function resampleLinear(input: Float32Array, from: number, to: number): Float32Array {
-  if (from === to || input.length === 0) return input;
-  const ratio = from / to;
-  const count = Math.max(1, Math.floor(input.length / ratio));
-  const out = new Float32Array(count);
-  for (let i = 0; i < count; i++) {
-    const pos = i * ratio;
-    const idx = Math.floor(pos);
-    const frac = pos - idx;
-    const a = input[idx] ?? 0;
-    const b = input[idx + 1] ?? a;
-    out[i] = a + (b - a) * frac;
+export class StreamingResampler {
+  private previous: number | null = null;
+  private position = 0;
+
+  constructor(private readonly from: number, private readonly to: number) {
+    if (!Number.isFinite(from) || !Number.isFinite(to) || from <= 0 || to <= 0)
+      throw new Error("Audio sample rates must be positive finite numbers");
   }
-  return out;
+
+  push(input: Float32Array): Float32Array {
+    if (this.from === this.to || input.length === 0) return input;
+    const prefix = this.previous === null ? 0 : 1;
+    const length = input.length + prefix;
+    const at = (i: number): number => i < prefix ? this.previous! : input[i - prefix]!;
+    const ratio = this.from / this.to;
+    // Keep the last sample until its neighbour arrives. Repeating it at each packet
+    // boundary makes a seam even at an exact 24 -> 48 kHz ratio. Fractional phase must
+    // also survive packets, otherwise 44.1 kHz output loses 37.5 samples every second.
+    const count = Math.max(0, Math.ceil((length - 1 - this.position) / ratio));
+    const out = new Float32Array(count);
+    for (let i = 0; i < count; i++) {
+      const pos = this.position + i * ratio;
+      const idx = Math.floor(pos);
+      const frac = pos - idx;
+      const a = at(idx);
+      out[i] = a + (at(Math.min(idx + 1, length - 1)) - a) * frac;
+    }
+    this.position += count * ratio - (length - 1);
+    this.previous = input[input.length - 1]!;
+    return out;
+  }
 }
 
 /**
@@ -85,6 +102,7 @@ export class ReceiverAudio {
   private packets = 0;
   private bufferedMs = 0;
   private underruns = 0;
+  private resampler: StreamingResampler | null = null;
 
   /**
    * The radio's sample rate, which arrives AFTER the context has to be created.
@@ -97,6 +115,7 @@ export class ReceiverAudio {
   private sampleRate = 0;
 
   setSampleRate(rate: number): void {
+    if (rate !== this.sampleRate) this.resampler = null;
     this.sampleRate = rate;
   }
 
@@ -148,7 +167,8 @@ export class ReceiverAudio {
     const node = this.node;
     if (!ctx || !node || this.sampleRate <= 0) return;
 
-    const samples = resampleLinear(s16leToFloat(pcm), this.sampleRate, ctx.sampleRate);
+    this.resampler ??= new StreamingResampler(this.sampleRate, ctx.sampleRate);
+    const samples = this.resampler.push(s16leToFloat(pcm));
     if (samples.length === 0) return;
     // Transferred rather than copied: this runs 188 times a second on the FlexRadio.
     node.port.postMessage(samples, [samples.buffer]);
@@ -176,6 +196,7 @@ export class ReceiverAudio {
     this.ctx = null;
     this.gain = null;
     this.node = null;
+    this.resampler = null;
     if (ctx) await ctx.close().catch(() => {});
   }
 }

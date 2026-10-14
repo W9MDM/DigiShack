@@ -93,6 +93,12 @@ export const PAN_Y_PIXELS = 4096;
 export const PAN_MIN_DBM = -140;
 export const PAN_MAX_DBM = -20;
 
+/** Flex FFT bins encode screen Y: zero is the top (strongest), not the floor. */
+export function panPixelToDb(raw: number): number {
+  const pixel = Math.max(0, Math.min(PAN_Y_PIXELS - 1, raw));
+  return PAN_MAX_DBM - (pixel / (PAN_Y_PIXELS - 1)) * (PAN_MAX_DBM - PAN_MIN_DBM);
+}
+
 /** Measured span limits: `min_bw=0.004920 max_bw=7.372800` MHz. */
 /**
  * How long a running panadapter may go without a frame before its settings are
