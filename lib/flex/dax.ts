@@ -982,9 +982,7 @@ export class FlexDaxSource extends EventEmitter<Events> {
     pan.on("error", (e) => this.emit("error", e));
 
     // A bin is a y pixel index over the panadapter's dBm window; the scaler wants dB.
-    this.panScaler = new PanadapterScaler(
-      panPixelToDb,
-    );
+    this.panScaler = new PanadapterScaler(panPixelToDb);
 
     pan.on("frame", (f) => {
       this.lastPanFrameAt = Date.now();

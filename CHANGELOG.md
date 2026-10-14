@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.185.1 - public release
+## 1.185.2 - public release
 
 Development happens in a private repository; this is where the public history starts.
 Earlier entries are not reproduced - they quote real operators by callsign, include
@@ -22,6 +22,7 @@ Notes for anyone running this:
 
 ## Release history
 
+- **1.185.2** — Correct Flex FFT polarity and preserve audio across packet boundaries
 - **1.185.1** — Golden vectors that survive the scrub
 - **1.185.0** — WSPR, part one: the codec, checked against the reference binaries
 - **1.181.8** — A queued station is lost to a mode switch, and nobody is told
