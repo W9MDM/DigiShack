@@ -17,12 +17,10 @@ import { FlexClient } from "@/lib/flex/client";
 import { hasAntennaChoice, resolveAntenna } from "@/lib/flex/antennas";
 import {
   FlexPanadapter,
-  PAN_MAX_DBM,
-  PAN_MIN_DBM,
   PAN_PACKET_CLASS,
   PAN_STALL_MS,
   panNeedsRecentre,
-  PAN_Y_PIXELS,
+  panPixelToDb,
   WATERFALL_PACKET_CLASS,
 } from "@/lib/flex/panadapter";
 import { LinkLatency } from "@/lib/radio/link-latency";
@@ -985,7 +983,7 @@ export class FlexDaxSource extends EventEmitter<Events> {
 
     // A bin is a y pixel index over the panadapter's dBm window; the scaler wants dB.
     this.panScaler = new PanadapterScaler(
-      (raw) => PAN_MIN_DBM + (raw / PAN_Y_PIXELS) * (PAN_MAX_DBM - PAN_MIN_DBM),
+      panPixelToDb,
     );
 
     pan.on("frame", (f) => {

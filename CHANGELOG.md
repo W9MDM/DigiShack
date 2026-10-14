@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.184.0 - public release
+## 1.185.1 - public release
 
 Development happens in a private repository; this is where the public history starts.
 Earlier entries are not reproduced - they quote real operators by callsign, include
@@ -22,6 +22,8 @@ Notes for anyone running this:
 
 ## Release history
 
+- **1.185.1** — Golden vectors that survive the scrub
+- **1.185.0** — WSPR, part one: the codec, checked against the reference binaries
 - **1.181.8** — A queued station is lost to a mode switch, and nobody is told
 - **1.181.7** — I pushed past a refusing scrub
 - **1.181.6** — Warm-up stops us CQing into a dead band, not answering a live one
