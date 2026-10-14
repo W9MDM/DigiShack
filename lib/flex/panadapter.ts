@@ -60,11 +60,10 @@ export const PAN_MAX_BINS = 4096;
 /**
  * Vertical quantisation, and the single most consequential number here.
  *
- * A bin's value is NOT a dBm code — it is a Y PIXEL INDEX between 0 and `ypixels`,
- * linear in dB across the panadapter's own `min_dbm`..`max_dbm` window. That was
- * established by sweeping ypixels and watching the implied noise floor stay put at
- * -66.3 dBm across 100, 256, 1024, 4096 and 16384, which only happens if the map is
- * linear and the divisor is ypixels.
+ * A bin is a screen Y coordinate: 0 is max_dbm, ypixels-1 is min_dbm.
+ * The earlier sweep established the dependence on ypixels but did not establish
+ * polarity. Mapping upward from min_dbm inverted signals into holes; use
+ * panPixelToDb for the conversion, including bottom clipping.
  *
  * The radio's default is **20**, which over a 120 dB window is **6 dB per step**. A
  * waterfall drawn from that has six usable colours and looks like a fault. Nothing
