@@ -105,9 +105,11 @@ export interface DaxDecode {
   /** Time offset of the transmission within its window, seconds. */
   dt: number;
   message: string;
-  mode: "FT8" | "FT4" | "FT2" | "WSPR" | "RTTY" | "CW";
+  mode: "FT8" | "FT4" | "FT2" | "WSPR" | "RTTY" | "CW" | "JS8";
   /** UTC start of the window this came from. */
   windowStart: Date;
+  /** JS8 only: what the message layer read from the frame. */
+  js8?: import("@/lib/radio/decode-pipeline").Js8DecodeExtra;
 }
 
 export interface DaxSourceOptions {
@@ -115,7 +117,7 @@ export interface DaxSourceOptions {
   port?: number;
   /** DAX channel the slice routes audio to (slice property `dax`). */
   daxChannel?: number;
-  mode?: "FT8" | "FT4" | "FT2" | "WSPR" | "RTTY" | "CW";
+  mode?: "FT8" | "FT4" | "FT2" | "WSPR" | "RTTY" | "CW" | "JS8";
   /**
    * Decoder depth. 2 is the live default: measured at ~0.6 s per window against
    * real 20 m traffic, comfortably inside the ~2.4 s gap between cycles. Depth 3
@@ -655,11 +657,12 @@ export class FlexDaxSource extends EventEmitter<Events> {
   get periodMs(): number {
     if (isStreamMode(this.opts.mode)) return STREAM_HEARTBEAT_MS;
     if (this.opts.mode === "WSPR") return WSPR_PERIOD_MS;
+    if (this.opts.mode === "JS8") return FT8_PERIOD_MS;
     if (this.opts.mode === "FT2") return FT2_PERIOD_MS;
     return this.opts.mode === "FT4" ? FT4_PERIOD_MS : FT8_PERIOD_MS;
   }
 
-  get mode(): "FT8" | "FT4" | "FT2" | "WSPR" | "RTTY" | "CW" {
+  get mode(): "FT8" | "FT4" | "FT2" | "WSPR" | "RTTY" | "CW" | "JS8" {
     return this.opts.mode;
   }
 
@@ -671,7 +674,7 @@ export class FlexDaxSource extends EventEmitter<Events> {
    * discarded: a partly-filled FT8 window is not a valid FT4 window, and feeding
    * it to the FT4 decoder would produce nothing while looking like a fault.
    */
-  setMode(mode: "FT8" | "FT4" | "FT2" | "WSPR" | "RTTY" | "CW"): boolean {
+  setMode(mode: "FT8" | "FT4" | "FT2" | "WSPR" | "RTTY" | "CW" | "JS8"): boolean {
     if (mode === this.opts.mode) return false;
     this.opts.mode = mode;
     if (mode === "RTTY") {

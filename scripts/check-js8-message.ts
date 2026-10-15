@@ -31,6 +31,7 @@ import {
   js8PackHuffmanFrame,
   js8PackNum,
   js8ParseFrame,
+  js8StationOf,
   js8Unpack72,
   js8UnpackAlphanumeric50,
   js8UnpackCallsign,
@@ -279,6 +280,15 @@ console.log("\nbuilding and joining messages");
     if (r) text = r.text;
   }
   eq(text, "THIS IS A LONGER LINE OF TEXT THAT WILL NOT FIT IN ONE FRAME AT ALL", "and joins back to the line");
+}
+
+console.log("\nthe station a frame is from");
+{
+  eq(js8StationOf({ from: "N0GES" }), "N0GES", "a directed frame's sender is the station, not the one it answers");
+  eq(js8StationOf({ from: "N6GRG" }), "N6GRG", "a heartbeat's sender, as heard on 40 m");
+  eq(js8StationOf({ from: "@ALLCALL" }), null, "a group is not a station");
+  eq(js8StationOf({ from: undefined }), null, "a data frame names nobody");
+  eq(js8StationOf({ from: "  " }), null, "nor does a blank");
 }
 
 console.log("");

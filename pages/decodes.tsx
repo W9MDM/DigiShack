@@ -1321,7 +1321,9 @@ export default function DigitalPage({ wsUrl }: Props) {
             ? "RTTY"
             : decodingAs === "CW"
               ? "CW"
-              : "FT8";
+              : decodingAs === "JS8"
+                ? "JS8"
+                : "FT8";
 
   /**
    * Is there anything to halt? Transmitting now, a contact in flight, or an automatic
@@ -2296,6 +2298,22 @@ export default function DigitalPage({ wsUrl }: Props) {
                 // <table> in the tree has a horizontal scroll container within six lines
                 // above it, because one unwrapped table sets the width of the whole
                 // document and every page then scrolls sideways.
+                <>
+                {/* JS8: the frames are the rows below; the messages they join into, one
+                    line each as the bridge finishes them, sit above. */}
+                {decodingAs === "JS8" && (
+                  <div className="mb-3">
+                    <div className="flex items-center justify-between text-xs text-fg-muted mb-1">
+                      <span>Messages, joined from their frames</span>
+                      <button type="button" className="hover:text-fg" onClick={() => setStreamText("")}>
+                        Clear
+                      </button>
+                    </div>
+                    <pre className="font-mono text-sm whitespace-pre-wrap break-words bg-bg-raised border border-line rounded-sm p-3 max-h-56 overflow-y-auto">
+                      {streamText || "No complete message yet. Frames appear below as they decode; a message prints here when its last frame arrives."}
+                    </pre>
+                  </div>
+                )}
                 <div className="-mx-4 overflow-x-auto lg:overflow-auto lg:max-h-[52rem]">
                   {/* The size is set HERE and inherited, so one number moves the header,
                       the rows and the row height together. Setting it per-cell would let
@@ -2562,7 +2580,7 @@ export default function DigitalPage({ wsUrl }: Props) {
 
                                   stopPropagation because the row handler does the
                                   same thing — without it the click runs twice. */}
-                              {d.callsign && decodingAs !== "WSPR" && (
+                              {d.callsign && decodingAs !== "WSPR" && decodingAs !== "JS8" && (
                                 <button
                                   type="button"
                                   title={`Call ${d.callsign} now. Click the row instead to select without transmitting.`}
@@ -2595,6 +2613,7 @@ export default function DigitalPage({ wsUrl }: Props) {
                     </tbody>
                   </table>
                 </div>
+                </>
               )}
             </Card>
           </div>
@@ -3557,7 +3576,7 @@ function BandButtons({
           to a one-row stats block). */}
       <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-1">
         <div className="flex gap-1" role="group" aria-label="Digital mode">
-          {(["FT8", "FT4", "FT2", "WSPR", "RTTY", "CW"] as const).map((m) => {
+          {(["FT8", "FT4", "FT2", "WSPR", "RTTY", "CW", "JS8"] as const).map((m) => {
           const active = decodingAs === m;
           const target = bandFor(m);
           const canSwitch = active || target !== null;
