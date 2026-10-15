@@ -138,7 +138,7 @@ const DIGITAL_SLOP_HZ = 4_000;
  */
 export function digitalCallingFrequency(
   hz: number,
-  mode: "FT8" | "FT4" | "FT2" | "WSPR" | "RTTY" | "CW" | "JS8" | "PSK31" | "OLIVIA" = "FT8",
+  mode: "FT8" | "FT4" | "FT2" | "WSPR" | "RTTY" | "CW" | "JS8" | "PSK31" | "OLIVIA" | "SSTV" = "FT8",
 ): number | null {
   if (!Number.isFinite(hz)) return null;
   for (const entry of DIGITAL_FREQUENCIES) {
@@ -151,7 +151,7 @@ export function digitalCallingFrequency(
 /** The nearest digital calling frequency for a mode, for a message that suggests one. */
 export function nearestDigitalFrequency(
   hz: number,
-  mode: "FT8" | "FT4" | "FT2" | "WSPR" | "RTTY" | "CW" | "JS8" | "PSK31" | "OLIVIA" = "FT8",
+  mode: "FT8" | "FT4" | "FT2" | "WSPR" | "RTTY" | "CW" | "JS8" | "PSK31" | "OLIVIA" | "SSTV" = "FT8",
 ): number | null {
   let best: number | null = null;
   let bestGap = Infinity;
@@ -179,7 +179,7 @@ export function nearestDigitalFrequency(
  *   3. Nothing at all for a frequency outside any amateur band, so a mistyped number does not
  *      also change the mode.
  */
-export function modulationForFrequency(hz: number, mode: "FT8" | "FT4" | "FT2" | "WSPR" | "RTTY" | "CW" | "JS8" | "PSK31" | "OLIVIA" = "FT8"): Modulation | null {
+export function modulationForFrequency(hz: number, mode: "FT8" | "FT4" | "FT2" | "WSPR" | "RTTY" | "CW" | "JS8" | "PSK31" | "OLIVIA" | "SSTV" = "FT8"): Modulation | null {
   if (!Number.isFinite(hz) || hz < 1_000_000 || hz > 1_300_000_000) return null;
 
   // CW is its own modulation: the radio's filters, pitch and keyer apply only in it.

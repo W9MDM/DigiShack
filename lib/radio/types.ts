@@ -24,7 +24,7 @@ import type { EventEmitter } from "node:events";
 
 /** The digital modes the bridge can run. Not vendor-specific; listed here so drivers
  * can report what they support without importing the Flex module. */
-export type DigitalMode = "FT8" | "FT4" | "FT2" | "WSPR" | "RTTY" | "CW" | "JS8" | "PSK31" | "OLIVIA";
+export type DigitalMode = "FT8" | "FT4" | "FT2" | "WSPR" | "RTTY" | "CW" | "JS8" | "PSK31" | "OLIVIA" | "SSTV";
 
 /**
  * Audio sample format as it arrives from a radio.

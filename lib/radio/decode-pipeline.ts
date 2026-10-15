@@ -28,6 +28,7 @@ import { CwDemodulator } from "@/lib/digital/cwdemod";
 import { Psk31Demodulator } from "@/lib/digital/psk31demod";
 import { RttyProbe, type RttySuggestion } from "@/lib/digital/rtty-probe";
 import { OliviaDemodulator } from "@/lib/digital/oliviademod";
+import { SstvDecoder } from "@/lib/digital/sstv";
 import type { OliviaBandwidth, OliviaCode, OliviaTones } from "@/lib/digital/olivia";
 import { HashCallBook as Ft2HashCallBook } from "@/lib/digital/pack77";
 import { js8SubmodeNow, PERIOD_MS, TRANSMISSION_MS } from "@/lib/radio/timing";
@@ -278,6 +279,10 @@ function streamConfigurationKey(opts: StreamOptions, includeTuning = true): stri
       configuration = [opts.mode, opts.tones, opts.bandwidth, opts.code ?? "olivia", opts.syncThreshold ?? 4];
       tuning = [opts.centreHz];
       break;
+    case "SSTV":
+      configuration = [opts.mode];
+      tuning = [];
+      break;
   }
   return JSON.stringify(includeTuning ? [...configuration, ...tuning] : configuration);
 }
@@ -287,11 +292,17 @@ function streamConfigurationKey(opts: StreamOptions, includeTuning = true): stri
  * the line idles on mark between keystrokes and the decoder runs the whole time. CW is
  * the same: a key, a tone, and text as it is sent.
  */
-export type StreamMode = "RTTY" | "CW" | "PSK31" | "OLIVIA";
+export type StreamMode = "RTTY" | "CW" | "PSK31" | "OLIVIA" | "SSTV";
 
 export function isStreamMode(mode: string | null | undefined): mode is StreamMode {
-  return mode === "RTTY" || mode === "CW" || mode === "PSK31" || mode === "OLIVIA";
+  return mode === "RTTY" || mode === "CW" || mode === "PSK31" || mode === "OLIVIA" || mode === "SSTV";
 }
+
+/** SSTV's events: a picture starting, rows as they arrive, the picture complete. */
+export type SstvEvent =
+  | { kind: "start"; mode: string; width: number; height: number; at: number }
+  | { kind: "rows"; from: number; to: number; width: number; rgb: Uint8ClampedArray }
+  | { kind: "image"; mode: string; width: number; height: number; rgb: Uint8ClampedArray; at: number };
 
 /** What a stream's demodulator needs: the mode names which. */
 export type StreamOptions =
@@ -333,6 +344,10 @@ export type StreamOptions =
       code?: OliviaCode;
       /** Signal over noise below which a block is not printed; see OliviaDemodOptions. */
       syncThreshold?: number;
+    }
+  | {
+      /** The VIS header names the mode; nothing to tune. */
+      mode: "SSTV";
     };
 
 /** What a stream's heartbeat carries: the running counts, and what that decoder measures. */
@@ -380,6 +395,16 @@ export type StreamHeartbeat =
       snr: number;
       freqOffsetHz: number;
       open: boolean;
+    }
+  | {
+      mode: "SSTV";
+      seconds: number;
+      /** The mode of the picture coming in, or null while waiting for a VIS. */
+      receiving: string | null;
+      rows: number;
+      pictures: number;
+      /** VIS headers heard, known mode or not. */
+      visHeard: number;
     };
 
 /** How often a stream mode reports: once per second of audio. The liveness watchdog beats on it. */
@@ -389,6 +414,8 @@ export type DecodePipelineEvents = {
   decodes: [{ windowStart: Date; decodes: Decode[]; rms: number; decodeMs: number }];
   /** A stream mode: text as it completes, in whatever pieces the audio arrived in. */
   text: [{ mode: StreamMode; text: string; at: number }];
+  /** SSTV: a picture starting, its rows, and the finished picture. */
+  sstv: [SstvEvent];
   /** A stream mode's heartbeat, once per second of audio, with what its decoder measures for a tuning display. */
   stream: [StreamHeartbeat];
   /**
@@ -608,8 +635,11 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
   private cw: CwDemodulator | null = null;
   private psk: Psk31Demodulator | null = null;
   private olivia: OliviaDemodulator | null = null;
+  private sstv: SstvDecoder | null = null;
+  /** SSTV prints no text; its pictures go out as `sstv` events. */
+  private readonly sstvStream = { feed: (s: ArrayLike<number>): string => (this.sstv?.feed(s), "") };
   private get stream(): { feed(samples: ArrayLike<number>): string } | null {
-    return this.rtty ?? this.cw ?? this.psk ?? this.olivia;
+    return this.rtty ?? this.cw ?? this.psk ?? this.olivia ?? (this.sstv ? this.sstvStream : null);
   }
   private streamMode: StreamMode | null = null;
   private streamConfiguration: StreamOptions | null = null;
@@ -796,6 +826,7 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
       this.cw = null;
       this.psk = null;
       this.olivia = null;
+      this.sstv = null;
       this.streamMode = null;
       this.start();
       return;
@@ -841,6 +872,7 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
     this.cw = null;
     this.psk = null;
     this.olivia = null;
+    this.sstv = null;
     this.streamMode = opts.mode;
     if (opts.mode === "RTTY") {
       const { mode: _m, ...rest } = opts;
@@ -853,6 +885,14 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
         pitchHz: opts.pitchHz,
         wpm: opts.wpm,
         thresholdDb: opts.thresholdDb,
+      });
+    } else if (opts.mode === "SSTV") {
+      this.sstv = new SstvDecoder(this.inputRate, {
+        onStart: (m) => this.emit("sstv", { kind: "start", mode: m.name, width: m.width, height: m.height, at: Date.now() }),
+        onRows: (img, from, to) =>
+          this.emit("sstv", { kind: "rows", from, to, width: img.width, rgb: img.rgb.slice(from * img.width * 3, to * img.width * 3) }),
+        onImage: (img, m) =>
+          this.emit("sstv", { kind: "image", mode: m.name, width: img.width, height: img.height, rgb: img.rgb, at: Date.now() }),
       });
     } else if (opts.mode === "OLIVIA") {
       // A size or code change is a new demodulator: the symbol, the tones, the block and
@@ -939,6 +979,9 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
           freqOffsetHz: s.freqOffsetHz,
           open: s.open,
         });
+      } else if (this.sstv) {
+        const s = this.sstv.statistics;
+        this.emit("stream", { mode: "SSTV", seconds, receiving: s.receiving, rows: s.rows, pictures: s.pictures, visHeard: s.visHeard });
       }
     }
   }

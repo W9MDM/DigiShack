@@ -106,7 +106,7 @@ export interface DaxDecode {
   /** Time offset of the transmission within its window, seconds. */
   dt: number;
   message: string;
-  mode: "FT8" | "FT4" | "FT2" | "WSPR" | "RTTY" | "CW" | "JS8" | "PSK31" | "OLIVIA";
+  mode: "FT8" | "FT4" | "FT2" | "WSPR" | "RTTY" | "CW" | "JS8" | "PSK31" | "OLIVIA" | "SSTV";
   /** UTC start of the window this came from. */
   windowStart: Date;
   /** JS8 only: what the message layer read from the frame. */
@@ -118,7 +118,7 @@ export interface DaxSourceOptions {
   port?: number;
   /** DAX channel the slice routes audio to (slice property `dax`). */
   daxChannel?: number;
-  mode?: "FT8" | "FT4" | "FT2" | "WSPR" | "RTTY" | "CW" | "JS8" | "PSK31" | "OLIVIA";
+  mode?: "FT8" | "FT4" | "FT2" | "WSPR" | "RTTY" | "CW" | "JS8" | "PSK31" | "OLIVIA" | "SSTV";
   /**
    * Decoder depth. 2 is the live default: measured at ~0.6 s per window against
    * real 20 m traffic, comfortably inside the ~2.4 s gap between cycles. Depth 3
@@ -242,6 +242,7 @@ type Events = {
   /** Stream modes (RTTY): text as it completes, and a once-a-second heartbeat with the tone levels. Forwarded from the pipeline. */
   text: DecodePipelineEvents["text"];
   stream: DecodePipelineEvents["stream"];
+  sstv: DecodePipelineEvents["sstv"];
   /**
    * The QSO partner's slice, decoded ahead of the band. Forwarded, not interpreted.
    *
@@ -645,10 +646,12 @@ export class FlexDaxSource extends EventEmitter<Events> {
     this.pipeline.on("error", (e) => this.emit("error", e));
     this.pipeline.on("text", (t) => this.emit("text", t));
     this.pipeline.on("stream", (s) => this.emit("stream", s));
+    this.pipeline.on("sstv", (e) => this.emit("sstv", e));
     if (this.opts.mode === "RTTY") this.pipeline.setStream(this.rttyOptions);
     if (this.opts.mode === "CW") this.pipeline.setStream(this.cwOptions);
     if (this.opts.mode === "PSK31") this.pipeline.setStream(this.pskOptions);
     if (this.opts.mode === "OLIVIA") this.pipeline.setStream(this.oliviaOptions);
+    if (this.opts.mode === "SSTV") this.pipeline.setStream({ mode: "SSTV" });
   }
 
   private readonly pipeline: DecodePipeline;
@@ -671,7 +674,7 @@ export class FlexDaxSource extends EventEmitter<Events> {
     return this.opts.mode === "FT4" ? FT4_PERIOD_MS : FT8_PERIOD_MS;
   }
 
-  get mode(): "FT8" | "FT4" | "FT2" | "WSPR" | "RTTY" | "CW" | "JS8" | "PSK31" | "OLIVIA" {
+  get mode(): "FT8" | "FT4" | "FT2" | "WSPR" | "RTTY" | "CW" | "JS8" | "PSK31" | "OLIVIA" | "SSTV" {
     return this.opts.mode;
   }
 
@@ -683,7 +686,7 @@ export class FlexDaxSource extends EventEmitter<Events> {
    * discarded: a partly-filled FT8 window is not a valid FT4 window, and feeding
    * it to the FT4 decoder would produce nothing while looking like a fault.
    */
-  setMode(mode: "FT8" | "FT4" | "FT2" | "WSPR" | "RTTY" | "CW" | "JS8" | "PSK31" | "OLIVIA"): boolean {
+  setMode(mode: "FT8" | "FT4" | "FT2" | "WSPR" | "RTTY" | "CW" | "JS8" | "PSK31" | "OLIVIA" | "SSTV"): boolean {
     if (mode === this.opts.mode) return false;
     this.opts.mode = mode;
     if (mode === "RTTY") {
@@ -696,6 +699,8 @@ export class FlexDaxSource extends EventEmitter<Events> {
       this.pipeline.setStream(this.pskOptions);
     } else if (mode === "OLIVIA") {
       this.pipeline.setStream(this.oliviaOptions);
+    } else if (mode === "SSTV") {
+      this.pipeline.setStream({ mode: "SSTV" });
     } else {
       this.pipeline.setStream(null);
       this.pipeline.setMode(mode);

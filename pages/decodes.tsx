@@ -9,6 +9,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Waterfall, type WaterfallMarker, type WaterfallTag } from "@/components/digital/Waterfall";
 import { Js8Panel, type Js8SendState } from "@/components/digital/Js8Panel";
+import { SstvPanel, type SstvMessage, type SstvPanelHandle, type SstvStats } from "@/components/digital/SstvPanel";
 import { StreamPanel, type StreamStats } from "@/components/digital/StreamPanel";
 import {
   Badge,
@@ -525,6 +526,9 @@ export default function DigitalPage({ wsUrl }: Props) {
   const audio = useReceiverAudio(wsUrl);
   /** Where a JS8 message goes out, Hz audio: typed, or picked on the waterfall. */
   const [js8OffsetHz, setJs8OffsetHz] = useState(1500);
+  /** The SSTV panel, handed picture rows straight from the socket rather than through state. */
+  const sstvPanel = useRef<SstvPanelHandle | null>(null);
+  const [sstvStats, setSstvStats] = useState<SstvStats | null>(null);
   /** A JS8 station picked from the list, for the message line. See callFromRow. */
   const [js8Prefill, setJs8Prefill] = useState<{ call: string; n: number } | null>(null);
   const [js8Error, setJs8Error] = useState<string | null>(null);
@@ -991,7 +995,11 @@ export default function DigitalPage({ wsUrl }: Props) {
             setStreamText((prev) => (prev + t).slice(-STREAM_TEXT_MAX));
           } else if (msg.kind === "text-backlog" && typeof msg.text === "string") {
             setStreamText(msg.text as string);
-          } else if (msg.kind === "stream") setStreamStats(msg as unknown as StreamStats);
+          } else if (msg.kind === "stream" && msg.mode === "SSTV") setSstvStats(msg as unknown as SstvStats);
+          else if (msg.kind === "stream") setStreamStats(msg as unknown as StreamStats);
+          else if (msg.kind === "sstv-start" || msg.kind === "sstv-rows" || msg.kind === "sstv-image") {
+            sstvPanel.current?.receive(msg as SstvMessage);
+          }
           else if (msg.kind === "spectrum") {
             const s = msg as SpectrumMsg;
             // The waterfall keeps running while paused: pausing is about the
@@ -1504,7 +1512,9 @@ export default function DigitalPage({ wsUrl }: Props) {
                   ? "PSK31"
                   : decodingAs === "OLIVIA"
                     ? "OLIVIA"
-                    : "FT8";
+                    : decodingAs === "SSTV"
+                      ? "SSTV"
+                      : "FT8";
 
   /**
    * Is there anything to halt? Transmitting now, a contact in flight, or an automatic
@@ -2465,7 +2475,9 @@ export default function DigitalPage({ wsUrl }: Props) {
               {rowCallNote && (
                 <p className="mb-2 text-xs text-accent-bright">{rowCallNote.text}</p>
               )}
-              {decodingAs === "RTTY" || decodingAs === "CW" || decodingAs === "PSK31" || decodingAs === "OLIVIA" ? (
+              {decodingAs === "SSTV" ? (
+                <SstvPanel ref={sstvPanel} stats={sstvStats} />
+              ) : decodingAs === "RTTY" || decodingAs === "CW" || decodingAs === "PSK31" || decodingAs === "OLIVIA" ? (
                 <StreamPanel
                   mode={decodingAs}
                   text={streamText}
@@ -3843,7 +3855,7 @@ function BandButtons({
           to a one-row stats block). */}
       <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-1">
         <div className="flex gap-1" role="group" aria-label="Digital mode">
-          {(["FT8", "FT4", "FT2", "WSPR", "RTTY", "CW", "JS8", "PSK31", "OLIVIA"] as const).map((m) => {
+          {(["FT8", "FT4", "FT2", "WSPR", "RTTY", "CW", "JS8", "PSK31", "OLIVIA", "SSTV"] as const).map((m) => {
           const active = decodingAs === m;
           const target = bandFor(m);
           const canSwitch = active || target !== null;

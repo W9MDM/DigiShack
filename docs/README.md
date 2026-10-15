@@ -32,6 +32,7 @@ and a backup moves the whole installation.
 | [JS8](js8.md) | JS8: heartbeats, directed messages and chat, listening and sending |
 | [PSK31](psk31.md) | PSK31: a decoder with AFC and a squelch on the stream pipeline, and sending |
 | [Olivia](olivia.md) | Olivia: the MFSK keyboard mode with its block code, on the stream pipeline, and sending |
+| [SSTV](sstv.md) | SSTV: receiving pictures in nine modes, live on the page, saved to a gallery |
 | [Icom protocol](icom-protocol.md) | The RS-BA1 wire format, for anyone working on the driver |
 | [Troubleshooting](troubleshooting.md) | Symptoms, in the order you are likely to meet them |
 | [Development](development.md) | Conventions, the test suite, how to add things |
