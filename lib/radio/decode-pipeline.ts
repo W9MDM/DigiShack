@@ -26,6 +26,7 @@ import { Js8Thread } from "@/lib/radio/js8-thread";
 import { RttyDemodulator } from "@/lib/digital/rttydemod";
 import { CwDemodulator } from "@/lib/digital/cwdemod";
 import { Psk31Demodulator } from "@/lib/digital/psk31demod";
+import { RttyProbe, type RttySuggestion } from "@/lib/digital/rtty-probe";
 import { OliviaDemodulator } from "@/lib/digital/oliviademod";
 import type { OliviaBandwidth, OliviaCode, OliviaTones } from "@/lib/digital/olivia";
 import { HashCallBook as Ft2HashCallBook } from "@/lib/digital/pack77";
@@ -320,6 +321,8 @@ export type StreamHeartbeat =
       mark: number;
       space: number;
       decision: number;
+      /** Another speed or polarity that is reading this signal while the current one is not. */
+      suggest?: RttySuggestion | null;
     }
   | {
       mode: "CW";
@@ -586,6 +589,8 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
   private streamMode: StreamMode | null = null;
   private pskSpeed: 31 | 63 | 125 = 31;
   private rttyBaud = 45.45;
+  /** Shadow decoders at the other speeds and polarity: see lib/digital/rtty-probe.ts. */
+  private rttyProbe: RttyProbe | null = null;
   private oliviaSize: { tones: OliviaTones; bandwidth: OliviaBandwidth; code: OliviaCode } = { tones: 16, bandwidth: 500, code: "olivia" };
   private streamSamples = 0;
   private streamNextBeat = 0;
@@ -759,6 +764,8 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
     // filters are per baud.
     if (opts.mode === "RTTY" && this.rtty && (opts.baud ?? 45.45) === this.rttyBaud) {
       this.rtty.retune(opts.markHz, opts.spaceHz);
+      // The probe's shadows sit on the old tones; they start again on the new ones.
+      this.rttyProbe = new RttyProbe(this.inputRate, opts.markHz, opts.spaceHz, this.rttyBaud);
       return;
     }
     if (opts.mode === "CW" && this.cw) {
@@ -793,6 +800,7 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
       const { mode: _m, ...rest } = opts;
       this.rttyBaud = opts.baud ?? 45.45;
       this.rtty = new RttyDemodulator({ sampleRate: this.inputRate, ...rest, baud: opts.baud ?? 1000 / 22 });
+      this.rttyProbe = new RttyProbe(this.inputRate, opts.markHz, opts.spaceHz, this.rttyBaud);
     } else if (opts.mode === "CW") {
       this.cw = new CwDemodulator({
         sampleRate: this.inputRate,
@@ -832,6 +840,7 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
     if (!demod || !mode) return;
     const text = demod.feed(samples);
     if (text) this.emit("text", { mode, text, at: Date.now() });
+    if (this.rtty) this.rttyProbe?.feed(samples);
     this.streamSamples += samples.length;
     if (this.streamSamples >= this.streamNextBeat) {
       this.streamNextBeat += Math.round((this.inputRate * STREAM_HEARTBEAT_MS) / 1000);
@@ -847,6 +856,7 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
           mark: s.mark,
           space: s.space,
           decision: s.decision,
+          suggest: this.rttyProbe?.suggestion() ?? null,
         });
       } else if (this.cw) {
         const s = this.cw.statistics;

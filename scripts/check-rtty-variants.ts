@@ -40,6 +40,42 @@ ok(run({ reverse: true }, { sideband: "LSB" }).includes(TEXT), "a reversed stati
 ok(!run({}, { sideband: "LSB" }).includes(TEXT), "and not with it off");
 ok(run({}, {}).includes(TEXT), "a normal station still reads with Rev off");
 
+console.log("\nthe probe suggests the setting that reads");
+function probe(opts: { baud?: number; reverse?: boolean }, sig: { baud?: number; sideband?: "USB" | "LSB" } | null): any {
+  const p = new DecodePipeline({ mode: "FT8", inputSampleRate: RATE });
+  const beats: any[] = [];
+  p.on("stream", (s) => beats.push(s));
+  const t = rttyTones(1000, 170, "USB");
+  const tones = opts.reverse ? { markHz: t.spaceHz, spaceHz: t.markHz } : t;
+  p.setStream({ mode: "RTTY", ...tones, baud: opts.baud });
+  let w: Float32Array;
+  if (sig) {
+    const line = "CQ CQ CQ DE W1AW W1AW W1AW PSE K RYRYRYRY THE QUICK BROWN FOX ";
+    w = rttyWaveform(line + line, { sampleRate: RATE, centreHz: 1000, baud: sig.baud, sideband: sig.sideband ?? "USB" });
+  } else {
+    let seed = 7;
+    w = new Float32Array(RATE * 12);
+    for (let i = 0; i < w.length; i++) {
+      seed = (seed * 1664525 + 1013904223) >>> 0;
+      w[i] = (seed / 4294967296 - 0.5) * 0.6;
+    }
+  }
+  for (let i = 0; i < w.length; i += 256) p.push(w.subarray(i, Math.min(w.length, i + 256)));
+  p.stop();
+  return beats[beats.length - 1]?.suggest ?? null;
+}
+{
+  const s = probe({}, { baud: 75, sideband: "LSB" });
+  ok(s && s.baud === 75 && s.swap === true, "a reversed 75 baud station, decoder on 45.45 normal: suggests 75 baud, swapped", s);
+  const s2 = probe({}, { baud: 50 });
+  ok(s2 && s2.baud === 50 && s2.swap === false, "a 50 baud station: suggests 50, not swapped", s2);
+  const s3 = probe({}, { sideband: "LSB" });
+  ok(s3 && s3.baud === 45.45 && s3.swap === true, "a reversed 45.45 station: suggests the swap alone", s3);
+  ok(probe({}, {}) === null, "a station the current setting already reads: no suggestion");
+  ok(probe({ baud: 75, reverse: true }, { baud: 75, sideband: "LSB" }) === null, "nor once the suggestion has been applied");
+  ok(probe({}, null) === null, "noise alone: no suggestion");
+}
+
 console.log("");
 if (failed > 0) {
   console.log(`${failed} FAILED`);

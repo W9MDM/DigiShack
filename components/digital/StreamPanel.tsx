@@ -14,6 +14,8 @@ export type StreamStats =
       space: number;
       /** -1 (space) to +1 (mark); near 0 when there is no signal at the tones. */
       decision: number;
+      /** Another speed or polarity reading this signal while the current one is not. */
+      suggest?: { baud: number; swap: boolean; runs: number; fit: number } | null;
     }
   | {
       mode: "CW";
@@ -468,6 +470,26 @@ export function StreamPanel({
         </span>
       </div>
 
+      {rttyStats?.suggest && rtty && canTune && (
+        <p className="flex flex-wrap items-center gap-2 text-xs">
+          <span className="text-accent-bright">
+            This signal looks like {rttyStats.suggest.baud} baud
+            {rttyStats.suggest.swap ? (rtty.reverse ? ", not reversed" : ", reversed") : ""}, by its timing ({rttyStats.suggest.runs} tone runs).
+          </span>
+          <button
+            type="button"
+            className="px-2 py-0.5 border border-accent text-accent-bright rounded-sm hover:bg-accent hover:text-bg"
+            onClick={() =>
+              onTune(undefined, undefined, {
+                baud: rttyStats.suggest!.baud,
+                reverse: rttyStats.suggest!.swap ? !rtty.reverse : (rtty.reverse ?? false),
+              })
+            }
+          >
+            Apply
+          </button>
+        </p>
+      )}
       {error && <p className="text-xs text-danger">{error}</p>}
 
       {/* Sending: a line at a time. RTTY is about six characters a second; CW at 20 wpm
