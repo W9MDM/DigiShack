@@ -1,7 +1,7 @@
 # RTTY
 
-Listening to RTTY: the mode chip, the tones and the sideband, the text panel, and what the
-automatic modes do about it. Transmitting is not in this release.
+Listening to RTTY: the mode chip, the tones and the sideband, the text panel, sending a
+line, and what the automatic modes do about it.
 
 ## Listening
 
@@ -53,12 +53,22 @@ begins anyway, and noise prints a few characters a minute. The panel counts what
 dropped as "weak" beside the framing errors; lower the setting for a station you can
 hear but not read.
 
+## Sending
+
+Type a line under the terminal and press Enter, or press **CQ** or **73** for the two lines
+every RTTY contact begins and ends with. The radio keys, the line goes out at the tone pair
+the decoder is listening on (so what you send is where the other station is), and the
+radio unkeys; at 45.45 baud that is about six characters a second, and a line is capped at
+forty seconds on the air. The line appears in the terminal as `[TX]` once it has gone, or
+as `[TX refused: ...]` with the reason - transmit off in Settings, the radio busy, or not
+on RTTY. "Allow transmit" has to be on, the same gate as every other transmission here.
+
 ## What the automatic modes do
 
 Nothing. RTTY has no structured messages, so there is nothing for a sequencer to answer:
 the automatic modes refuse to start while the decoder is on RTTY, landing on RTTY with one
 running stops it, and the Call button is not offered. The transmitter refuses RTTY as a
-framed mode; text goes out through its own path when that part lands.
+framed mode; text goes out through its own path, above.
 
 ## The decoder, and how it was checked
 
@@ -77,8 +87,8 @@ stream's once-a-second heartbeat here, since no window will ever arrive.
 
 ## Not yet
 
-- Transmitting: text and macros (CQ, exchange, 73) through the DAX path, and a logging
-  panel beside the terminal.
+- A logging panel beside the terminal, and macros you can edit (an exchange with a serial
+  number, for a contest).
 - Reading callsigns out of the text for PSKReporter and the worked-before index.
 - Click-to-tune the RADIO to a signal on the panadapter, rather than the tones within
   the passband.

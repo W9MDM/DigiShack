@@ -32,6 +32,7 @@ const bodySchema = z.object({
     "pan-span",
     "stream",
     "rtty",
+    "rtty-send",
   ]),
   /** Which radio to drive. Changing it stops any automatic mode. */
   kind: z.enum(["flex", "icom", "wsjtx"]).optional(),
@@ -62,6 +63,8 @@ const bodySchema = z.object({
   /** RTTY tone pair, for action "rtty": centre and shift in Hz audio. */
   centreHz: z.number().min(300).max(5000).optional(),
   shiftHz: z.number().min(23).max(1000).optional(),
+  /** A line of RTTY to send, for action "rtty-send". 240 characters is about forty seconds. */
+  text: z.string().min(1).max(240).optional(),
   theirCall: z.string().trim().toUpperCase().max(16).optional(),
   theirGrid: z.string().trim().toUpperCase().max(8).nullish(),
   theirSnr: z.number().min(-50).max(50).optional(),

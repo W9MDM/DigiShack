@@ -1281,6 +1281,15 @@ export default function DigitalPage({ wsUrl }: Props) {
       setRttyError(err instanceof ApiError ? err.message : "Could not move the RTTY tones");
     }
   }, []);
+  /** Send a line of RTTY. The bridge answers as soon as the radio is keyed; the line appears in the stream as [TX]. */
+  const sendRtty = useCallback(async (text: string) => {
+    try {
+      await apiPost("/api/bridge/control", { action: "rtty-send", text });
+      setRttyError(null);
+    } catch (err) {
+      setRttyError(err instanceof ApiError ? err.message : "Could not send");
+    }
+  }, []);
   const decodingAs = status?.subMode ?? status?.mode ?? "—";
 
   // Which mode the band buttons retune to. All three have calling frequencies, so
@@ -2198,8 +2207,12 @@ export default function DigitalPage({ wsUrl }: Props) {
                   stats={streamStats}
                   rtty={status?.rtty ?? null}
                   canTune={canSwitch}
+                  canSend={canSwitch}
+                  myCall={myCall}
+                  transmitting={status?.transmitting ?? false}
                   error={rttyError}
                   onTune={(centreHz, shiftHz) => void tuneRtty(centreHz, shiftHz)}
+                  onSend={(text) => void sendRtty(text)}
                   onClear={() => setStreamText("")}
                 />
               ) : visible.length === 0 ? (
