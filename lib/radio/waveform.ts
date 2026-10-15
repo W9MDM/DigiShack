@@ -14,7 +14,7 @@ import { js8EncodeFrame, js8Waveform } from "@/lib/digital/js8";
 import type { Js8OutFrame } from "@/lib/digital/js8-message";
 import { encodeFT4, encodeFT8 } from "@e04/ft8ts";
 
-export type TxMode = "FT8" | "FT4" | "FT2" | "WSPR" | "RTTY" | "CW" | "JS8" | "PSK31";
+export type TxMode = "FT8" | "FT4" | "FT2" | "WSPR" | "RTTY" | "CW" | "JS8" | "PSK31" | "OLIVIA";
 
 /**
  * Symbol rates, in baud.
@@ -39,6 +39,8 @@ export const SYMBOL_RATE: Record<TxMode, number> = {
   JS8: 6.25,
   /** 31.25 baud: a stream of characters, never a frame. See lib/digital/psk31.ts. */
   PSK31: 31.25,
+  /** 31.25 baud for the common sizes; per size in lib/digital/olivia.ts. A stream. */
+  OLIVIA: 31.25,
 };
 
 /** Nothing legitimate runs this long; a longer waveform is a bug, not a transmission. */
@@ -86,7 +88,7 @@ export function buildWaveform(
   }
   // RTTY is text, not a framed message: lib/digital/rtty.ts makes its waveform from a
   // string, and the transmit path for that is part three of the mode.
-  if (mode === "RTTY" || mode === "CW" || mode === "PSK31") {
+  if (mode === "RTTY" || mode === "CW" || mode === "PSK31" || mode === "OLIVIA") {
     throw new Error(`${mode} is not a framed mode: nothing builds a ${mode} waveform from a structured message`);
   }
   // JS8 frames are built from the message layer's twelve characters and a transmission

@@ -246,6 +246,16 @@ export const SETTING_GROUPS: SettingGroup[] = [
       "are the values the bridge loads.",
   },
   {
+    id: "olivia",
+    doc: "olivia",
+    docLabel: "Olivia: the centre, the size, and the sync threshold",
+    title: "Olivia",
+    blurb:
+      "Where the Olivia tone set starts in the audio passband, which size, and how sure the " +
+      "synchroniser must be before a block prints. The decodes page moves the centre live " +
+      "(click a signal on the waterfall); these are the values the bridge loads.",
+  },
+  {
     id: "psk31",
     doc: "psk31",
     docLabel: "PSK31: the carrier, the speed, and the squelch",
@@ -1086,6 +1096,39 @@ export const SETTINGS: SettingDef[] = [
     help: "The decoder's quality - how consistently the symbols read as a phase or its reverse - below which nothing prints. Noise sits near 0.2, a clean signal near 1, a weak one around 0.6. 0 prints everything, which on an empty channel is a stream of random characters.",
     default: "0.5",
   },
+  // --- Olivia ---
+  {
+    key: "olivia.centreHz",
+    label: "Olivia centre (Hz audio)",
+    type: "number",
+    group: "olivia",
+    help: "The centre of the tone set when the Olivia chip is pressed, Hz above the dial. 1500 is the convention: the published 20 m centre of 14.0725 is a 14.071 dial. A click on the waterfall moves it for the session.",
+    default: "1500",
+  },
+  {
+    key: "olivia.tones",
+    label: "Olivia tones",
+    type: "number",
+    group: "olivia",
+    help: "With the bandwidth, the size: 500/16 and 1000/32 are what the air mostly runs. Tones and bandwidth together must be one of 250/8, 500/8, 500/16, 1000/32, 1000/16, 2000/64; the panel's picker changes it for the session.",
+    default: "16",
+  },
+  {
+    key: "olivia.bandwidth",
+    label: "Olivia bandwidth (Hz)",
+    type: "number",
+    group: "olivia",
+    help: "The tone set's width in Hz; with olivia.tones it names the size, and the pair must be one of those listed under olivia.tones.",
+    default: "500",
+  },
+  {
+    key: "olivia.threshold",
+    label: "Olivia sync threshold",
+    type: "number",
+    group: "olivia",
+    help: "The synchroniser's signal over noise below which a block is not printed. Noise alone reads about 3; a readable signal 6 and up. Lower prints weaker blocks and more junk.",
+    default: "4",
+  },
   // --- CW ---
   {
     key: "cw.pitchHz",
@@ -1186,7 +1229,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Digital mode",
     type: "string",
     group: "digital",
-    help: "auto | ft8 | ft4 | ft2 | wspr | rtty | cw | js8 | psk31. Auto infers the mode from the dial frequency, which is the only reliable way — a DIGU slice does not say which mode it carries, and the three use different window lengths (15 / 7.5 / 3.75 s). FT2 has provisional calling frequencies so auto does find it, except on 60 m where it shares 5.357 MHz with FT4 and auto resolves to FT4; pin ft2 here to run it there or anywhere off-frequency.",
+    help: "auto | ft8 | ft4 | ft2 | wspr | rtty | cw | js8 | psk31 | olivia. Auto infers the mode from the dial frequency, which is the only reliable way — a DIGU slice does not say which mode it carries, and the three use different window lengths (15 / 7.5 / 3.75 s). FT2 has provisional calling frequencies so auto does find it, except on 60 m where it shares 5.357 MHz with FT4 and auto resolves to FT4; pin ft2 here to run it there or anywhere off-frequency.",
     default: "auto",
   },
   {

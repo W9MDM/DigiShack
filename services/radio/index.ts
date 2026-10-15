@@ -150,6 +150,7 @@ import { postWsprSpots, wsprSpotOf, type WsprSpotReport } from "@/lib/wsprnet/up
 import { RTTY_CENTRE_HZ, RTTY_SHIFT_HZ, rttyDurationMs, rttyTones } from "@/lib/digital/rtty";
 import { cwDurationMs } from "@/lib/digital/cw";
 import { PSK31_CENTRE_HZ, psk31DurationMs, type PskSpeed } from "@/lib/digital/psk31";
+import { OLIVIA_MODES, oliviaDurationMs, type OliviaBandwidth, type OliviaTones } from "@/lib/digital/olivia";
 import { isStreamMode, type Js8DecodeExtra } from "@/lib/radio/decode-pipeline";
 import {
   Js8MessageAssembler,
@@ -205,6 +206,8 @@ interface RigStatus {
   cw: { pitchHz: number; wpm: number; pitchFromRadio: boolean } | null;
   /** The PSK31 carrier and speed, while on PSK31. */
   psk: { centreHz: number; speed: PskSpeed } | null;
+  /** The Olivia centre and size, while on Olivia. */
+  olivia: { centreHz: number; tones: OliviaTones; bandwidth: OliviaBandwidth } | null;
   /** A JS8 message going out, or the last one, with the offset it uses. See lib/radio/js8-sender.ts. */
   js8: (Js8SenderState & { offsetHz: number }) | null;
   dxCall: string | null;
@@ -343,6 +346,7 @@ const status: RigStatus = {
   rtty: null,
   cw: null,
   psk: null,
+  olivia: null,
   js8: null,
   dxCall: null,
   deCall: null,
@@ -1142,6 +1146,15 @@ const pskTuning: { centreHz: number; speed: PskSpeed; squelch: number } = { cent
 /** Set by the live source: hands the tuning to the demodulator. */
 let pskApply: (() => void) | null = null;
 
+/** Olivia: the centre of the tone set, the size, and the synchroniser's threshold. */
+const oliviaTuning: { centreHz: number; tones: OliviaTones; bandwidth: OliviaBandwidth; threshold: number } = {
+  centreHz: 1500,
+  tones: 16,
+  bandwidth: 500,
+  threshold: 4,
+};
+let oliviaApply: (() => void) | null = null;
+
 /** The last few thousand characters of stream text, replayed to a page that connects. */
 const STREAM_TEXT_MAX = 8_000;
 let streamText = "";
@@ -1599,7 +1612,9 @@ async function startFlexSource(): Promise<() => Promise<void>> {
                   ? "JS8"
                   : configuredMode === "psk31"
                     ? "PSK31"
-                    : "FT8",
+                    : configuredMode === "olivia"
+                      ? "OLIVIA"
+                      : "FT8",
     depth,
     // Shared with the Icom: the passband is a property of the operating convention,
     // not of the radio.
@@ -1782,6 +1797,15 @@ async function startFlexSource(): Promise<() => Promise<void>> {
     pskTuning.speed = speed === 63 ? 63 : speed === 125 ? 125 : 31;
   }
   pskTuning.squelch = await getNumberSetting("psk31.squelch", 0.5);
+  oliviaTuning.centreHz = await getNumberSetting("olivia.centreHz", 1500);
+  {
+    const tones = await getNumberSetting("olivia.tones", 16);
+    const bandwidth = await getNumberSetting("olivia.bandwidth", 500);
+    const size = OLIVIA_MODES.find((m) => m.tones === tones && m.bandwidth === bandwidth) ?? { tones: 16, bandwidth: 500 };
+    oliviaTuning.tones = size.tones;
+    oliviaTuning.bandwidth = size.bandwidth;
+  }
+  oliviaTuning.threshold = await getNumberSetting("olivia.threshold", 4);
   rttyApply = () => {
     const sideband: "USB" | "LSB" = /LSB|DIGL/i.test(status.mode ?? "") ? "LSB" : "USB";
     const tones = rttyTones(rttyTuning.centreHz, rttyTuning.shiftHz, sideband);
@@ -1799,6 +1823,16 @@ async function startFlexSource(): Promise<() => Promise<void>> {
   pskApply = () => {
     source.setPskOptions({ mode: "PSK31", centreHz: pskTuning.centreHz, speed: pskTuning.speed, squelch: pskTuning.squelch });
     status.psk = { centreHz: pskTuning.centreHz, speed: pskTuning.speed };
+  };
+  oliviaApply = () => {
+    source.setOliviaOptions({
+      mode: "OLIVIA",
+      centreHz: oliviaTuning.centreHz,
+      tones: oliviaTuning.tones,
+      bandwidth: oliviaTuning.bandwidth,
+      syncThreshold: oliviaTuning.threshold,
+    });
+    status.olivia = { centreHz: oliviaTuning.centreHz, tones: oliviaTuning.tones, bandwidth: oliviaTuning.bandwidth };
   };
 
   source.on("window", (w) => {
@@ -2148,6 +2182,7 @@ async function startFlexSource(): Promise<() => Promise<void>> {
     if (status.subMode === "RTTY") rttyApply?.();
     if (status.subMode === "CW") cwApply?.();
     if (status.subMode === "PSK31") pskApply?.();
+    if (status.subMode === "OLIVIA") oliviaApply?.();
     if (status.subMode && NO_SEQUENCER_MODES.has(status.subMode)) {
       const a = activeAuto();
       if (a && a.state.mode !== "off") {
@@ -4242,7 +4277,17 @@ async function main(): Promise<void> {
         }
         const rtty = status.rtty;
         const req2 =
-          streamMode === "PSK31"
+          streamMode === "OLIVIA"
+            ? {
+                mode: "OLIVIA" as const,
+                text,
+                centreHz: oliviaTuning.centreHz,
+                shiftHz: 0,
+                sideband: "USB" as const,
+                tones: oliviaTuning.tones,
+                bandwidth: oliviaTuning.bandwidth,
+              }
+            : streamMode === "PSK31"
             ? { mode: "PSK31" as const, text, centreHz: pskTuning.centreHz, shiftHz: 0, sideband: "USB" as const, speed: pskTuning.speed }
             : streamMode === "CW" || !rtty
             ? { mode: "CW" as const, text, centreHz: 0, shiftHz: 0, sideband: "USB" as const, wpm: cwTuning.wpm }
@@ -4271,8 +4316,35 @@ async function main(): Promise<void> {
             ? cwDurationMs(text, cwTuning.wpm)
             : streamMode === "PSK31"
               ? psk31DurationMs(text, { speed: pskTuning.speed })
-              : rttyDurationMs(text);
+              : streamMode === "OLIVIA"
+                ? oliviaDurationMs(text, { tones: oliviaTuning.tones, bandwidth: oliviaTuning.bandwidth })
+                : rttyDurationMs(text);
         sendJson(res, 202, { ok: true, mode: streamMode, chars: text.length, durationMs: Math.round(durationMs) });
+        return;
+      }
+
+      // POST /olivia — move the Olivia centre (Hz audio) or change the size. Takes effect at
+      // once; the starting values live in Settings (olivia.*).
+      if (url.pathname === "/olivia") {
+        const body = await readJson(req);
+        const centre = body.centreHz === undefined ? oliviaTuning.centreHz : Number(body.centreHz);
+        const tones = body.tones === undefined ? oliviaTuning.tones : Number(body.tones);
+        const bandwidth = body.bandwidth === undefined ? oliviaTuning.bandwidth : Number(body.bandwidth);
+        if (!Number.isFinite(centre) || centre < 300 || centre > 2800) {
+          sendJson(res, 400, { error: "centreHz must be between 300 and 2800" });
+          return;
+        }
+        const size = OLIVIA_MODES.find((m) => m.tones === tones && m.bandwidth === bandwidth);
+        if (!size) {
+          sendJson(res, 400, { error: `size must be one of ${OLIVIA_MODES.map((m) => `${m.bandwidth}/${m.tones}`).join(", ")}` });
+          return;
+        }
+        oliviaTuning.centreHz = Math.round(centre);
+        oliviaTuning.tones = size.tones;
+        oliviaTuning.bandwidth = size.bandwidth;
+        oliviaApply?.();
+        broadcast({ kind: "status", status });
+        sendJson(res, 200, { ok: true, olivia: status.olivia });
         return;
       }
 
@@ -4324,8 +4396,8 @@ async function main(): Promise<void> {
         const body = await readJson(req);
         const band = String(body.band ?? "").toUpperCase();
         const mode = String(body.mode ?? "FT8").toUpperCase() as DigitalMode;
-        if (!["FT8", "FT4", "FT2", "WSPR", "RTTY", "CW", "JS8", "PSK31"].includes(mode)) {
-          sendJson(res, 400, { error: "mode must be FT8, FT4, FT2, WSPR, RTTY, CW, JS8 or PSK31" });
+        if (!["FT8", "FT4", "FT2", "WSPR", "RTTY", "CW", "JS8", "PSK31", "OLIVIA"].includes(mode)) {
+          sendJson(res, 400, { error: "mode must be FT8, FT4, FT2, WSPR, RTTY, CW, JS8, PSK31 or OLIVIA" });
           return;
         }
         const r = await tuneToCalling(band, mode);

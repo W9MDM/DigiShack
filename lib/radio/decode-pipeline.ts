@@ -26,6 +26,8 @@ import { Js8Thread } from "@/lib/radio/js8-thread";
 import { RttyDemodulator } from "@/lib/digital/rttydemod";
 import { CwDemodulator } from "@/lib/digital/cwdemod";
 import { Psk31Demodulator } from "@/lib/digital/psk31demod";
+import { OliviaDemodulator } from "@/lib/digital/oliviademod";
+import type { OliviaBandwidth, OliviaTones } from "@/lib/digital/olivia";
 import { HashCallBook as Ft2HashCallBook } from "@/lib/digital/pack77";
 import { PERIOD_MS, TRANSMISSION_MS } from "@/lib/radio/timing";
 import type { TxMode } from "@/lib/radio/waveform";
@@ -259,10 +261,10 @@ export interface Decode {
  * the line idles on mark between keystrokes and the decoder runs the whole time. CW is
  * the same: a key, a tone, and text as it is sent.
  */
-export type StreamMode = "RTTY" | "CW" | "PSK31";
+export type StreamMode = "RTTY" | "CW" | "PSK31" | "OLIVIA";
 
 export function isStreamMode(mode: string | null | undefined): mode is StreamMode {
-  return mode === "RTTY" || mode === "CW" || mode === "PSK31";
+  return mode === "RTTY" || mode === "CW" || mode === "PSK31" || mode === "OLIVIA";
 }
 
 /** What a stream's demodulator needs: the mode names which. */
@@ -292,6 +294,15 @@ export type StreamOptions =
       speed?: 31 | 63 | 125;
       /** 0 to 1; see Psk31DemodOptions.squelch. */
       squelch?: number;
+    }
+  | {
+      mode: "OLIVIA";
+      /** Centre of the tone set, Hz audio. */
+      centreHz: number;
+      tones: OliviaTones;
+      bandwidth: OliviaBandwidth;
+      /** Signal over noise below which a block is not printed; see OliviaDemodOptions. */
+      syncThreshold?: number;
     };
 
 /** What a stream's heartbeat carries: the running counts, and what that decoder measures. */
@@ -326,6 +337,16 @@ export type StreamHeartbeat =
       afcHz: number;
       level: number;
       /** Whether the squelch is open. */
+      open: boolean;
+    }
+  | {
+      mode: "OLIVIA";
+      seconds: number;
+      chars: number;
+      blocks: number;
+      /** The synchroniser's signal over noise. */
+      snr: number;
+      freqOffsetHz: number;
       open: boolean;
     };
 
@@ -554,11 +575,13 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
   private rtty: RttyDemodulator | null = null;
   private cw: CwDemodulator | null = null;
   private psk: Psk31Demodulator | null = null;
+  private olivia: OliviaDemodulator | null = null;
   private get stream(): { feed(samples: ArrayLike<number>): string } | null {
-    return this.rtty ?? this.cw ?? this.psk;
+    return this.rtty ?? this.cw ?? this.psk ?? this.olivia;
   }
   private streamMode: StreamMode | null = null;
   private pskSpeed: 31 | 63 | 125 = 31;
+  private oliviaSize: { tones: OliviaTones; bandwidth: OliviaBandwidth } = { tones: 16, bandwidth: 500 };
   private streamSamples = 0;
   private streamNextBeat = 0;
   /**
@@ -722,6 +745,7 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
       this.rtty = null;
       this.cw = null;
       this.psk = null;
+      this.olivia = null;
       this.streamMode = null;
       this.start();
       return;
@@ -738,6 +762,10 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
       this.psk.retune(opts.centreHz);
       return;
     }
+    if (opts.mode === "OLIVIA" && this.olivia && opts.tones === this.oliviaSize.tones && opts.bandwidth === this.oliviaSize.bandwidth) {
+      this.olivia.retune(opts.centreHz);
+      return;
+    }
     if (this.timer) {
       clearTimeout(this.timer);
       this.timer = null;
@@ -746,6 +774,7 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
     this.rtty = null;
     this.cw = null;
     this.psk = null;
+    this.olivia = null;
     this.streamMode = opts.mode;
     if (opts.mode === "RTTY") {
       const { mode: _m, ...rest } = opts;
@@ -756,6 +785,16 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
         pitchHz: opts.pitchHz,
         wpm: opts.wpm,
         thresholdDb: opts.thresholdDb,
+      });
+    } else if (opts.mode === "OLIVIA") {
+      // A size change is a new demodulator: the symbol, the tones and the sync are per size.
+      this.oliviaSize = { tones: opts.tones, bandwidth: opts.bandwidth };
+      this.olivia = new OliviaDemodulator({
+        sampleRate: this.inputRate,
+        centreHz: opts.centreHz,
+        tones: opts.tones,
+        bandwidth: opts.bandwidth,
+        syncThreshold: opts.syncThreshold,
       });
     } else {
       // A speed change is a new demodulator: the decimation and the timing are per baud.
@@ -815,6 +854,17 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
           quality: s.quality,
           afcHz: s.afcHz,
           level: s.level,
+          open: s.open,
+        });
+      } else if (this.olivia) {
+        const s = this.olivia.statistics;
+        this.emit("stream", {
+          mode: "OLIVIA",
+          seconds,
+          chars: s.chars,
+          blocks: s.blocks,
+          snr: s.snr,
+          freqOffsetHz: s.freqOffsetHz,
           open: s.open,
         });
       }

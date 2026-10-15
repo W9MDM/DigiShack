@@ -36,6 +36,16 @@ export type StreamStats =
       afcHz: number;
       level: number;
       open: boolean;
+    }
+  | {
+      mode: "OLIVIA";
+      seconds: number;
+      chars: number;
+      blocks: number;
+      /** The synchroniser's signal over noise; the threshold is a floor on it. */
+      snr: number;
+      freqOffsetHz: number;
+      open: boolean;
     };
 
 export interface RttyTuning {
@@ -60,6 +70,23 @@ export interface PskTuning {
   speed: 31 | 63 | 125;
 }
 
+export interface OliviaTuning {
+  /** Centre of the tone set, Hz audio. */
+  centreHz: number;
+  tones: number;
+  bandwidth: number;
+}
+
+/** The sizes the picker offers, as the bridge accepts them. */
+export const OLIVIA_SIZES: readonly { tones: number; bandwidth: number }[] = [
+  { tones: 8, bandwidth: 250 },
+  { tones: 8, bandwidth: 500 },
+  { tones: 16, bandwidth: 500 },
+  { tones: 32, bandwidth: 1000 },
+  { tones: 16, bandwidth: 1000 },
+  { tones: 64, bandwidth: 2000 },
+];
+
 interface Props {
   mode: string;
   text: string;
@@ -67,6 +94,7 @@ interface Props {
   rtty: RttyTuning | null;
   cw: CwTuning | null;
   psk: PskTuning | null;
+  olivia: OliviaTuning | null;
   canTune: boolean;
   /** Sending needs an operator and a station callsign for the macros. */
   canSend: boolean;
@@ -76,6 +104,7 @@ interface Props {
   onTune: (centreHz?: number, shiftHz?: number) => void;
   onCwWpm: (wpm: number) => void;
   onPskTune: (centreHz?: number, speed?: 31 | 63 | 125) => void;
+  onOliviaTune: (centreHz?: number, size?: { tones: number; bandwidth: number }) => void;
   onSend: (text: string) => void;
   onClear: () => void;
 }
@@ -98,6 +127,7 @@ export function StreamPanel({
   rtty,
   cw,
   psk,
+  olivia,
   canTune,
   canSend,
   myCall,
@@ -106,6 +136,7 @@ export function StreamPanel({
   onTune,
   onCwWpm,
   onPskTune,
+  onOliviaTune,
   onSend,
   onClear,
 }: Props) {
@@ -123,8 +154,10 @@ export function StreamPanel({
   const rttyStats = stats && stats.mode === "RTTY" ? stats : null;
   const cwStats = stats && stats.mode === "CW" ? stats : null;
   const pskStats = stats && stats.mode === "PSK31" ? stats : null;
+  const oliviaStats = stats && stats.mode === "OLIVIA" ? stats : null;
   const isCw = mode === "CW";
   const isPsk = mode === "PSK31";
+  const isOlivia = mode === "OLIVIA";
 
   // Bars. RTTY: mark and space, relative to the stronger. CW: the key's peak and the
   // noise floor it stands over, relative to the peak.
@@ -150,6 +183,12 @@ export function StreamPanel({
     barB = Math.round(Math.min(1, pskStats.level * 4) * 100);
     quiet = pskStats.level < 1e-3;
     idle = pskStats.open;
+  } else if (oliviaStats) {
+    // Olivia: the synchroniser's signal over noise (noise alone reads about 3), and whether it is printing.
+    barA = Math.round(Math.min(1, oliviaStats.snr / 20) * 100);
+    barB = oliviaStats.open ? 100 : 0;
+    quiet = oliviaStats.snr < 1;
+    idle = oliviaStats.open;
   }
 
   const cqLine = myCall ? `CQ CQ CQ DE ${myCall} ${myCall} ${myCall} K` : "";
@@ -174,6 +213,26 @@ export function StreamPanel({
           ) : (
             <span>Waiting for the bridge to report the pitch…</span>
           )
+        ) : isOlivia ? (
+          olivia ? (
+            <span className="tnum">
+              centre <span className="text-fg">{olivia.centreHz}</span> Hz · Olivia {olivia.bandwidth}/{olivia.tones}
+              {oliviaStats && oliviaStats.snr > 0 && (
+                <>
+                  {" "}
+                  · S/N <span className="text-fg">{oliviaStats.snr.toFixed(1)}</span>
+                  {Math.abs(oliviaStats.freqOffsetHz) >= 8 && (
+                    <>
+                      {" "}
+                      · found <span className="text-fg">{oliviaStats.freqOffsetHz > 0 ? "+" : ""}{Math.round(oliviaStats.freqOffsetHz)}</span> Hz off
+                    </>
+                  )}
+                </>
+              )}
+            </span>
+          ) : (
+            <span>Waiting for the bridge to report the centre…</span>
+          )
         ) : isPsk ? (
           psk ? (
             <span className="tnum">
@@ -195,6 +254,45 @@ export function StreamPanel({
           </span>
         ) : (
           <span>Waiting for the bridge to report the tones…</span>
+        )}
+        {canTune && isOlivia && (
+          <span className="flex items-center gap-1">
+            <button
+              type="button"
+              className="px-2 py-0.5 border border-line rounded-sm hover:text-fg tnum"
+              onClick={() => olivia && onOliviaTune(olivia.centreHz - 10)}
+              disabled={!olivia}
+              title="Move the tone set 10 Hz down"
+            >
+              −10
+            </button>
+            <button
+              type="button"
+              className="px-2 py-0.5 border border-line rounded-sm hover:text-fg tnum"
+              onClick={() => olivia && onOliviaTune(olivia.centreHz + 10)}
+              disabled={!olivia}
+              title="Move the tone set 10 Hz up"
+            >
+              +10
+            </button>
+            <select
+              className="bg-bg-raised border border-line rounded-sm px-1 py-0.5 text-xs"
+              value={olivia ? `${olivia.bandwidth}/${olivia.tones}` : "500/16"}
+              onChange={(e) => {
+                const [bw, t] = e.target.value.split("/").map(Number);
+                if (bw && t) onOliviaTune(undefined, { tones: t, bandwidth: bw });
+              }}
+              disabled={!olivia}
+              aria-label="Olivia size"
+            >
+              {OLIVIA_SIZES.map((s) => (
+                <option key={`${s.bandwidth}/${s.tones}`} value={`${s.bandwidth}/${s.tones}`}>
+                  {s.bandwidth}/{s.tones}
+                </option>
+              ))}
+            </select>
+            <span className="text-fg-subtle">· click the waterfall to set the centre</span>
+          </span>
         )}
         {canTune && isPsk && (
           <span className="flex items-center gap-1">
@@ -252,7 +350,7 @@ export function StreamPanel({
             </button>
           </span>
         )}
-        {canTune && !isCw && !isPsk && (
+        {canTune && !isCw && !isPsk && !isOlivia && (
           <span className="flex items-center gap-1">
             <button
               type="button"
@@ -294,12 +392,12 @@ export function StreamPanel({
       </div>
 
       <div className="grid grid-cols-[3rem_1fr_7rem] items-center gap-x-2 text-xs tnum">
-        <span className="text-fg-muted">{isCw ? "peak" : isPsk ? "quality" : "mark"}</span>
+        <span className="text-fg-muted">{isCw ? "peak" : isPsk ? "quality" : isOlivia ? "S/N" : "mark"}</span>
         <div className="h-1.5 bg-bg-raised rounded-sm overflow-hidden">
           <div className={cn("h-full", idle ? "bg-accent" : "bg-ok/70")} style={{ width: `${barA}%` }} />
         </div>
         <span className="text-fg-subtle text-right">{stats ? `${stats.chars} chars` : ""}</span>
-        <span className="text-fg-muted">{isCw ? "floor" : isPsk ? "level" : "space"}</span>
+        <span className="text-fg-muted">{isCw ? "floor" : isPsk ? "level" : isOlivia ? "sync" : "space"}</span>
         <div className="h-1.5 bg-bg-raised rounded-sm overflow-hidden">
           <div className="h-full bg-ok/70" style={{ width: `${barB}%` }} />
         </div>
@@ -310,7 +408,9 @@ export function StreamPanel({
               ? "Patterns that matched nothing in the table"
               : isPsk
                 ? "Varicodes no character has"
-                : "Bad stop bits, and well-framed characters the squelch dropped"
+                : isOlivia
+                  ? "Blocks printed"
+                  : "Bad stop bits, and well-framed characters the squelch dropped"
           }
         >
           {rttyStats
@@ -319,7 +419,9 @@ export function StreamPanel({
               ? `${cwStats.unknown} unread`
               : pskStats
                 ? `${pskStats.errors} unread`
-                : ""}
+                : oliviaStats
+                  ? `${oliviaStats.blocks} blocks`
+                  : ""}
         </span>
       </div>
 
@@ -346,7 +448,9 @@ export function StreamPanel({
                 ? "Type a line; Enter sends it through the radio's keyer"
                 : isPsk
                   ? "Type a line; Enter sends it (about 5 characters a second at BPSK31)"
-                  : "Type a line; Enter sends it (about 6 characters a second)"
+                  : isOlivia
+                    ? "Type a line; Enter sends it (about 2 characters a second at 500/16)"
+                    : "Type a line; Enter sends it (about 6 characters a second)"
             }
             aria-label={`${mode} text to send`}
           />
@@ -390,13 +494,17 @@ export function StreamPanel({
               ? "Nothing at the pitch yet. Tune the radio to a CW signal; the decoder listens where the radio's sidetone is."
               : isPsk
                 ? "No signal at the carrier yet. Tune the radio to a PSK31 signal and click it on the waterfall."
-                : "No audio at the tones yet. Tune the radio to an RTTY signal and click it on the waterfall."
+                : isOlivia
+                  ? "No Olivia block has synced yet. Click the signal's centre on the waterfall; a block takes two seconds, and the first prints a few blocks later."
+                  : "No audio at the tones yet. Tune the radio to an RTTY signal and click it on the waterfall."
             : idle
               ? isCw
                 ? "Key down: a carrier at the pitch."
                 : isPsk
                   ? "A PSK signal at the carrier: idle, or not yet typing."
-                  : "Carrier on mark: a station is keyed and not yet typing, or the pair is on an unmodulated tone."
+                  : isOlivia
+                    ? "Synced on an Olivia signal: idle blocks, or not yet typing."
+                    : "Carrier on mark: a station is keyed and not yet typing, or the pair is on an unmodulated tone."
               : "Listening…")}
       </pre>
     </div>

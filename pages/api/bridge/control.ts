@@ -38,6 +38,7 @@ const bodySchema = z.object({
     "js8-send",
     "js8-cancel",
     "psk",
+    "olivia",
   ]),
   /** Which radio to drive. Changing it stops any automatic mode. */
   kind: z.enum(["flex", "icom", "wsjtx"]).optional(),
@@ -76,6 +77,9 @@ const bodySchema = z.object({
   offsetHz: z.number().min(200).max(2800).optional(),
   /** PSK speed for action "psk": 31, 63 or 125 (baud 31.25, 62.5, 125). */
   speed: z.union([z.literal(31), z.literal(63), z.literal(125)]).optional(),
+  /** Olivia size for action "olivia": tones and bandwidth, one of the listed pairs. */
+  tones: z.number().int().min(2).max(256).optional(),
+  bandwidth: z.number().int().min(125).max(2000).optional(),
   theirCall: z.string().trim().toUpperCase().max(16).optional(),
   theirGrid: z.string().trim().toUpperCase().max(8).nullish(),
   theirSnr: z.number().min(-50).max(50).optional(),

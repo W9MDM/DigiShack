@@ -59,6 +59,8 @@ interface RigStatus {
   cw?: { pitchHz: number; wpm: number; pitchFromRadio: boolean } | null;
   /** The PSK31 carrier and speed while on PSK31. */
   psk?: { centreHz: number; speed: 31 | 63 | 125 } | null;
+  /** The Olivia centre and size while on Olivia. */
+  olivia?: { centreHz: number; tones: number; bandwidth: number } | null;
   /** A JS8 message going out, or the last one. */
   js8?: Js8SendState | null;
   connected: boolean;
@@ -1198,6 +1200,14 @@ export default function DigitalPage({ wsUrl }: Props) {
     if (status?.subMode === "PSK31" && status.psk) {
       return [{ hz: status.psk.centreHz, label: "PSK31 carrier", emphasis: true }];
     }
+    if (status?.subMode === "OLIVIA" && status.olivia) {
+      const half = status.olivia.bandwidth / 2;
+      return [
+        { hz: status.olivia.centreHz, label: `Olivia ${status.olivia.bandwidth}/${status.olivia.tones}`, emphasis: true },
+        { hz: status.olivia.centreHz - half, label: "edge", emphasis: false },
+        { hz: status.olivia.centreHz + half, label: "edge", emphasis: false },
+      ];
+    }
     if (rows.length === 0) return [];
     const newest = rows[0]!.timestamp;
     return rows
@@ -1353,6 +1363,15 @@ export default function DigitalPage({ wsUrl }: Props) {
       setRttyError(err instanceof ApiError ? err.message : "Could not move the PSK31 carrier");
     }
   }, []);
+  /** Move the Olivia tone set (a click on the waterfall or the ± buttons) or change the size. */
+  const tuneOlivia = useCallback(async (centreHz?: number, size?: { tones: number; bandwidth: number }) => {
+    try {
+      await apiPost("/api/bridge/control", { action: "olivia", centreHz, tones: size?.tones, bandwidth: size?.bandwidth });
+      setRttyError(null);
+    } catch (err) {
+      setRttyError(err instanceof ApiError ? err.message : "Could not move the Olivia tones");
+    }
+  }, []);
   /** Send a line of RTTY. The bridge answers as soon as the radio is keyed; the line appears in the stream as [TX]. */
   const sendRtty = useCallback(async (text: string) => {
     try {
@@ -1411,7 +1430,9 @@ export default function DigitalPage({ wsUrl }: Props) {
                 ? "JS8"
                 : decodingAs === "PSK31"
                   ? "PSK31"
-                  : "FT8";
+                  : decodingAs === "OLIVIA"
+                    ? "OLIVIA"
+                    : "FT8";
 
   /**
    * Is there anything to halt? Transmitting now, a contact in flight, or an automatic
@@ -1971,7 +1992,9 @@ export default function DigitalPage({ wsUrl }: Props) {
                   ? (hz) => setJs8OffsetHz(Math.round(hz))
                   : decodingAs === "PSK31" && canSwitch
                     ? (hz) => void tunePsk(Math.round(hz))
-                    : undefined
+                    : decodingAs === "OLIVIA" && canSwitch
+                      ? (hz) => void tuneOlivia(Math.round(hz))
+                      : undefined
             }
             txHz={status?.txDF ?? null}
             gain={gain}
@@ -2334,7 +2357,7 @@ export default function DigitalPage({ wsUrl }: Props) {
               {rowCallNote && (
                 <p className="mb-2 text-xs text-accent-bright">{rowCallNote.text}</p>
               )}
-              {decodingAs === "RTTY" || decodingAs === "CW" || decodingAs === "PSK31" ? (
+              {decodingAs === "RTTY" || decodingAs === "CW" || decodingAs === "PSK31" || decodingAs === "OLIVIA" ? (
                 <StreamPanel
                   mode={decodingAs}
                   text={streamText}
@@ -2342,6 +2365,7 @@ export default function DigitalPage({ wsUrl }: Props) {
                   rtty={status?.rtty ?? null}
                   cw={status?.cw ?? null}
                   psk={status?.psk ?? null}
+                  olivia={status?.olivia ?? null}
                   canTune={canSwitch}
                   canSend={canSwitch}
                   myCall={myCall}
@@ -2350,6 +2374,7 @@ export default function DigitalPage({ wsUrl }: Props) {
                   onTune={(centreHz, shiftHz) => void tuneRtty(centreHz, shiftHz)}
                   onCwWpm={(wpm) => void setCwWpm(wpm)}
                   onPskTune={(centreHz, speed) => void tunePsk(centreHz, speed)}
+                  onOliviaTune={(centreHz, size) => void tuneOlivia(centreHz, size)}
                   onSend={(text) => void sendRtty(text)}
                   onClear={() => setStreamText("")}
                 />
@@ -3703,7 +3728,7 @@ function BandButtons({
           to a one-row stats block). */}
       <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-1">
         <div className="flex gap-1" role="group" aria-label="Digital mode">
-          {(["FT8", "FT4", "FT2", "WSPR", "RTTY", "CW", "JS8", "PSK31"] as const).map((m) => {
+          {(["FT8", "FT4", "FT2", "WSPR", "RTTY", "CW", "JS8", "PSK31", "OLIVIA"] as const).map((m) => {
           const active = decodingAs === m;
           const target = bandFor(m);
           const canSwitch = active || target !== null;
