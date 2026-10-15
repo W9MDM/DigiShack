@@ -201,7 +201,16 @@ interface RigStatus {
   mode: string | null;
   subMode: string | null;
   /** The RTTY tone pair while listening to RTTY, for the page's panel and waterfall. */
-  rtty: { centreHz: number; shiftHz: number; sideband: "USB" | "LSB"; markHz: number; spaceHz: number } | null;
+  rtty: {
+    centreHz: number;
+    shiftHz: number;
+    sideband: "USB" | "LSB";
+    markHz: number;
+    spaceHz: number;
+    /** Mark and space swapped: for a station sending the other way round. */
+    reverse: boolean;
+    baud: number;
+  } | null;
   /** The CW pitch the decoder listens on and the speed the keyer sends at, while on CW. */
   cw: { pitchHz: number; wpm: number; pitchFromRadio: boolean } | null;
   /** The PSK31 carrier and speed, while on PSK31. */
@@ -1131,7 +1140,7 @@ function sendJson(res: ServerResponse, code: number, body: unknown): void {
 let stickyMode: DigitalMode | null = null;
 
 /** RTTY tuning: the tone pair's centre and shift. The sideband comes from the slice. */
-const rttyTuning = { centreHz: RTTY_CENTRE_HZ, shiftHz: RTTY_SHIFT_HZ };
+const rttyTuning = { centreHz: RTTY_CENTRE_HZ, shiftHz: RTTY_SHIFT_HZ, reverse: false, baud: 45.45 };
 let rttyCode: { figures: "us" | "ita2"; usos: boolean; squelch: number } = { figures: "us", usos: true, squelch: 0.7 };
 /** Set by the live source: recomputes the tones from the tuning and the slice's sideband. */
 let rttyApply: (() => void) | null = null;
@@ -1810,9 +1819,18 @@ async function startFlexSource(): Promise<() => Promise<void>> {
   oliviaTuning.code = ((await getSetting("olivia.code")) ?? "olivia").toLowerCase() === "contestia" ? "contestia" : "olivia";
   rttyApply = () => {
     const sideband: "USB" | "LSB" = /LSB|DIGL/i.test(status.mode ?? "") ? "LSB" : "USB";
-    const tones = rttyTones(rttyTuning.centreHz, rttyTuning.shiftHz, sideband);
-    source.setRttyOptions({ mode: "RTTY", ...tones, ...rttyCode });
-    status.rtty = { centreHz: rttyTuning.centreHz, shiftHz: rttyTuning.shiftHz, sideband, ...tones };
+    const normal = rttyTones(rttyTuning.centreHz, rttyTuning.shiftHz, sideband);
+    // Reverse swaps the two: for a station whose mark is the lower tone.
+    const tones = rttyTuning.reverse ? { markHz: normal.spaceHz, spaceHz: normal.markHz } : normal;
+    source.setRttyOptions({ mode: "RTTY", ...tones, ...rttyCode, baud: rttyTuning.baud });
+    status.rtty = {
+      centreHz: rttyTuning.centreHz,
+      shiftHz: rttyTuning.shiftHz,
+      sideband,
+      ...tones,
+      reverse: rttyTuning.reverse,
+      baud: rttyTuning.baud,
+    };
   };
   // The CW decoder listens where the radio's sidetone is. The pitch arrives in the
   // transmit status when the radio reports it; the setting stands in until then.
@@ -4305,9 +4323,11 @@ async function main(): Promise<void> {
                 text,
                 centreHz: rtty.centreHz,
                 shiftHz: rtty.shiftHz,
-                sideband: rtty.sideband,
+                // Reverse sends the way it listens: the opposite sideband's tone order.
+                sideband: rtty.reverse ? (rtty.sideband === "USB" ? ("LSB" as const) : ("USB" as const)) : rtty.sideband,
                 figures: rttyCode.figures,
                 usos: rttyCode.usos,
+                baud: rtty.baud,
               };
         const tag = streamMode.toLowerCase();
         void tx.transmitText(req2).then(
@@ -4327,7 +4347,7 @@ async function main(): Promise<void> {
               ? psk31DurationMs(text, { speed: pskTuning.speed })
               : streamMode === "OLIVIA"
                 ? oliviaDurationMs(text, { tones: oliviaTuning.tones, bandwidth: oliviaTuning.bandwidth, code: oliviaTuning.code })
-                : rttyDurationMs(text);
+                : rttyDurationMs(text, { baud: rttyTuning.baud });
         sendJson(res, 202, { ok: true, mode: streamMode, chars: text.length, durationMs: Math.round(durationMs) });
         return;
       }
@@ -4399,8 +4419,15 @@ async function main(): Promise<void> {
           sendJson(res, 400, { error: "shiftHz must be between 23 and 1000" });
           return;
         }
+        const baud = body.baud === undefined ? rttyTuning.baud : Number(body.baud);
+        if (![45.45, 50, 75, 100].includes(baud)) {
+          sendJson(res, 400, { error: "baud must be 45.45, 50, 75 or 100" });
+          return;
+        }
         rttyTuning.centreHz = Math.round(centre);
         rttyTuning.shiftHz = Math.round(shift);
+        rttyTuning.baud = baud;
+        if (typeof body.reverse === "boolean") rttyTuning.reverse = body.reverse;
         rttyApply?.();
         broadcast({ kind: "status", status });
         sendJson(res, 200, { ok: true, rtty: status.rtty });

@@ -204,6 +204,8 @@ export interface TextTransmitRequest {
   usos?: boolean;
   /** CW speed, words per minute. Default 20. */
   wpm?: number;
+  /** RTTY speed. Default 45.45. */
+  baud?: number;
   /** PSK: 31.25, 62.5 or 125 baud. Default 31. */
   speed?: 31 | 63 | 125;
   /** Olivia: the size. Default 500/16. */
@@ -1102,7 +1104,7 @@ export class FlexDaxTransmitter {
       }
       return psk31Waveform(text, { sampleRate: DAX_RATE, centreHz: req.centreHz, speed: req.speed });
     }
-    const ms = rttyDurationMs(text);
+    const ms = rttyDurationMs(text, { baud: req.baud });
     if (ms > FlexDaxTransmitter.MAX_TEXT_MS) {
       throw new Error(
         `${text.length} characters is ${(ms / 1000).toFixed(0)} s of RTTY, over the ${FlexDaxTransmitter.MAX_TEXT_MS / 1000} s cap - send it in pieces`,
@@ -1115,6 +1117,7 @@ export class FlexDaxTransmitter {
       sideband: req.sideband,
       figures: req.figures,
       usos: req.usos,
+      baud: req.baud,
     });
   }
 

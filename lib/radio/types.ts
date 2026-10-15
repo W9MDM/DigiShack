@@ -175,6 +175,8 @@ export interface DigitalTransmitter {
     usos?: boolean;
     /** CW speed, words per minute. */
     wpm?: number;
+    /** RTTY speed. Default 45.45. */
+    baud?: number;
     /** PSK: 31.25, 62.5 or 125 baud. */
     speed?: 31 | 63 | 125;
     /** Olivia: the size, and Contestia on the same engine. */
