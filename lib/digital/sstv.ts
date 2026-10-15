@@ -47,7 +47,26 @@ export const SSTV_MODES: readonly SstvMode[] = [
   { name: "PD 90", vis: 99, width: 320, height: 256, colour: "ycc-pd", syncMs: 20, porchMs: 2.08, scanMs: 170.24, sepMs: 0, lineMs: 703.04 },
   { name: "PD 120", vis: 95, width: 640, height: 496, colour: "ycc-pd", syncMs: 20, porchMs: 2.08, scanMs: 121.6, sepMs: 0, lineMs: 508.48 },
   { name: "PD 180", vis: 96, width: 640, height: 496, colour: "ycc-pd", syncMs: 20, porchMs: 2.08, scanMs: 183.04, sepMs: 0, lineMs: 754.24 },
+  { name: "PD 50", vis: 93, width: 320, height: 256, colour: "ycc-pd", syncMs: 20, porchMs: 2.08, scanMs: 91.52, sepMs: 0, lineMs: 388.16 },
+  { name: "PD 160", vis: 98, width: 512, height: 400, colour: "ycc-pd", syncMs: 20, porchMs: 2.08, scanMs: 195.584, sepMs: 0, lineMs: 804.416 },
+  { name: "PD 240", vis: 97, width: 640, height: 496, colour: "ycc-pd", syncMs: 20, porchMs: 2.08, scanMs: 244.48, sepMs: 0, lineMs: 1000 },
 ];
+
+/**
+ * VIS codes heard on the air for modes not decoded here, so a header that cannot be drawn
+ * at least says what it was. From the Dayton Paper and MMSSTV's list.
+ */
+export const SSTV_OTHER_VIS: Readonly<Record<number, string>> = {
+  0: "Robot 12", 4: "Robot 24", 12: "Robot 72", 2: "Robot 8 B/W", 6: "Robot 12 B/W",
+  36: "Martin 3", 32: "Martin 4", 52: "Scottie 3", 48: "Scottie 4",
+  55: "Wraase SC2-180", 63: "Wraase SC2-120", 59: "Wraase SC2-60", 51: "Wraase SC2-30",
+  113: "Pasokon P3", 114: "Pasokon P5", 115: "Pasokon P7",
+  35: "MMSSTV extended (MP/MR/ML modes)",
+};
+
+export function sstvVisName(code: number): string {
+  return sstvModeByVis(code)?.name ?? SSTV_OTHER_VIS[code] ?? `unknown (VIS ${code})`;
+}
 
 export function sstvModeByVis(vis: number): SstvMode | null {
   return SSTV_MODES.find((m) => m.vis === vis) ?? null;
@@ -283,6 +302,8 @@ export class SstvFm {
 }
 
 export interface SstvDecodeEvents {
+  /** Any header heard, decoded or not: its code and name, once per header. */
+  onVis?: (code: number, name: string, decoded: boolean) => void;
   /** A VIS header naming a known mode: a picture is starting. */
   onStart?: (mode: SstvMode) => void;
   /** Rows finished, from `fromRow` up to but not including `toRow`. */
@@ -314,6 +335,8 @@ export class SstvDecoder {
   private drift = 0;
   private readonly samplesPerMs: number;
   private stats = { pictures: 0, visHeard: 0 };
+  /** Samples left before the hunt may count another header: one header is one count. */
+  private visQuiet = 0;
 
   constructor(private readonly fs: number, private readonly events: SstvDecodeEvents = {}) {
     this.fm = new SstvFm(fs);
@@ -349,9 +372,10 @@ export class SstvDecoder {
           this.hist.copyWithin(0, 1);
           this.hist[this.hist.length - 1] = f;
         }
+        if (this.visQuiet > 0) this.visQuiet--;
         if (++this.sinceCheck >= this.samplesPerMs * 10) {
           this.sinceCheck = 0;
-          this.huntVis();
+          if (this.visQuiet === 0) this.huntVis();
         }
       }
     }
@@ -401,8 +425,12 @@ export class SstvDecoder {
       }
       if (bad || ones % 2 !== 0) continue;
       const mode = sstvModeByVis(code);
+      // One header, one count: the same one matches at the next check or two otherwise,
+      // which is how one Robot 72 header read as three.
       this.stats.visHeard++;
-      if (!mode) continue;
+      this.visQuiet = Math.round(this.samplesPerMs * 600);
+      this.events.onVis?.(code, sstvVisName(code), mode !== null);
+      if (!mode) return;
       this.begin(mode, off);
       return;
     }
