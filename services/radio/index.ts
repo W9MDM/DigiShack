@@ -20,6 +20,8 @@
 //   * expose a token-guarded control API so the web app can send Reply / HaltTx /
 //     HighlightCallsign back to the decoder
 
+import fs from "node:fs";
+import path from "node:path";
 import { randomBytes } from "node:crypto";
 import dgram from "node:dgram";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
@@ -161,6 +163,8 @@ import {
   type Js8ParsedFrame,
 } from "@/lib/digital/js8-message";
 import { Js8Sender, type Js8SenderState } from "@/lib/radio/js8-sender";
+import { encodePng } from "@/lib/digital/png";
+import type { SstvEvent } from "@/lib/radio/decode-pipeline";
 import { js8SubmodeNow, PERIOD_MS, setJs8Submode } from "@/lib/radio/timing";
 import { gateAutomation, hopModeFor, NO_SEQUENCER_MODES, noSequencerReason } from "@/lib/radio/automation-gate";
 import type { SchedulableAuto } from "@/lib/radio/schedule-runner";
@@ -1341,8 +1345,13 @@ async function tuneToCalling(
     // by a restart, the radio, or the CAT panel - decoded JS8 upside down on 7.078.
     const wantCw = mode === "CW";
     const cur = (status.mode ?? "").toUpperCase();
+    // SSTV below 10 MHz is lower sideband, as its operators run it; everything else digital
+    // is upper.
+    const wantLsb = mode === "SSTV" && hz < 10_000_000;
     if (wantCw && !cur.startsWith("CW")) await client.command(`slice set ${flexSliceIndex ?? 0} mode=CW`);
-    else if (!wantCw && !/^DIG[UL]$/.test(cur)) await client.command(`slice set ${flexSliceIndex ?? 0} mode=DIGU`);
+    else if (wantLsb && cur !== "DIGL") await client.command(`slice set ${flexSliceIndex ?? 0} mode=DIGL`);
+    else if (!wantCw && !wantLsb && !/^DIG[UL]$/.test(cur)) await client.command(`slice set ${flexSliceIndex ?? 0} mode=DIGU`);
+    else if (!wantCw && !wantLsb && mode === "SSTV" && cur === "DIGL") await client.command(`slice set ${flexSliceIndex ?? 0} mode=DIGU`);
     return { ok: true, hz };
   }
 
@@ -1392,6 +1401,42 @@ function applyJs8Speed(speed: "normal" | "fast" | "turbo" | "slow"): void {
   if (status.subMode === "JS8") js8Rearm?.();
   console.log(`[js8] speed ${speed}: ${PERIOD_MS.JS8 / 1000} s windows`);
   broadcast({ kind: "status", status });
+}
+
+/**
+ * SSTV pictures: rows to the page as they arrive, and each finished picture saved as a
+ * PNG under data/sstv for the gallery (pages/api/sstv). The picture in progress is kept
+ * so a page that opens half way through gets what has arrived so far.
+ */
+const SSTV_DIR = path.join(process.cwd(), "data", "sstv");
+let sstvLive: { mode: string; width: number; height: number; rgb: Uint8ClampedArray; rows: number; at: number } | null = null;
+
+function onSstvEvent(e: SstvEvent): void {
+  if (e.kind === "start") {
+    sstvLive = { mode: e.mode, width: e.width, height: e.height, rgb: new Uint8ClampedArray(e.width * e.height * 3), rows: 0, at: e.at };
+    console.log(`[sstv] receiving ${e.mode} (${e.width}x${e.height})`);
+    broadcast({ kind: "sstv-start", mode: e.mode, width: e.width, height: e.height, at: e.at });
+    return;
+  }
+  if (e.kind === "rows") {
+    if (sstvLive) {
+      sstvLive.rgb.set(e.rgb, e.from * e.width * 3);
+      sstvLive.rows = e.to;
+    }
+    broadcast({ kind: "sstv-rows", from: e.from, to: e.to, width: e.width, rgb: Buffer.from(e.rgb).toString("base64") });
+    return;
+  }
+  const stamp = new Date(e.at).toISOString().replace(/[-:]/g, "").replace(/\..*$/, "").replace("T", "-");
+  const file = `${stamp}-${e.mode.replace(/\s+/g, "")}.png`;
+  sstvLive = null;
+  void fs.promises
+    .mkdir(SSTV_DIR, { recursive: true })
+    .then(() => fs.promises.writeFile(path.join(SSTV_DIR, file), encodePng(e.width, e.height, e.rgb)))
+    .then(() => {
+      console.log(`[sstv] saved ${e.mode} picture as ${file}`);
+      broadcast({ kind: "sstv-image", file, mode: e.mode, at: e.at });
+    })
+    .catch((err) => console.error(`[sstv] could not save the picture: ${err instanceof Error ? err.message : err}`));
 }
 
 /** A line into the JS8 message box: what went out, and how it ended. */
@@ -1721,7 +1766,9 @@ async function startFlexSource(): Promise<() => Promise<void>> {
                     ? "PSK31"
                     : configuredMode === "olivia"
                       ? "OLIVIA"
-                      : "FT8",
+                      : configuredMode === "sstv"
+                        ? "SSTV"
+                        : "FT8",
     depth,
     // Shared with the Icom: the passband is a property of the operating convention,
     // not of the radio.
@@ -2028,6 +2075,7 @@ async function startFlexSource(): Promise<() => Promise<void>> {
     watchdog?.beat();
     broadcast({ kind: "stream", ...s });
   });
+  source.on("sstv", (e) => onSstvEvent(e));
   source.on("decodes", (d) => onDecodedWindow(d, "flex.decodeDepth"));
 
   // The partner's slice, about a second ahead of the rest of the band.
@@ -4568,8 +4616,8 @@ async function main(): Promise<void> {
         const body = await readJson(req);
         const band = String(body.band ?? "").toUpperCase();
         const mode = String(body.mode ?? "FT8").toUpperCase() as DigitalMode;
-        if (!["FT8", "FT4", "FT2", "WSPR", "RTTY", "CW", "JS8", "PSK31", "OLIVIA"].includes(mode)) {
-          sendJson(res, 400, { error: "mode must be FT8, FT4, FT2, WSPR, RTTY, CW, JS8, PSK31 or OLIVIA" });
+        if (!["FT8", "FT4", "FT2", "WSPR", "RTTY", "CW", "JS8", "PSK31", "OLIVIA", "SSTV"].includes(mode)) {
+          sendJson(res, 400, { error: "mode must be FT8, FT4, FT2, WSPR, RTTY, CW, JS8, PSK31, OLIVIA or SSTV" });
           return;
         }
         const r = await tuneToCalling(band, mode);

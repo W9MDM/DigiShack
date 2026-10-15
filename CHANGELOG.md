@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.203.1 - public release
+## 1.204.0 - public release
 
 Development happens in a private repository; this is where the public history starts.
 Earlier entries are not reproduced - they quote real operators by callsign, include
@@ -22,6 +22,7 @@ Notes for anyone running this:
 
 ## Release history
 
+- **1.204.0** — SSTV, part two: pictures on the page
 - **1.203.1** — Calling a JS8 station
 - **1.203.0** — SSTV, part one: the modes, the VIS header, an encoder and a decoder
 - **1.202.1** — The slice mode, properly

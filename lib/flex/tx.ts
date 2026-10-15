@@ -76,12 +76,12 @@ const PACKET_CLASS_TX_S16 = 0x0123;
  * past the last one. Using 144 here would size the watchdog 27 ms short of the
  * actual transmission.
  */
-const SYMBOLS_PER_FRAME = { FT8: 79, FT4: 105, FT2: 146, WSPR: 162, RTTY: 0, CW: 0, JS8: 79, PSK31: 0, OLIVIA: 0 } as const;
+const SYMBOLS_PER_FRAME = { FT8: 79, FT4: 105, FT2: 146, WSPR: 162, RTTY: 0, CW: 0, JS8: 79, PSK31: 0, OLIVIA: 0, SSTV: 0 } as const;
 
 /** Extra time before the watchdog fires, allowing for scheduling jitter. */
 const WATCHDOG_MARGIN_MS = 2_000;
 
-export type TxMode = "FT8" | "FT4" | "FT2" | "WSPR" | "RTTY" | "CW" | "JS8" | "PSK31" | "OLIVIA";
+export type TxMode = "FT8" | "FT4" | "FT2" | "WSPR" | "RTTY" | "CW" | "JS8" | "PSK31" | "OLIVIA" | "SSTV";
 
 /**
  * Above this percentage of the radio's rated output, say something.
@@ -826,6 +826,9 @@ export class FlexDaxTransmitter {
     // of the mode). Nothing here keys the radio on an RTTY frequency until then.
     if (req.mode === "RTTY" || req.mode === "CW" || req.mode === "PSK31" || req.mode === "OLIVIA") {
       return { ...base, reason: `${req.mode} is sent as text, not as a timed frame` };
+    }
+    if (req.mode === "SSTV") {
+      return { ...base, reason: "SSTV is received here, not sent" };
     }
     // JS8 goes out as frames from the message layer, one per window; the frame rides on
     // the request and the waveform is built from it below. Without one there is nothing

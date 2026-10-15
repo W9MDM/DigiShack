@@ -9,7 +9,7 @@
 // The dial frequency is the reliable discriminator: the two modes use distinct,
 // well-established watering holes on every band.
 
-export type DigitalMode = "FT8" | "FT4" | "FT2" | "WSPR" | "RTTY" | "CW" | "JS8" | "PSK31" | "OLIVIA";
+export type DigitalMode = "FT8" | "FT4" | "FT2" | "WSPR" | "RTTY" | "CW" | "JS8" | "PSK31" | "OLIVIA" | "SSTV";
 
 
 export interface DigitalFrequency {
@@ -209,6 +209,19 @@ const OLIVIA: [number, string, (1 | 2 | 3)?][] = [
   [28_121_000, "10M"],
 ];
 
+/**
+ * SSTV calling frequencies, where the pictures are: 14.230 on 20 m, and the rest by the
+ * same habit. Lower sideband below 10 MHz, as the SSTV operators there run it - the chip
+ * puts the slice in DIGL on 80 and 40 m.
+ */
+const SSTV: [number, string, (1 | 2 | 3)?][] = [
+  [3_845_000, "80M"],
+  [7_171_000, "40M"],
+  [14_230_000, "20M"],
+  [21_340_000, "15M"],
+  [28_680_000, "10M"],
+];
+
 export const DIGITAL_FREQUENCIES: readonly DigitalFrequency[] = [
   ...FT8.map(([hz, band, region]): DigitalFrequency => ({ hz, mode: "FT8", band, region })),
   ...FT4.map(([hz, band, region]): DigitalFrequency => ({ hz, mode: "FT4", band, region })),
@@ -226,6 +239,7 @@ export const DIGITAL_FREQUENCIES: readonly DigitalFrequency[] = [
   ...JS8.map(([hz, band, region]): DigitalFrequency => ({ hz, mode: "JS8", band, region })),
   ...PSK31.map(([hz, band, region]): DigitalFrequency => ({ hz, mode: "PSK31", band, region })),
   ...OLIVIA.map(([hz, band, region]): DigitalFrequency => ({ hz, mode: "OLIVIA", band, region })),
+  ...SSTV.map(([hz, band, region]): DigitalFrequency => ({ hz, mode: "SSTV", band, region })),
 ];
 
 /**
@@ -349,6 +363,7 @@ const PERIOD_MS: Record<DigitalMode, number> = {
   /** A stream, as RTTY. */
   PSK31: 1_000,
   OLIVIA: 1_000,
+  SSTV: 1_000,
 };
 
 export function periodMsFor(mode: DigitalMode): number {

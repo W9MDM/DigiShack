@@ -34,6 +34,7 @@ export const PERIOD_MS: Record<TxMode, number> = {
   /** A stream, as RTTY: the heartbeat interval. */
   PSK31: 1_000,
   OLIVIA: 1_000,
+  SSTV: 1_000,
 };
 
 /**
@@ -55,6 +56,7 @@ export const TX_START_OFFSET_MS: Record<TxMode, number> = {
   JS8: 500,
   PSK31: 0,
   OLIVIA: 0,
+  SSTV: 0,
 };
 
 /**
@@ -82,6 +84,7 @@ export const TRANSMISSION_MS: Record<TxMode, number> = {
   JS8: 12_640,
   PSK31: 0,
   OLIVIA: 0,
+  SSTV: 0,
 };
 
 /** A late transmission may never eat more of the window's margin than it leaves behind. */
@@ -120,6 +123,7 @@ const DECODABLE_LATE_MS: Record<TxMode, number> = {
   JS8: 1_860,
   PSK31: 0,
   OLIVIA: 0,
+  SSTV: 0,
 };
 
 /**

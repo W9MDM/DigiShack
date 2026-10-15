@@ -49,7 +49,7 @@ function make(sub: string | null, leaveResult: boolean | Error = true) {
 
 async function main(): Promise<void> {
   console.log("\nmodes with nothing to answer");
-  for (const m of ["WSPR", "RTTY", "CW", "JS8", "PSK31", "OLIVIA"]) ok(NO_SEQUENCER_MODES.has(m), `${m} has no sequencer`);
+  for (const m of ["WSPR", "RTTY", "CW", "JS8", "PSK31", "OLIVIA", "SSTV"]) ok(NO_SEQUENCER_MODES.has(m), `${m} has no sequencer`);
   for (const m of ["FT8", "FT4", "FT2"]) ok(!NO_SEQUENCER_MODES.has(m), `${m} has one`);
   ok(noSequencerReason("JS8").includes("JS8"), "the JS8 reason names JS8");
   ok(noSequencerReason("WSPR").includes("receive-only"), "the WSPR reason says receive-only");
@@ -128,7 +128,7 @@ async function main(): Promise<void> {
   {
     const src = fs.readFileSync("services/radio/index.ts", "utf8");
     ok(
-      src.includes("else if (!wantCw && !/^DIG[UL]$/.test(cur)) await client.command(`slice set ${flexSliceIndex ?? 0} mode=DIGU`)"),
+      src.includes("else if (!wantCw && !wantLsb && !/^DIG[UL]$/.test(cur)) await client.command(`slice set ${flexSliceIndex ?? 0} mode=DIGU`)"),
       "a data-mode chip sets DIGU on a slice in USB or LSB, not only on one in CW",
     );
     const at = src.indexOf("function saveLastTune");
