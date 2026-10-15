@@ -129,7 +129,7 @@ import { startScheduleRunner } from "@/lib/radio/schedule-runner";
 import { FlexDaxSource, DAX_SAMPLE_RATE } from "@/lib/flex/dax";
 import { discoverRadios } from "@/lib/flex/discovery";
 import { freqToBand } from "@/lib/ham/bands";
-import { inferDigitalMode, type DigitalMode, type ModeGuess } from "@/lib/ham/digital-freqs";
+import { inferDigitalMode, ituRegionFromGrid, type DigitalMode, type ModeGuess } from "@/lib/ham/digital-freqs";
 import { clearAlert, raiseAlert } from "@/lib/alerts";
 import { guardFaultsCleared, watchGuardFaults } from "./guard-alerts";
 import { TxPowerTracker, dbmToWatts } from "@/lib/radio/power";
@@ -1104,7 +1104,7 @@ let stickyMode: DigitalMode | null = null;
 
 /** RTTY tuning: the tone pair's centre and shift. The sideband comes from the slice. */
 const rttyTuning = { centreHz: RTTY_CENTRE_HZ, shiftHz: RTTY_SHIFT_HZ };
-let rttyCode: { figures: "us" | "ita2"; usos: boolean } = { figures: "us", usos: true };
+let rttyCode: { figures: "us" | "ita2"; usos: boolean; squelch: number } = { figures: "us", usos: true, squelch: 0.7 };
 /** Set by the live source: recomputes the tones from the tuning and the slice's sideband. */
 let rttyApply: (() => void) | null = null;
 
@@ -1558,6 +1558,7 @@ async function startFlexSource(): Promise<() => Promise<void>> {
   rttyCode = {
     figures: ((await getSetting("rtty.figures")) ?? "us").toLowerCase() === "ita2" ? "ita2" : "us",
     usos: await getBooleanSetting("rtty.usos", true),
+    squelch: await getNumberSetting("rtty.squelch", 0.7),
   };
   rttyApply = () => {
     const sideband: "USB" | "LSB" = /LSB|DIGL/i.test(status.mode ?? "") ? "LSB" : "USB";
@@ -1762,7 +1763,7 @@ async function startFlexSource(): Promise<() => Promise<void>> {
       retune: async (band, mode) => {
         const shared = source.shared;
         if (!shared) return false;
-        const hz = callingFrequencyHz(band, mode);
+        const hz = callingFrequencyHz(band, mode, ituRegionFromGrid(status.deGrid));
         if (hz === null) return false;
         const mhz = (hz / 1_000_000).toFixed(6);
         const reply = await shared.client.command(`slice tune ${shared.sliceIndex} ${mhz}`);
@@ -3888,7 +3889,7 @@ async function main(): Promise<void> {
           sendJson(res, 400, { error: "mode must be FT8, FT4, FT2, WSPR or RTTY" });
           return;
         }
-        const hz = callingFrequencyHz(band, mode);
+        const hz = callingFrequencyHz(band, mode, ituRegionFromGrid(status.deGrid));
         if (hz === null) {
           sendJson(res, 404, { error: `No ${mode} calling frequency is listed for ${band}` });
           return;

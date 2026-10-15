@@ -8,6 +8,7 @@ export interface StreamStats {
   seconds: number;
   chars: number;
   framingErrors: number;
+  weak: number;
   mark: number;
   space: number;
   /** -1 (space) to +1 (mark); near 0 when there is no signal at the tones. */
@@ -119,7 +120,9 @@ export function RttyPanel({ text, stats, rtty, canTune, error, onTune, onClear }
         <div className="h-1.5 bg-bg-raised rounded-sm overflow-hidden">
           <div className="h-full bg-ok/70" style={{ width: `${spacePct}%` }} />
         </div>
-        <span className="text-fg-subtle text-right">{stats ? `${stats.framingErrors} bad` : ""}</span>
+        <span className="text-fg-subtle text-right" title="Bad stop bits, and well-framed characters the squelch dropped">
+          {stats ? `${stats.framingErrors} bad · ${stats.weak} weak` : ""}
+        </span>
       </div>
 
       {error && <p className="text-xs text-danger">{error}</p>}
