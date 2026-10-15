@@ -93,6 +93,15 @@ function barsRecognised(a: SstvImage, b: SstvImage): number {
   return right;
 }
 
+function greyOf(img: SstvImage): SstvImage {
+  const rgb = new Uint8ClampedArray(img.rgb.length);
+  for (let i = 0; i < rgb.length; i += 3) {
+    const v = 0.299 * img.rgb[i]! + 0.587 * img.rgb[i + 1]! + 0.114 * img.rgb[i + 2]!;
+    rgb[i] = rgb[i + 1] = rgb[i + 2] = v;
+  }
+  return { width: img.width, height: img.height, rgb };
+}
+
 function decode(mode: SstvMode, wave: Float32Array, fs: number): { img: SstvImage | null; started: string | null; rowsSeen: number } {
   let img: SstvImage | null = null;
   let started: string | null = null;
@@ -119,9 +128,11 @@ const fs24 = 24_000;
 console.log("\nevery mode, clean, at the FlexRadio's 24 kHz");
 for (const mode of SSTV_MODES) {
   const card = sstvTestCard(mode.width, mode.height);
+  // A black and white mode sends the card's luminance: compare with that.
+  const want = mode.colour === "bw" ? greyOf(card) : card;
   const r = decode(mode, sstvWaveform(mode, card, { sampleRate: fs24 }), fs24);
   ok(r.started === mode.name, `${mode.name}: the VIS names it`, r.started);
-  const e = r.img ? error(card, r.img) : 999;
+  const e = r.img ? error(want, r.img) : 999;
   ok(r.img !== null && e < 12, `${mode.name}: the picture comes back (mean error ${e.toFixed(1)} of 255)`);
   ok(r.rowsSeen === mode.height, `${mode.name}: every row is reported as it is decoded (${r.rowsSeen})`);
 }
@@ -161,8 +172,8 @@ console.log("\nthe Icom's 48 kHz, noise, and a sound card 0.1% slow");
 
 console.log("\na header for a mode not decoded here");
 {
-  // Robot 72 (VIS 12): heard, named, counted once, and no picture started.
-  const segs = sstvVisSegments(12);
+  // Robot 12 (VIS 0, still not decoded here): heard, named, counted once, and no picture started.
+  const segs = sstvVisSegments(0);
   let total = 0;
   for (const [, ms] of segs) total += ms;
   const lead = Math.round(fs24 * 0.5);
@@ -186,7 +197,7 @@ console.log("\na header for a mode not decoded here");
   let started = 0;
   const d = new SstvDecoder(fs24, { onVis: (_c, name) => heard.push(name), onStart: () => started++ });
   for (let i = 0; i < w.length; i += 256) d.feed(w.subarray(i, i + 256));
-  ok(heard.length === 1 && heard[0] === "Robot 72", `the header is named and counted once (${heard.join(", ") || "nothing"})`);
+  ok(heard.length === 1 && heard[0] === "Robot 12", `the header is named and counted once (${heard.join(", ") || "nothing"})`);
   ok(started === 0 && d.statistics.visHeard === 1, "and starts no picture");
 }
 

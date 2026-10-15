@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.204.2 - public release
+## 1.205.1 - public release
 
 Development happens in a private repository; this is where the public history starts.
 Earlier entries are not reproduced - they quote real operators by callsign, include
@@ -22,6 +22,8 @@ Notes for anyone running this:
 
 ## Release history
 
+- **1.205.1** — SSTV: every standard mode
+- **1.205.0** — JS8, part seven: automatic replies
 - **1.204.2** — SSTV: three more PD modes, and headers that say what they were
 - **1.204.1** — The first SSTV picture, and a page opened mid-picture
 - **1.204.0** — SSTV, part two: pictures on the page

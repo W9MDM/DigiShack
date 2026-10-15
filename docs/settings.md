@@ -27,7 +27,7 @@ be read: `DATABASE_URL`, `SETTINGS_KEY` and `PORT`.
 - [DXCC reference data](#dxcc-reference-data) — 2 settings
 - [PSKReporter](#pskreporter) — 4 settings
 - [RTTY](#rtty) — 5 settings
-- [JS8](#js8) — 1 setting
+- [JS8](#js8) — 4 settings
 - [Olivia](#olivia) — 5 settings
 - [PSK31](#psk31) — 3 settings
 - [CW](#cw) — 3 settings
@@ -192,6 +192,9 @@ Which of JS8Call's speeds this station listens and sends at. The JS8 panel chang
 
 | Setting | Key | Type | Default | What it does |
 |---|---|---|---|---|
+| JS8 automatic replies | `js8.autoreply` | text | `off` | off \| hb \| all. hb acknowledges every heartbeat heard with the signal report, as JS8Call stations do; all also answers SNR?, GRID? and INFO? sent to this station. Off by default because it transmits on its own; the transmit gate still applies. |
+| JS8 INFO text | `js8.info` | text | — | What a station that sends INFO? gets back, after the INFO command, when automatic replies are set to all. Upper case on the air. Empty means INFO? is not answered. |
+| JS8 acknowledgement cooldown (minutes) | `js8.ackCooldownMin` | number | `15` | How long after acknowledging a station's heartbeat its next ones are let go, so a station heartbeating every few minutes does not have this one keying every few minutes for it. JS8Call acknowledges every one; 15 keeps the duty cycle sane. |
 | JS8 speed | `js8.speed` | text | `normal` | normal \| fast \| turbo \| slow: JS8Call's speeds, 15, 10, 6 and 30 second windows on the same frequencies. Both ends must use the same one; Normal is what most stations run. The JS8 panel changes it for the session. |
 
 ## Olivia

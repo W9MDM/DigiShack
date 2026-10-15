@@ -17,7 +17,7 @@
 // line's worth of search rather than wrecking it. scripts/check-sstv.ts encodes test
 // pictures in every mode and reads them back, clean, in noise and with a clock error.
 
-export type SstvColour = "gbr" | "ycc-robot" | "ycc-pd";
+export type SstvColour = "gbr" | "rgb" | "bw" | "ycc-robot" | "ycc-robot72" | "ycc-pd";
 
 export interface SstvMode {
   name: string;
@@ -35,6 +35,11 @@ export interface SstvMode {
   sepMs: number;
   /** One sync period, ms: a line, or for PD a pair of lines. */
   lineMs: number;
+  /**
+   * 2 for the half-height modes (Martin 3 and 4, Scottie 3 and 4, Robot 8 and 12 B/W):
+   * each transmitted line fills two rows of the picture, so it keeps its shape.
+   */
+  lineHeight?: 2;
 }
 
 export const SSTV_MODES: readonly SstvMode[] = [
@@ -50,6 +55,27 @@ export const SSTV_MODES: readonly SstvMode[] = [
   { name: "PD 50", vis: 93, width: 320, height: 256, colour: "ycc-pd", syncMs: 20, porchMs: 2.08, scanMs: 91.52, sepMs: 0, lineMs: 388.16 },
   { name: "PD 160", vis: 98, width: 512, height: 400, colour: "ycc-pd", syncMs: 20, porchMs: 2.08, scanMs: 195.584, sepMs: 0, lineMs: 804.416 },
   { name: "PD 240", vis: 97, width: 640, height: 496, colour: "ycc-pd", syncMs: 20, porchMs: 2.08, scanMs: 244.48, sepMs: 0, lineMs: 1000 },
+  { name: "PD 290", vis: 94, width: 800, height: 616, colour: "ycc-pd", syncMs: 20, porchMs: 2.08, scanMs: 228.8, sepMs: 0, lineMs: 937.28 },
+  // Half-height: Martin 1 and 2's and Scottie 1 and 2's lines, 128 of them.
+  { name: "Martin 3", vis: 36, width: 320, height: 256, colour: "gbr", syncMs: 4.862, porchMs: 0.572, scanMs: 146.432, sepMs: 0.572, lineMs: 446.446, lineHeight: 2 },
+  { name: "Martin 4", vis: 32, width: 320, height: 256, colour: "gbr", syncMs: 4.862, porchMs: 0.572, scanMs: 73.216, sepMs: 0.572, lineMs: 226.798, lineHeight: 2 },
+  { name: "Scottie 3", vis: 52, width: 320, height: 256, colour: "gbr", syncMs: 9, porchMs: 1.5, scanMs: 138.24, sepMs: 1.5, lineMs: 428.22, lineHeight: 2 },
+  { name: "Scottie 4", vis: 48, width: 320, height: 256, colour: "gbr", syncMs: 9, porchMs: 1.5, scanMs: 88.064, sepMs: 1.5, lineMs: 277.692, lineHeight: 2 },
+  // Robot 24 as slowrx reads it: Robot 36's lines under its own VIS code.
+  { name: "Robot 24", vis: 4, width: 320, height: 240, colour: "ycc-robot", syncMs: 9, porchMs: 3, scanMs: 88, sepMs: 4.5, lineMs: 150 },
+  // Robot 72: luminance 138 ms, then R-Y and B-Y at half width, 69 ms each, every line.
+  { name: "Robot 72", vis: 12, width: 320, height: 240, colour: "ycc-robot72", syncMs: 9, porchMs: 3, scanMs: 138, sepMs: 4.5, lineMs: 300 },
+  // Black and white Robot: a sync and a luminance scan.
+  { name: "Robot 8 B/W", vis: 2, width: 320, height: 240, colour: "bw", syncMs: 7, porchMs: 0, scanMs: 59.9, sepMs: 0, lineMs: 66.9, lineHeight: 2 },
+  { name: "Robot 12 B/W", vis: 6, width: 320, height: 240, colour: "bw", syncMs: 7, porchMs: 0, scanMs: 93.12, sepMs: 0, lineMs: 100.12, lineHeight: 2 },
+  { name: "Robot 24 B/W", vis: 10, width: 320, height: 240, colour: "bw", syncMs: 7, porchMs: 0, scanMs: 93.12, sepMs: 0, lineMs: 100.12 },
+  // Wraase SC-2: red, green, blue with no separators.
+  { name: "Wraase SC2-180", vis: 55, width: 320, height: 256, colour: "rgb", syncMs: 5.5225, porchMs: 0.5, scanMs: 235, sepMs: 0, lineMs: 711.0225 },
+  { name: "Wraase SC2-120", vis: 63, width: 320, height: 256, colour: "rgb", syncMs: 5.5225, porchMs: 0.5, scanMs: 156.5025, sepMs: 0, lineMs: 475.530018 },
+  // Pasokon: red, green, blue, each followed by a gap the length of the porch.
+  { name: "Pasokon P3", vis: 113, width: 640, height: 496, colour: "rgb", syncMs: 5.208, porchMs: 1.042, scanMs: 133.333, sepMs: 1.042, lineMs: 409.375 },
+  { name: "Pasokon P5", vis: 114, width: 640, height: 496, colour: "rgb", syncMs: 7.813, porchMs: 1.563, scanMs: 200, sepMs: 1.563, lineMs: 614.065 },
+  { name: "Pasokon P7", vis: 115, width: 640, height: 496, colour: "rgb", syncMs: 10.417, porchMs: 2.083, scanMs: 266.666, sepMs: 2.083, lineMs: 818.747 },
 ];
 
 /**
@@ -57,10 +83,7 @@ export const SSTV_MODES: readonly SstvMode[] = [
  * at least says what it was. From the Dayton Paper and MMSSTV's list.
  */
 export const SSTV_OTHER_VIS: Readonly<Record<number, string>> = {
-  0: "Robot 12", 4: "Robot 24", 12: "Robot 72", 2: "Robot 8 B/W", 6: "Robot 12 B/W",
-  36: "Martin 3", 32: "Martin 4", 52: "Scottie 3", 48: "Scottie 4",
-  55: "Wraase SC2-180", 63: "Wraase SC2-120", 59: "Wraase SC2-60", 51: "Wraase SC2-30",
-  113: "Pasokon P3", 114: "Pasokon P5", 115: "Pasokon P7",
+  0: "Robot 12", 59: "Wraase SC2-60", 51: "Wraase SC2-30",
   35: "MMSSTV extended (MP/MR/ML modes)",
 };
 
@@ -79,7 +102,7 @@ export function sstvModeByName(name: string): SstvMode | null {
 
 /** Sync periods in a picture: lines, or pairs of lines for PD. */
 export function sstvSyncPeriods(mode: SstvMode): number {
-  return mode.colour === "ycc-pd" ? mode.height / 2 : mode.height;
+  return mode.colour === "ycc-pd" || mode.lineHeight === 2 ? mode.height / 2 : mode.height;
 }
 
 /** Seconds a whole transmission takes after the VIS header. */
@@ -151,10 +174,35 @@ export function sstvSegments(mode: SstvMode, img: SstvImage): Segment[] {
   const chan = (y: number, c: number) => Array.from({ length: W }, (_, x) => px(x, y, c));
   const ycc = (y: number) => Array.from({ length: W }, (_, x) => toYcc(px(x, y, 0), px(x, y, 1), px(x, y, 2)));
   const seg: Segment[] = [...sstvVisSegments(mode.vis)];
-  if (mode.colour === "gbr") {
+  const lh = mode.lineHeight ?? 1;
+  const luma = (y: number) => Array.from({ length: W }, (_, x) => 0.299 * px(x, y, 0) + 0.587 * px(x, y, 1) + 0.114 * px(x, y, 2));
+  if (mode.colour === "bw") {
+    for (let y = 0; y < mode.height; y += lh) {
+      seg.push([SSTV_SYNC_HZ, mode.syncMs]);
+      if (mode.porchMs > 0) seg.push([1500, mode.porchMs]);
+      seg.push(...scanSegments(luma(y), mode.scanMs));
+    }
+  } else if (mode.colour === "rgb") {
+    for (let y = 0; y < mode.height; y += lh) {
+      seg.push([SSTV_SYNC_HZ, mode.syncMs], [1500, mode.porchMs]);
+      for (const c of [0, 1, 2]) {
+        seg.push(...scanSegments(chan(y, c), mode.scanMs));
+        if (mode.sepMs > 0) seg.push([1500, mode.sepMs]);
+      }
+    }
+  } else if (mode.colour === "ycc-robot72") {
+    for (let y = 0; y < mode.height; y++) {
+      const row = ycc(y);
+      const half = (k: 1 | 2) => Array.from({ length: W / 2 }, (_, i) => (row[2 * i]![k] + row[2 * i + 1]![k]) / 2);
+      seg.push([SSTV_SYNC_HZ, mode.syncMs], [1500, mode.porchMs]);
+      seg.push(...scanSegments(row.map((v) => v[0]), mode.scanMs));
+      seg.push([1500, mode.sepMs], [1900, 1.5], ...scanSegments(half(2), mode.scanMs / 2));
+      seg.push([2300, mode.sepMs], [1900, 1.5], ...scanSegments(half(1), mode.scanMs / 2));
+    }
+  } else if (mode.colour === "gbr") {
     const scottie = mode.name.startsWith("Scottie");
     if (scottie) seg.push([SSTV_SYNC_HZ, mode.syncMs]);
-    for (let y = 0; y < mode.height; y++) {
+    for (let y = 0; y < mode.height; y += lh) {
       if (scottie) {
         seg.push([1500, mode.sepMs], ...scanSegments(chan(y, 1), mode.scanMs));
         seg.push([1500, mode.sepMs], ...scanSegments(chan(y, 2), mode.scanMs));
@@ -555,6 +603,40 @@ export class SstvDecoder {
       img.rgb[i + 2] = b;
     };
     const p = this.rowsDone;
+    const lh = mode.lineHeight ?? 1;
+    /** Put a decoded line into its rows: one, or two for the half-height modes. */
+    const putLine = (line: number, rgbAt: (x: number) => [number, number, number]) => {
+      for (let x = 0; x < W; x++) {
+        const [r, g, b] = rgbAt(x);
+        for (let k = 0; k < lh; k++) put(line * lh + k, x, r, g, b);
+      }
+      this.events.onRows?.(img, line * lh, line * lh + lh);
+    };
+    if (mode.colour === "bw") {
+      const y = this.scan(at + (mode.syncMs + mode.porchMs) * sp, mode.scanMs, W);
+      putLine(p, (x) => [y[x]!, y[x]!, y[x]!]);
+      return;
+    }
+    if (mode.colour === "rgb") {
+      let t = at + (mode.syncMs + mode.porchMs) * sp;
+      const r = this.scan(t, mode.scanMs, W);
+      t += (mode.scanMs + mode.sepMs) * sp;
+      const g = this.scan(t, mode.scanMs, W);
+      t += (mode.scanMs + mode.sepMs) * sp;
+      const b = this.scan(t, mode.scanMs, W);
+      putLine(p, (x) => [r[x]!, g[x]!, b[x]!]);
+      return;
+    }
+    if (mode.colour === "ycc-robot72") {
+      let t = at + (mode.syncMs + mode.porchMs) * sp;
+      const y = this.scan(t, mode.scanMs, W);
+      t += (mode.scanMs + mode.sepMs + 1.5) * sp;
+      const cr = this.scan(t, mode.scanMs / 2, W / 2);
+      t += (mode.scanMs / 2 + mode.sepMs + 1.5) * sp;
+      const cb = this.scan(t, mode.scanMs / 2, W / 2);
+      putLine(p, (x) => fromYcc(y[x]!, cb[x >> 1]!, cr[x >> 1]!));
+      return;
+    }
     if (mode.colour === "gbr") {
       const scottie = mode.name.startsWith("Scottie");
       let t = at;
@@ -574,8 +656,7 @@ export class SstvDecoder {
         t += (mode.scanMs + mode.sepMs) * sp;
         r = this.scan(t, mode.scanMs, W);
       }
-      for (let x = 0; x < W; x++) put(p, x, r[x]!, g[x]!, b[x]!);
-      this.events.onRows?.(img, p, p + 1);
+      putLine(p, (x) => [r[x]!, g[x]!, b[x]!]);
     } else if (mode.colour === "ycc-robot") {
       let t = at + (mode.syncMs + mode.porchMs) * sp;
       const y = this.scan(t, mode.scanMs, W);
