@@ -8,6 +8,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Waterfall, type WaterfallMarker } from "@/components/digital/Waterfall";
+import { RttyPanel, type StreamStats } from "@/components/digital/RttyPanel";
 import {
   Badge,
   Button,
@@ -47,7 +48,12 @@ import {
 import { cn } from "@/lib/utils";
 
 import { useVisibleInterval } from "@/lib/client/use-visible-interval";
+/** Rolling RTTY text kept on the page, characters. */
+const STREAM_TEXT_MAX = 8_000;
+
 interface RigStatus {
+  /** The RTTY tone pair while listening to RTTY. */
+  rtty?: { centreHz: number; shiftHz: number; sideband: "USB" | "LSB"; markHz: number; spaceHz: number } | null;
   connected: boolean;
   dialFrequency: number | null;
   band: string | null;
@@ -492,6 +498,10 @@ const MAX_REASONS_SHOWN = 3;
 export default function DigitalPage({ wsUrl }: Props) {
   const [status, setStatus] = useState<RigStatus | null>(null);
   const [rows, setRows] = useState<DecodeEvent[]>([]);
+  // Stream modes (RTTY): the rolling text and the once-a-second heartbeat with tone levels.
+  const [streamText, setStreamText] = useState("");
+  const [streamStats, setStreamStats] = useState<StreamStats | null>(null);
+  const [rttyError, setRttyError] = useState<string | null>(null);
 
   // Why each station is worth calling — the same scoring Auto Hunt ranks by, so the
   // badges an operator sees and the choices the software makes cannot disagree.
@@ -916,6 +926,12 @@ export default function DigitalPage({ wsUrl }: Props) {
           linkStats.current.counts[k] = (linkStats.current.counts[k] ?? 0) + 1;
           if (msg.kind === "status") setStatus(msg.status);
           else if (msg.kind === "decode") push(msg as DecodeEvent);
+          else if (msg.kind === "text" && typeof msg.text === "string") {
+            const t = msg.text as string;
+            setStreamText((prev) => (prev + t).slice(-STREAM_TEXT_MAX));
+          } else if (msg.kind === "text-backlog" && typeof msg.text === "string") {
+            setStreamText(msg.text as string);
+          } else if (msg.kind === "stream") setStreamStats(msg as unknown as StreamStats);
           else if (msg.kind === "spectrum") {
             const s = msg as SpectrumMsg;
             // The waterfall keeps running while paused: pausing is about the
@@ -1112,6 +1128,13 @@ export default function DigitalPage({ wsUrl }: Props) {
 
   /** Markers for the most recent cycle only — older ones aren't on screen. */
   const markers = useMemo<WaterfallMarker[]>(() => {
+    // On RTTY the waterfall is a control: the markers are the tone pair being listened on.
+    if (status?.subMode === "RTTY" && status.rtty) {
+      return [
+        { hz: status.rtty.markHz, label: "RTTY mark", emphasis: true },
+        { hz: status.rtty.spaceHz, label: "RTTY space", emphasis: false },
+      ];
+    }
     if (rows.length === 0) return [];
     const newest = rows[0]!.timestamp;
     return rows
@@ -1121,7 +1144,7 @@ export default function DigitalPage({ wsUrl }: Props) {
         label: r.message,
         emphasis: mentionsMe(r.message),
       }));
-  }, [rows, mentionsMe]);
+  }, [rows, mentionsMe, status?.subMode, status?.rtty]);
 
   const cyclePct = ((now % scale.periodMs) / scale.periodMs) * 100;
 
@@ -1249,6 +1272,15 @@ export default function DigitalPage({ wsUrl }: Props) {
       `parseErrors=${linkStats.current.parseErrors}`,
     );
   }
+  /** Move the RTTY tone pair: the centre from a click on the waterfall or the ± buttons, the shift from its picker. */
+  const tuneRtty = useCallback(async (centreHz?: number, shiftHz?: number) => {
+    try {
+      await apiPost("/api/bridge/control", { action: "rtty", centreHz, shiftHz });
+      setRttyError(null);
+    } catch (err) {
+      setRttyError(err instanceof ApiError ? err.message : "Could not move the RTTY tones");
+    }
+  }, []);
   const decodingAs = status?.subMode ?? status?.mode ?? "—";
 
   // Which mode the band buttons retune to. All three have calling frequencies, so
@@ -1256,7 +1288,15 @@ export default function DigitalPage({ wsUrl }: Props) {
   // the fallback when the radio has not reported a mode yet, being much the most
   // common watering hole.
   const tuneMode: DigitalMode =
-    decodingAs === "FT4" ? "FT4" : decodingAs === "FT2" ? "FT2" : decodingAs === "WSPR" ? "WSPR" : "FT8";
+    decodingAs === "FT4"
+      ? "FT4"
+      : decodingAs === "FT2"
+        ? "FT2"
+        : decodingAs === "WSPR"
+          ? "WSPR"
+          : decodingAs === "RTTY"
+            ? "RTTY"
+            : "FT8";
 
   /**
    * Is there anything to halt? Transmitting now, a contact in flight, or an automatic
@@ -1790,6 +1830,7 @@ export default function DigitalPage({ wsUrl }: Props) {
             binHz={scale.binHz}
             maxHz={scale.maxHz}
             markers={markers}
+            onPickHz={decodingAs === "RTTY" && canSwitch ? (hz) => void tuneRtty(hz) : undefined}
             txHz={status?.txDF ?? null}
             gain={gain}
             // Was `compact ? 120 : 300`. Both numbers were defensible and neither was
@@ -2151,7 +2192,17 @@ export default function DigitalPage({ wsUrl }: Props) {
               {rowCallNote && (
                 <p className="mb-2 text-xs text-accent-bright">{rowCallNote.text}</p>
               )}
-              {visible.length === 0 ? (
+              {decodingAs === "RTTY" ? (
+                <RttyPanel
+                  text={streamText}
+                  stats={streamStats}
+                  rtty={status?.rtty ?? null}
+                  canTune={canSwitch}
+                  error={rttyError}
+                  onTune={(centreHz, shiftHz) => void tuneRtty(centreHz, shiftHz)}
+                  onClear={() => setStreamText("")}
+                />
+              ) : visible.length === 0 ? (
                 // "Nothing heard" and "nothing MATCHED" are different problems, and
                 // the narrow filters (CQ POTA especially) are legitimately empty on a
                 // busy band. Saying "no decodes yet" under 200 live decodes would send
@@ -3474,7 +3525,7 @@ function BandButtons({
           to a one-row stats block). */}
       <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-1">
         <div className="flex gap-1" role="group" aria-label="Digital mode">
-          {(["FT8", "FT4", "FT2", "WSPR"] as const).map((m) => {
+          {(["FT8", "FT4", "FT2", "WSPR", "RTTY"] as const).map((m) => {
           const active = decodingAs === m;
           const target = bandFor(m);
           const canSwitch = active || target !== null;

@@ -29,7 +29,7 @@ export const SETTINGS_TABS: SettingsTab[] = [
   {
     id: "radio",
     label: "Radio",
-    groups: ["digital", "flex", "icom", "wsjtx", "bridge"],
+    groups: ["digital", "rtty", "flex", "icom", "wsjtx", "bridge"],
   },
   {
     id: "automation",

@@ -9,7 +9,7 @@
 // The dial frequency is the reliable discriminator: the two modes use distinct,
 // well-established watering holes on every band.
 
-export type DigitalMode = "FT8" | "FT4" | "FT2" | "WSPR";
+export type DigitalMode = "FT8" | "FT4" | "FT2" | "WSPR" | "RTTY";
 
 
 export interface DigitalFrequency {
@@ -115,6 +115,26 @@ const WSPR: [number, string, (1 | 2 | 3)?][] = [
   [144_489_000, "2M"],
 ];
 
+/**
+ * RTTY has no calling frequencies. Activity spreads across a segment of each band and the
+ * station tunes around inside it, so these are the segment CENTRES the mode button tunes
+ * to - where to start looking - and the bridge keeps the decoder on RTTY while the dial
+ * moves nearby (its sticky mode), until the dial lands on another mode's calling
+ * frequency. 40 m differs by region: 7.080 in Region 2, 7.040 in Regions 1 and 3.
+ */
+const RTTY: [number, string, (1 | 2 | 3)?][] = [
+  [3_590_000, "80M"],
+  [7_040_000, "40M", 1],
+  [7_080_000, "40M", 2],
+  [7_040_000, "40M", 3],
+  [10_140_000, "30M"],
+  [14_085_000, "20M"],
+  [18_102_000, "17M"],
+  [21_085_000, "15M"],
+  [24_922_000, "12M"],
+  [28_085_000, "10M"],
+];
+
 export const DIGITAL_FREQUENCIES: readonly DigitalFrequency[] = [
   ...FT8.map(([hz, band, region]): DigitalFrequency => ({ hz, mode: "FT8", band, region })),
   ...FT4.map(([hz, band, region]): DigitalFrequency => ({ hz, mode: "FT4", band, region })),
@@ -127,6 +147,7 @@ export const DIGITAL_FREQUENCIES: readonly DigitalFrequency[] = [
   // WSPR shares no frequency with the others (7.0386 is 35 kHz below FT8's 7.074), so
   // the inference picks it by distance alone and a WSPR dial means WSPR.
   ...WSPR.map(([hz, band, region]): DigitalFrequency => ({ hz, mode: "WSPR", band, region })),
+  ...RTTY.map(([hz, band, region]): DigitalFrequency => ({ hz, mode: "RTTY", band, region })),
 ];
 
 /**
@@ -226,6 +247,8 @@ const PERIOD_MS: Record<DigitalMode, number> = {
   FT4: 7_500,
   FT2: 3_750,
   WSPR: 120_000,
+  /** A stream, not a period: the decoder reports once per second of audio. */
+  RTTY: 1_000,
 };
 
 export function periodMsFor(mode: DigitalMode): number {

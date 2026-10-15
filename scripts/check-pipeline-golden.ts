@@ -124,7 +124,7 @@ const OFFSET = 1200;
  * that gate. A decode test that feeds a bare transmission is not testing the pipeline,
  * because the pipeline never sees one.
  */
-const TX_START_MS: Record<TxMode, number> = { FT8: 500, FT4: 500, FT2: 0, WSPR: 1000 };
+const TX_START_MS: Record<TxMode, number> = { FT8: 500, FT4: 500, FT2: 0, WSPR: 1000, RTTY: 0 };
 
 function liveWindow(mode: TxMode, wave: Float32Array): Float32Array {
   const lead = Math.round((DAX_SAMPLE_RATE * TX_START_MS[mode]) / 1000);

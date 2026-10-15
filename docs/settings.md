@@ -26,6 +26,7 @@ be read: `DATABASE_URL`, `SETTINGS_KEY` and `PORT`.
 - [N3FJP Amateur Contact Log](#n3fjp-amateur-contact-log) — 2 settings
 - [DXCC reference data](#dxcc-reference-data) — 2 settings
 - [PSKReporter](#pskreporter) — 4 settings
+- [RTTY](#rtty) — 4 settings
 - [WSPR](#wspr) — 1 setting
 - [Digital modes](#digital-modes) — 8 settings
 - [DigiShack bridge](#digishack-bridge) — 4 settings
@@ -169,6 +170,17 @@ PSKReporter asks developers to identify their traffic and to poll no more than o
 | Antenna description | `pskreporter.antenna` | text | — | Shown alongside your spots on pskreporter.info. Optional. |
 | Collect reception reports | `pskreporter.enabled` | on/off | `false` | Ask PSKReporter which receivers heard our transmissions, and attach their reports to the contacts they belong to — the 'Heard by' panel on a contact. Downloads; the setting above uploads. Queried every five minutes, which is the most often PSKReporter permits. Most reports are of CQs that led to no contact and cannot be attached to one, so they are counted and discarded. |
 
+## RTTY
+
+Where the RTTY tone pair starts in the audio passband and how the decoder reads the code. The decodes page moves the tones live (click a signal on the waterfall); these are the values the bridge loads.
+
+| Setting | Key | Type | Default | What it does |
+|---|---|---|---|---|
+| RTTY tone centre (Hz) | `rtty.centreHz` | number | `2210` | Centre of the mark/space pair in the audio passband, Hz. 2210 is the classic 2125/2295 pair. The decodes page moves it live; this is where it starts. |
+| RTTY shift (Hz) | `rtty.shiftHz` | number | `170` | Distance between mark and space, Hz. 170 is the amateur standard; 850 the old commercial one. |
+| Figures case | `rtty.figures` | text | `us` | us \| ita2. Which characters the FIGURES case carries where the standards differ: US TTY ($ ! & # ; ") is what amateur software uses; ITA2 proper has ' WRU BELL + = there instead. |
+| Unshift on space | `rtty.usos` | on/off | `true` | A received space returns the decoder to the letters case, the amateur convention. Leave on unless the station you are reading sends figures across spaces without re-shifting. |
+
 ## WSPR
 
 DigiShack listens to WSPR beacons whenever the radio is on a WSPR dial frequency, and can report what it hears to wsprnet.org. Receive only: nothing on a WSPR frequency is called or answered, and the automatic modes will not start there.
@@ -189,7 +201,7 @@ Where decodes and rig status come from. `wsjtx` takes them from an external deco
 | Re-check the clock every (minutes) | `time.syncMinutes` | number | `60` | How often to re-measure. Hourly is plenty for a machine that is roughly synchronised, and one exchange is 48 bytes. 0 measures once at startup and never again. |
 | Also write every decode to CSV in | `digital.decodeCsvDir` | text | — | A directory on the server. One file per UTC day, `decodes-YYYY-MM-DD.csv`, holding every decode heard — including ones with no resolvable band, which never reach the database. Leave blank to write none. This is separate from the database copy, which is pruned after `digital.decodeRetentionDays`: the table is what the application queries, this is the raw feed kept for its own sake in a format that outlives the schema. A busy band produces around 42,000 rows a day, which is a few megabytes. |
 | Passband to decode and display (Hz) | `digital.passbandHz` | number | `3000` | Top of the audio passband: what the decoders search AND what the waterfall draws — one number, so the display cannot disagree with the decoder. 3000 is the conventional FT8 sub-band and the decoder library's own default. Raising it finds stations above 3 kHz that were being clipped: a busy band shows a hard stop at exactly 3000, which is a clipped distribution rather than a natural one. It costs decode time, so watch for the "decode took Nms" warning, and note that most radios will not TRANSMIT above about 2.9 kHz whatever the receiver hears — stations found up there can be decoded but not answered. |
-| Digital mode | `digital.mode` | text | `auto` | auto \| ft8 \| ft4 \| ft2. Auto infers the mode from the dial frequency, which is the only reliable way — a DIGU slice does not say which mode it carries, and the three use different window lengths (15 / 7.5 / 3.75 s). FT2 has provisional calling frequencies so auto does find it, except on 60 m where it shares 5.357 MHz with FT4 and auto resolves to FT4; pin ft2 here to run it there or anywhere off-frequency. |
+| Digital mode | `digital.mode` | text | `auto` | auto \| ft8 \| ft4 \| ft2 \| wspr \| rtty. Auto infers the mode from the dial frequency, which is the only reliable way — a DIGU slice does not say which mode it carries, and the three use different window lengths (15 / 7.5 / 3.75 s). FT2 has provisional calling frequencies so auto does find it, except on 60 m where it shares 5.357 MHz with FT4 and auto resolves to FT4; pin ft2 here to run it there or anywhere off-frequency. |
 | Keep decodes for (days) | `digital.decodeRetentionDays` | number | `30` | A busy band produces around 42,000 decodes a day — roughly 10 MB, or 3.7 GB a year — and nothing used to delete any of it. Decodes attached to a logged contact are NEVER pruned whatever this says; they are the evidence of the QSO. 0 keeps everything, which is fine if you have the disk and want the full history. |
 
 ## DigiShack bridge

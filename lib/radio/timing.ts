@@ -25,6 +25,8 @@ export const PERIOD_MS: Record<TxMode, number> = {
   FT4: 7_500,
   FT2: 3_750,
   WSPR: 120_000,
+  /** A stream: no period. One second, the decoder's heartbeat interval. */
+  RTTY: 1_000,
 };
 
 /**
@@ -40,6 +42,7 @@ export const TX_START_OFFSET_MS: Record<TxMode, number> = {
   FT2: 0,
   /** One second after the even minute, per the WSPR protocol. */
   WSPR: 1_000,
+  RTTY: 0,
 };
 
 /**
@@ -60,6 +63,8 @@ export const TRANSMISSION_MS: Record<TxMode, number> = {
   FT2: 1_947,
   /** 162 symbols of 8192 samples at 12 kHz. */
   WSPR: 110_592,
+  /** Text has no fixed length. */
+  RTTY: 0,
 };
 
 /** A late transmission may never eat more of the window's margin than it leaves behind. */
@@ -93,6 +98,7 @@ const DECODABLE_LATE_MS: Record<TxMode, number> = {
   FT2: 0,
   /** The search spans several seconds of DT; nothing here transmits WSPR, so this is only a table entry. */
   WSPR: 2_000,
+  RTTY: 0,
 };
 
 /**
