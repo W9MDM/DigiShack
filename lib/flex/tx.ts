@@ -64,12 +64,12 @@ const PACKET_CLASS_TX_S16 = 0x0123;
  * past the last one. Using 144 here would size the watchdog 27 ms short of the
  * actual transmission.
  */
-const SYMBOLS_PER_FRAME = { FT8: 79, FT4: 105, FT2: 146 } as const;
+const SYMBOLS_PER_FRAME = { FT8: 79, FT4: 105, FT2: 146, WSPR: 162 } as const;
 
 /** Extra time before the watchdog fires, allowing for scheduling jitter. */
 const WATCHDOG_MARGIN_MS = 2_000;
 
-export type TxMode = "FT8" | "FT4" | "FT2";
+export type TxMode = "FT8" | "FT4" | "FT2" | "WSPR";
 
 /**
  * Above this percentage of the radio's rated output, say something.
@@ -777,6 +777,13 @@ export class FlexDaxTransmitter {
       mode: req.mode,
       offsetHz: req.offsetHz,
     };
+
+    // WSPR IS RECEIVE-ONLY, and this is the gate every path goes through: the automatic
+    // modes, a manual call, free text. Refused before the transmit gate is even read, so
+    // nothing about an operator's settings can turn a listening mode into a beacon.
+    if (req.mode === "WSPR") {
+      return { ...base, reason: "WSPR is receive-only in this release; nothing is transmitted on a WSPR frequency" };
+    }
 
     // Re-read the gate, so turning it off in Settings takes effect on the very next
     // transmission rather than at the next restart. Falls back to the snapshot when

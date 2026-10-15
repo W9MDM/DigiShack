@@ -12,7 +12,7 @@
 import { ft2Encode } from "@/lib/digital/ft2";
 import { encodeFT4, encodeFT8 } from "@e04/ft8ts";
 
-export type TxMode = "FT8" | "FT4" | "FT2";
+export type TxMode = "FT8" | "FT4" | "FT2" | "WSPR";
 
 /**
  * Symbol rates, in baud.
@@ -27,6 +27,8 @@ export const SYMBOL_RATE: Record<TxMode, number> = {
   FT8: 6.25,
   FT4: 20.833333333333332,
   FT2: 75,
+  /** 12000 / 8192: the slowest thing here by a factor of fifty. */
+  WSPR: 12_000 / 8_192,
 };
 
 /** Nothing legitimate runs this long; a longer waveform is a bug, not a transmission. */
@@ -66,6 +68,12 @@ export function buildWaveform(
 
   // FT2 is ours end to end — lib/digital, ported from the wsjt-x_improved reference —
   // rather than @e04/ft8ts, which does not implement it.
+  // WSPR is listened to, not transmitted, in this release. The codec can make the
+  // waveform (lib/digital/wspr.ts does, and the pipeline check uses it), but a 110-second
+  // beacon on a schedule at a chosen power is its own feature, with its own gate.
+  if (mode === "WSPR") {
+    throw new Error("WSPR transmit is not enabled: DigiShack listens to WSPR and does not beacon");
+  }
   let wave: Float32Array;
   if (mode === "FT2") {
     wave = ft2Encode(message, offsetHz, undefined, sampleRate).audio;

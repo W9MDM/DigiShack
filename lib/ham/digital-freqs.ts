@@ -9,7 +9,7 @@
 // The dial frequency is the reliable discriminator: the two modes use distinct,
 // well-established watering holes on every band.
 
-export type DigitalMode = "FT8" | "FT4" | "FT2";
+export type DigitalMode = "FT8" | "FT4" | "FT2" | "WSPR";
 
 
 export interface DigitalFrequency {
@@ -94,6 +94,27 @@ const FT2: [number, string, (1 | 2 | 3)?][] = [
 ];
 
 
+/**
+ * WSPR dial frequencies: the signal sits 1500 Hz above the dial, in a 200 Hz window.
+ * The standard set every WSPR program uses; 4 m is Region 1 only. LF and MF (2200 m,
+ * 630 m) are left out until a radio here can reach them.
+ */
+const WSPR: [number, string, (1 | 2 | 3)?][] = [
+  [1_836_600, "160M"],
+  [3_568_600, "80M"],
+  [5_287_200, "60M"],
+  [7_038_600, "40M"],
+  [10_138_700, "30M"],
+  [14_095_600, "20M"],
+  [18_104_600, "17M"],
+  [21_094_600, "15M"],
+  [24_924_600, "12M"],
+  [28_124_600, "10M"],
+  [50_293_000, "6M"],
+  [70_091_000, "4M", 1],
+  [144_489_000, "2M"],
+];
+
 export const DIGITAL_FREQUENCIES: readonly DigitalFrequency[] = [
   ...FT8.map(([hz, band, region]): DigitalFrequency => ({ hz, mode: "FT8", band, region })),
   ...FT4.map(([hz, band, region]): DigitalFrequency => ({ hz, mode: "FT4", band, region })),
@@ -103,6 +124,9 @@ export const DIGITAL_FREQUENCIES: readonly DigitalFrequency[] = [
   // earlier one. FT4 is overwhelmingly the more likely occupant of a shared
   // frequency, and guessing FT2 there would stop FT4 decoding entirely.
   ...FT2.map(([hz, band, region]): DigitalFrequency => ({ hz, mode: "FT2", band, region })),
+  // WSPR shares no frequency with the others (7.0386 is 35 kHz below FT8's 7.074), so
+  // the inference picks it by distance alone and a WSPR dial means WSPR.
+  ...WSPR.map(([hz, band, region]): DigitalFrequency => ({ hz, mode: "WSPR", band, region })),
 ];
 
 /**
@@ -201,6 +225,7 @@ const PERIOD_MS: Record<DigitalMode, number> = {
   FT8: 15_000,
   FT4: 7_500,
   FT2: 3_750,
+  WSPR: 120_000,
 };
 
 export function periodMsFor(mode: DigitalMode): number {

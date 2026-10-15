@@ -1256,7 +1256,7 @@ export default function DigitalPage({ wsUrl }: Props) {
   // the fallback when the radio has not reported a mode yet, being much the most
   // common watering hole.
   const tuneMode: DigitalMode =
-    decodingAs === "FT4" ? "FT4" : decodingAs === "FT2" ? "FT2" : "FT8";
+    decodingAs === "FT4" ? "FT4" : decodingAs === "FT2" ? "FT2" : decodingAs === "WSPR" ? "WSPR" : "FT8";
 
   /**
    * Is there anything to halt? Transmitting now, a contact in flight, or an automatic
@@ -2479,7 +2479,7 @@ export default function DigitalPage({ wsUrl }: Props) {
 
                                   stopPropagation because the row handler does the
                                   same thing — without it the click runs twice. */}
-                              {d.callsign && (
+                              {d.callsign && decodingAs !== "WSPR" && (
                                 <button
                                   type="button"
                                   title={`Call ${d.callsign} now. Click the row instead to select without transmitting.`}
@@ -3474,7 +3474,7 @@ function BandButtons({
           to a one-row stats block). */}
       <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-1">
         <div className="flex gap-1" role="group" aria-label="Digital mode">
-          {(["FT8", "FT4", "FT2"] as const).map((m) => {
+          {(["FT8", "FT4", "FT2", "WSPR"] as const).map((m) => {
           const active = decodingAs === m;
           const target = bandFor(m);
           const canSwitch = active || target !== null;
