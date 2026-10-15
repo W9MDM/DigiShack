@@ -3,6 +3,8 @@
 // it must not. See lib/radio/automation-gate.ts for the five minutes on 40 m JS8 that
 // made it.
 
+import fs from "node:fs";
+
 import type { AutoMode } from "@/lib/radio/auto-mode";
 import { gateAutomation, hopModeFor, NO_SEQUENCER_MODES, noSequencerReason } from "@/lib/radio/automation-gate";
 
@@ -109,6 +111,17 @@ async function main(): Promise<void> {
     t.gated.setMode("hunt");
     eq(t.auto.state.mode, "hunt", "before the first window the mode is unknown and the start is not held");
     eq(t.left.length, 0, "nor retuned");
+  }
+
+  console.log("\nlanding on a mode with nothing to answer is saved as off");
+  {
+    const src = fs.readFileSync("services/radio/index.ts", "utf8");
+    const at = src.indexOf("automatic mode stopped");
+    const around = at >= 0 ? src.slice(Math.max(0, at - 900), at) : "";
+    ok(
+      /a\.setMode\("off"\)[\s\S]*persistAutoMode\("off"\)/.test(around),
+      "the landing stop persists off, so a bridge restart does not resume the hunt and pull the radio away",
+    );
   }
 
   console.log(`\n${passed} passed, ${failed} failed`);

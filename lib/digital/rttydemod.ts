@@ -119,6 +119,21 @@ export class RttyDemodulator {
   private code = 0;
   private lastDecision = 1;
 
+  // ACQUISITION. Noise passes the frame check and the squelch now and then - about three
+  // characters a minute across the noise kinds an independent review measured - and each
+  // one is a lone character: the next frame noise produces almost never passes too. A real
+  // signal's characters come in runs. So a character that passes is held, and printed only
+  // when the next one passes as well, or when the line goes to a steady idle mark after it
+  // (the last character of an over, followed by carrier). A frame that fails drops what is
+  // held. The cost is one character of latency, and a lone character between two failures
+  // on a fading signal, which was more likely junk than copy.
+  /** Text that passed, waiting for a neighbour. */
+  private held = "";
+  /** Consecutive passing characters, capped. */
+  private run = 0;
+  /** Samples of steady mark while idle: carrier after the last character. */
+  private idleMark = 0;
+
   private readonly stats: RttyDemodStats = { chars: 0, framingErrors: 0, weak: 0, mark: 0, space: 0, decision: 1 };
   private readonly squelch: number;
   /** Sum of |decision| at the sampled instants of the character in progress, and how many. */
@@ -149,6 +164,9 @@ export class RttyDemodulator {
   reset(): void {
     this.state = "idle";
     this.ita2.reset();
+    this.held = "";
+    this.run = 0;
+    this.idleMark = 0;
   }
 
   /**
@@ -169,6 +187,17 @@ export class RttyDemodulator {
 
       switch (this.state) {
         case "idle":
+          // A held character followed by a character's worth of steady mark: a real
+          // station idling after its last character. Noise does not hold mark that long.
+          if (this.held) {
+            this.idleMark = d > 0.6 ? this.idleMark + 1 : 0;
+            if (this.idleMark >= 7.5 * spb) {
+              out += this.held;
+              this.stats.chars += this.held.length;
+              this.held = "";
+              this.idleMark = 0;
+            }
+          }
           // The start bit's leading edge: mark to space.
           if (this.lastDecision >= 0 && d < 0) {
             this.state = "confirm";
@@ -205,15 +234,29 @@ export class RttyDemodulator {
               // The stop bit, at edge + 6.5 bits. Mark, or the frame was not one.
               if (d < 0) {
                 this.stats.framingErrors++;
+                this.held = "";
+                this.run = 0;
               } else if (this.confidence / this.confidenceN < this.squelch) {
                 // Well framed but no conviction behind the bits: noise that happened to
                 // end on mark. See `squelch` for the arithmetic.
                 this.stats.weak++;
+                this.held = "";
+                this.run = 0;
               } else {
+                // Shift codes and the rest produce no text but are still characters of
+                // the run: a FIGS between two digits keeps the run going.
                 const text = this.ita2.push(this.code);
-                if (text) {
-                  out += text;
-                  this.stats.chars += text.length;
+                this.run = Math.min(this.run + 1, 8);
+                this.idleMark = 0;
+                if (this.run >= 2) {
+                  const t = this.held + text;
+                  this.held = "";
+                  if (t) {
+                    out += t;
+                    this.stats.chars += t.length;
+                  }
+                } else {
+                  this.held = text;
                 }
               }
               // Back to the idle mark. The next start edge is at least half a bit away

@@ -141,6 +141,8 @@ export interface DaxSourceOptions {
    * Ignored when any slice already exists.
    */
   freqHz?: number;
+  /** Slice mode for that slice: DIGU unless the station was last on CW. */
+  sliceMode?: string;
   /**
    * Which antenna port to use, on a radio that has more than one.
    *
@@ -323,10 +325,12 @@ export class FlexDaxSource extends EventEmitter<Events> {
       | "priorityOffsetHz"
       | "candidateOffsetsHz"
       | "transmitPending"
+      | "sliceMode"
     >
   > & {
     host: string;
     port: number;
+    sliceMode?: string;
     passbandHz?: number;
     // Optional for the same reason `dialHz` is: a caller with no QSO controller — the
     // wiring check, a receive-only install — still constructs, and the pipeline simply
@@ -601,6 +605,7 @@ export class FlexDaxSource extends EventEmitter<Events> {
       silenceRms: options.silenceRms ?? 1e-5,
       passbandHz: options.passbandHz,
       freqHz: options.freqHz ?? 7_074_000,
+      sliceMode: options.sliceMode,
       // `rx` falls back to `tx` here, once, so nothing downstream has to remember that
       // one antenna for both is the normal case.
       antenna: {
@@ -835,7 +840,7 @@ export class FlexDaxSource extends EventEmitter<Events> {
         const createAnt =
           resolveAntenna(this.opts.antenna.rx, client.state.antennas.rx).ant ?? "ANT1";
         const madeSlice = await client.command(
-          `slice create freq=${mhz} ant=${createAnt} mode=DIGU`,
+          `slice create freq=${mhz} ant=${createAnt} mode=${this.opts.sliceMode ?? "DIGU"}`,
         );
         if (madeSlice.status !== 0) {
           throw new Error(
@@ -868,9 +873,12 @@ export class FlexDaxSource extends EventEmitter<Events> {
     if (!this.createdSlice && otherGuiClients === 0 && this.sliceIndex !== null) {
       const mhz = (this.opts.freqHz / 1_000_000).toFixed(6);
       await client.command(`slice tune ${this.sliceIndex} ${mhz}`).catch(() => {});
+      // The mode the station was last in (CW, after a restart on 14.040), or DIGU.
+      const want = this.opts.sliceMode ?? "DIGU";
       const s = client.state.slices.get(this.sliceIndex);
-      if (!/^DIG[UL]$/i.test(s?.mode ?? "")) {
-        await client.command(`slice set ${this.sliceIndex} mode=DIGU`).catch(() => {});
+      const ok = want === "DIGU" ? /^DIG[UL]$/i.test(s?.mode ?? "") : (s?.mode ?? "").toUpperCase() === want;
+      if (!ok) {
+        await client.command(`slice set ${this.sliceIndex} mode=${want}`).catch(() => {});
       }
     }
 
