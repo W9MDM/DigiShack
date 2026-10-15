@@ -15,7 +15,7 @@ be read: `DATABASE_URL`, `SETTINGS_KEY` and `PORT`.
 
 ## Contents
 
-- [General](#general) — 4 settings
+- [General](#general) — 5 settings
 - [QRZ.com](#qrz-com) — 3 settings
 - [Logbook of the World](#logbook-of-the-world) — 12 settings
 - [eQSL.cc](#eqsl-cc) — 5 settings
@@ -32,7 +32,7 @@ be read: `DATABASE_URL`, `SETTINGS_KEY` and `PORT`.
 - [PSK31](#psk31) — 3 settings
 - [CW](#cw) — 3 settings
 - [WSPR](#wspr) — 1 setting
-- [Digital modes](#digital-modes) — 8 settings
+- [Digital modes](#digital-modes) — 9 settings
 - [DigiShack bridge](#digishack-bridge) — 4 settings
 - [External decoder (WSJT-X)](#external-decoder-wsjt-x) — 3 settings
 - [FlexRadio (direct)](#flexradio-direct) — 15 settings
@@ -54,6 +54,7 @@ Instance-wide behaviour.
 
 | Setting | Key | Type | Default | What it does |
 |---|---|---|---|---|
+| Licence class | `station.licenceClass` | text | — | us-technician \| us-general \| us-advanced \| us-extra \| other. Decides where an image mode (SSTV) may be sent: in the US images share the phone sub-bands, which differ by class - 14.230 needs General or above, 7.171 Advanced or Extra. other is a licence outside the US, whose own rules apply. Unset, SSTV sending refuses. |
 | Public base URL | `app.baseUrl` | text | from `APP_BASE_URL` | Used for absolute links in outgoing email. |
 | Session lifetime (days) | `app.sessionTtlDays` | number | `30` | How long a login stays valid. Lowering it does not revoke existing sessions — do that from the Users page. |
 | Redis URL | `redis.url` | text | from `REDIS_URL` | Background job queue. Required from Phase 2 onward. |
@@ -243,6 +244,7 @@ Where decodes and rig status come from. `wsjtx` takes them from an external deco
 
 | Setting | Key | Type | Default | What it does |
 |---|---|---|---|---|
+| SSTV transmit power (%) | `sstv.powerPct` | number | `50` | RF power for sending an SSTV picture, which is one to five minutes of steady carrier. Lowered to this for the picture if set higher, never raised, and put back afterwards. |
 | Decode source | `digital.source` | text | `wsjtx` | One of "wsjtx" (an external decoder over the WSJT-X UDP protocol), "flex" (direct to a FlexRadio) or "icom" (direct to a networked Icom over RS-BA1). The bridge reads this at startup. "omega" is still accepted and means "wsjtx" — that was a reference to one particular fork of WSJT-X, never to anything DigiShack does. |
 | Time server | `time.ntpServer` | text | `pool.ntp.org` | Where to ask what time it is, over SNTP. FT8 tolerates about a second of clock error before decoding degrades and other stations stop decoding you — and DigiShack cannot set the system clock (that needs elevation, and in a container it is the host's clock anyway), so instead it measures the difference and compensates internally. Blank disables the check entirely, which leaves you relying on the decode-median estimate that needs eight decodes before it can say anything. |
 | Compensate for a wrong clock | `time.correct` | on/off | `true` | Apply the measured offset to transmit timing, decode windows and logged contact times. Off measures and displays it without changing anything. Corrections above 5 seconds are always refused: that is not a clock needing a nudge, it is a machine whose time is wrong, and quietly compensating would hide it and produce a log nobody can reconcile. |

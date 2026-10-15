@@ -66,7 +66,27 @@ and interference; the picture underneath is whole.
 
 ![N3CHX, Martin 1, 14.230](sstv-first-n3chx.png)
 
+## Sending
+
+**Send a picture** under the picture opens the send box. Choose a file, the gallery
+picture on show, or the test card; choose the mode (Martin 1 or Scottie 1 are what 14.230
+mostly runs, Robot 36 is quick); the preview shows it at the mode's size, cropped to
+fill, with your callsign stamped in the top left. **Send** puts it on the air on the
+frequency the station is listening to, and the line beside the button counts it out with
+a **Stop** that unkeys at once.
+
+Before it keys, the bridge checks:
+
+- **Your licence class** (Settings, General). In the US an image mode shares the phone
+  sub-bands, which differ by class: 14.230 needs General or above, 7.171 Advanced or
+  Extra. Unset, nothing is sent. "other" is a licence outside the US.
+- **Allow transmit**, as for every mode.
+- **The PA under 60 °C**: a picture is one to five minutes of steady carrier.
+- **No picture coming in** on the frequency.
+
+It sends at **sstv.powerPct** (50% unless set): lowered to that for the picture if your
+power is higher, never raised, and put back afterwards. Sending works on the FlexRadio.
+
 ## Not yet
 
-- Sending pictures.
 - Slant correction by hand, and saving a picture that was cut off part way.

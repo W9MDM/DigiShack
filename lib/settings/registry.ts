@@ -417,6 +417,14 @@ export const SETTING_GROUPS: SettingGroup[] = [
 export const SETTINGS: SettingDef[] = [
   // --- general ---
   {
+    key: "station.licenceClass",
+    label: "Licence class",
+    type: "string",
+    group: "general",
+    help: "us-technician | us-general | us-advanced | us-extra | other. Decides where an image mode (SSTV) may be sent: in the US images share the phone sub-bands, which differ by class - 14.230 needs General or above, 7.171 Advanced or Extra. other is a licence outside the US, whose own rules apply. Unset, SSTV sending refuses.",
+    default: "",
+  },
+  {
     key: "app.baseUrl",
     label: "Public base URL",
     type: "string",
@@ -1104,6 +1112,15 @@ export const SETTINGS: SettingDef[] = [
     group: "psk31",
     help: "The decoder's quality - how consistently the symbols read as a phase or its reverse - below which nothing prints. Noise sits near 0.2, a clean signal near 1, a weak one around 0.6. 0 prints everything, which on an empty channel is a stream of random characters.",
     default: "0.5",
+  },
+  // --- SSTV ---
+  {
+    key: "sstv.powerPct",
+    label: "SSTV transmit power (%)",
+    type: "number",
+    group: "digital",
+    help: "RF power for sending an SSTV picture, which is one to five minutes of steady carrier. Lowered to this for the picture if set higher, never raised, and put back afterwards.",
+    default: "50",
   },
   // --- JS8 ---
   {

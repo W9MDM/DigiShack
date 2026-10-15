@@ -10,6 +10,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Waterfall, type WaterfallMarker, type WaterfallTag } from "@/components/digital/Waterfall";
 import { Js8Panel, type Js8SendState } from "@/components/digital/Js8Panel";
 import { SstvPanel, type SstvMessage, type SstvPanelHandle, type SstvStats } from "@/components/digital/SstvPanel";
+import type { SstvTxState } from "@/components/digital/SstvSend";
 import { StreamPanel, type StreamStats } from "@/components/digital/StreamPanel";
 import {
   Badge,
@@ -529,6 +530,8 @@ export default function DigitalPage({ wsUrl }: Props) {
   /** The SSTV panel, handed picture rows straight from the socket rather than through state. */
   const sstvPanel = useRef<SstvPanelHandle | null>(null);
   const [sstvStats, setSstvStats] = useState<SstvStats | null>(null);
+  /** A picture going out, or how the last one ended. */
+  const [sstvTx, setSstvTx] = useState<SstvTxState | null>(null);
   /** A JS8 station picked from the list, for the message line. See callFromRow. */
   const [js8Prefill, setJs8Prefill] = useState<{ call: string; n: number } | null>(null);
   const [js8Error, setJs8Error] = useState<string | null>(null);
@@ -972,6 +975,7 @@ export default function DigitalPage({ wsUrl }: Props) {
             setStreamText(msg.text as string);
           } else if (msg.kind === "stream" && msg.mode === "SSTV") setSstvStats(msg as unknown as SstvStats);
           else if (msg.kind === "stream") setStreamStats(msg as unknown as StreamStats);
+          else if (msg.kind === "sstv-tx") setSstvTx(msg as unknown as SstvTxState);
           else if (msg.kind === "sstv-vis" || msg.kind === "sstv-start" || msg.kind === "sstv-rows" || msg.kind === "sstv-image") {
             sstvPanel.current?.receive(msg as SstvMessage);
           }
@@ -2410,7 +2414,7 @@ export default function DigitalPage({ wsUrl }: Props) {
                 <p className="mb-2 text-xs text-accent-bright">{rowCallNote.text}</p>
               )}
               {decodingAs === "SSTV" ? (
-                <SstvPanel ref={sstvPanel} stats={sstvStats} />
+                <SstvPanel ref={sstvPanel} stats={sstvStats} myCall={myCall} canSend={canSwitch} tx={sstvTx} />
               ) : decodingAs === "RTTY" || decodingAs === "CW" || decodingAs === "PSK31" || decodingAs === "OLIVIA" ? (
                 <StreamPanel
                   mode={decodingAs}
