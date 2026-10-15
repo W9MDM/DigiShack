@@ -28,14 +28,14 @@ async function main(): Promise<void> {
   const beats: { mode: string; seconds: number; chars: number; framingErrors: number; mark: number; space: number }[] = [];
   let windows = 0;
   p.on("text", (t) => text.push(t.text));
-  p.on("stream", (s) => beats.push(s));
+  p.on("stream", (s) => beats.push(s as (typeof beats)[number]));
   p.on("window", () => windows++);
   p.on("error", (e) => console.log("  pipeline error:", e.message));
 
   console.log("entering a stream");
   eq(p.streaming, null, "a new pipeline is not streaming");
   const usb = rttyTones(RTTY_CENTRE_HZ, RTTY_SHIFT_HZ, "USB");
-  p.setStream("RTTY", { ...usb, figures: "us", usos: true });
+  p.setStream({ mode: "RTTY", ...usb, figures: "us", usos: true });
   eq(p.streaming, "RTTY", "setStream(RTTY) is reported");
   ok(!p.windowsArmed, "and the window timer is not armed");
   p.start();
@@ -62,7 +62,7 @@ async function main(): Promise<void> {
 
   console.log("\nretuning while streaming keeps the demodulator");
   const off = rttyWaveform("RETUNED", { sampleRate: RATE, centreHz: RTTY_CENTRE_HZ + 300 });
-  p.setStream("RTTY", { ...rttyTones(RTTY_CENTRE_HZ + 300, RTTY_SHIFT_HZ, "USB"), figures: "us", usos: true });
+  p.setStream({ mode: "RTTY", ...rttyTones(RTTY_CENTRE_HZ + 300, RTTY_SHIFT_HZ, "USB"), figures: "us", usos: true });
   eq(p.streaming, "RTTY", "still streaming");
   text.length = 0;
   for (let i = 0; i < off.length; i += 256) p.push(off.subarray(i, Math.min(off.length, i + 256)));

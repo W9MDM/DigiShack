@@ -9,7 +9,7 @@
 // The dial frequency is the reliable discriminator: the two modes use distinct,
 // well-established watering holes on every band.
 
-export type DigitalMode = "FT8" | "FT4" | "FT2" | "WSPR" | "RTTY";
+export type DigitalMode = "FT8" | "FT4" | "FT2" | "WSPR" | "RTTY" | "CW";
 
 
 export interface DigitalFrequency {
@@ -135,6 +135,24 @@ const RTTY: [number, string, (1 | 2 | 3)?][] = [
   [28_085_000, "10M"],
 ];
 
+/**
+ * CW segment centres, as RTTY's: where the activity is on each band, not a calling
+ * frequency. The sticky mode keeps the decoder on CW while the dial moves, and a slice in
+ * CW mode means CW to the bridge whatever the dial says.
+ */
+const CW: [number, string, (1 | 2 | 3)?][] = [
+  [1_830_000, "160M"],
+  [3_550_000, "80M"],
+  [7_030_000, "40M"],
+  [10_120_000, "30M"],
+  [14_040_000, "20M"],
+  [18_080_000, "17M"],
+  [21_040_000, "15M"],
+  [24_900_000, "12M"],
+  [28_040_000, "10M"],
+  [50_095_000, "6M"],
+];
+
 export const DIGITAL_FREQUENCIES: readonly DigitalFrequency[] = [
   ...FT8.map(([hz, band, region]): DigitalFrequency => ({ hz, mode: "FT8", band, region })),
   ...FT4.map(([hz, band, region]): DigitalFrequency => ({ hz, mode: "FT4", band, region })),
@@ -148,6 +166,7 @@ export const DIGITAL_FREQUENCIES: readonly DigitalFrequency[] = [
   // the inference picks it by distance alone and a WSPR dial means WSPR.
   ...WSPR.map(([hz, band, region]): DigitalFrequency => ({ hz, mode: "WSPR", band, region })),
   ...RTTY.map(([hz, band, region]): DigitalFrequency => ({ hz, mode: "RTTY", band, region })),
+  ...CW.map(([hz, band, region]): DigitalFrequency => ({ hz, mode: "CW", band, region })),
 ];
 
 /**
@@ -265,6 +284,7 @@ const PERIOD_MS: Record<DigitalMode, number> = {
   WSPR: 120_000,
   /** A stream, not a period: the decoder reports once per second of audio. */
   RTTY: 1_000,
+  CW: 1_000,
 };
 
 export function periodMsFor(mode: DigitalMode): number {

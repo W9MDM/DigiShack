@@ -246,6 +246,16 @@ export const SETTING_GROUPS: SettingGroup[] = [
       "are the values the bridge loads.",
   },
   {
+    id: "cw",
+    doc: "cw",
+    docLabel: "CW: the decoder on the radio's pitch, and sending through its keyer",
+    title: "CW",
+    blurb:
+      "The CW decoder listens at the pitch the radio reports; this is the pitch to assume " +
+      "when it has not, the speed lines go out at through the radio's keyer, and how far a " +
+      "signal must stand over the noise before the page prints it.",
+  },
+  {
     id: "wspr",
     doc: "wspr",
     docLabel: "Listening to WSPR, and reporting spots to wsprnet",
@@ -1041,6 +1051,32 @@ export const SETTINGS: SettingDef[] = [
     default: "0.7",
   },
 
+  // --- CW ---
+  {
+    key: "cw.pitchHz",
+    label: "CW pitch to assume (Hz)",
+    type: "number",
+    group: "cw",
+    help: "Where the decoder listens when the radio has not reported its CW pitch. A FlexRadio reports it in its transmit status and that always wins; this is for before it arrives.",
+    default: "600",
+  },
+  {
+    key: "cw.wpm",
+    label: "CW sending speed (wpm)",
+    type: "number",
+    group: "cw",
+    help: "The speed a typed line goes out at through the radio's keyer (CWX). 5 to 60. The −2 / +2 buttons on the decodes page change it live; this is where it starts.",
+    default: "20",
+  },
+  {
+    key: "cw.thresholdDb",
+    label: "CW presence threshold (dB)",
+    type: "number",
+    group: "cw",
+    help: "How far a signal's peak must stand over the noise floor, in the decoder's narrow filter, before anything prints. Noise's own peaks reach about 13 dB over its floor; 16 keeps an empty channel silent and is roughly what a machine needs to read CW anyway. Lower it for a weak station you can hear but the page cannot.",
+    default: "16",
+  },
+
   // --- Digital source selection ---
   {
     key: "digital.source",
@@ -1115,7 +1151,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Digital mode",
     type: "string",
     group: "digital",
-    help: "auto | ft8 | ft4 | ft2 | wspr | rtty. Auto infers the mode from the dial frequency, which is the only reliable way — a DIGU slice does not say which mode it carries, and the three use different window lengths (15 / 7.5 / 3.75 s). FT2 has provisional calling frequencies so auto does find it, except on 60 m where it shares 5.357 MHz with FT4 and auto resolves to FT4; pin ft2 here to run it there or anywhere off-frequency.",
+    help: "auto | ft8 | ft4 | ft2 | wspr | rtty | cw. Auto infers the mode from the dial frequency, which is the only reliable way — a DIGU slice does not say which mode it carries, and the three use different window lengths (15 / 7.5 / 3.75 s). FT2 has provisional calling frequencies so auto does find it, except on 60 m where it shares 5.357 MHz with FT4 and auto resolves to FT4; pin ft2 here to run it there or anywhere off-frequency.",
     default: "auto",
   },
   {

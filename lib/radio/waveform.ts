@@ -12,7 +12,7 @@
 import { ft2Encode } from "@/lib/digital/ft2";
 import { encodeFT4, encodeFT8 } from "@e04/ft8ts";
 
-export type TxMode = "FT8" | "FT4" | "FT2" | "WSPR" | "RTTY";
+export type TxMode = "FT8" | "FT4" | "FT2" | "WSPR" | "RTTY" | "CW";
 
 /**
  * Symbol rates, in baud.
@@ -31,6 +31,8 @@ export const SYMBOL_RATE: Record<TxMode, number> = {
   WSPR: 12_000 / 8_192,
   /** 45.45 baud: a stream of characters, never a frame. See lib/digital/rtty.ts. */
   RTTY: 1_000 / 22,
+  /** No symbols here: the radio's own keyer sends CW. */
+  CW: 0,
 };
 
 /** Nothing legitimate runs this long; a longer waveform is a bug, not a transmission. */
@@ -78,8 +80,8 @@ export function buildWaveform(
   }
   // RTTY is text, not a framed message: lib/digital/rtty.ts makes its waveform from a
   // string, and the transmit path for that is part three of the mode.
-  if (mode === "RTTY") {
-    throw new Error("RTTY is not a framed mode: nothing builds an RTTY waveform from a structured message");
+  if (mode === "RTTY" || mode === "CW") {
+    throw new Error(`${mode} is not a framed mode: nothing builds a ${mode} waveform from a structured message`);
   }
   let wave: Float32Array;
   if (mode === "FT2") {
