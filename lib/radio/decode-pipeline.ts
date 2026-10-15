@@ -808,6 +808,14 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
       const sincePeriod = (nowMs() - lag) % period;
       // Next cut instant: this window's cut point if still ahead, else the next's.
       delay = sincePeriod < cutAt ? cutAt - sincePeriod : period - sincePeriod + cutAt;
+      // BUFFER FROM THE NEXT BOUNDARY, not from now. Audio already arriving belongs to a
+      // window that began before this schedule did, and a buffer with a head of it decodes
+      // nothing: the decoder dates every sample from the window start, so every DT is off
+      // by the head. On WSPR that head was eight seconds and cost a whole two-minute
+      // window at every switch - the first full window after the retune decoded nothing,
+      // the second decoded eight stations. The cut for the window in progress, if still
+      // ahead, then finds an empty buffer and reports it short, which is the truth.
+      this.dropUntil = Math.max(this.dropUntil, nowMs() - sincePeriod + period + lag);
     }
 
     this.timer = setTimeout(() => {
