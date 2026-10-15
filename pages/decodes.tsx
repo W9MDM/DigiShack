@@ -49,6 +49,7 @@ import {
 import { cn } from "@/lib/utils";
 
 import { useVisibleInterval } from "@/lib/client/use-visible-interval";
+import { useReceiverAudio } from "@/lib/client/use-receiver-audio";
 /** Rolling RTTY text kept on the page, characters. */
 const STREAM_TEXT_MAX = 8_000;
 
@@ -511,6 +512,8 @@ export default function DigitalPage({ wsUrl }: Props) {
   const [streamText, setStreamText] = useState("");
   const [streamStats, setStreamStats] = useState<StreamStats | null>(null);
   const [rttyError, setRttyError] = useState<string | null>(null);
+  /** The receiver in this browser, beside the waterfall it is the sound of. */
+  const audio = useReceiverAudio(wsUrl);
   /** Where a JS8 message goes out, Hz audio: typed, or picked on the waterfall. */
   const [js8OffsetHz, setJs8OffsetHz] = useState(1500);
   const [js8Error, setJs8Error] = useState<string | null>(null);
@@ -2094,6 +2097,41 @@ export default function DigitalPage({ wsUrl }: Props) {
             <span className="tnum w-8">{gain.toFixed(1)}</span>
           </label>
           <span>0–{scale.maxHz} Hz audio passband</span>
+          <span className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={audio.toggle}
+              title={audio.listening ? "Stop listening" : "Listen to the receiver in this browser"}
+              className={cn(
+                "px-2 py-1 rounded-sm border",
+                audio.listening
+                  ? "border-accent text-accent-bright"
+                  : "border-line text-fg-muted hover:text-fg hover:border-fg-muted",
+              )}
+            >
+              {audio.listening ? "Listening" : "Listen"}
+            </button>
+            {audio.listening && (
+              <label className="flex items-center gap-1.5">
+                <span>vol</span>
+                <input
+                  type="range"
+                  min={0}
+                  max={1}
+                  step={0.05}
+                  value={audio.volume}
+                  onChange={(e) => audio.setVolume(Number(e.target.value))}
+                  className="accent-accent w-24"
+                  aria-label="Receiver volume"
+                />
+              </label>
+            )}
+            {audio.listening && audio.info && audio.info.packets === 0 && <span>waiting for audio…</span>}
+            {audio.listening && audio.info && audio.info.context !== "running" && (
+              <span className="text-accent-bright">audio {audio.info.context}</span>
+            )}
+            {audio.error && <span className="text-danger">{audio.error}</span>}
+          </span>
           {status?.txDF !== null && status?.txDF !== undefined && (
             <span className="text-accent-bright">TX offset {status.txDF} Hz</span>
           )}

@@ -16,7 +16,7 @@ import {
 import { withPageAuth } from "@/lib/auth/guard";
 import { bridgeWsUrl } from "@/lib/bridge/ws-url";
 import { ApiError, apiPost, useApi } from "@/lib/client/api";
-import { ReceiverAudio } from "@/lib/client/audio-player";
+import { useReceiverAudio } from "@/lib/client/use-receiver-audio";
 import { useBridgeSocket } from "@/lib/client/use-bridge-socket";
 import { formatFreqDial, formatFreqMHz, parseFreqToHz } from "@/lib/ham/bands";
 import { bandsFor, canTune, radioCapabilities } from "@/lib/radio/capabilities";
@@ -129,166 +129,16 @@ export default function RigPage({ wsUrl }: Props) {
   // The player and its socket live in refs, not state: the scheduling cursor inside the
   // player must survive re-renders untouched, and this page re-renders every two seconds
   // from a status poll. Audio that stutters on every poll would be worse than none.
-  const playerRef = useRef<ReceiverAudio | null>(null);
-  const audioSocketRef = useRef<WebSocket | null>(null);
-  /**
-   * Marks the next socket close as deliberate, so `onclose` can tell a stop from a
-   * failure. A ref rather than state for the same reason the socket is: it is read
-   * inside a socket callback that closed over an older render.
-   */
-  const closeAudioIntentRef = useRef<(() => void) | null>(null);
-  const [listening, setListening] = useState(false);
-  const [volume, setVolume] = useState(0.8);
-  const [audioInfo, setAudioInfo] = useState<{
-    rate: number;
-    packets: number;
-    context: string;
-    bufferedMs: number;
-    underruns: number;
-  } | null>(null);
-  const [audioError, setAudioError] = useState<string | null>(null);
-
-  // Stop on the way out, always. A page left for another one would otherwise keep an audio
-  // device open and a socket pulling 96 kB/s from the bridge for as long as the tab lived.
-  useEffect(() => {
-    return () => {
-      // Same intent flag as an explicit stop: leaving the page is not a failure, and
-      // without this the close handler would report a dead bridge into a component
-      // that no longer exists.
-      closeAudioIntentRef.current?.();
-      audioSocketRef.current?.close();
-      void playerRef.current?.stop();
-    };
-  }, []);
-
-  async function startListening() {
-    setAudioError(null);
-
-    // The AudioContext is created HERE, in the click, before the socket is opened.
-    //
-    // It used to be created when the first message arrived with the sample rate — a network
-    // round trip later — and every browser blocks audio started outside a user gesture. The
-    // failure is silent: the context exists, packets are scheduled against it, and nothing
-    // comes out of the speakers. That is what "I still don't hear any audio" was.
-    const player = new ReceiverAudio();
-    try {
-      await player.start(volume);
-    } catch {
-      setAudioError("The browser would not start audio. Click Listen again.");
-      return;
-    }
-    playerRef.current = player;
-
-    try {
-      const url = wsUrl.replace(/\/ws\/decodes$/, "/ws/audio");
-      const ws = new WebSocket(url);
-      ws.binaryType = "arraybuffer";
-      audioSocketRef.current = ws;
-
-      // Did the bridge ever tell us the format? A socket that opens and closes again
-      // without a hello is a bridge that went away mid-connect — a restart, or a
-      // proxy that upgraded the connection and then hung up. Without this the button
-      // flicks to "Listening" and straight back with nothing said, which reads as a
-      // dead button rather than as a bridge problem.
-      let gotHello = false;
-      // Deliberate stops must not raise an error. `stopListening` closes the socket,
-      // which reaches the same onclose as a failure.
-      let closingOnPurpose = false;
-      closeAudioIntentRef.current = () => {
-        closingOnPurpose = true;
-      };
-
-      ws.onopen = () => setListening(true);
-
-      ws.onmessage = (ev) => {
-        // The first frame is JSON and carries the sample rate; everything after it is PCM.
-        // The Icom streams 48 kHz and the FlexRadio 24, so a player told the wrong one sounds
-        // like fast forward or like it is under water.
-        if (typeof ev.data === "string") {
-          try {
-            const hello = JSON.parse(ev.data) as { sampleRate?: number };
-            const rate = hello.sampleRate ?? 0;
-            if (!rate) {
-              setAudioError(
-                "The bridge has no radio audio to send — the source is an external decoder.",
-              );
-              ws.close();
-              return;
-            }
-            gotHello = true;
-            player.setSampleRate(rate);
-            setAudioInfo({
-              rate,
-              packets: 0,
-              context: player.state.contextState,
-              bufferedMs: 0,
-              underruns: 0,
-            });
-          } catch {
-            setAudioError("Could not read the audio stream's format");
-          }
-          return;
-        }
-        player.push(ev.data as ArrayBuffer);
-      };
-
-      ws.onerror = () =>
-        setAudioError(
-          `Could not reach the audio stream at ${url}. The bridge listens on loopback only, ` +
-            "so a browser on another machine needs bridge.wsUrl pointing at a proxy.",
-        );
-      ws.onclose = () => {
-        setListening(false);
-        void playerRef.current?.stop();
-        playerRef.current = null;
-        // Only when it went away by itself, and only when it never said what it was
-        // sending — `setAudioError` in the hello handler has already given a better
-        // reason than this one in the case where the bridge answered honestly.
-        if (!closingOnPurpose && !gotHello) {
-          setAudioError(
-            `The audio stream at ${url} closed before sending anything. The bridge is ` +
-              "probably not running — start it with `npm run bridge`.",
-          );
-        }
-      };
-    } catch {
-      setAudioError("Could not open the audio connection");
-      await player.stop();
-      playerRef.current = null;
-    }
-  }
-
-  async function stopListening() {
-    // Tell the socket's own onclose that this was deliberate, BEFORE closing it.
-    closeAudioIntentRef.current?.();
-    audioSocketRef.current?.close();
-    audioSocketRef.current = null;
-    await playerRef.current?.stop();
-    playerRef.current = null;
-    setListening(false);
-    // A stopped listener has no diagnostics. Leaving the last packet count on screen
-    // implies audio is still arriving, and leaving an error implies the stop failed.
-    setAudioInfo(null);
-    setAudioError(null);
-  }
-
-  // A counter that proves audio is arriving, rather than a button that merely looks pressed.
-  useEffect(() => {
-    if (!listening) return;
-    const id = setInterval(() => {
-      const st = playerRef.current?.state;
-      if (st) {
-        setAudioInfo({
-          rate: st.sampleRate,
-          packets: st.packets,
-          context: st.contextState,
-          bufferedMs: st.bufferedMs,
-          underruns: st.underruns,
-        });
-      }
-    }, 1_000);
-    return () => clearInterval(id);
-  }, [listening]);
+  // The player, its socket and its diagnostics: shared with the Decodes page.
+  const {
+    listening,
+    volume,
+    setVolume,
+    info: audioInfo,
+    error: audioError,
+    start: startListening,
+    stop: stopListening,
+  } = useReceiverAudio(wsUrl);
 
   const [pan, setPan] = useState<{ bins: Uint8Array; at: number } | null>(null);
   const [panScale, setPanScale] = useState<{
@@ -997,9 +847,7 @@ export default function RigPage({ wsUrl }: Props) {
                     step={0.05}
                     value={volume}
                     onChange={(e) => {
-                      const v = Number(e.target.value);
-                      setVolume(v);
-                      playerRef.current?.setVolume(v);
+                      setVolume(Number(e.target.value));
                     }}
                     className="accent-accent w-24 align-middle"
                   />
