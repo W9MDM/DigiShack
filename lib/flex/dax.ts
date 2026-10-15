@@ -105,7 +105,7 @@ export interface DaxDecode {
   /** Time offset of the transmission within its window, seconds. */
   dt: number;
   message: string;
-  mode: "FT8" | "FT4" | "FT2" | "WSPR" | "RTTY" | "CW" | "JS8";
+  mode: "FT8" | "FT4" | "FT2" | "WSPR" | "RTTY" | "CW" | "JS8" | "PSK31";
   /** UTC start of the window this came from. */
   windowStart: Date;
   /** JS8 only: what the message layer read from the frame. */
@@ -117,7 +117,7 @@ export interface DaxSourceOptions {
   port?: number;
   /** DAX channel the slice routes audio to (slice property `dax`). */
   daxChannel?: number;
-  mode?: "FT8" | "FT4" | "FT2" | "WSPR" | "RTTY" | "CW" | "JS8";
+  mode?: "FT8" | "FT4" | "FT2" | "WSPR" | "RTTY" | "CW" | "JS8" | "PSK31";
   /**
    * Decoder depth. 2 is the live default: measured at ~0.6 s per window against
    * real 20 m traffic, comfortably inside the ~2.4 s gap between cycles. Depth 3
@@ -641,6 +641,7 @@ export class FlexDaxSource extends EventEmitter<Events> {
     this.pipeline.on("stream", (s) => this.emit("stream", s));
     if (this.opts.mode === "RTTY") this.pipeline.setStream(this.rttyOptions);
     if (this.opts.mode === "CW") this.pipeline.setStream(this.cwOptions);
+    if (this.opts.mode === "PSK31") this.pipeline.setStream(this.pskOptions);
   }
 
   private readonly pipeline: DecodePipeline;
@@ -662,7 +663,7 @@ export class FlexDaxSource extends EventEmitter<Events> {
     return this.opts.mode === "FT4" ? FT4_PERIOD_MS : FT8_PERIOD_MS;
   }
 
-  get mode(): "FT8" | "FT4" | "FT2" | "WSPR" | "RTTY" | "CW" | "JS8" {
+  get mode(): "FT8" | "FT4" | "FT2" | "WSPR" | "RTTY" | "CW" | "JS8" | "PSK31" {
     return this.opts.mode;
   }
 
@@ -674,7 +675,7 @@ export class FlexDaxSource extends EventEmitter<Events> {
    * discarded: a partly-filled FT8 window is not a valid FT4 window, and feeding
    * it to the FT4 decoder would produce nothing while looking like a fault.
    */
-  setMode(mode: "FT8" | "FT4" | "FT2" | "WSPR" | "RTTY" | "CW" | "JS8"): boolean {
+  setMode(mode: "FT8" | "FT4" | "FT2" | "WSPR" | "RTTY" | "CW" | "JS8" | "PSK31"): boolean {
     if (mode === this.opts.mode) return false;
     this.opts.mode = mode;
     if (mode === "RTTY") {
@@ -683,6 +684,8 @@ export class FlexDaxSource extends EventEmitter<Events> {
       this.pipeline.setStream(this.rttyOptions);
     } else if (mode === "CW") {
       this.pipeline.setStream(this.cwOptions);
+    } else if (mode === "PSK31") {
+      this.pipeline.setStream(this.pskOptions);
     } else {
       this.pipeline.setStream(null);
       this.pipeline.setMode(mode);
@@ -705,8 +708,15 @@ export class FlexDaxSource extends EventEmitter<Events> {
     if (this.pipeline.streaming === "CW") this.pipeline.setStream(opts);
   }
 
+  /** The PSK31 carrier, speed and squelch. Takes effect at once while streaming PSK31. */
+  setPskOptions(opts: Extract<StreamOptions, { mode: "PSK31" }>): void {
+    this.pskOptions = opts;
+    if (this.pipeline.streaming === "PSK31") this.pipeline.setStream(opts);
+  }
+
   private rttyOptions: Extract<StreamOptions, { mode: "RTTY" }> = { mode: "RTTY", markHz: 2295, spaceHz: 2125 };
   private cwOptions: Extract<StreamOptions, { mode: "CW" }> = { mode: "CW", pitchHz: 600 };
+  private pskOptions: Extract<StreamOptions, { mode: "PSK31" }> = { mode: "PSK31", centreHz: 1000 };
 
 
   /**

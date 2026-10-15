@@ -25,6 +25,7 @@ import { WsprThread } from "@/lib/radio/wspr-thread";
 import { Js8Thread } from "@/lib/radio/js8-thread";
 import { RttyDemodulator } from "@/lib/digital/rttydemod";
 import { CwDemodulator } from "@/lib/digital/cwdemod";
+import { Psk31Demodulator } from "@/lib/digital/psk31demod";
 import { HashCallBook as Ft2HashCallBook } from "@/lib/digital/pack77";
 import { PERIOD_MS, TRANSMISSION_MS } from "@/lib/radio/timing";
 import type { TxMode } from "@/lib/radio/waveform";
@@ -258,10 +259,10 @@ export interface Decode {
  * the line idles on mark between keystrokes and the decoder runs the whole time. CW is
  * the same: a key, a tone, and text as it is sent.
  */
-export type StreamMode = "RTTY" | "CW";
+export type StreamMode = "RTTY" | "CW" | "PSK31";
 
 export function isStreamMode(mode: string | null | undefined): mode is StreamMode {
-  return mode === "RTTY" || mode === "CW";
+  return mode === "RTTY" || mode === "CW" || mode === "PSK31";
 }
 
 /** What a stream's demodulator needs: the mode names which. */
@@ -282,6 +283,15 @@ export type StreamOptions =
       /** Starting speed guess; the decoder adapts. */
       wpm?: number;
       thresholdDb?: number;
+    }
+  | {
+      mode: "PSK31";
+      /** The carrier, Hz audio. */
+      centreHz: number;
+      /** 31.25, 62.5 or 125 baud. */
+      speed?: 31 | 63 | 125;
+      /** 0 to 1; see Psk31DemodOptions.squelch. */
+      squelch?: number;
     };
 
 /** What a stream's heartbeat carries: the running counts, and what that decoder measures. */
@@ -305,6 +315,18 @@ export type StreamHeartbeat =
       floor: number;
       keyed: boolean;
       unknown: number;
+    }
+  | {
+      mode: "PSK31";
+      seconds: number;
+      chars: number;
+      errors: number;
+      /** 0 to 1: how consistently the symbols read as 0 or pi. */
+      quality: number;
+      afcHz: number;
+      level: number;
+      /** Whether the squelch is open. */
+      open: boolean;
     };
 
 /** How often a stream mode reports: once per second of audio. The liveness watchdog beats on it. */
@@ -531,10 +553,12 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
   // A stream mode replaces the window schedule: audio goes to a demodulator as it arrives.
   private rtty: RttyDemodulator | null = null;
   private cw: CwDemodulator | null = null;
+  private psk: Psk31Demodulator | null = null;
   private get stream(): { feed(samples: ArrayLike<number>): string } | null {
-    return this.rtty ?? this.cw;
+    return this.rtty ?? this.cw ?? this.psk;
   }
   private streamMode: StreamMode | null = null;
+  private pskSpeed: 31 | 63 | 125 = 31;
   private streamSamples = 0;
   private streamNextBeat = 0;
   /**
@@ -697,6 +721,7 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
       if (!this.streamMode) return;
       this.rtty = null;
       this.cw = null;
+      this.psk = null;
       this.streamMode = null;
       this.start();
       return;
@@ -709,6 +734,10 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
       this.cw.retune(opts.pitchHz);
       return;
     }
+    if (opts.mode === "PSK31" && this.psk && (opts.speed ?? 31) === this.pskSpeed) {
+      this.psk.retune(opts.centreHz);
+      return;
+    }
     if (this.timer) {
       clearTimeout(this.timer);
       this.timer = null;
@@ -716,16 +745,26 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
     this.buffer = [];
     this.rtty = null;
     this.cw = null;
+    this.psk = null;
     this.streamMode = opts.mode;
     if (opts.mode === "RTTY") {
       const { mode: _m, ...rest } = opts;
       this.rtty = new RttyDemodulator({ sampleRate: this.inputRate, ...rest });
-    } else {
+    } else if (opts.mode === "CW") {
       this.cw = new CwDemodulator({
         sampleRate: this.inputRate,
         pitchHz: opts.pitchHz,
         wpm: opts.wpm,
         thresholdDb: opts.thresholdDb,
+      });
+    } else {
+      // A speed change is a new demodulator: the decimation and the timing are per baud.
+      this.pskSpeed = opts.speed ?? 31;
+      this.psk = new Psk31Demodulator({
+        sampleRate: this.inputRate,
+        centreHz: opts.centreHz,
+        speed: this.pskSpeed,
+        squelch: opts.squelch,
       });
     }
     this.streamSamples = 0;
@@ -765,6 +804,18 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
           floor: s.floor,
           keyed: s.keyed,
           unknown: s.unknown,
+        });
+      } else if (this.psk) {
+        const s = this.psk.statistics;
+        this.emit("stream", {
+          mode: "PSK31",
+          seconds,
+          chars: s.chars,
+          errors: s.errors,
+          quality: s.quality,
+          afcHz: s.afcHz,
+          level: s.level,
+          open: s.open,
         });
       }
     }

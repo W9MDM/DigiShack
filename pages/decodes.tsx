@@ -57,6 +57,8 @@ interface RigStatus {
   rtty?: { centreHz: number; shiftHz: number; sideband: "USB" | "LSB"; markHz: number; spaceHz: number } | null;
   /** The CW pitch and sending speed while on CW. */
   cw?: { pitchHz: number; wpm: number; pitchFromRadio: boolean } | null;
+  /** The PSK31 carrier and speed while on PSK31. */
+  psk?: { centreHz: number; speed: 31 | 63 | 125 } | null;
   /** A JS8 message going out, or the last one. */
   js8?: Js8SendState | null;
   connected: boolean;
@@ -1193,6 +1195,9 @@ export default function DigitalPage({ wsUrl }: Props) {
     if (status?.subMode === "CW" && status.cw) {
       return [{ hz: status.cw.pitchHz, label: "CW pitch", emphasis: true }];
     }
+    if (status?.subMode === "PSK31" && status.psk) {
+      return [{ hz: status.psk.centreHz, label: "PSK31 carrier", emphasis: true }];
+    }
     if (rows.length === 0) return [];
     const newest = rows[0]!.timestamp;
     return rows
@@ -1339,6 +1344,15 @@ export default function DigitalPage({ wsUrl }: Props) {
       setRttyError(err instanceof ApiError ? err.message : "Could not move the RTTY tones");
     }
   }, []);
+  /** Move the PSK31 carrier (a click on the waterfall or the ± buttons) or change the speed. */
+  const tunePsk = useCallback(async (centreHz?: number, speed?: 31 | 63 | 125) => {
+    try {
+      await apiPost("/api/bridge/control", { action: "psk", centreHz, speed });
+      setRttyError(null);
+    } catch (err) {
+      setRttyError(err instanceof ApiError ? err.message : "Could not move the PSK31 carrier");
+    }
+  }, []);
   /** Send a line of RTTY. The bridge answers as soon as the radio is keyed; the line appears in the stream as [TX]. */
   const sendRtty = useCallback(async (text: string) => {
     try {
@@ -1395,7 +1409,9 @@ export default function DigitalPage({ wsUrl }: Props) {
               ? "CW"
               : decodingAs === "JS8"
                 ? "JS8"
-                : "FT8";
+                : decodingAs === "PSK31"
+                  ? "PSK31"
+                  : "FT8";
 
   /**
    * Is there anything to halt? Transmitting now, a contact in flight, or an automatic
@@ -1953,7 +1969,9 @@ export default function DigitalPage({ wsUrl }: Props) {
                 ? (hz) => void tuneRtty(hz)
                 : decodingAs === "JS8" && canSwitch
                   ? (hz) => setJs8OffsetHz(Math.round(hz))
-                  : undefined
+                  : decodingAs === "PSK31" && canSwitch
+                    ? (hz) => void tunePsk(Math.round(hz))
+                    : undefined
             }
             txHz={status?.txDF ?? null}
             gain={gain}
@@ -2316,13 +2334,14 @@ export default function DigitalPage({ wsUrl }: Props) {
               {rowCallNote && (
                 <p className="mb-2 text-xs text-accent-bright">{rowCallNote.text}</p>
               )}
-              {decodingAs === "RTTY" || decodingAs === "CW" ? (
+              {decodingAs === "RTTY" || decodingAs === "CW" || decodingAs === "PSK31" ? (
                 <StreamPanel
                   mode={decodingAs}
                   text={streamText}
                   stats={streamStats}
                   rtty={status?.rtty ?? null}
                   cw={status?.cw ?? null}
+                  psk={status?.psk ?? null}
                   canTune={canSwitch}
                   canSend={canSwitch}
                   myCall={myCall}
@@ -2330,6 +2349,7 @@ export default function DigitalPage({ wsUrl }: Props) {
                   error={rttyError}
                   onTune={(centreHz, shiftHz) => void tuneRtty(centreHz, shiftHz)}
                   onCwWpm={(wpm) => void setCwWpm(wpm)}
+                  onPskTune={(centreHz, speed) => void tunePsk(centreHz, speed)}
                   onSend={(text) => void sendRtty(text)}
                   onClear={() => setStreamText("")}
                 />
@@ -3683,7 +3703,7 @@ function BandButtons({
           to a one-row stats block). */}
       <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-1">
         <div className="flex gap-1" role="group" aria-label="Digital mode">
-          {(["FT8", "FT4", "FT2", "WSPR", "RTTY", "CW", "JS8"] as const).map((m) => {
+          {(["FT8", "FT4", "FT2", "WSPR", "RTTY", "CW", "JS8", "PSK31"] as const).map((m) => {
           const active = decodingAs === m;
           const target = bandFor(m);
           const canSwitch = active || target !== null;

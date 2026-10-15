@@ -21,6 +21,7 @@ import { rttyDurationMs, rttyTones } from "@/lib/digital/rtty";
 import { RttyDemodulator } from "@/lib/digital/rttydemod";
 import { js8BuildFrames } from "@/lib/digital/js8-message";
 import { buildJs8Waveform } from "@/lib/radio/waveform";
+import { psk31DurationMs } from "@/lib/digital/psk31";
 
 let pass = 0;
 let fail = 0;
@@ -352,6 +353,19 @@ async function safetyChecks(): Promise<void> {
   const demod = new RttyDemodulator({ sampleRate: 24_000, ...rttyTones(2210, 170, "USB") });
   ok(demod.feed(wave) === "RYRY CQ DE W1AW", "and decodes back to the text at the DAX rate - the exact audio the radio would get");
   const lsb = enabled.buildTextWaveform({ mode: "RTTY", text: "RY", centreHz: 2210, shiftHz: 170, sideband: "LSB" });
+  // PSK31 through the same text path: a carrier at the centre, the text's symbols over the baud rate.
+  const pskReq = { mode: "PSK31" as const, text: "CQ de W1AW", centreHz: 1000, shiftHz: 0, sideband: "USB" as const };
+  const pskWave = enabled.buildTextWaveform(pskReq);
+  ok(Math.abs(pskWave.length / DAX_RATE - psk31DurationMs("CQ de W1AW", {}) / 1000) < 0.01, "PSK31 text builds a waveform the length its duration says", `${pskWave.length}`);
+  const pskRefused = await enabled.transmitText(pskReq);
+  ok(!pskRefused.sent && /not started/i.test(pskRefused.reason ?? ""), "and transmitText(PSK31) reaches the gate RTTY reaches", pskRefused.reason);
+  let pskLong = "";
+  try {
+    enabled.buildTextWaveform({ ...pskReq, text: "X".repeat(400) });
+  } catch (err) {
+    pskLong = err instanceof Error ? err.message : "?";
+  }
+  ok(/over the .* cap/.test(pskLong), "400 characters of PSK31 is over the cap and refused before keying", pskLong);
   const lsbDemod = new RttyDemodulator({ sampleRate: 24_000, ...rttyTones(2210, 170, "LSB") });
   ok(lsbDemod.feed(lsb) === "RY", "and on LSB the pair is swapped to match");
 

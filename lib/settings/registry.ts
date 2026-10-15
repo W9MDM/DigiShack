@@ -246,6 +246,16 @@ export const SETTING_GROUPS: SettingGroup[] = [
       "are the values the bridge loads.",
   },
   {
+    id: "psk31",
+    doc: "psk31",
+    docLabel: "PSK31: the carrier, the speed, and the squelch",
+    title: "PSK31",
+    blurb:
+      "Where the PSK31 carrier starts in the audio passband, which speed, and how sure the " +
+      "decoder must be of a signal before the page prints. The decodes page moves the " +
+      "carrier live (click a signal on the waterfall); these are the values the bridge loads.",
+  },
+  {
     id: "cw",
     doc: "cw",
     docLabel: "CW: the decoder on the radio's pitch, and sending through its keyer",
@@ -1051,6 +1061,31 @@ export const SETTINGS: SettingDef[] = [
     default: "0.7",
   },
 
+  // --- PSK31 ---
+  {
+    key: "psk31.centreHz",
+    label: "PSK31 carrier (Hz audio)",
+    type: "number",
+    group: "psk31",
+    help: "Where the decoder listens and the transmitter sends when the PSK31 chip is pressed, Hz above the dial. 1000 is the convention: the 20 m watering hole at a 14.070 dial sits at 14.071. A click on the waterfall moves it for the session.",
+    default: "1000",
+  },
+  {
+    key: "psk31.speed",
+    label: "PSK speed",
+    type: "number",
+    group: "psk31",
+    help: "31, 63 or 125: BPSK31 at 31.25 baud, BPSK63 at 62.5, BPSK125 at 125. The panel's picker changes it for the session.",
+    default: "31",
+  },
+  {
+    key: "psk31.squelch",
+    label: "PSK31 squelch (0 to 1)",
+    type: "number",
+    group: "psk31",
+    help: "The decoder's quality - how consistently the symbols read as a phase or its reverse - below which nothing prints. Noise sits near 0.2, a clean signal near 1, a weak one around 0.6. 0 prints everything, which on an empty channel is a stream of random characters.",
+    default: "0.5",
+  },
   // --- CW ---
   {
     key: "cw.pitchHz",
@@ -1151,7 +1186,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Digital mode",
     type: "string",
     group: "digital",
-    help: "auto | ft8 | ft4 | ft2 | wspr | rtty | cw | js8. Auto infers the mode from the dial frequency, which is the only reliable way — a DIGU slice does not say which mode it carries, and the three use different window lengths (15 / 7.5 / 3.75 s). FT2 has provisional calling frequencies so auto does find it, except on 60 m where it shares 5.357 MHz with FT4 and auto resolves to FT4; pin ft2 here to run it there or anywhere off-frequency.",
+    help: "auto | ft8 | ft4 | ft2 | wspr | rtty | cw | js8 | psk31. Auto infers the mode from the dial frequency, which is the only reliable way — a DIGU slice does not say which mode it carries, and the three use different window lengths (15 / 7.5 / 3.75 s). FT2 has provisional calling frequencies so auto does find it, except on 60 m where it shares 5.357 MHz with FT4 and auto resolves to FT4; pin ft2 here to run it there or anywhere off-frequency.",
     default: "auto",
   },
   {
