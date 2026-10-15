@@ -1,7 +1,7 @@
 # JS8
 
-JS8 on the decodes page: the mode chip, what a frame is, what a message is, and how what
-is heard reaches PSKReporter. Sending is not in this release.
+JS8 on the decodes page: the mode chip, what a frame is, what a message is, how what is
+heard reaches PSKReporter, and sending.
 
 ## Listening
 
@@ -54,12 +54,18 @@ it. Each printed as JS8Call prints it, joined into a one-frame message, and the
 heartbeat went to PSKReporter as a JS8 spot. A window costs about three seconds on the
 station.
 
+The first send, 16:20 UTC the same day: a heartbeat from the page, one frame in the
+16:20:30 window at 1500 Hz, and in the next window four stations answered it -
+`N0GES: K9XYZ HEARTBEAT SNR +16`, `WD4U: K9XYZ HEARTBEAT SNR +13`, `WA8WQU: K9XYZ
+HEARTBEAT SNR +17`, `KE4ZDJ: K9XYZ HEARTBEAT SNR +11` - each decoded here and named by
+its sender. The whole path, both directions, in one window pair.
+
 ## What the automatic modes do
 
 Nothing. JS8 has its own conversation model - heartbeats, directed queries with automatic
 replies, relays - and the FT8 sequencer does not run on it: the automatic modes refuse to
 start while the decoder is on JS8, landing on JS8 with one running stops it, and the Call
-button is not offered on a JS8 row. The transmitter refuses JS8 until part five.
+button is not offered on a JS8 row.
 
 The operating schedule and the resume after a restart start the station with nobody at the
 screen, so they do what you would: leave JS8 for FT8 on the same band, then start. A
@@ -80,9 +86,26 @@ The decoder runs on its own thread, as a bundle (`npm run build:js8-worker`), fo
 reason the WSPR one does: a worker thread on the station's Node 20 does not inherit the
 bridge's TypeScript loader.
 
+## Sending
+
+Under the message box, a line and an offset. **HB** sends a heartbeat (your callsign and
+grid, one frame); **CQ** sends `CQ CQ CQ` with your grid; a line such as `KK4COV SNR?` is
+a directed message and anything else is text, as many frames as it takes - a short line
+is one, a sentence three or four, each a fifteen-second window. The offset is where in
+the passband the signal goes: type it, or click the waterfall. The bridge answers as soon
+as the first frame is scheduled; the message box gets a `[TX]` line saying how many
+frames and from which window, the status line under the form counts them out, and a
+`[TX done]` or `[TX stopped: ...]` line closes it. **Cancel** stops after the frame on the
+air.
+
+The rules a transmission goes through are FT8's: "Allow transmit" in Settings, the
+power and SWR guards, the window timing (keyed half a second after the boundary, refused
+rather than sent late). Frames go in consecutive windows at one offset because the
+receiving station joins them per frequency; a refused frame stops the message rather
+than send a tail without its head, and moving the dial off JS8 cancels what is left.
+
 ## Not yet
 
-- Sending: heartbeats, directed messages and chat through the DAX path, with the
-  automatic replies JS8Call stations expect (SNR?, QUERY, ACK).
+- The automatic replies JS8Call stations expect (SNR?, QUERY, ACK, relays).
 - A panel of stations heard and conversations, rather than frames in a table.
 - The other submodes.

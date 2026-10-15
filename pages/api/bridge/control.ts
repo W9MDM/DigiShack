@@ -35,6 +35,8 @@ const bodySchema = z.object({
     "rtty-send",
     "text-send",
     "cw",
+    "js8-send",
+    "js8-cancel",
   ]),
   /** Which radio to drive. Changing it stops any automatic mode. */
   kind: z.enum(["flex", "icom", "wsjtx"]).optional(),
@@ -69,6 +71,8 @@ const bodySchema = z.object({
   text: z.string().min(1).max(240).optional(),
   /** CW sending speed, for action "cw". */
   wpm: z.number().min(5).max(60).optional(),
+  /** Audio offset for action "js8-send", Hz. */
+  offsetHz: z.number().min(200).max(2800).optional(),
   theirCall: z.string().trim().toUpperCase().max(16).optional(),
   theirGrid: z.string().trim().toUpperCase().max(8).nullish(),
   theirSnr: z.number().min(-50).max(50).optional(),

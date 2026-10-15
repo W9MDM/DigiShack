@@ -9,7 +9,8 @@ import {
   PERIOD_MS,
   transmitStartAt,
 } from "@/lib/radio/timing";
-import { buildWaveform, samplesPerSymbol } from "@/lib/radio/waveform";
+import { buildJs8Waveform, buildWaveform, samplesPerSymbol } from "@/lib/radio/waveform";
+import type { Js8OutFrame } from "@/lib/digital/js8-message";
 import { rttyDurationMs, rttyWaveform } from "@/lib/digital/rtty";
 import { cwDurationMs } from "@/lib/digital/cw";
 
@@ -177,6 +178,8 @@ export interface TransmitRequest {
    * boundary by the caller; this class does not guess timing.
    */
   startAt: number;
+  /** JS8: the frame to send, from the message layer. The waveform is built from it, and `message` is only the printed form. */
+  js8?: Js8OutFrame;
 }
 
 /** A line of text to send as it is: RTTY, at a tone pair, now. */
@@ -806,8 +809,11 @@ export class FlexDaxTransmitter {
     if (req.mode === "RTTY" || req.mode === "CW") {
       return { ...base, reason: `${req.mode} is sent as text, not as a timed frame` };
     }
-    if (req.mode === "JS8") {
-      return { ...base, reason: "JS8 transmit is not enabled yet: this release listens to JS8" };
+    // JS8 goes out as frames from the message layer, one per window; the frame rides on
+    // the request and the waveform is built from it below. Without one there is nothing
+    // to send, and `message` is only the printed form for the log.
+    if (req.mode === "JS8" && !req.js8) {
+      return { ...base, reason: "JS8 is sent as frames from the message layer; this request carries none" };
     }
 
     const refused = await this.gateRefusal(base);
@@ -817,7 +823,7 @@ export class FlexDaxTransmitter {
     // of doing it before rather than during.
     let wave: Float32Array;
     try {
-      wave = this.buildWaveform(req.message, req.mode, req.offsetHz);
+      wave = req.js8 ? buildJs8Waveform(req.js8, req.offsetHz, DAX_RATE) : this.buildWaveform(req.message, req.mode, req.offsetHz);
     } catch (err) {
       return {
         ...base,
