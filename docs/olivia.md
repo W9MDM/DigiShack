@@ -73,7 +73,16 @@ every peak the scan found, so nothing printed through seven minutes of empty pas
 Olivia station was on 20 m at 17:43 UTC on a weekday; the decoder has read only the
 generated signals of its check, and the first real one goes in the changelog.
 
+## Contestia
+
+The second picker in the panel switches the engine to Contestia: the same tones and the
+same block code with a 6-bit upper-case alphabet (letters, digits, punctuation, space,
+newline) and blocks half the length - 32 symbols, 1.024 s at 500/16 - so it is about
+twice as fast and a little less robust. The sizes, the dials and the sending are the
+same; `olivia.code` is what the bridge starts with. A Contestia signal is not readable as
+Olivia or the other way round, so match the station.
+
 ## Not yet
 
-- Contestia and RTTYM, the same engine with other alphabets.
+- RTTYM, the engine's 5-bit variant.
 - A real-signal report.

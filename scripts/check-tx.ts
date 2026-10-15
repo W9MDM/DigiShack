@@ -380,6 +380,8 @@ async function safetyChecks(): Promise<void> {
     olLong = err instanceof Error ? err.message : "?";
   }
   ok(/over the .* cap/.test(olLong), "200 characters of Olivia 500/16 is over the cap and refused before keying", olLong);
+  const conWave = enabled.buildTextWaveform({ ...olReq, code: "contestia" as const });
+  ok(conWave.length < olWave.length, "the same line as Contestia is shorter on the air: half-length blocks", `${conWave.length} vs ${olWave.length}`);
   const lsbDemod = new RttyDemodulator({ sampleRate: 24_000, ...rttyTones(2210, 170, "LSB") });
   ok(lsbDemod.feed(lsb) === "RY", "and on LSB the pair is swapped to match");
 

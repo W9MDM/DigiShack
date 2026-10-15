@@ -80,6 +80,8 @@ const bodySchema = z.object({
   /** Olivia size for action "olivia": tones and bandwidth, one of the listed pairs. */
   tones: z.number().int().min(2).max(256).optional(),
   bandwidth: z.number().int().min(125).max(2000).optional(),
+  /** Olivia or Contestia, for action "olivia". */
+  code: z.enum(["olivia", "contestia"]).optional(),
   theirCall: z.string().trim().toUpperCase().max(16).optional(),
   theirGrid: z.string().trim().toUpperCase().max(8).nullish(),
   theirSnr: z.number().min(-50).max(50).optional(),

@@ -83,6 +83,15 @@ async function main(): Promise<void> {
   pushSilence(p, Math.round(RATE * flushS));
   ok(text.join("").includes("WIDER"), "1000/32 decodes after switching the size", text.join(""));
 
+  console.log("\nContestia on the same stream");
+  const con = { tones: 16, bandwidth: 500, code: "contestia" } as const;
+  const conWave = oliviaWaveform(oliviaSymbols("contest", { ...con, preambleBlocks: 3 }), { ...con, sampleRate: RATE, centreHz: 1200 });
+  p.setStream({ mode: "OLIVIA", centreHz: 1200, ...con });
+  text.length = 0;
+  for (let i = 0; i < conWave.length; i += 256) p.push(conWave.subarray(i, Math.min(conWave.length, i + 256)));
+  pushSilence(p, Math.round(RATE * flushS));
+  ok(text.join("").includes("CONTEST"), "a Contestia line decodes after switching the code, upper-cased", text.join(""));
+
   console.log("\nleaving the stream");
   p.setStream(null);
   eq(p.streaming, null, "setStream(null) ends it");
