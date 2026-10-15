@@ -7,7 +7,7 @@ import { BandConditions } from "@/components/digital/BandConditions";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { Waterfall, type WaterfallMarker } from "@/components/digital/Waterfall";
+import { Waterfall, type WaterfallMarker, type WaterfallTag } from "@/components/digital/Waterfall";
 import { Js8Panel, type Js8SendState } from "@/components/digital/Js8Panel";
 import { StreamPanel, type StreamStats } from "@/components/digital/StreamPanel";
 import {
@@ -1329,6 +1329,43 @@ export default function DigitalPage({ wsUrl }: Props) {
       setRttyError(err instanceof ApiError ? err.message : "Could not move the Olivia tones");
     }
   }, []);
+  /**
+   * Where the decoder found the signal, as a tag on the waterfall: a click re-centres on
+   * it. Only while the decoder is actually on a signal - Olivia's synchroniser over its
+   * threshold, PSK31's squelch open - because on noise the "found" offset is wherever the
+   * noise happened to peak, and a tag there invites a click that moves you off nothing
+   * onto nothing.
+   */
+  const foundTags = useMemo<WaterfallTag[]>(() => {
+    if (!canSwitch || !streamStats) return [];
+    if (status?.subMode === "OLIVIA" && status.olivia && streamStats.mode === "OLIVIA") {
+      const off = streamStats.freqOffsetHz;
+      if (streamStats.snr < 4 || Math.abs(off) < 8) return [];
+      const hz = Math.round(status.olivia.centreHz + off);
+      return [
+        {
+          hz,
+          label: `found ${off > 0 ? "+" : ""}${Math.round(off)}`,
+          title: `The Olivia signal is centred at ${hz} Hz - click to centre the decoder on it`,
+          onClick: () => void tuneOlivia(hz),
+        },
+      ];
+    }
+    if (status?.subMode === "PSK31" && status.psk && streamStats.mode === "PSK31") {
+      const off = streamStats.afcHz;
+      if (!streamStats.open || Math.abs(off) < 2) return [];
+      const hz = Math.round(status.psk.centreHz + off);
+      return [
+        {
+          hz,
+          label: `AFC ${off > 0 ? "+" : ""}${off.toFixed(0)}`,
+          title: `The PSK31 carrier is at ${hz} Hz - click to put the decoder and the transmitter on it`,
+          onClick: () => void tunePsk(hz),
+        },
+      ];
+    }
+    return [];
+  }, [canSwitch, streamStats, status?.subMode, status?.olivia, status?.psk, tuneOlivia, tunePsk]);
   /** Send a line of RTTY. The bridge answers as soon as the radio is keyed; the line appears in the stream as [TX]. */
   const sendRtty = useCallback(async (text: string) => {
     try {
@@ -1923,6 +1960,7 @@ export default function DigitalPage({ wsUrl }: Props) {
             binHz={scale.binHz}
             maxHz={scale.maxHz}
             markers={markers}
+            tags={foundTags}
             onPickHz={
               decodingAs === "RTTY" && canSwitch
                 ? (hz) => void tuneRtty(hz)

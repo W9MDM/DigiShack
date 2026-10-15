@@ -226,7 +226,8 @@ export function StreamPanel({
                   {Math.abs(oliviaStats.freqOffsetHz) >= 8 && (
                     <>
                       {" "}
-                      · found <span className="text-fg">{oliviaStats.freqOffsetHz > 0 ? "+" : ""}{Math.round(oliviaStats.freqOffsetHz)}</span> Hz off
+                      · {oliviaStats.snr >= 4 ? "found" : "best guess"}{" "}
+                      <span className="text-fg">{oliviaStats.freqOffsetHz > 0 ? "+" : ""}{Math.round(oliviaStats.freqOffsetHz)}</span> Hz off
                     </>
                   )}
                 </>
