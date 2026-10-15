@@ -212,6 +212,8 @@ async function main(): Promise<void> {
     const text = decodeAll(demod, wave);
     ok(text.length <= 3, `twenty seconds of band noise prints next to nothing (${text.length} characters)`, JSON.stringify(text));
     ok(demod.statistics.quality < 0.4, `quality reads as noise (${demod.statistics.quality.toFixed(2)})`);
+    eq(demod.statistics.errors, 0, "and nothing is counted as unread while the squelch is closed");
+    ok(Math.abs(demod.statistics.afcHz) < 0.01, `and the AFC has not moved on noise (${demod.statistics.afcHz.toFixed(2)} Hz)`);
     const open = new Psk31Demodulator({ sampleRate: fs, centreHz: 1000, squelch: 0 });
     const junk = decodeAll(open, wave);
     ok(junk.length > 50, `with the squelch off the same noise prints junk (${junk.length} characters), which is the squelch's job`);

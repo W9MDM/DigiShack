@@ -205,7 +205,11 @@ export class Psk31Demodulator {
     this.qualQ += QUALITY_ALPHA * (sQ - this.qualQ);
     const quality = Math.hypot(this.qualI, this.qualQ);
     this.stats.quality = quality;
-    const trusted = quality >= Math.max(0.35, this.squelch * 0.8);
+    // The AFC follows only what the squelch would print: quality measures how consistent
+    // the symbols are, not how far off the carrier is, so a signal 5 Hz off still reads
+    // near 1 and is followed, while noise at 0.1 to 0.3 leaves the oscillator alone.
+    const open = this.squelch === 0 || quality >= this.squelch;
+    const trusted = quality >= Math.max(0.5, this.squelch);
     if (this.afc && trusted) {
       // The averaged angle is 4 pi df T: df = angle * baud / (4 pi).
       const angle = Math.atan2(this.qualQ, this.qualI);
@@ -218,9 +222,11 @@ export class Psk31Demodulator {
       this.stats.afcHz = this.lo - this.centreHz;
     }
     const bit = dI >= 0 ? 1 : 0;
+    const before = this.varicode.errors;
     const ch = this.varicode.pushBit(bit);
-    this.stats.errors = this.varicode.errors;
-    const open = this.squelch === 0 || quality >= this.squelch;
+    // Unread codes are counted only while the squelch is open: with it closed the bits
+    // are noise and every one of them is a code no character has, which is not a fault.
+    if (open) this.stats.errors += this.varicode.errors - before;
     this.stats.open = open;
     if (!ch || !open) return "";
     this.stats.chars++;
