@@ -61,6 +61,27 @@ async function get(
       },
       {
         method: "GET",
+        path: "/api/v1/radio/state",
+        role: "VIEWER",
+        description:
+          "The active receiver as the radio service sees it: frequency, modulation, digital mode, filter, antenna, contact and automation state, and the locks that would refuse a command right now. For a dial or other controller - see docs/radio-api.md.",
+      },
+      {
+        method: "GET",
+        path: "/api/v1/radio/capabilities",
+        role: "VIEWER",
+        description:
+          "What the active radio accepts: tuning range, modulations, AGC settings, and the commands this API takes.",
+      },
+      {
+        method: "POST",
+        path: "/api/v1/radio/commands",
+        role: "OPERATOR",
+        description:
+          "One command with a client-chosen id: tune-relative (deltaHz), set-frequency (frequencyHz), set-modulation (modulation), stop-automation. 409 with the locks while a contact, an automatic mode, a transmission or FT-0 owns the receiver. A repeated id answers with the first outcome and is not applied again.",
+      },
+      {
+        method: "GET",
         path: "/api/v1/stats",
         role: "VIEWER",
         description: "Totals, unique counts, and per-band/per-mode breakdowns.",

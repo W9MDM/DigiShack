@@ -24,6 +24,7 @@ and a backup moves the whole installation.
 | [Settings reference](settings.md) | Every one of the 175 settings, generated from the code |
 | [Networked Icom](icom.md) | Driving an IC-7300 or IC-705 over the network, with no bridge software |
 | [Architecture](architecture.md) | What runs where, and why the radio is its own process |
+| [Radio API](radio-api.md) | Driving the active receiver from a dial or other controller through /api/v1/radio |
 | [Icom protocol](icom-protocol.md) | The RS-BA1 wire format, for anyone working on the driver |
 | [Troubleshooting](troubleshooting.md) | Symptoms, in the order you are likely to meet them |
 | [Development](development.md) | Conventions, the test suite, how to add things |

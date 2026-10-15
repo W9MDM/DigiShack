@@ -139,6 +139,7 @@ import { getEqslCredentials, syncEqslInbox } from "@/lib/integrations/eqsl";
 import { reconcileLotwSent } from "@/lib/integrations/lotw-reconcile";
 import { startFt8brTracker } from "@/lib/contest/ft8battle-tracker";
 import { runUploads } from "@/lib/integrations/upload-runner";
+import { locksFor } from "@/lib/radio/api";
 import { collectReceptionReports } from "@/lib/pskreporter/collect";
 import { MIN_QUERY_INTERVAL_MS } from "@/lib/pskreporter/retrieve";
 import type { PskReporterUploader } from "@/lib/pskreporter/upload";
@@ -4032,6 +4033,47 @@ async function main(): Promise<void> {
       // connection, for the same reason RF power does: the radio ignores several
       // of these from a non-GUI client, silently.
       if (url.pathname === "/rig") {
+        const body = await readJson(req);
+
+        // RELATIVE TUNING, for a knob. Computed HERE against the frequency this process is
+        // reporting, not in the web tier against a copy of it: a dial sends deltas, two can
+        // be in flight, and the second must add to where the first left the receiver.
+        if (body.deltaHz !== undefined) {
+          const delta = Number(body.deltaHz);
+          if (!Number.isInteger(delta) || delta === 0) {
+            sendJson(res, 400, { error: "deltaHz must be a non-zero integer number of hertz" });
+            return;
+          }
+          if (status.dialFrequency === null) {
+            sendJson(res, 409, {
+              error: "The radio has not reported a frequency yet, so there is nothing to tune relative to",
+            });
+            return;
+          }
+          body.freqHz = status.dialFrequency + delta;
+        }
+
+        // THE MANUAL-CONTROL POLICY, for callers that ask for it. A contact in progress, an
+        // automatic mode, a transmission or FT-0 owns the receiver, and a knob does not take
+        // it from them. The browser's rig panel does not send this flag: an operator
+        // retuning by hand mid-contact is a decision, not an accident. Decided here, at the
+        // moment of the command, so a worker and this process cannot disagree about whether
+        // the receiver was free. The rule itself is in lib/radio/api.ts.
+        if (body.respectLocks) {
+          const qsoState = activeQso()?.state ?? null;
+          const locks = locksFor({
+            qsoActive: qsoState?.active === true,
+            qsoWith: qsoState?.theirCall ?? null,
+            autoMode: activeAuto()?.state.mode ?? "off",
+            transmitting: status.transmitting,
+            ft0: status.ft0,
+          });
+          if (locks.length > 0) {
+            sendJson(res, 409, { error: locks.map((l) => l.detail).join("; "), locks });
+            return;
+          }
+        }
+
         // The CAT panel on the Icom.
         //
         // Everything here except the filter passband now has a CI-V equivalent, and each
@@ -4051,7 +4093,6 @@ async function main(): Promise<void> {
             sendJson(res, 503, { error: "The Icom is not connected" });
             return;
           }
-          const body = await readJson(req);
           // rxAnt/txAnt: these radios have ONE antenna socket, so there is nothing to
           // select. Named rather than ignored, for the same reason as the filter widths —
           // a control that silently does nothing is the failure this list exists to stop.
@@ -4153,7 +4194,6 @@ async function main(): Promise<void> {
           return;
         }
         const sliceIdx = flexSliceIndex ?? 0;
-        const body = await readJson(req);
         const cmds: string[] = [];
 
         if (body.freqHz !== undefined) {
