@@ -149,6 +149,7 @@ import { locksFor } from "@/lib/radio/api";
 import { postWsprSpots, wsprSpotOf, type WsprSpotReport } from "@/lib/wsprnet/upload";
 import { RTTY_CENTRE_HZ, RTTY_SHIFT_HZ, rttyDurationMs, rttyTones } from "@/lib/digital/rtty";
 import { cwDurationMs } from "@/lib/digital/cw";
+import { PSK31_CENTRE_HZ, psk31DurationMs, type PskSpeed } from "@/lib/digital/psk31";
 import { isStreamMode, type Js8DecodeExtra } from "@/lib/radio/decode-pipeline";
 import {
   Js8MessageAssembler,
@@ -202,6 +203,8 @@ interface RigStatus {
   rtty: { centreHz: number; shiftHz: number; sideband: "USB" | "LSB"; markHz: number; spaceHz: number } | null;
   /** The CW pitch the decoder listens on and the speed the keyer sends at, while on CW. */
   cw: { pitchHz: number; wpm: number; pitchFromRadio: boolean } | null;
+  /** The PSK31 carrier and speed, while on PSK31. */
+  psk: { centreHz: number; speed: PskSpeed } | null;
   /** A JS8 message going out, or the last one, with the offset it uses. See lib/radio/js8-sender.ts. */
   js8: (Js8SenderState & { offsetHz: number }) | null;
   dxCall: string | null;
@@ -339,6 +342,7 @@ const status: RigStatus = {
   subMode: null,
   rtty: null,
   cw: null,
+  psk: null,
   js8: null,
   dxCall: null,
   deCall: null,
@@ -1133,6 +1137,11 @@ const cwTuning = { pitchHz: 600, wpm: 20, thresholdDb: 16 };
 /** Set by the live source: puts the decoder on the radio's pitch. */
 let cwApply: (() => void) | null = null;
 
+/** PSK31: the carrier the decoder listens on and sends at, the speed, and the squelch. */
+const pskTuning: { centreHz: number; speed: PskSpeed; squelch: number } = { centreHz: PSK31_CENTRE_HZ, speed: 31, squelch: 0.5 };
+/** Set by the live source: hands the tuning to the demodulator. */
+let pskApply: (() => void) | null = null;
+
 /** The last few thousand characters of stream text, replayed to a page that connects. */
 const STREAM_TEXT_MAX = 8_000;
 let streamText = "";
@@ -1588,7 +1597,9 @@ async function startFlexSource(): Promise<() => Promise<void>> {
                 ? "CW"
                 : configuredMode === "js8"
                   ? "JS8"
-                  : "FT8",
+                  : configuredMode === "psk31"
+                    ? "PSK31"
+                    : "FT8",
     depth,
     // Shared with the Icom: the passband is a property of the operating convention,
     // not of the radio.
@@ -1765,6 +1776,12 @@ async function startFlexSource(): Promise<() => Promise<void>> {
   cwTuning.pitchHz = await getNumberSetting("cw.pitchHz", 600);
   cwTuning.wpm = await getNumberSetting("cw.wpm", 20);
   cwTuning.thresholdDb = await getNumberSetting("cw.thresholdDb", 16);
+  pskTuning.centreHz = await getNumberSetting("psk31.centreHz", PSK31_CENTRE_HZ);
+  {
+    const speed = await getNumberSetting("psk31.speed", 31);
+    pskTuning.speed = speed === 63 ? 63 : speed === 125 ? 125 : 31;
+  }
+  pskTuning.squelch = await getNumberSetting("psk31.squelch", 0.5);
   rttyApply = () => {
     const sideband: "USB" | "LSB" = /LSB|DIGL/i.test(status.mode ?? "") ? "LSB" : "USB";
     const tones = rttyTones(rttyTuning.centreHz, rttyTuning.shiftHz, sideband);
@@ -1778,6 +1795,10 @@ async function startFlexSource(): Promise<() => Promise<void>> {
     const pitchHz = fromRadio ?? cwTuning.pitchHz;
     source.setCwOptions({ mode: "CW", pitchHz, wpm: cwTuning.wpm, thresholdDb: cwTuning.thresholdDb });
     status.cw = { pitchHz, wpm: cwTuning.wpm, pitchFromRadio: fromRadio !== null };
+  };
+  pskApply = () => {
+    source.setPskOptions({ mode: "PSK31", centreHz: pskTuning.centreHz, speed: pskTuning.speed, squelch: pskTuning.squelch });
+    status.psk = { centreHz: pskTuning.centreHz, speed: pskTuning.speed };
   };
 
   source.on("window", (w) => {
@@ -2126,6 +2147,7 @@ async function startFlexSource(): Promise<() => Promise<void>> {
     // stopping auto is the only safe reading of it.
     if (status.subMode === "RTTY") rttyApply?.();
     if (status.subMode === "CW") cwApply?.();
+    if (status.subMode === "PSK31") pskApply?.();
     if (status.subMode && NO_SEQUENCER_MODES.has(status.subMode)) {
       const a = activeAuto();
       if (a && a.state.mode !== "off") {
@@ -4220,7 +4242,9 @@ async function main(): Promise<void> {
         }
         const rtty = status.rtty;
         const req2 =
-          streamMode === "CW" || !rtty
+          streamMode === "PSK31"
+            ? { mode: "PSK31" as const, text, centreHz: pskTuning.centreHz, shiftHz: 0, sideband: "USB" as const, speed: pskTuning.speed }
+            : streamMode === "CW" || !rtty
             ? { mode: "CW" as const, text, centreHz: 0, shiftHz: 0, sideband: "USB" as const, wpm: cwTuning.wpm }
             : {
                 mode: "RTTY" as const,
@@ -4242,8 +4266,35 @@ async function main(): Promise<void> {
           },
           (err) => console.error(`[${tag}] send failed: ${err instanceof Error ? err.message : String(err)}`),
         );
-        const durationMs = streamMode === "CW" ? cwDurationMs(text, cwTuning.wpm) : rttyDurationMs(text);
+        const durationMs =
+          streamMode === "CW"
+            ? cwDurationMs(text, cwTuning.wpm)
+            : streamMode === "PSK31"
+              ? psk31DurationMs(text, { speed: pskTuning.speed })
+              : rttyDurationMs(text);
         sendJson(res, 202, { ok: true, mode: streamMode, chars: text.length, durationMs: Math.round(durationMs) });
+        return;
+      }
+
+      // POST /psk — move the PSK31 carrier (Hz audio) or change the speed. Takes effect at
+      // once; the starting values live in Settings (psk31.*).
+      if (url.pathname === "/psk") {
+        const body = await readJson(req);
+        const centre = body.centreHz === undefined ? pskTuning.centreHz : Number(body.centreHz);
+        const speedRaw = body.speed === undefined ? pskTuning.speed : Number(body.speed);
+        if (!Number.isFinite(centre) || centre < 300 || centre > 2800) {
+          sendJson(res, 400, { error: "centreHz must be between 300 and 2800" });
+          return;
+        }
+        if (![31, 63, 125].includes(speedRaw)) {
+          sendJson(res, 400, { error: "speed must be 31, 63 or 125" });
+          return;
+        }
+        pskTuning.centreHz = Math.round(centre);
+        pskTuning.speed = speedRaw as PskSpeed;
+        pskApply?.();
+        broadcast({ kind: "status", status });
+        sendJson(res, 200, { ok: true, psk: status.psk });
         return;
       }
 
@@ -4273,8 +4324,8 @@ async function main(): Promise<void> {
         const body = await readJson(req);
         const band = String(body.band ?? "").toUpperCase();
         const mode = String(body.mode ?? "FT8").toUpperCase() as DigitalMode;
-        if (!["FT8", "FT4", "FT2", "WSPR", "RTTY", "CW", "JS8"].includes(mode)) {
-          sendJson(res, 400, { error: "mode must be FT8, FT4, FT2, WSPR, RTTY, CW or JS8" });
+        if (!["FT8", "FT4", "FT2", "WSPR", "RTTY", "CW", "JS8", "PSK31"].includes(mode)) {
+          sendJson(res, 400, { error: "mode must be FT8, FT4, FT2, WSPR, RTTY, CW, JS8 or PSK31" });
           return;
         }
         const r = await tuneToCalling(band, mode);

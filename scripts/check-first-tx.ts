@@ -190,7 +190,7 @@ async function main(): Promise<void> {
     eq(realMs, TRANSMISSION_MS[mode], `${mode}: the generated waveform really is ${TRANSMISSION_MS[mode]} ms`);
   }
 
-  const slack: Record<TxMode, number> = { FT8: 0, FT4: 0, FT2: 0, WSPR: 0, RTTY: 0, CW: 0, JS8: 0 };
+  const slack: Record<TxMode, number> = { FT8: 0, FT4: 0, FT2: 0, WSPR: 0, RTTY: 0, CW: 0, JS8: 0, PSK31: 0 };
   for (const mode of ["FT8", "FT4", "FT2"] as TxMode[]) {
     slack[mode] = PERIOD_MS[mode] - TX_START_OFFSET_MS[mode] - TRANSMISSION_MS[mode];
   }
@@ -271,7 +271,7 @@ async function main(): Promise<void> {
   // THE OLD RULE, verbatim, so what it did can be shown rather than described. Two tests
   // with a gap between them: 400 ms of lead, or late but inside the tolerance.
   const OLD_LEAD_MS = 400;
-  const OLD_TOLERANCE: Record<TxMode, number> = { FT8: 1_500, FT4: 800, FT2: 0, WSPR: 0, RTTY: 0, CW: 0, JS8: 0 };
+  const OLD_TOLERANCE: Record<TxMode, number> = { FT8: 1_500, FT4: 800, FT2: 0, WSPR: 0, RTTY: 0, CW: 0, JS8: 0, PSK31: 0 };
   function oldRule(mode: TxMode, txParity: 0 | 1, now: number): number | null {
     const period = PERIOD_MS[mode];
     const current = Math.floor(now / period) * period;

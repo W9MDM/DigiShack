@@ -27,6 +27,7 @@ be read: `DATABASE_URL`, `SETTINGS_KEY` and `PORT`.
 - [DXCC reference data](#dxcc-reference-data) — 2 settings
 - [PSKReporter](#pskreporter) — 4 settings
 - [RTTY](#rtty) — 5 settings
+- [PSK31](#psk31) — 3 settings
 - [CW](#cw) — 3 settings
 - [WSPR](#wspr) — 1 setting
 - [Digital modes](#digital-modes) — 8 settings
@@ -183,6 +184,16 @@ Where the RTTY tone pair starts in the audio passband and how the decoder reads 
 | Unshift on space | `rtty.usos` | on/off | `true` | A received space returns the decoder to the letters case, the amateur convention. Leave on unless the station you are reading sends figures across spaces without re-shifting. |
 | RTTY squelch | `rtty.squelch` | number | `0.7` | 0 to 1. How sure the decoder must be of a character's bits before printing it. Band noise alone passes the frame check about twice a second; at 0.7 it passes a few characters a minute and a signal needs about 6 dB over the noise, which is where RTTY copy begins anyway. Lower it for a weak station you can hear but not read; 0 prints everything. |
 
+## PSK31
+
+Where the PSK31 carrier starts in the audio passband, which speed, and how sure the decoder must be of a signal before the page prints. The decodes page moves the carrier live (click a signal on the waterfall); these are the values the bridge loads.
+
+| Setting | Key | Type | Default | What it does |
+|---|---|---|---|---|
+| PSK31 carrier (Hz audio) | `psk31.centreHz` | number | `1000` | Where the decoder listens and the transmitter sends when the PSK31 chip is pressed, Hz above the dial. 1000 is the convention: the 20 m watering hole at a 14.070 dial sits at 14.071. A click on the waterfall moves it for the session. |
+| PSK speed | `psk31.speed` | number | `31` | 31, 63 or 125: BPSK31 at 31.25 baud, BPSK63 at 62.5, BPSK125 at 125. The panel's picker changes it for the session. |
+| PSK31 squelch (0 to 1) | `psk31.squelch` | number | `0.5` | The decoder's quality - how consistently the symbols read as a phase or its reverse - below which nothing prints. Noise sits near 0.2, a clean signal near 1, a weak one around 0.6. 0 prints everything, which on an empty channel is a stream of random characters. |
+
 ## CW
 
 The CW decoder listens at the pitch the radio reports; this is the pitch to assume when it has not, the speed lines go out at through the radio's keyer, and how far a signal must stand over the noise before the page prints it.
@@ -213,7 +224,7 @@ Where decodes and rig status come from. `wsjtx` takes them from an external deco
 | Re-check the clock every (minutes) | `time.syncMinutes` | number | `60` | How often to re-measure. Hourly is plenty for a machine that is roughly synchronised, and one exchange is 48 bytes. 0 measures once at startup and never again. |
 | Also write every decode to CSV in | `digital.decodeCsvDir` | text | — | A directory on the server. One file per UTC day, `decodes-YYYY-MM-DD.csv`, holding every decode heard — including ones with no resolvable band, which never reach the database. Leave blank to write none. This is separate from the database copy, which is pruned after `digital.decodeRetentionDays`: the table is what the application queries, this is the raw feed kept for its own sake in a format that outlives the schema. A busy band produces around 42,000 rows a day, which is a few megabytes. |
 | Passband to decode and display (Hz) | `digital.passbandHz` | number | `3000` | Top of the audio passband: what the decoders search AND what the waterfall draws — one number, so the display cannot disagree with the decoder. 3000 is the conventional FT8 sub-band and the decoder library's own default. Raising it finds stations above 3 kHz that were being clipped: a busy band shows a hard stop at exactly 3000, which is a clipped distribution rather than a natural one. It costs decode time, so watch for the "decode took Nms" warning, and note that most radios will not TRANSMIT above about 2.9 kHz whatever the receiver hears — stations found up there can be decoded but not answered. |
-| Digital mode | `digital.mode` | text | `auto` | auto \| ft8 \| ft4 \| ft2 \| wspr \| rtty \| cw \| js8. Auto infers the mode from the dial frequency, which is the only reliable way — a DIGU slice does not say which mode it carries, and the three use different window lengths (15 / 7.5 / 3.75 s). FT2 has provisional calling frequencies so auto does find it, except on 60 m where it shares 5.357 MHz with FT4 and auto resolves to FT4; pin ft2 here to run it there or anywhere off-frequency. |
+| Digital mode | `digital.mode` | text | `auto` | auto \| ft8 \| ft4 \| ft2 \| wspr \| rtty \| cw \| js8 \| psk31. Auto infers the mode from the dial frequency, which is the only reliable way — a DIGU slice does not say which mode it carries, and the three use different window lengths (15 / 7.5 / 3.75 s). FT2 has provisional calling frequencies so auto does find it, except on 60 m where it shares 5.357 MHz with FT4 and auto resolves to FT4; pin ft2 here to run it there or anywhere off-frequency. |
 | Keep decodes for (days) | `digital.decodeRetentionDays` | number | `30` | A busy band produces around 42,000 decodes a day — roughly 10 MB, or 3.7 GB a year — and nothing used to delete any of it. Decodes attached to a logged contact are NEVER pruned whatever this says; they are the evidence of the QSO. 0 keeps everything, which is fine if you have the disk and want the full history. |
 
 ## DigiShack bridge

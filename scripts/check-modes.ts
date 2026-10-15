@@ -119,7 +119,13 @@ console.log("\nis this a frequency an automatic mode may run on");
   eq(callingFrequencyFor("6M", "CW", 2), 50_095_000, "and 6 m has a CW segment too");
   eq(callingFrequencyFor("40M", "JS8", 2), 7_078_000, "40 m JS8 is 7.078, JS8Call's default");
   eq(callingFrequencyFor("20M", "JS8", 2), 14_078_000, "20 m JS8 is 14.078");
-  eq(callingFrequencyFor("12M", "RTTY", 2), 24_920_000, "12 m RTTY moved to 24.920 so JS8's 24.922 is its own bin");
+  eq(callingFrequencyFor("12M", "RTTY", 2), 24_915_000, "12 m RTTY sits at 24.915, clear of JS8's 24.922 and PSK31's 24.920");
+  eq(callingFrequencyFor("20M", "PSK31", 2), 14_070_000, "20 m PSK31 is the 14.070 dial");
+  eq(callingFrequencyFor("40M", "PSK31", 2), 7_070_000, "40 m PSK31 is 7.070 in Region 2");
+  eq(callingFrequencyFor("40M", "PSK31", 1), 7_035_000, "and 7.035 in Region 1");
+  eq(inferDigitalMode(14_070_000).mode, "PSK31", "a 14.070 dial infers PSK31");
+  eq(inferDigitalMode(14_074_000).mode, "FT8", "and 14.074 is still FT8, 4 kHz away");
+  eq(inferDigitalMode(18_097_000).mode, "PSK31", "17 m PSK31 at 18.097, below the FT8 dial at 18.100");
   eq(digitalCallingFrequency(7_078_000, "JS8"), 7_078_000, "7.078 is JS8");
   eq(digitalCallingFrequency(7_078_000, "FT8"), 7_074_000, "and also the top of FT8's 7.074 passband as a dial - which is why auto infers by 500 Hz, not by passband");
   eq(inferDigitalMode(18_104_000).mode, "FT4", "17 m: FT4 and JS8 share 18.104, and auto prefers FT4 there");
@@ -144,8 +150,9 @@ console.log("\nis this a frequency an automatic mode may run on");
   // needs a radio. The rule is the part that was wrong.
   const resolveMode = (st: { subMode: string | null; mode: string | null }): TxMode => {
     const m = (st.subMode || st.mode || "FT8").toUpperCase();
-    return m === "FT4" ? "FT4" : m === "FT2" ? "FT2" : m === "WSPR" ? "WSPR" : m === "RTTY" ? "RTTY" : m === "CW" ? "CW" : m === "JS8" ? "JS8" : "FT8";
+    return m === "FT4" ? "FT4" : m === "FT2" ? "FT2" : m === "WSPR" ? "WSPR" : m === "RTTY" ? "RTTY" : m === "CW" ? "CW" : m === "JS8" ? "JS8" : m === "PSK31" ? "PSK31" : "FT8";
   };
+  eq(resolveMode({ subMode: "PSK31", mode: "DIGU" }), "PSK31", "listening to PSK31 resolves to PSK31");
   eq(resolveMode({ subMode: "JS8", mode: "DIGU" }), "JS8", "listening to JS8 resolves to JS8");
   eq(resolveMode({ subMode: "WSPR", mode: "DIGU" }), "WSPR", "listening to WSPR resolves to WSPR");
   eq(resolveMode({ subMode: "RTTY", mode: "DIGU" }), "RTTY", "listening to RTTY resolves to RTTY");

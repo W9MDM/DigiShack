@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.199.0 - public release
+## 1.199.1 - public release
 
 Development happens in a private repository; this is where the public history starts.
 Earlier entries are not reproduced - they quote real operators by callsign, include
@@ -22,6 +22,7 @@ Notes for anyone running this:
 
 ## Release history
 
+- **1.199.1** — PSK31, part two: the mode
 - **1.199.0** — PSK31, part one: the code, the waveform and a demodulator
 - **1.198.1** — The first JS8 heartbeat, answered by four stations
 - **1.198.0** — JS8, part five: sending

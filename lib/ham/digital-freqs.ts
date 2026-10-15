@@ -9,7 +9,7 @@
 // The dial frequency is the reliable discriminator: the two modes use distinct,
 // well-established watering holes on every band.
 
-export type DigitalMode = "FT8" | "FT4" | "FT2" | "WSPR" | "RTTY" | "CW" | "JS8";
+export type DigitalMode = "FT8" | "FT4" | "FT2" | "WSPR" | "RTTY" | "CW" | "JS8" | "PSK31";
 
 
 export interface DigitalFrequency {
@@ -131,10 +131,11 @@ const RTTY: [number, string, (1 | 2 | 3)?][] = [
   [14_085_000, "20M"],
   [18_102_000, "17M"],
   [21_085_000, "15M"],
-  // 24.920, not 24.922: JS8's 12 m calling frequency is 24.922, and on the same dial the
-  // inference would take the first entry in the table, RTTY, for every 12 m JS8 dial.
-  // RTTY has a segment, JS8 has a frequency; the segment moves.
-  [24_920_000, "12M"],
+  // 24.915, not 24.922 or 24.920: JS8's 12 m calling frequency is 24.922 and PSK31's is
+  // 24.920, and on the same dial the inference would take the first entry in the table,
+  // RTTY, for every one of their stations. RTTY has a segment (24.910-24.930), the others
+  // have frequencies; the segment moves.
+  [24_915_000, "12M"],
   [28_085_000, "10M"],
 ];
 
@@ -170,6 +171,26 @@ const JS8: [number, string, (1 | 2 | 3)?][] = [
   [50_318_000, "6M"],
 ];
 
+/**
+ * PSK31 dials: the signal sits 1 kHz up (the decoder's default carrier), so 14.070 is the
+ * watering hole at 14.071. Region 1 and 3 work 40 m at 7.035; Region 2 at 7.070. 17 m is
+ * 18.097: FT8 took 18.100 and the PSK activity moved down.
+ */
+const PSK31: [number, string, (1 | 2 | 3)?][] = [
+  [1_838_000, "160M"],
+  [3_580_000, "80M"],
+  [7_035_000, "40M", 1],
+  [7_070_000, "40M", 2],
+  [7_035_000, "40M", 3],
+  [10_142_000, "30M"],
+  [14_070_000, "20M"],
+  [18_097_000, "17M"],
+  [21_070_000, "15M"],
+  [24_920_000, "12M"],
+  [28_120_000, "10M"],
+  [50_290_000, "6M"],
+];
+
 export const DIGITAL_FREQUENCIES: readonly DigitalFrequency[] = [
   ...FT8.map(([hz, band, region]): DigitalFrequency => ({ hz, mode: "FT8", band, region })),
   ...FT4.map(([hz, band, region]): DigitalFrequency => ({ hz, mode: "FT4", band, region })),
@@ -185,6 +206,7 @@ export const DIGITAL_FREQUENCIES: readonly DigitalFrequency[] = [
   ...RTTY.map(([hz, band, region]): DigitalFrequency => ({ hz, mode: "RTTY", band, region })),
   ...CW.map(([hz, band, region]): DigitalFrequency => ({ hz, mode: "CW", band, region })),
   ...JS8.map(([hz, band, region]): DigitalFrequency => ({ hz, mode: "JS8", band, region })),
+  ...PSK31.map(([hz, band, region]): DigitalFrequency => ({ hz, mode: "PSK31", band, region })),
 ];
 
 /**
@@ -305,6 +327,8 @@ const PERIOD_MS: Record<DigitalMode, number> = {
   CW: 1_000,
   /** JS8 normal mode: FT8's period. */
   JS8: 15_000,
+  /** A stream, as RTTY. */
+  PSK31: 1_000,
 };
 
 export function periodMsFor(mode: DigitalMode): number {

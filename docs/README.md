@@ -29,6 +29,7 @@ and a backup moves the whole installation.
 | [RTTY](rtty.md) | RTTY: listening, the tones and the sideband, and sending a line |
 | [CW](cw.md) | CW: a best-effort decoder on the radio's pitch, and sending through its keyer |
 | [JS8](js8.md) | JS8: heartbeats, directed messages and chat, listening and sending |
+| [PSK31](psk31.md) | PSK31: a decoder with AFC and a squelch on the stream pipeline, and sending |
 | [Icom protocol](icom-protocol.md) | The RS-BA1 wire format, for anyone working on the driver |
 | [Troubleshooting](troubleshooting.md) | Symptoms, in the order you are likely to meet them |
 | [Development](development.md) | Conventions, the test suite, how to add things |

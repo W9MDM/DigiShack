@@ -25,6 +25,17 @@ export type StreamStats =
       floor: number;
       keyed: boolean;
       unknown: number;
+    }
+  | {
+      mode: "PSK31";
+      seconds: number;
+      chars: number;
+      errors: number;
+      /** 0 to 1: how consistently the symbols read as 0 or pi; the squelch is a floor on it. */
+      quality: number;
+      afcHz: number;
+      level: number;
+      open: boolean;
     };
 
 export interface RttyTuning {
@@ -43,12 +54,19 @@ export interface CwTuning {
   pitchFromRadio: boolean;
 }
 
+export interface PskTuning {
+  /** The carrier, Hz audio: where the decoder listens and the transmitter sends. */
+  centreHz: number;
+  speed: 31 | 63 | 125;
+}
+
 interface Props {
   mode: string;
   text: string;
   stats: StreamStats | null;
   rtty: RttyTuning | null;
   cw: CwTuning | null;
+  psk: PskTuning | null;
   canTune: boolean;
   /** Sending needs an operator and a station callsign for the macros. */
   canSend: boolean;
@@ -57,6 +75,7 @@ interface Props {
   error?: string | null;
   onTune: (centreHz?: number, shiftHz?: number) => void;
   onCwWpm: (wpm: number) => void;
+  onPskTune: (centreHz?: number, speed?: 31 | 63 | 125) => void;
   onSend: (text: string) => void;
   onClear: () => void;
 }
@@ -78,6 +97,7 @@ export function StreamPanel({
   stats,
   rtty,
   cw,
+  psk,
   canTune,
   canSend,
   myCall,
@@ -85,6 +105,7 @@ export function StreamPanel({
   error,
   onTune,
   onCwWpm,
+  onPskTune,
   onSend,
   onClear,
 }: Props) {
@@ -101,7 +122,9 @@ export function StreamPanel({
 
   const rttyStats = stats && stats.mode === "RTTY" ? stats : null;
   const cwStats = stats && stats.mode === "CW" ? stats : null;
+  const pskStats = stats && stats.mode === "PSK31" ? stats : null;
   const isCw = mode === "CW";
+  const isPsk = mode === "PSK31";
 
   // Bars. RTTY: mark and space, relative to the stronger. CW: the key's peak and the
   // noise floor it stands over, relative to the peak.
@@ -121,6 +144,12 @@ export function StreamPanel({
     barB = Math.round((cwStats.floor / peak) * 100);
     quiet = cwStats.peak < 1e-4;
     idle = cwStats.keyed;
+  } else if (pskStats) {
+    // PSK: the quality (the squelch's measure) and the level at the carrier.
+    barA = Math.round(Math.min(1, pskStats.quality) * 100);
+    barB = Math.round(Math.min(1, pskStats.level * 4) * 100);
+    quiet = pskStats.level < 1e-3;
+    idle = pskStats.open;
   }
 
   const cqLine = myCall ? `CQ CQ CQ DE ${myCall} ${myCall} ${myCall} K` : "";
@@ -145,6 +174,20 @@ export function StreamPanel({
           ) : (
             <span>Waiting for the bridge to report the pitch…</span>
           )
+        ) : isPsk ? (
+          psk ? (
+            <span className="tnum">
+              carrier <span className="text-fg">{psk.centreHz}</span> Hz · BPSK{psk.speed}
+              {pskStats && Math.abs(pskStats.afcHz) >= 0.5 && (
+                <>
+                  {" "}
+                  · AFC <span className="text-fg">{pskStats.afcHz > 0 ? "+" : ""}{pskStats.afcHz.toFixed(1)}</span> Hz
+                </>
+              )}
+            </span>
+          ) : (
+            <span>Waiting for the bridge to report the carrier…</span>
+          )
         ) : rtty ? (
           <span className="tnum">
             mark <span className="text-fg">{rtty.markHz}</span> · space{" "}
@@ -152,6 +195,40 @@ export function StreamPanel({
           </span>
         ) : (
           <span>Waiting for the bridge to report the tones…</span>
+        )}
+        {canTune && isPsk && (
+          <span className="flex items-center gap-1">
+            <button
+              type="button"
+              className="px-2 py-0.5 border border-line rounded-sm hover:text-fg tnum"
+              onClick={() => psk && onPskTune(psk.centreHz - 10)}
+              disabled={!psk}
+              title="Move the carrier 10 Hz down"
+            >
+              −10
+            </button>
+            <button
+              type="button"
+              className="px-2 py-0.5 border border-line rounded-sm hover:text-fg tnum"
+              onClick={() => psk && onPskTune(psk.centreHz + 10)}
+              disabled={!psk}
+              title="Move the carrier 10 Hz up"
+            >
+              +10
+            </button>
+            <select
+              className="bg-bg-raised border border-line rounded-sm px-1 py-0.5 text-xs"
+              value={psk?.speed ?? 31}
+              onChange={(e) => onPskTune(undefined, Number(e.target.value) as 31 | 63 | 125)}
+              disabled={!psk}
+              aria-label="PSK speed"
+            >
+              <option value={31}>BPSK31</option>
+              <option value={63}>BPSK63</option>
+              <option value={125}>BPSK125</option>
+            </select>
+            <span className="text-fg-subtle">· click the waterfall to set the carrier</span>
+          </span>
         )}
         {canTune && isCw && (
           <span className="flex items-center gap-1">
@@ -175,7 +252,7 @@ export function StreamPanel({
             </button>
           </span>
         )}
-        {canTune && !isCw && (
+        {canTune && !isCw && !isPsk && (
           <span className="flex items-center gap-1">
             <button
               type="button"
@@ -217,20 +294,32 @@ export function StreamPanel({
       </div>
 
       <div className="grid grid-cols-[3rem_1fr_7rem] items-center gap-x-2 text-xs tnum">
-        <span className="text-fg-muted">{isCw ? "peak" : "mark"}</span>
+        <span className="text-fg-muted">{isCw ? "peak" : isPsk ? "quality" : "mark"}</span>
         <div className="h-1.5 bg-bg-raised rounded-sm overflow-hidden">
           <div className={cn("h-full", idle ? "bg-accent" : "bg-ok/70")} style={{ width: `${barA}%` }} />
         </div>
         <span className="text-fg-subtle text-right">{stats ? `${stats.chars} chars` : ""}</span>
-        <span className="text-fg-muted">{isCw ? "floor" : "space"}</span>
+        <span className="text-fg-muted">{isCw ? "floor" : isPsk ? "level" : "space"}</span>
         <div className="h-1.5 bg-bg-raised rounded-sm overflow-hidden">
           <div className="h-full bg-ok/70" style={{ width: `${barB}%` }} />
         </div>
         <span
           className="text-fg-subtle text-right"
-          title={isCw ? "Patterns that matched nothing in the table" : "Bad stop bits, and well-framed characters the squelch dropped"}
+          title={
+            isCw
+              ? "Patterns that matched nothing in the table"
+              : isPsk
+                ? "Varicodes no character has"
+                : "Bad stop bits, and well-framed characters the squelch dropped"
+          }
         >
-          {rttyStats ? `${rttyStats.framingErrors} bad · ${rttyStats.weak} weak` : cwStats ? `${cwStats.unknown} unread` : ""}
+          {rttyStats
+            ? `${rttyStats.framingErrors} bad · ${rttyStats.weak} weak`
+            : cwStats
+              ? `${cwStats.unknown} unread`
+              : pskStats
+                ? `${pskStats.errors} unread`
+                : ""}
         </span>
       </div>
 
@@ -252,7 +341,13 @@ export function StreamPanel({
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             maxLength={240}
-            placeholder={isCw ? "Type a line; Enter sends it through the radio's keyer" : "Type a line; Enter sends it (about 6 characters a second)"}
+            placeholder={
+              isCw
+                ? "Type a line; Enter sends it through the radio's keyer"
+                : isPsk
+                  ? "Type a line; Enter sends it (about 5 characters a second at BPSK31)"
+                  : "Type a line; Enter sends it (about 6 characters a second)"
+            }
             aria-label={`${mode} text to send`}
           />
           <button
@@ -293,11 +388,15 @@ export function StreamPanel({
           (quiet
             ? isCw
               ? "Nothing at the pitch yet. Tune the radio to a CW signal; the decoder listens where the radio's sidetone is."
-              : "No audio at the tones yet. Tune the radio to an RTTY signal and click it on the waterfall."
+              : isPsk
+                ? "No signal at the carrier yet. Tune the radio to a PSK31 signal and click it on the waterfall."
+                : "No audio at the tones yet. Tune the radio to an RTTY signal and click it on the waterfall."
             : idle
               ? isCw
                 ? "Key down: a carrier at the pitch."
-                : "Carrier on mark: a station is keyed and not yet typing, or the pair is on an unmodulated tone."
+                : isPsk
+                  ? "A PSK signal at the carrier: idle, or not yet typing."
+                  : "Carrier on mark: a station is keyed and not yet typing, or the pair is on an unmodulated tone."
               : "Listening…")}
       </pre>
     </div>
