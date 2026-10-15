@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.195.0 - public release
+## 1.196.0 - public release
 
 Development happens in a private repository; this is where the public history starts.
 Earlier entries are not reproduced - they quote real operators by callsign, include
@@ -22,6 +22,7 @@ Notes for anyone running this:
 
 ## Release history
 
+- **1.196.0** — JS8, part three: the message layer and the dictionary
 - **1.195.0** — JS8, part two: the demodulator
 - **1.194.0** — JS8, part one: frame, (174,87) code, symbols, waveform
 - **1.193.1** — CW pitch from the radio, and a whole first window after a retune
