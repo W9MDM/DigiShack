@@ -150,7 +150,7 @@ import { postWsprSpots, wsprSpotOf, type WsprSpotReport } from "@/lib/wsprnet/up
 import { RTTY_CENTRE_HZ, RTTY_SHIFT_HZ, rttyDurationMs, rttyTones } from "@/lib/digital/rtty";
 import { cwDurationMs } from "@/lib/digital/cw";
 import { PSK31_CENTRE_HZ, psk31DurationMs, type PskSpeed } from "@/lib/digital/psk31";
-import { OLIVIA_MODES, oliviaDurationMs, type OliviaBandwidth, type OliviaTones } from "@/lib/digital/olivia";
+import { OLIVIA_MODES, oliviaDurationMs, type OliviaBandwidth, type OliviaCode, type OliviaTones } from "@/lib/digital/olivia";
 import { isStreamMode, type Js8DecodeExtra } from "@/lib/radio/decode-pipeline";
 import {
   Js8MessageAssembler,
@@ -206,8 +206,8 @@ interface RigStatus {
   cw: { pitchHz: number; wpm: number; pitchFromRadio: boolean } | null;
   /** The PSK31 carrier and speed, while on PSK31. */
   psk: { centreHz: number; speed: PskSpeed } | null;
-  /** The Olivia centre and size, while on Olivia. */
-  olivia: { centreHz: number; tones: OliviaTones; bandwidth: OliviaBandwidth } | null;
+  /** The Olivia centre, size and code, while on Olivia. */
+  olivia: { centreHz: number; tones: OliviaTones; bandwidth: OliviaBandwidth; code: OliviaCode } | null;
   /** A JS8 message going out, or the last one, with the offset it uses. See lib/radio/js8-sender.ts. */
   js8: (Js8SenderState & { offsetHz: number }) | null;
   dxCall: string | null;
@@ -1146,11 +1146,12 @@ const pskTuning: { centreHz: number; speed: PskSpeed; squelch: number } = { cent
 /** Set by the live source: hands the tuning to the demodulator. */
 let pskApply: (() => void) | null = null;
 
-/** Olivia: the centre of the tone set, the size, and the synchroniser's threshold. */
-const oliviaTuning: { centreHz: number; tones: OliviaTones; bandwidth: OliviaBandwidth; threshold: number } = {
+/** Olivia: the centre of the tone set, the size, the code (Olivia or Contestia), and the synchroniser's threshold. */
+const oliviaTuning: { centreHz: number; tones: OliviaTones; bandwidth: OliviaBandwidth; code: OliviaCode; threshold: number } = {
   centreHz: 1500,
   tones: 16,
   bandwidth: 500,
+  code: "olivia",
   threshold: 4,
 };
 let oliviaApply: (() => void) | null = null;
@@ -1806,6 +1807,7 @@ async function startFlexSource(): Promise<() => Promise<void>> {
     oliviaTuning.bandwidth = size.bandwidth;
   }
   oliviaTuning.threshold = await getNumberSetting("olivia.threshold", 4);
+  oliviaTuning.code = ((await getSetting("olivia.code")) ?? "olivia").toLowerCase() === "contestia" ? "contestia" : "olivia";
   rttyApply = () => {
     const sideband: "USB" | "LSB" = /LSB|DIGL/i.test(status.mode ?? "") ? "LSB" : "USB";
     const tones = rttyTones(rttyTuning.centreHz, rttyTuning.shiftHz, sideband);
@@ -1830,9 +1832,15 @@ async function startFlexSource(): Promise<() => Promise<void>> {
       centreHz: oliviaTuning.centreHz,
       tones: oliviaTuning.tones,
       bandwidth: oliviaTuning.bandwidth,
+      code: oliviaTuning.code,
       syncThreshold: oliviaTuning.threshold,
     });
-    status.olivia = { centreHz: oliviaTuning.centreHz, tones: oliviaTuning.tones, bandwidth: oliviaTuning.bandwidth };
+    status.olivia = {
+      centreHz: oliviaTuning.centreHz,
+      tones: oliviaTuning.tones,
+      bandwidth: oliviaTuning.bandwidth,
+      code: oliviaTuning.code,
+    };
   };
 
   source.on("window", (w) => {
@@ -4286,6 +4294,7 @@ async function main(): Promise<void> {
                 sideband: "USB" as const,
                 tones: oliviaTuning.tones,
                 bandwidth: oliviaTuning.bandwidth,
+                code: oliviaTuning.code,
               }
             : streamMode === "PSK31"
             ? { mode: "PSK31" as const, text, centreHz: pskTuning.centreHz, shiftHz: 0, sideband: "USB" as const, speed: pskTuning.speed }
@@ -4317,19 +4326,24 @@ async function main(): Promise<void> {
             : streamMode === "PSK31"
               ? psk31DurationMs(text, { speed: pskTuning.speed })
               : streamMode === "OLIVIA"
-                ? oliviaDurationMs(text, { tones: oliviaTuning.tones, bandwidth: oliviaTuning.bandwidth })
+                ? oliviaDurationMs(text, { tones: oliviaTuning.tones, bandwidth: oliviaTuning.bandwidth, code: oliviaTuning.code })
                 : rttyDurationMs(text);
         sendJson(res, 202, { ok: true, mode: streamMode, chars: text.length, durationMs: Math.round(durationMs) });
         return;
       }
 
-      // POST /olivia — move the Olivia centre (Hz audio) or change the size. Takes effect at
-      // once; the starting values live in Settings (olivia.*).
+      // POST /olivia — move the Olivia centre (Hz audio), change the size, or switch between
+      // Olivia and Contestia. Takes effect at once; the starting values live in Settings (olivia.*).
       if (url.pathname === "/olivia") {
         const body = await readJson(req);
         const centre = body.centreHz === undefined ? oliviaTuning.centreHz : Number(body.centreHz);
         const tones = body.tones === undefined ? oliviaTuning.tones : Number(body.tones);
         const bandwidth = body.bandwidth === undefined ? oliviaTuning.bandwidth : Number(body.bandwidth);
+        const code = body.code === undefined ? oliviaTuning.code : String(body.code).toLowerCase();
+        if (code !== "olivia" && code !== "contestia") {
+          sendJson(res, 400, { error: "code must be olivia or contestia" });
+          return;
+        }
         if (!Number.isFinite(centre) || centre < 300 || centre > 2800) {
           sendJson(res, 400, { error: "centreHz must be between 300 and 2800" });
           return;
@@ -4342,6 +4356,7 @@ async function main(): Promise<void> {
         oliviaTuning.centreHz = Math.round(centre);
         oliviaTuning.tones = size.tones;
         oliviaTuning.bandwidth = size.bandwidth;
+        oliviaTuning.code = code;
         oliviaApply?.();
         broadcast({ kind: "status", status });
         sendJson(res, 200, { ok: true, olivia: status.olivia });

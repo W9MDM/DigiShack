@@ -1122,6 +1122,14 @@ export const SETTINGS: SettingDef[] = [
     default: "500",
   },
   {
+    key: "olivia.code",
+    label: "Olivia or Contestia",
+    type: "string",
+    group: "olivia",
+    help: "olivia | contestia. Contestia is the same engine with a 6-bit upper-case alphabet and blocks half the length, so it is faster and a little less robust; the panel's picker changes it for the session.",
+    default: "olivia",
+  },
+  {
     key: "olivia.threshold",
     label: "Olivia sync threshold",
     type: "number",

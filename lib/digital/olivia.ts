@@ -27,6 +27,26 @@
 import { fftMixed } from "@/lib/dsp/fft-mixed";
 
 export const OLIVIA_SCRAMBLING_CODE = 0xe257e6d0291574ecn;
+/** Contestia: the same engine with 6-bit characters, 32-symbol blocks and its own scrambler. */
+export const CONTESTIA_SCRAMBLING_CODE = 0xedb88320n;
+
+export type OliviaCode = "olivia" | "contestia";
+
+export interface OliviaCodeParams {
+  code: OliviaCode;
+  bitsPerCharacter: number;
+  /** 2^(bits per character - 1): the Walsh functions a character maps onto, and the block length in symbols. */
+  symbolsPerBlock: number;
+  scramble: bigint;
+  /** The scramble offset step per character within a block: 13 for Olivia, 5 for Contestia. */
+  shift: number;
+}
+
+export function oliviaCode(code: OliviaCode = "olivia"): OliviaCodeParams {
+  return code === "contestia"
+    ? { code, bitsPerCharacter: 6, symbolsPerBlock: 32, scramble: CONTESTIA_SCRAMBLING_CODE, shift: 5 }
+    : { code, bitsPerCharacter: 7, symbolsPerBlock: 64, scramble: OLIVIA_SCRAMBLING_CODE, shift: 13 };
+}
 /** The reference's internal rate; symbol lengths below are quoted at it. */
 export const OLIVIA_REF_RATE = 8000;
 export const OLIVIA_BITS_PER_CHARACTER = 7;
@@ -34,8 +54,6 @@ export const OLIVIA_BITS_PER_CHARACTER = 7;
 export const OLIVIA_SYMBOLS_PER_BLOCK = 64;
 /** Tones are two FFT bins apart, at the reference's 15.625 Hz bin. */
 const CARRIER_SEPAR = 2;
-/** The scramble offset step per character within a block: 13 for Olivia. */
-const SCRAMBLE_SHIFT = 13;
 
 export type OliviaTones = 2 | 4 | 8 | 16 | 32 | 64 | 128 | 256;
 export type OliviaBandwidth = 125 | 250 | 500 | 1000 | 2000;
@@ -43,6 +61,8 @@ export type OliviaBandwidth = 125 | 250 | 500 | 1000 | 2000;
 export interface OliviaMode {
   tones: OliviaTones;
   bandwidth: OliviaBandwidth;
+  /** Olivia unless said otherwise. */
+  code?: OliviaCode;
 }
 
 /** The common sizes: what the mode picker offers. */
@@ -81,6 +101,7 @@ export interface OliviaParams extends OliviaMode {
 
 export function oliviaParams(mode: OliviaMode): OliviaParams {
   const bitsPerSymbol = log2(mode.tones);
+  const cp = oliviaCode(mode.code);
   const refSymbolLen = 1 << (bitsPerSymbol + 7 - log2(mode.bandwidth / 125));
   const refSymbolSepar = refSymbolLen / 2;
   const baud = OLIVIA_REF_RATE / refSymbolSepar;
@@ -93,8 +114,8 @@ export function oliviaParams(mode: OliviaMode): OliviaParams {
     baud,
     toneSpacingHz: binHz * CARRIER_SEPAR,
     binHz,
-    charactersPerSecond: (bitsPerSymbol * baud) / OLIVIA_SYMBOLS_PER_BLOCK,
-    blockSeconds: OLIVIA_SYMBOLS_PER_BLOCK / baud,
+    charactersPerSecond: (bitsPerSymbol * baud) / cp.symbolsPerBlock,
+    blockSeconds: cp.symbolsPerBlock / baud,
   };
 }
 
@@ -147,30 +168,57 @@ export function ifht(data: Float64Array | Int8Array, len: number): void {
   }
 }
 
-/** Whether bit `codeBit` of the 64-bit scrambling code is set. */
-function scrambleBit(codeBit: number): boolean {
-  return ((OLIVIA_SCRAMBLING_CODE >> BigInt(codeBit & 63)) & 1n) === 1n;
+/** Whether bit `codeBit` of a scrambling code is set. */
+function scrambleBit(scramble: bigint, codeBit: number): boolean {
+  return ((scramble >> BigInt(codeBit & 63)) & 1n) === 1n;
+}
+
+/**
+ * Contestia's 6-bit alphabet, as the reference maps ASCII into it: upper case only, space
+ * is 59, carriage return 60 (a newline goes the same way), backspace 61, anything else a
+ * question mark. 0 is idle.
+ */
+export function contestiaCharFor(ascii: number): number {
+  let c = ascii;
+  if (c >= 97 && c <= 122) c -= 32;
+  if (c === 32) return 59;
+  if (c === 13 || c === 10) return 60;
+  if (c === 8) return 61;
+  if (c === 0) return 0;
+  if (c >= 33 && c <= 90) return c - 32;
+  return 63 - 32;
+}
+
+/** The ASCII a Contestia character prints as: 60 is a newline here, since that is how a line ends. */
+export function contestiaAsciiFor(c: number): number {
+  if (c === 0) return 0;
+  if (c === 59) return 32;
+  if (c === 60) return 10;
+  if (c === 61) return 8;
+  return c + 32;
 }
 
 /**
  * One FEC block: `bitsPerSymbol` characters (7-bit; the rest of a byte is dropped) to 64
  * symbols, each a tone index of `bitsPerSymbol` bits. EncodeBlock of the reference.
  */
-export function oliviaEncodeBlock(chars: readonly number[], bitsPerSymbol: number): Uint8Array {
-  const n = OLIVIA_SYMBOLS_PER_BLOCK;
+export function oliviaEncodeBlock(chars: readonly number[], bitsPerSymbol: number, code: OliviaCode = "olivia"): Uint8Array {
+  const cp = oliviaCode(code);
+  const n = cp.symbolsPerBlock;
   const out = new Uint8Array(n);
   const buf = new Int8Array(n);
   const mask = (n << 1) - 1;
   for (let freqBit = 0; freqBit < bitsPerSymbol; freqBit++) {
-    const ch = (chars[freqBit] ?? 0) & mask;
+    const raw = chars[freqBit] ?? 0;
+    const ch = (code === "contestia" ? contestiaCharFor(raw) : raw) & mask;
     buf.fill(0);
     if (ch < n) buf[ch] = 1;
     else buf[ch - n] = -1;
     ifht(buf, n);
     // Scramble at this character's offset in the code.
-    let codeBit = (freqBit * SCRAMBLE_SHIFT) & (n - 1);
+    let codeBit = (freqBit * cp.shift) & (n - 1);
     for (let t = 0; t < n; t++) {
-      if (scrambleBit(codeBit)) buf[t] = -buf[t]!;
+      if (scrambleBit(cp.scramble, codeBit)) buf[t] = -buf[t]!;
       codeBit = (codeBit + 1) & (n - 1);
     }
     // Spread: symbol t carries this character's bit t in tone bit (freqBit + t) mod bits.
@@ -197,19 +245,21 @@ export function oliviaEncodeBlock(chars: readonly number[], bitsPerSymbol: numbe
 export function oliviaDecodeBlock(
   soft: ArrayLike<number>,
   bitsPerSymbol: number,
+  code: OliviaCode = "olivia",
 ): { chars: number[]; signal: number; noiseEnergy: number } {
-  const n = OLIVIA_SYMBOLS_PER_BLOCK;
+  const cp = oliviaCode(code);
+  const n = cp.symbolsPerBlock;
   const buf = new Float64Array(n);
   const chars: number[] = [];
   let signal = 0;
   let noise = 0;
   for (let freqBit = 0; freqBit < bitsPerSymbol; freqBit++) {
     let rotate = freqBit;
-    let codeBit = (freqBit * SCRAMBLE_SHIFT) & (n - 1);
+    let codeBit = (freqBit * cp.shift) & (n - 1);
     let ptr = 0;
     for (let t = 0; t < n; t++) {
       let bit = soft[ptr + rotate] ?? 0;
-      if (scrambleBit(codeBit)) bit = -bit;
+      if (scrambleBit(cp.scramble, codeBit)) bit = -bit;
       buf[t] = bit;
       codeBit = (codeBit + 1) & (n - 1);
       rotate++;
@@ -231,7 +281,7 @@ export function oliviaDecodeBlock(
     let ch = peakPos;
     if (peak < 0) ch += n;
     sqr -= peak * peak;
-    chars.push(ch);
+    chars.push(code === "contestia" ? contestiaAsciiFor(ch) : ch);
     noise += sqr / (n - 1);
     signal += Math.abs(peak);
   }
@@ -252,12 +302,17 @@ export function oliviaCharsToText(chars: readonly number[]): string {
   return s;
 }
 
-/** A line of text as the characters the FEC takes: 7-bit, newline as CR LF, others dropped. */
-export function oliviaTextToChars(text: string): number[] {
+/**
+ * A line of text as the characters the FEC takes: 7-bit ASCII, newline as CR LF, others
+ * dropped. For Contestia the encoder maps each one into the 6-bit alphabet, and a newline
+ * is one character there.
+ */
+export function oliviaTextToChars(text: string, code: OliviaCode = "olivia"): number[] {
   const out: number[] = [];
   for (const ch of text) {
     if (ch === "\n") {
-      out.push(13, 10);
+      if (code === "contestia") out.push(13);
+      else out.push(13, 10);
       continue;
     }
     if (ch === "\r") continue;
@@ -284,13 +339,14 @@ export interface OliviaWaveformOptions extends OliviaMode {
  */
 export function oliviaSymbols(text: string, opts: Partial<OliviaWaveformOptions> & OliviaMode): Uint8Array {
   const p = oliviaParams(opts);
-  const chars = oliviaTextToChars(text);
+  const cp = oliviaCode(opts.code);
+  const chars = oliviaTextToChars(text, opts.code);
   const blocks: number[][] = [];
   for (let i = 0; i < (opts.preambleBlocks ?? 1); i++) blocks.push([]);
   for (let i = 0; i < chars.length; i += p.bitsPerSymbol) blocks.push(chars.slice(i, i + p.bitsPerSymbol));
   for (let i = 0; i < (opts.tailBlocks ?? 1); i++) blocks.push([]);
-  const out = new Uint8Array(blocks.length * OLIVIA_SYMBOLS_PER_BLOCK);
-  blocks.forEach((b, i) => out.set(oliviaEncodeBlock(b, p.bitsPerSymbol), i * OLIVIA_SYMBOLS_PER_BLOCK));
+  const out = new Uint8Array(blocks.length * cp.symbolsPerBlock);
+  blocks.forEach((b, i) => out.set(oliviaEncodeBlock(b, p.bitsPerSymbol, opts.code), i * cp.symbolsPerBlock));
   return out;
 }
 

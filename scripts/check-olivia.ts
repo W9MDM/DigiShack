@@ -6,9 +6,12 @@
 import {
   OLIVIA_SYMBOLS_PER_BLOCK,
   binaryCode,
+  contestiaAsciiFor,
+  contestiaCharFor,
   fht,
   grayCode,
   ifht,
+  oliviaCode,
   oliviaDecodeBlock,
   oliviaDurationMs,
   oliviaEncodeBlock,
@@ -132,6 +135,33 @@ async function main(): Promise<void> {
     for (let t = 0; t < 64; t++) for (let b = 0; b < 4; b++) soft4[t * 4 + b] = four[t]! & (1 << b) ? -1 : 1;
     eq(oliviaDecodeBlock(soft4, 4).chars.join(","), "72,73,0,0", "a 16-tone block carries four characters, padded with idle");
     eq(oliviaTextToChars("a\nb").join(","), "97,13,10,98", "newline goes as CR LF");
+  }
+
+  console.log("\nContestia: the same engine, 6-bit characters, 32-symbol blocks");
+  {
+    const cp = oliviaCode("contestia");
+    eq(cp.symbolsPerBlock, 32, "a Contestia block is 32 symbols");
+    eq(cp.shift, 5, "with the scramble stepping five bits a character");
+    eq(contestiaCharFor(97), 33, "lower-case a becomes A, 33 in the alphabet");
+    eq(contestiaCharFor(32), 59, "space is 59");
+    eq(contestiaCharFor(10), 60, "a newline is 60");
+    eq(contestiaCharFor(126), 31, "a character outside the alphabet is a question mark");
+    eq(contestiaAsciiFor(59), 32, "and 59 prints as a space");
+    eq(contestiaAsciiFor(60), 10, "60 as a newline");
+    const chars = oliviaTextToChars("cq de w1aw", "contestia");
+    const block = oliviaEncodeBlock(chars.slice(0, 5), 5, "contestia");
+    eq(block.length, 32, "the block encodes to 32 symbols");
+    const soft = new Float64Array(32 * 5);
+    for (let t = 0; t < 32; t++) for (let b = 0; b < 5; b++) soft[t * 5 + b] = block[t]! & (1 << b) ? -1 : 1;
+    const r = oliviaDecodeBlock(soft, 5, "contestia");
+    eq(String.fromCharCode(...r.chars), "CQ DE", "and decodes back as upper case ASCII");
+    eq(oliviaParams({ tones: 16, bandwidth: 500, code: "contestia" }).blockSeconds, 1.024, "500/16 Contestia is a 1.024 s block");
+    const fs = 12_000;
+    const mode = { tones: 16, bandwidth: 500, code: "contestia" } as const;
+    const wave = oliviaWaveform(oliviaSymbols("cq cq de w1aw k", { ...mode, preambleBlocks: 3 }), { ...mode, sampleRate: fs, centreHz: 1500 });
+    const demod = new OliviaDemodulator({ ...mode, sampleRate: fs, centreHz: 1500 });
+    const text = decodeAll(demod, wave) + flush(demod, fs, 8 * oliviaParams(mode).blockSeconds);
+    ok(text.includes("CQ CQ DE W1AW K"), "a Contestia 500/16 line reads back through the demodulator, upper-cased", JSON.stringify(text));
   }
 
   console.log("\nthe waveform");

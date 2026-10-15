@@ -34,11 +34,12 @@ import { fftMixed } from "@/lib/dsp/fft-mixed";
 import {
   binaryCode,
   OLIVIA_REF_RATE,
-  OLIVIA_SYMBOLS_PER_BLOCK,
   oliviaCharsToText,
+  oliviaCode,
   oliviaDecodeBlock,
   oliviaFirstCarrierBin,
   oliviaParams,
+  type OliviaCode,
   type OliviaMode,
 } from "@/lib/digital/olivia";
 
@@ -107,6 +108,8 @@ export class OliviaDemodulator {
   private readonly integLen: number;
   private readonly threshold: number;
   private readonly binHz: number;
+  private readonly code: OliviaCode;
+  private readonly symbolsPerBlock: number;
   private centreHz: number;
 
   // Input: the last symbol of audio, and the chunk being filled.
@@ -151,12 +154,14 @@ export class OliviaDemodulator {
     this.bits = p.bitsPerSymbol;
     this.tones = p.tones;
     this.binHz = p.binHz;
+    this.code = opts.code ?? "olivia";
+    this.symbolsPerBlock = oliviaCode(this.code).symbolsPerBlock;
     this.centreHz = opts.centreHz;
     this.firstCarrier = oliviaFirstCarrierBin(p, opts.centreHz);
     this.margin = Math.max(2, Math.min(opts.syncMargin ?? 8, this.firstCarrier));
     this.decodeWidth = this.tones * 2 - 1 + 2 * this.margin;
     this.freqOffsets = 2 * this.margin + 1;
-    this.blockPhases = SLICES * OLIVIA_SYMBOLS_PER_BLOCK;
+    this.blockPhases = SLICES * this.symbolsPerBlock;
     this.integLen = Math.max(2, opts.syncIntegLen ?? 4);
     this.threshold = Math.max(1, opts.syncThreshold ?? 4);
     this.onSlice = opts.onSlice;
@@ -172,7 +177,7 @@ export class OliviaDemodulator {
     this.energy = [new Float64Array(this.decodeWidth), new Float64Array(this.decodeWidth)];
 
     const nDec = SLICES * this.freqOffsets;
-    this.softRings = Array.from({ length: nDec }, () => new Float64Array(OLIVIA_SYMBOLS_PER_BLOCK * this.bits));
+    this.softRings = Array.from({ length: nDec }, () => new Float64Array(this.symbolsPerBlock * this.bits));
     this.softPtr = new Int32Array(nDec);
     this.syncSignal = Array.from({ length: this.blockPhases }, () => Array.from({ length: this.freqOffsets }, () => new LowPass3()));
     this.syncNoise = Array.from({ length: this.blockPhases }, () => Array.from({ length: this.freqOffsets }, () => new LowPass3()));
@@ -191,7 +196,7 @@ export class OliviaDemodulator {
   /** Move the tone set while running. The sync starts over. */
   retune(centreHz: number): void {
     this.centreHz = centreHz;
-    this.firstCarrier = oliviaFirstCarrierBin(oliviaParams({ tones: this.tones as OliviaMode["tones"], bandwidth: this.bandwidthOf() }), centreHz);
+    this.firstCarrier = oliviaFirstCarrierBin(oliviaParams({ tones: this.tones as OliviaMode["tones"], bandwidth: this.bandwidthOf(), code: this.code }), centreHz);
     this.reset();
   }
 
@@ -285,7 +290,7 @@ export class OliviaDemodulator {
         this.softPtr[d] = ptr;
         // The block is the last 64 symbols: read from the oldest, which is where ptr points.
         const view = ptr === 0 ? ring : this.rotated(ring, ptr);
-        const r = oliviaDecodeBlock(view, this.bits);
+        const r = oliviaDecodeBlock(view, this.bits, this.code);
         this.onDecode?.(phase, off, r.chars, r.signal, r.noiseEnergy, view);
         row[off] = { chars: r.chars, signal: r.signal, noise: r.noiseEnergy };
         this.syncNoise[phase]![off]!.process(r.noiseEnergy, weight);

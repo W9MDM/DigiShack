@@ -59,8 +59,8 @@ interface RigStatus {
   cw?: { pitchHz: number; wpm: number; pitchFromRadio: boolean } | null;
   /** The PSK31 carrier and speed while on PSK31. */
   psk?: { centreHz: number; speed: 31 | 63 | 125 } | null;
-  /** The Olivia centre and size while on Olivia. */
-  olivia?: { centreHz: number; tones: number; bandwidth: number } | null;
+  /** The Olivia centre, size and code while on Olivia. */
+  olivia?: { centreHz: number; tones: number; bandwidth: number; code?: "olivia" | "contestia" } | null;
   /** A JS8 message going out, or the last one. */
   js8?: Js8SendState | null;
   connected: boolean;
@@ -1156,7 +1156,11 @@ export default function DigitalPage({ wsUrl }: Props) {
     if (status?.subMode === "OLIVIA" && status.olivia) {
       const half = status.olivia.bandwidth / 2;
       return [
-        { hz: status.olivia.centreHz, label: `Olivia ${status.olivia.bandwidth}/${status.olivia.tones}`, emphasis: true },
+        {
+          hz: status.olivia.centreHz,
+          label: `${status.olivia.code === "contestia" ? "Contestia" : "Olivia"} ${status.olivia.bandwidth}/${status.olivia.tones}`,
+          emphasis: true,
+        },
         { hz: status.olivia.centreHz - half, label: "edge", emphasis: false },
         { hz: status.olivia.centreHz + half, label: "edge", emphasis: false },
       ];
@@ -1316,10 +1320,10 @@ export default function DigitalPage({ wsUrl }: Props) {
       setRttyError(err instanceof ApiError ? err.message : "Could not move the PSK31 carrier");
     }
   }, []);
-  /** Move the Olivia tone set (a click on the waterfall or the ± buttons) or change the size. */
-  const tuneOlivia = useCallback(async (centreHz?: number, size?: { tones: number; bandwidth: number }) => {
+  /** Move the Olivia tone set (a click on the waterfall or the ± buttons), change the size, or switch to Contestia. */
+  const tuneOlivia = useCallback(async (centreHz?: number, size?: { tones: number; bandwidth: number }, code?: "olivia" | "contestia") => {
     try {
-      await apiPost("/api/bridge/control", { action: "olivia", centreHz, tones: size?.tones, bandwidth: size?.bandwidth });
+      await apiPost("/api/bridge/control", { action: "olivia", centreHz, tones: size?.tones, bandwidth: size?.bandwidth, code });
       setRttyError(null);
     } catch (err) {
       setRttyError(err instanceof ApiError ? err.message : "Could not move the Olivia tones");
@@ -2308,7 +2312,7 @@ export default function DigitalPage({ wsUrl }: Props) {
                   onTune={(centreHz, shiftHz) => void tuneRtty(centreHz, shiftHz)}
                   onCwWpm={(wpm) => void setCwWpm(wpm)}
                   onPskTune={(centreHz, speed) => void tunePsk(centreHz, speed)}
-                  onOliviaTune={(centreHz, size) => void tuneOlivia(centreHz, size)}
+                  onOliviaTune={(centreHz, size, code) => void tuneOlivia(centreHz, size, code)}
                   onSend={(text) => void sendRtty(text)}
                   onClear={() => setStreamText("")}
                 />

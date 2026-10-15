@@ -27,7 +27,7 @@ import { RttyDemodulator } from "@/lib/digital/rttydemod";
 import { CwDemodulator } from "@/lib/digital/cwdemod";
 import { Psk31Demodulator } from "@/lib/digital/psk31demod";
 import { OliviaDemodulator } from "@/lib/digital/oliviademod";
-import type { OliviaBandwidth, OliviaTones } from "@/lib/digital/olivia";
+import type { OliviaBandwidth, OliviaCode, OliviaTones } from "@/lib/digital/olivia";
 import { HashCallBook as Ft2HashCallBook } from "@/lib/digital/pack77";
 import { PERIOD_MS, TRANSMISSION_MS } from "@/lib/radio/timing";
 import type { TxMode } from "@/lib/radio/waveform";
@@ -301,6 +301,8 @@ export type StreamOptions =
       centreHz: number;
       tones: OliviaTones;
       bandwidth: OliviaBandwidth;
+      /** Olivia, or Contestia on the same engine. Default Olivia. */
+      code?: OliviaCode;
       /** Signal over noise below which a block is not printed; see OliviaDemodOptions. */
       syncThreshold?: number;
     };
@@ -581,7 +583,7 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
   }
   private streamMode: StreamMode | null = null;
   private pskSpeed: 31 | 63 | 125 = 31;
-  private oliviaSize: { tones: OliviaTones; bandwidth: OliviaBandwidth } = { tones: 16, bandwidth: 500 };
+  private oliviaSize: { tones: OliviaTones; bandwidth: OliviaBandwidth; code: OliviaCode } = { tones: 16, bandwidth: 500, code: "olivia" };
   private streamSamples = 0;
   private streamNextBeat = 0;
   /**
@@ -762,7 +764,13 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
       this.psk.retune(opts.centreHz);
       return;
     }
-    if (opts.mode === "OLIVIA" && this.olivia && opts.tones === this.oliviaSize.tones && opts.bandwidth === this.oliviaSize.bandwidth) {
+    if (
+      opts.mode === "OLIVIA" &&
+      this.olivia &&
+      opts.tones === this.oliviaSize.tones &&
+      opts.bandwidth === this.oliviaSize.bandwidth &&
+      (opts.code ?? "olivia") === this.oliviaSize.code
+    ) {
       this.olivia.retune(opts.centreHz);
       return;
     }
@@ -787,13 +795,15 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
         thresholdDb: opts.thresholdDb,
       });
     } else if (opts.mode === "OLIVIA") {
-      // A size change is a new demodulator: the symbol, the tones and the sync are per size.
-      this.oliviaSize = { tones: opts.tones, bandwidth: opts.bandwidth };
+      // A size or code change is a new demodulator: the symbol, the tones, the block and
+      // the sync are per size and per code.
+      this.oliviaSize = { tones: opts.tones, bandwidth: opts.bandwidth, code: opts.code ?? "olivia" };
       this.olivia = new OliviaDemodulator({
         sampleRate: this.inputRate,
         centreHz: opts.centreHz,
         tones: opts.tones,
         bandwidth: opts.bandwidth,
+        code: opts.code,
         syncThreshold: opts.syncThreshold,
       });
     } else {

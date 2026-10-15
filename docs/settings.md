@@ -27,7 +27,7 @@ be read: `DATABASE_URL`, `SETTINGS_KEY` and `PORT`.
 - [DXCC reference data](#dxcc-reference-data) — 2 settings
 - [PSKReporter](#pskreporter) — 4 settings
 - [RTTY](#rtty) — 5 settings
-- [Olivia](#olivia) — 4 settings
+- [Olivia](#olivia) — 5 settings
 - [PSK31](#psk31) — 3 settings
 - [CW](#cw) — 3 settings
 - [WSPR](#wspr) — 1 setting
@@ -194,6 +194,7 @@ Where the Olivia tone set starts in the audio passband, which size, and how sure
 | Olivia centre (Hz audio) | `olivia.centreHz` | number | `1500` | The centre of the tone set when the Olivia chip is pressed, Hz above the dial. 1500 is the convention: the published 20 m centre of 14.0725 is a 14.071 dial. A click on the waterfall moves it for the session. |
 | Olivia tones | `olivia.tones` | number | `16` | With the bandwidth, the size: 500/16 and 1000/32 are what the air mostly runs. Tones and bandwidth together must be one of 250/8, 500/8, 500/16, 1000/32, 1000/16, 2000/64; the panel's picker changes it for the session. |
 | Olivia bandwidth (Hz) | `olivia.bandwidth` | number | `500` | The tone set's width in Hz; with olivia.tones it names the size, and the pair must be one of those listed under olivia.tones. |
+| Olivia or Contestia | `olivia.code` | text | `olivia` | olivia \| contestia. Contestia is the same engine with a 6-bit upper-case alphabet and blocks half the length, so it is faster and a little less robust; the panel's picker changes it for the session. |
 | Olivia sync threshold | `olivia.threshold` | number | `4` | The synchroniser's signal over noise below which a block is not printed. Noise alone reads about 3; a readable signal 6 and up. Lower prints weaker blocks and more junk. |
 
 ## PSK31

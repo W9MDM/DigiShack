@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.200.2 - public release
+## 1.201.0 - public release
 
 Development happens in a private repository; this is where the public history starts.
 Earlier entries are not reproduced - they quote real operators by callsign, include
@@ -22,6 +22,7 @@ Notes for anyone running this:
 
 ## Release history
 
+- **1.201.0** — Olivia, part three: Contestia
 - **1.200.2** — Olivia on the station
 - **1.200.1** — Olivia, part two: the mode
 - **1.200.0** — Olivia, part one: the code, the waveform and a demodulator

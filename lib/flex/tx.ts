@@ -13,7 +13,14 @@ import { buildJs8Waveform, buildWaveform, samplesPerSymbol } from "@/lib/radio/w
 import type { Js8OutFrame } from "@/lib/digital/js8-message";
 import { rttyDurationMs, rttyWaveform } from "@/lib/digital/rtty";
 import { psk31DurationMs, psk31Waveform } from "@/lib/digital/psk31";
-import { oliviaDurationMs, oliviaSymbols, oliviaWaveform, type OliviaBandwidth, type OliviaTones } from "@/lib/digital/olivia";
+import {
+  oliviaDurationMs,
+  oliviaSymbols,
+  oliviaWaveform,
+  type OliviaBandwidth,
+  type OliviaCode,
+  type OliviaTones,
+} from "@/lib/digital/olivia";
 import { cwDurationMs } from "@/lib/digital/cw";
 
 // Native FT8/FT4 transmit over FlexRadio DAX TX. No external decoder, no WSJT-X.
@@ -202,6 +209,8 @@ export interface TextTransmitRequest {
   /** Olivia: the size. Default 500/16. */
   tones?: OliviaTones;
   bandwidth?: OliviaBandwidth;
+  /** Olivia, or Contestia on the same engine. */
+  code?: OliviaCode;
 }
 
 export interface TransmitResult {
@@ -1075,11 +1084,11 @@ export class FlexDaxTransmitter {
     const text = req.text.trim();
     if (!text) throw new Error("Nothing to send");
     if (req.mode === "OLIVIA") {
-      const size = { tones: req.tones ?? 16, bandwidth: req.bandwidth ?? 500 } as const;
+      const size = { tones: req.tones ?? 16, bandwidth: req.bandwidth ?? 500, code: req.code ?? "olivia" } as const;
       const olMs = oliviaDurationMs(text, size);
       if (olMs > FlexDaxTransmitter.MAX_TEXT_MS) {
         throw new Error(
-          `${text.length} characters is ${(olMs / 1000).toFixed(0)} s of Olivia ${size.bandwidth}/${size.tones}, over the ${FlexDaxTransmitter.MAX_TEXT_MS / 1000} s cap - send it in pieces`,
+          `${text.length} characters is ${(olMs / 1000).toFixed(0)} s of ${size.code === "contestia" ? "Contestia" : "Olivia"} ${size.bandwidth}/${size.tones}, over the ${FlexDaxTransmitter.MAX_TEXT_MS / 1000} s cap - send it in pieces`,
         );
       }
       return oliviaWaveform(oliviaSymbols(text, size), { ...size, sampleRate: DAX_RATE, centreHz: req.centreHz });

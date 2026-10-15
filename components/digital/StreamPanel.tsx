@@ -75,6 +75,8 @@ export interface OliviaTuning {
   centreHz: number;
   tones: number;
   bandwidth: number;
+  /** Olivia, or Contestia on the same engine. */
+  code?: "olivia" | "contestia";
 }
 
 /** The sizes the picker offers, as the bridge accepts them. */
@@ -104,7 +106,7 @@ interface Props {
   onTune: (centreHz?: number, shiftHz?: number) => void;
   onCwWpm: (wpm: number) => void;
   onPskTune: (centreHz?: number, speed?: 31 | 63 | 125) => void;
-  onOliviaTune: (centreHz?: number, size?: { tones: number; bandwidth: number }) => void;
+  onOliviaTune: (centreHz?: number, size?: { tones: number; bandwidth: number }, code?: "olivia" | "contestia") => void;
   onSend: (text: string) => void;
   onClear: () => void;
 }
@@ -216,7 +218,7 @@ export function StreamPanel({
         ) : isOlivia ? (
           olivia ? (
             <span className="tnum">
-              centre <span className="text-fg">{olivia.centreHz}</span> Hz · Olivia {olivia.bandwidth}/{olivia.tones}
+              centre <span className="text-fg">{olivia.centreHz}</span> Hz · {olivia.code === "contestia" ? "Contestia" : "Olivia"} {olivia.bandwidth}/{olivia.tones}
               {oliviaStats && oliviaStats.snr > 0 && (
                 <>
                   {" "}
@@ -290,6 +292,16 @@ export function StreamPanel({
                   {s.bandwidth}/{s.tones}
                 </option>
               ))}
+            </select>
+            <select
+              className="bg-bg-raised border border-line rounded-sm px-1 py-0.5 text-xs"
+              value={olivia?.code ?? "olivia"}
+              onChange={(e) => onOliviaTune(undefined, undefined, e.target.value === "contestia" ? "contestia" : "olivia")}
+              disabled={!olivia}
+              aria-label="Olivia or Contestia"
+            >
+              <option value="olivia">Olivia</option>
+              <option value="contestia">Contestia</option>
             </select>
             <span className="text-fg-subtle">· click the waterfall to set the centre</span>
           </span>

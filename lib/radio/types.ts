@@ -177,9 +177,10 @@ export interface DigitalTransmitter {
     wpm?: number;
     /** PSK: 31.25, 62.5 or 125 baud. */
     speed?: 31 | 63 | 125;
-    /** Olivia: the size. */
+    /** Olivia: the size, and Contestia on the same engine. */
     tones?: 2 | 4 | 8 | 16 | 32 | 64 | 128 | 256;
     bandwidth?: 125 | 250 | 500 | 1000 | 2000;
+    code?: "olivia" | "contestia";
   }): Promise<TransmitOutcome>;
   unkey(): Promise<void>;
 }
