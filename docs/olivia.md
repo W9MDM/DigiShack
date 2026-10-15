@@ -64,7 +64,16 @@ and so does the block's own. `scripts/check-olivia.ts` runs it on generated sign
 three sizes at both radios' rates, off frequency, in noise to −10 dB and on noise alone;
 `check-olivia-pipeline` runs a line through the real pipeline at the FlexRadio's 24 kHz.
 
+## On the air so far
+
+The plumbing, on the station: the chip put the dial on 14.071 with the slice in DIGU, the
+decoder streamed with a heartbeat a second, the tone set moved on request, and the
+synchroniser read 2.9 to 3.1 over noise - the noise figure the threshold sits above - at
+every peak the scan found, so nothing printed through seven minutes of empty passband. No
+Olivia station was on 20 m at 17:43 UTC on a weekday; the decoder has read only the
+generated signals of its check, and the first real one goes in the changelog.
+
 ## Not yet
 
 - Contestia and RTTYM, the same engine with other alphabets.
-- A real-signal report: see the changelog for what 20 m did.
+- A real-signal report.
