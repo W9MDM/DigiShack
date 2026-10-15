@@ -248,7 +248,7 @@ export const SETTING_GROUPS: SettingGroup[] = [
   {
     id: "js8",
     doc: "js8",
-    docLabel: "JS8: the speed",
+    docLabel: "JS8: the speed, and automatic replies",
     title: "JS8",
     blurb:
       "Which of JS8Call's speeds this station listens and sends at. The JS8 panel changes it " +
@@ -1106,6 +1106,30 @@ export const SETTINGS: SettingDef[] = [
     default: "0.5",
   },
   // --- JS8 ---
+  {
+    key: "js8.autoreply",
+    label: "JS8 automatic replies",
+    type: "string",
+    group: "js8",
+    help: "off | hb | all. hb acknowledges every heartbeat heard with the signal report, as JS8Call stations do; all also answers SNR?, GRID? and INFO? sent to this station. Off by default because it transmits on its own; the transmit gate still applies.",
+    default: "off",
+  },
+  {
+    key: "js8.info",
+    label: "JS8 INFO text",
+    type: "string",
+    group: "js8",
+    help: "What a station that sends INFO? gets back, after the INFO command, when automatic replies are set to all. Upper case on the air. Empty means INFO? is not answered.",
+    default: "",
+  },
+  {
+    key: "js8.ackCooldownMin",
+    label: "JS8 acknowledgement cooldown (minutes)",
+    type: "number",
+    group: "js8",
+    help: "How long after acknowledging a station's heartbeat its next ones are let go, so a station heartbeating every few minutes does not have this one keying every few minutes for it. JS8Call acknowledges every one; 15 keeps the duty cycle sane.",
+    default: "15",
+  },
   {
     key: "js8.speed",
     label: "JS8 speed",

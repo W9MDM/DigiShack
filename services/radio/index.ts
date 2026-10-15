@@ -163,6 +163,7 @@ import {
   type Js8ParsedFrame,
 } from "@/lib/digital/js8-message";
 import { Js8Sender, type Js8SenderState } from "@/lib/radio/js8-sender";
+import { Js8AutoReplier, type Js8AutoReplyLevel } from "@/lib/radio/js8-autoreply";
 import { encodePng } from "@/lib/digital/png";
 import type { SstvEvent } from "@/lib/radio/decode-pipeline";
 import { js8SubmodeNow, PERIOD_MS, setJs8Submode } from "@/lib/radio/timing";
@@ -868,6 +869,7 @@ function onStatus(msg: StatusMsg): void {
   status.subMode = msg.subMode || null;
   status.dxCall = msg.dxCall;
   status.deCall = msg.deCall;
+  js8Replier.configure({ mycall: msg.deCall ?? "", mygrid: msg.deGrid ?? "" });
   status.deGrid = msg.deGrid;
   status.transmitting = msg.transmitting;
   status.decoding = msg.decoding;
@@ -1284,6 +1286,21 @@ function onJs8Decodes(
     if (done) emitJs8Message(done.hz, done.text, windowStart);
   }
   for (const stale of js8Assembler.expire(now, 90_000)) emitJs8Message(stale.hz, stale.text + " …", windowStart);
+
+  // Automatic replies, from what this window heard.
+  if (js8Replier.level !== "off" && status.deCall) {
+    const heard = decodes
+      .filter((d) => d.js8)
+      .map((d) => ({ ...d.js8!, snr: d.snr }));
+    const lines = js8Replier.repliesFor(heard);
+    for (const line of lines) {
+      if (!js8ReplyQueue.includes(line)) js8ReplyQueue.push(line);
+      console.log(`[js8] will reply: ${line}`);
+    }
+    // A short, random delay: every station that heard the same heartbeat answers in the
+    // next window, and two answering on the same boundary at the same offset collide.
+    if (lines.length > 0) scheduleJs8Pump(500 + Math.floor(Math.random() * 6_000));
+  }
 }
 
 function emitJs8Message(hz: number, text: string, at: Date): void {
@@ -1414,7 +1431,13 @@ let sstvLive: { mode: string; width: number; height: number; rgb: Uint8ClampedAr
 function onSstvEvent(e: SstvEvent): void {
   if (e.kind === "vis") {
     // Every header, so one that cannot be drawn still says what it was.
-    if (!e.decoded) console.log(`[sstv] heard a ${e.name} header (VIS ${e.code}) - not a mode decoded here`);
+    if (!e.decoded) {
+      console.log(
+        e.name.startsWith("unknown")
+          ? `[sstv] heard a header for no known mode (VIS ${e.code}) - probably a known one read through noise`
+          : `[sstv] heard a ${e.name} header (VIS ${e.code}) - not a mode decoded here`,
+      );
+    }
     broadcast({ kind: "sstv-vis", code: e.code, name: e.name, decoded: e.decoded, at: e.at });
     return;
   }
@@ -1445,6 +1468,49 @@ function onSstvEvent(e: SstvEvent): void {
     .catch((err) => console.error(`[sstv] could not save the picture: ${err instanceof Error ? err.message : err}`));
 }
 
+/**
+ * JS8 automatic replies: heartbeat acknowledgements and answers to SNR?, GRID? and INFO?
+ * sent to us, behind js8.autoreply (off by default: it transmits on its own). Each reply
+ * is a line queued here and handed to the sender when it is idle, one per window.
+ */
+const js8Replier = new Js8AutoReplier({ level: "off", mycall: "", mygrid: "", info: "" });
+const js8ReplyQueue: string[] = [];
+let js8PumpTimer: NodeJS.Timeout | null = null;
+
+async function pumpJs8Replies(): Promise<void> {
+  if (js8ReplyQueue.length === 0 || js8Sender.current.sending) return;
+  if (status.subMode !== "JS8" || status.transmitting || !status.deCall) return;
+  if (!(await transmitArmed())) {
+    js8ReplyQueue.length = 0;
+    return;
+  }
+  const line = js8ReplyQueue.shift()!;
+  let frames: Js8OutFrame[];
+  try {
+    frames = js8BuildFrames(status.deCall, status.deGrid ?? "", line);
+  } catch {
+    return;
+  }
+  if (frames.length === 0) return;
+  const r = js8Sender.start(line, frames);
+  if (!r.ok) {
+    console.warn(`[js8] auto-reply not started: ${r.reason}`);
+    return;
+  }
+  const at = `${new Date(r.firstWindow).toISOString().slice(11, 19)}Z`;
+  appendJs8Text(`[TX auto] ${line} - ${r.frames} frame${r.frames === 1 ? "" : "s"} at ${js8OffsetHz} Hz from ${at}\n`);
+  console.log(`[js8] auto-reply "${line}": ${r.frames} frame(s) from ${at}`);
+}
+
+function scheduleJs8Pump(delayMs: number): void {
+  if (js8PumpTimer) clearTimeout(js8PumpTimer);
+  js8PumpTimer = setTimeout(() => {
+    js8PumpTimer = null;
+    void pumpJs8Replies();
+  }, delayMs);
+  js8PumpTimer.unref?.();
+}
+
 /** A line into the JS8 message box: what went out, and how it ended. */
 function appendJs8Text(line: string): void {
   streamText = (streamText + line).slice(-STREAM_TEXT_MAX);
@@ -1471,6 +1537,8 @@ const js8Sender = new Js8Sender({
     status.js8 = { ...s, offsetHz: js8OffsetHz };
     if (!s.sending) {
       appendJs8Text(s.stopped ? `[TX stopped: ${s.stopped}]\n` : `[TX done: ${s.frames} frame${s.frames === 1 ? "" : "s"}]\n`);
+      // The next queued reply, a moment later so the transmitter has unkeyed.
+      if (js8ReplyQueue.length > 0) scheduleJs8Pump(1_500);
     }
     broadcast({ kind: "status", status });
   },
@@ -1976,6 +2044,18 @@ async function startFlexSource(): Promise<() => Promise<void>> {
     if (watchdog) watchdog.retime(windowTimeoutMs(source.periodMs, watchdogPeriods));
   };
   oliviaTuning.code = ((await getSetting("olivia.code")) ?? "olivia").toLowerCase() === "contestia" ? "contestia" : "olivia";
+  {
+    const levelRaw = ((await getSetting("js8.autoreply")) ?? "off").toLowerCase();
+    const level: Js8AutoReplyLevel = levelRaw === "hb" || levelRaw === "all" ? levelRaw : "off";
+    js8Replier.configure({
+      level,
+      mycall: status.deCall ?? "",
+      mygrid: status.deGrid ?? "",
+      info: (await getSetting("js8.info")) ?? "",
+      cooldownMs: Math.max(1, await getNumberSetting("js8.ackCooldownMin", 15)) * 60_000,
+    });
+    if (level !== "off") console.log(`[js8] automatic replies: ${level === "hb" ? "heartbeat acknowledgements" : "acknowledgements and SNR?, GRID?, INFO?"}`);
+  }
   rttyApply = () => {
     const sideband: "USB" | "LSB" = /LSB|DIGL/i.test(status.mode ?? "") ? "LSB" : "USB";
     const normal = rttyTones(rttyTuning.centreHz, rttyTuning.shiftHz, sideband);

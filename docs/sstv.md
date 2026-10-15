@@ -23,11 +23,22 @@ the same, Robot 36 thirty-six seconds, PD 120 just over two minutes.
 SSTV operators run lower sideband on 80 and 40 m, so the chip puts the slice in DIGL
 there and DIGU above. 14.230 is the busiest by far, at weekends especially.
 
-The modes: Martin 1 and 2, Scottie 1, 2 and DX, Robot 36, and PD 50, 90, 120, 160, 180
-and 240. The header names the mode, so there is nothing to choose. A picture in a mode
-outside these - Robot 72, Wraase, Pasokon, the MMSSTV extended modes - is heard but not
-drawn: the panel and the bridge log say which it was ("Last header: Robot 72"), so a
-missing mode shows up by name rather than as a count.
+The modes, 26 of them, which is every standard-VIS mode the open decoders read:
+
+| Family | Modes |
+|---|---|
+| Martin | 1, 2, and the half-height 3 and 4 |
+| Scottie | 1, 2, DX, and the half-height 3 and 4 |
+| Robot | 24, 36 and 72 in colour; 8, 12 and 24 in black and white |
+| PD | 50, 90, 120, 160, 180, 240 and 290 |
+| Wraase | SC2-120 and SC2-180 |
+| Pasokon | P3, P5 and P7 |
+
+Timings are slowrx's (windytan), from N7CXI's Dayton paper and KB4YZ's line list.
+The header names the mode, so there is nothing to choose. A header outside these - Robot
+12 colour, Wraase SC2-30 and 60, the MMSSTV extended modes - is heard but not drawn,
+and the panel and the bridge log say which it was. A header naming no mode at all is
+almost always a known one read through noise: two bits wrong still pass the parity check.
 
 ## The gallery
 

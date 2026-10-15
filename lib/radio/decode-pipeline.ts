@@ -243,6 +243,11 @@ export interface Js8DecodeExtra {
   grid?: string;
   /** A data frame's text, or null when it needed the dictionary and the thread had none. */
   text?: string | null;
+  /** For a heartbeat-or-CQ frame: which. */
+  isCq?: boolean;
+  /** For a directed frame: the command, as the table spells it (" SNR?", " HEARTBEAT SNR"). */
+  cmdString?: string;
+  num?: number | null;
   first: boolean;
   last: boolean;
 }
@@ -1234,6 +1239,9 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
             to: d.parsed.to,
             grid: d.parsed.grid,
             text: d.parsed.text,
+            isCq: d.parsed.isCq,
+            cmdString: d.parsed.cmdString,
+            num: d.parsed.num,
             first: d.parsed.first,
             last: d.parsed.last,
           },

@@ -107,7 +107,27 @@ rather than sent late). Frames go in consecutive windows at one offset because t
 receiving station joins them per frequency; a refused frame stops the message rather
 than send a tail without its head, and moving the dial off JS8 cancels what is left.
 
+## Automatic replies
+
+A JS8 station is expected to take part, and `js8.autoreply` in Settings says how much
+this one does on its own:
+
+- **off** (the default): nothing goes out that you did not type.
+- **hb**: every heartbeat heard is acknowledged with the signal report - `K9XYZ: KK4COV
+  HEARTBEAT SNR -06` - the way the four stations answered ours. A station is acknowledged
+  once per `js8.ackCooldownMin` (15 minutes), not on every heartbeat as JS8Call does, so
+  a station heartbeating every few minutes does not have this one keying every few
+  minutes for it.
+- **all**: that, and `SNR?`, `GRID?` and `INFO?` sent to this station are answered with
+  the report, the four-character grid, and `js8.info`.
+
+Each reply is one message through the same sender as a typed line, a random moment
+inside the next few seconds so two stations answering the same heartbeat do not land on
+the same boundary, with a `[TX auto]` line in the message box. The transmit gate applies:
+with "Allow transmit" off nothing is answered. Queries from groups, queries to other
+stations, HEARING?, QUERY and the rest are left to the operator.
+
 ## Not yet
 
-- The automatic replies JS8Call stations expect (SNR?, QUERY, ACK, relays).
+- Relays, QUERY and the rest of JS8Call's automatic behaviour.
 - A panel of stations heard and conversations, rather than frames in a table.
