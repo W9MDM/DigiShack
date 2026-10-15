@@ -11,6 +11,7 @@
 
 import { ft2Encode } from "@/lib/digital/ft2";
 import { js8EncodeFrame, js8Waveform } from "@/lib/digital/js8";
+import { js8SubmodeNow } from "@/lib/radio/timing";
 import type { Js8OutFrame } from "@/lib/digital/js8-message";
 import { encodeFT4, encodeFT8 } from "@e04/ft8ts";
 
@@ -43,8 +44,11 @@ export const SYMBOL_RATE: Record<TxMode, number> = {
   OLIVIA: 31.25,
 };
 
-/** Nothing legitimate runs this long; a longer waveform is a bug, not a transmission. */
-export const MAX_TRANSMIT_MS = 20_000;
+/**
+ * Nothing legitimate runs this long; a longer waveform is a bug, not a transmission.
+ * 27 s since JS8 Slow, whose frame is 25.28 s; it was 20 s, which refused Slow on the Icom.
+ */
+export const MAX_TRANSMIT_MS = 27_000;
 
 /**
  * Usable audio offsets.
@@ -135,6 +139,8 @@ export function buildJs8Waveform(frame: Js8OutFrame, offsetHz: number, sampleRat
       `Audio offset ${offsetHz} Hz is outside ${MIN_OFFSET_HZ}-${MAX_OFFSET_HZ} Hz; the transmit filter would clip it`,
     );
   }
-  const { tones } = js8EncodeFrame(frame.frame, frame.txType);
-  return js8Waveform(tones, { sampleRate, baseHz: offsetHz });
+  // At the speed in force: the Costas set and the symbol length are the submode's.
+  const submode = js8SubmodeNow();
+  const { tones } = js8EncodeFrame(frame.frame, frame.txType, submode);
+  return js8Waveform(tones, { sampleRate, baseHz: offsetHz, submode });
 }

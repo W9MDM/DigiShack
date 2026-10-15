@@ -161,6 +161,7 @@ import {
   type Js8ParsedFrame,
 } from "@/lib/digital/js8-message";
 import { Js8Sender, type Js8SenderState } from "@/lib/radio/js8-sender";
+import { js8SubmodeNow, PERIOD_MS, setJs8Submode } from "@/lib/radio/timing";
 import { gateAutomation, hopModeFor, NO_SEQUENCER_MODES, noSequencerReason } from "@/lib/radio/automation-gate";
 import type { SchedulableAuto } from "@/lib/radio/schedule-runner";
 import { collectReceptionReports } from "@/lib/pskreporter/collect";
@@ -219,6 +220,8 @@ interface RigStatus {
   olivia: { centreHz: number; tones: OliviaTones; bandwidth: OliviaBandwidth; code: OliviaCode } | null;
   /** A JS8 message going out, or the last one, with the offset it uses. See lib/radio/js8-sender.ts. */
   js8: (Js8SenderState & { offsetHz: number }) | null;
+  /** JS8's speed: normal, fast, turbo or slow. */
+  js8Speed: "normal" | "fast" | "turbo" | "slow";
   dxCall: string | null;
   deCall: string | null;
   deGrid: string | null;
@@ -357,6 +360,7 @@ const status: RigStatus = {
   psk: null,
   olivia: null,
   js8: null,
+  js8Speed: "normal",
   dxCall: null,
   deCall: null,
   deGrid: null,
@@ -1177,8 +1181,14 @@ async function readLastTune(): Promise<LastTune | null> {
 function saveLastTune(hz: number | null, sliceMode: string | null): void {
   if (!hz) return;
   const next = JSON.stringify({ hz, sliceMode, sticky: stickyMode });
+  // A pending save is always superseded, including by a return to what is already saved:
+  // a restored profile slice reports USB for a moment before the bridge puts it in CW,
+  // and returning early here left that USB save queued - 1.201.8 saved it.
+  if (lastTuneTimer) {
+    clearTimeout(lastTuneTimer);
+    lastTuneTimer = null;
+  }
   if (next === lastTuneSaved) return;
-  if (lastTuneTimer) clearTimeout(lastTuneTimer);
   lastTuneTimer = setTimeout(() => {
     lastTuneTimer = null;
     const t: LastTune = { hz, sliceMode, sticky: stickyMode, at: Date.now() };
@@ -1327,10 +1337,12 @@ async function tuneToCalling(
     }
     // CW is a modulation as well as a mode: the radio's filters, pitch and keyer
     // apply only with the slice in CW. Leaving CW for a data mode restores DIGU.
+    // Every chip leaves the slice in its mode, not only CW: a slice left in USB or LSB -
+    // by a restart, the radio, or the CAT panel - decoded JS8 upside down on 7.078.
     const wantCw = mode === "CW";
-    const isCw = /^CW/i.test(status.mode ?? "");
-    if (wantCw && !isCw) await client.command(`slice set ${flexSliceIndex ?? 0} mode=CW`);
-    else if (!wantCw && isCw) await client.command(`slice set ${flexSliceIndex ?? 0} mode=DIGU`);
+    const cur = (status.mode ?? "").toUpperCase();
+    if (wantCw && !cur.startsWith("CW")) await client.command(`slice set ${flexSliceIndex ?? 0} mode=CW`);
+    else if (!wantCw && !/^DIG[UL]$/.test(cur)) await client.command(`slice set ${flexSliceIndex ?? 0} mode=DIGU`);
     return { ok: true, hz };
   }
 
@@ -1363,6 +1375,24 @@ const automationGate = {
 
 /** Where JS8 goes out, Hz audio: the page sends it with every message, and this is the last one used. */
 let js8OffsetHz = 1500;
+
+/** JS8's speeds, by the names JS8Call uses. Ultra (4 s) is left out: nobody runs it. */
+const JS8_SPEEDS: Record<string, "A" | "B" | "C" | "E"> = { normal: "A", fast: "B", turbo: "C", slow: "E" };
+/** Set by the live source: re-arms the decode windows after the length changed. */
+let js8Rearm: (() => void) | null = null;
+
+function applyJs8Speed(speed: "normal" | "fast" | "turbo" | "slow"): void {
+  if (status.js8Speed === speed && js8SubmodeNow() === JS8_SPEEDS[speed]) return;
+  if (js8Sender.current.sending) {
+    js8Sender.cancel();
+    console.log("[js8] message cancelled: the speed changed");
+  }
+  setJs8Submode(JS8_SPEEDS[speed]!);
+  status.js8Speed = speed;
+  if (status.subMode === "JS8") js8Rearm?.();
+  console.log(`[js8] speed ${speed}: ${PERIOD_MS.JS8 / 1000} s windows`);
+  broadcast({ kind: "status", status });
+}
 
 /** A line into the JS8 message box: what went out, and how it ended. */
 function appendJs8Text(line: string): void {
@@ -1884,6 +1914,14 @@ async function startFlexSource(): Promise<() => Promise<void>> {
     oliviaTuning.bandwidth = size.bandwidth;
   }
   oliviaTuning.threshold = await getNumberSetting("olivia.threshold", 4);
+  {
+    const speed = ((await getSetting("js8.speed")) ?? "normal").toLowerCase();
+    applyJs8Speed(speed === "fast" || speed === "turbo" || speed === "slow" ? speed : "normal");
+  }
+  js8Rearm = () => {
+    source.rearmWindows();
+    if (watchdog) watchdog.retime(windowTimeoutMs(source.periodMs, watchdogPeriods));
+  };
   oliviaTuning.code = ((await getSetting("olivia.code")) ?? "olivia").toLowerCase() === "contestia" ? "contestia" : "olivia";
   rttyApply = () => {
     const sideband: "USB" | "LSB" = /LSB|DIGL/i.test(status.mode ?? "") ? "LSB" : "USB";
@@ -4343,6 +4381,22 @@ async function main(): Promise<void> {
       }
 
       // POST /js8-cancel — stop after the frame on the air, if one is.
+      // POST /js8-speed — Normal, Fast, Turbo or Slow. The window length changes, so the
+      // cut is re-armed and the watchdog retimed; a message going out is stopped first,
+      // since its frames were built for the old speed.
+      if (url.pathname === "/js8-speed") {
+        const body = await readJson(req);
+        const speed = String(body.speedName ?? body.speed ?? "").toLowerCase();
+        const sub = JS8_SPEEDS[speed];
+        if (!sub) {
+          sendJson(res, 400, { error: "speed must be normal, fast, turbo or slow" });
+          return;
+        }
+        applyJs8Speed(speed as "normal" | "fast" | "turbo" | "slow");
+        sendJson(res, 200, { ok: true, speed: status.js8Speed, periodMs: PERIOD_MS.JS8 });
+        return;
+      }
+
       if (url.pathname === "/js8-cancel") {
         sendJson(res, 200, { ok: true, cancelled: js8Sender.cancel() });
         return;

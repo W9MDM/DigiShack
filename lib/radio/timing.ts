@@ -17,6 +17,7 @@
 // convention to FT2 would not merely be untidy, it would make the mode unreadable.
 
 import { nowMs } from "@/lib/time/clock";
+import { JS8_SUBMODES, type Js8Submode } from "@/lib/digital/js8";
 import type { TxMode } from "@/lib/radio/waveform";
 
 /** T/R period per mode, ms. */
@@ -120,6 +121,32 @@ const DECODABLE_LATE_MS: Record<TxMode, number> = {
   PSK31: 0,
   OLIVIA: 0,
 };
+
+/**
+ * JS8's speed. JS8Call runs Normal (15 s), Fast (10 s), Turbo (6 s) and Slow (30 s) on the
+ * same frequencies, each with its own period, start delay and transmission length. One
+ * station listens and sends at one speed at a time here, so the speed is a single
+ * process-wide setting and switching it rewrites the JS8 row of the tables above. Every
+ * consumer - the window cut, the transmitter's timing, the sender's boundaries, the
+ * watchdog - reads those tables at the moment it needs them, which is what makes this
+ * one assignment enough.
+ */
+let js8Submode: Js8Submode = "A";
+
+export function js8SubmodeNow(): Js8Submode {
+  return js8Submode;
+}
+
+export function setJs8Submode(submode: Js8Submode): void {
+  const p = JS8_SUBMODES[submode];
+  js8Submode = submode;
+  PERIOD_MS.JS8 = p.periodS * 1000;
+  TX_START_OFFSET_MS.JS8 = Math.round(p.startS * 1000);
+  // 79 symbols at the submode's symbol length, 12 kHz.
+  TRANSMISSION_MS.JS8 = Math.round(((79 * p.nsps) / 12_000) * 1000);
+  // Scaled from Normal's FT8-like figure by the period.
+  DECODABLE_LATE_MS.JS8 = Math.round((1_860 * p.periodS) / 15);
+}
 
 /**
  * How late this mode's transmission may start and still be worth sending, ms.

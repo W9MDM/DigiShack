@@ -30,7 +30,7 @@ import { RttyProbe, type RttySuggestion } from "@/lib/digital/rtty-probe";
 import { OliviaDemodulator } from "@/lib/digital/oliviademod";
 import type { OliviaBandwidth, OliviaCode, OliviaTones } from "@/lib/digital/olivia";
 import { HashCallBook as Ft2HashCallBook } from "@/lib/digital/pack77";
-import { PERIOD_MS, TRANSMISSION_MS } from "@/lib/radio/timing";
+import { js8SubmodeNow, PERIOD_MS, TRANSMISSION_MS } from "@/lib/radio/timing";
 import type { TxMode } from "@/lib/radio/waveform";
 
 /** What every decoder here is fed, whatever the radio delivered. */
@@ -691,6 +691,19 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
   }
 
   /** Changing mode changes the window length, so the schedule restarts. */
+  /**
+   * The window length changed under the same mode - JS8's speed (see setJs8Submode). The
+   * partial window was cut to the old length; drop it and arm the schedule for the new.
+   */
+  rearm(): void {
+    this.buffer = [];
+    if (this.timer) {
+      clearTimeout(this.timer);
+      this.timer = null;
+      this.start();
+    }
+  }
+
   setMode(mode: TxMode): boolean {
     if (mode === this.mode) return false;
     // Anything still waiting on the transmitter was decoded under the OLD mode and is
@@ -1161,7 +1174,7 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
         // JS8 is decoded by our own port on its own thread, which also reads each frame
         // with the message layer; the printed form is the message, and what the layer read
         // rides beside it for the bridge to join frames and spot heartbeats.
-        const r = await this.js8Thread.decode(Float32Array.from(p.audio), DECODE_SAMPLE_RATE);
+        const r = await this.js8Thread.decode(Float32Array.from(p.audio), DECODE_SAMPLE_RATE, js8SubmodeNow());
         if (r.error) this.emit("error", new Error(`js8 thread: ${r.error}`));
         decoded = r.decodes.map((d) => ({
           freq: Math.round(d.freqHz),

@@ -20,6 +20,7 @@ import { EventEmitter } from "node:events";
 import { decodeFT4, decodeFT8, HashCallBook } from "@e04/ft8ts";
 
 import { WSPR_PERIOD_MS } from "@/lib/digital/wspr";
+import { PERIOD_MS } from "@/lib/radio/timing";
 import { FlexClient } from "@/lib/flex/client";
 import { hasAntennaChoice, resolveAntenna } from "@/lib/flex/antennas";
 import {
@@ -664,7 +665,8 @@ export class FlexDaxSource extends EventEmitter<Events> {
   get periodMs(): number {
     if (isStreamMode(this.opts.mode)) return STREAM_HEARTBEAT_MS;
     if (this.opts.mode === "WSPR") return WSPR_PERIOD_MS;
-    if (this.opts.mode === "JS8") return FT8_PERIOD_MS;
+    // The speed in force: Normal 15 s, Fast 10, Turbo 6, Slow 30. See setJs8Submode.
+    if (this.opts.mode === "JS8") return PERIOD_MS.JS8;
     if (this.opts.mode === "FT2") return FT2_PERIOD_MS;
     return this.opts.mode === "FT4" ? FT4_PERIOD_MS : FT8_PERIOD_MS;
   }
@@ -714,6 +716,11 @@ export class FlexDaxSource extends EventEmitter<Events> {
   setCwOptions(opts: Extract<StreamOptions, { mode: "CW" }>): void {
     this.cwOptions = opts;
     if (this.pipeline.streaming === "CW") this.pipeline.setStream(opts);
+  }
+
+  /** The window length changed under the same mode (JS8's speed): re-arm the cut. */
+  rearmWindows(): void {
+    this.pipeline.rearm();
   }
 
   /** The PSK31 carrier, speed and squelch. Takes effect at once while streaming PSK31. */

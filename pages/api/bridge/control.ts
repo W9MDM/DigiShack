@@ -37,6 +37,7 @@ const bodySchema = z.object({
     "cw",
     "js8-send",
     "js8-cancel",
+    "js8-speed",
     "psk",
     "olivia",
   ]),
@@ -77,6 +78,8 @@ const bodySchema = z.object({
   text: z.string().min(1).max(240).optional(),
   /** CW sending speed, for action "cw". */
   wpm: z.number().min(5).max(60).optional(),
+  /** JS8 speed for action "js8-speed". */
+  speedName: z.enum(["normal", "fast", "turbo", "slow"]).optional(),
   /** Audio offset for action "js8-send", Hz. */
   offsetHz: z.number().min(200).max(2800).optional(),
   /** PSK speed for action "psk": 31, 63 or 125 (baud 31.25, 62.5, 125). */

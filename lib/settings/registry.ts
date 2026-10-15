@@ -246,6 +246,15 @@ export const SETTING_GROUPS: SettingGroup[] = [
       "are the values the bridge loads.",
   },
   {
+    id: "js8",
+    doc: "js8",
+    docLabel: "JS8: the speed",
+    title: "JS8",
+    blurb:
+      "Which of JS8Call's speeds this station listens and sends at. The JS8 panel changes it " +
+      "live; this is the speed the bridge starts with.",
+  },
+  {
     id: "olivia",
     doc: "olivia",
     docLabel: "Olivia: the centre, the size, and the sync threshold",
@@ -1095,6 +1104,15 @@ export const SETTINGS: SettingDef[] = [
     group: "psk31",
     help: "The decoder's quality - how consistently the symbols read as a phase or its reverse - below which nothing prints. Noise sits near 0.2, a clean signal near 1, a weak one around 0.6. 0 prints everything, which on an empty channel is a stream of random characters.",
     default: "0.5",
+  },
+  // --- JS8 ---
+  {
+    key: "js8.speed",
+    label: "JS8 speed",
+    type: "string",
+    group: "js8",
+    help: "normal | fast | turbo | slow: JS8Call's speeds, 15, 10, 6 and 30 second windows on the same frequencies. Both ends must use the same one; Normal is what most stations run. The JS8 panel changes it for the session.",
+    default: "normal",
   },
   // --- Olivia ---
   {

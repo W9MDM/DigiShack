@@ -23,6 +23,8 @@ export interface Js8Job {
   id: number;
   audio: Float32Array;
   sampleRate: number;
+  /** The speed to decode: A Normal, B Fast, C Turbo, E Slow. */
+  submode?: "A" | "B" | "C" | "E" | "I";
 }
 
 export interface Js8WorkerDecode {
@@ -48,7 +50,7 @@ export interface Js8JobResult {
 parentPort?.on("message", (job: Js8Job) => {
   const started = Date.now();
   try {
-    const decodes = js8DecodeAudio(job.audio, { sampleRate: job.sampleRate }).map((d) => ({
+    const decodes = js8DecodeAudio(job.audio, { sampleRate: job.sampleRate, submode: job.submode ?? "A" }).map((d) => ({
       freqHz: d.freqHz,
       dtS: d.dtS,
       snrDb: d.snrDb,
