@@ -23,6 +23,7 @@ import { DecodeThread } from "@/lib/radio/decode-thread";
 import { ft2DecodeAudio } from "@/lib/digital/ft2demod";
 import { WsprThread } from "@/lib/radio/wspr-thread";
 import { RttyDemodulator } from "@/lib/digital/rttydemod";
+import { CwDemodulator } from "@/lib/digital/cwdemod";
 import { HashCallBook as Ft2HashCallBook } from "@/lib/digital/pack77";
 import { PERIOD_MS, TRANSMISSION_MS } from "@/lib/radio/timing";
 import type { TxMode } from "@/lib/radio/waveform";
@@ -237,18 +238,57 @@ export interface Decode {
 
 /**
  * A mode decoded as a continuous stream rather than in windows. RTTY has no T/R period:
- * the line idles on mark between keystrokes and the decoder runs the whole time.
+ * the line idles on mark between keystrokes and the decoder runs the whole time. CW is
+ * the same: a key, a tone, and text as it is sent.
  */
-export type StreamMode = "RTTY";
+export type StreamMode = "RTTY" | "CW";
 
-export interface StreamOptions {
-  markHz: number;
-  spaceHz: number;
-  figures?: "us" | "ita2";
-  usos?: boolean;
-  /** 0 to 1; see RttyDemodOptions.squelch. */
-  squelch?: number;
+export function isStreamMode(mode: string | null | undefined): mode is StreamMode {
+  return mode === "RTTY" || mode === "CW";
 }
+
+/** What a stream's demodulator needs: the mode names which. */
+export type StreamOptions =
+  | {
+      mode: "RTTY";
+      markHz: number;
+      spaceHz: number;
+      figures?: "us" | "ita2";
+      usos?: boolean;
+      /** 0 to 1; see RttyDemodOptions.squelch. */
+      squelch?: number;
+    }
+  | {
+      mode: "CW";
+      /** The radio's CW pitch, Hz audio. */
+      pitchHz: number;
+      /** Starting speed guess; the decoder adapts. */
+      wpm?: number;
+      thresholdDb?: number;
+    };
+
+/** What a stream's heartbeat carries: the running counts, and what that decoder measures. */
+export type StreamHeartbeat =
+  | {
+      mode: "RTTY";
+      seconds: number;
+      chars: number;
+      framingErrors: number;
+      weak: number;
+      mark: number;
+      space: number;
+      decision: number;
+    }
+  | {
+      mode: "CW";
+      seconds: number;
+      chars: number;
+      wpm: number;
+      peak: number;
+      floor: number;
+      keyed: boolean;
+      unknown: number;
+    };
 
 /** How often a stream mode reports: once per second of audio. The liveness watchdog beats on it. */
 export const STREAM_HEARTBEAT_MS = 1_000;
@@ -257,20 +297,8 @@ export type DecodePipelineEvents = {
   decodes: [{ windowStart: Date; decodes: Decode[]; rms: number; decodeMs: number }];
   /** A stream mode: text as it completes, in whatever pieces the audio arrived in. */
   text: [{ mode: StreamMode; text: string; at: number }];
-  /** A stream mode's heartbeat, once per second of audio, with the tone levels for a tuning display. */
-  stream: [
-    {
-      mode: StreamMode;
-      seconds: number;
-      chars: number;
-      framingErrors: number;
-      /** Well-framed characters the squelch dropped as noise. */
-      weak: number;
-      mark: number;
-      space: number;
-      decision: number;
-    },
-  ];
+  /** A stream mode's heartbeat, once per second of audio, with what its decoder measures for a tuning display. */
+  stream: [StreamHeartbeat];
   /**
    * A slice decoded ahead of the rest of the band — the QSO partner's, or a candidate's.
    *
@@ -483,7 +511,11 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
   private readonly wsprThread = new WsprThread((line) => this.emit("error", new Error(line)));
 
   // A stream mode replaces the window schedule: audio goes to a demodulator as it arrives.
-  private stream: RttyDemodulator | null = null;
+  private rtty: RttyDemodulator | null = null;
+  private cw: CwDemodulator | null = null;
+  private get stream(): { feed(samples: ArrayLike<number>): string } | null {
+    return this.rtty ?? this.cw;
+  }
   private streamMode: StreamMode | null = null;
   private streamSamples = 0;
   private streamNextBeat = 0;
@@ -635,24 +667,28 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
   }
 
   /**
-   * Switch to a stream mode, or back to the window schedule with null.
+   * Switch to a stream, or back to the window schedule with null.
    *
    * Entering a stream stops the cut timer and discards the partial window: a stream has
    * no windows. Leaving one re-arms the schedule for the current window mode. Setting the
-   * same stream again only moves its tones, keeping the demodulator's state: the bridge
-   * does that on every slice update, and a retune must not lose a character in flight.
+   * same stream again only retunes it, keeping the demodulator's state: the bridge does
+   * that on every slice update, and a retune must not lose a character in flight.
    */
-  setStream(mode: StreamMode | null, opts?: StreamOptions): void {
-    if (mode === null) {
+  setStream(opts: StreamOptions | null): void {
+    if (opts === null) {
       if (!this.streamMode) return;
-      this.stream = null;
+      this.rtty = null;
+      this.cw = null;
       this.streamMode = null;
       this.start();
       return;
     }
-    if (!opts) throw new Error("a stream mode needs its tone options");
-    if (this.streamMode === mode && this.stream) {
-      this.stream.retune(opts.markHz, opts.spaceHz);
+    if (opts.mode === "RTTY" && this.rtty) {
+      this.rtty.retune(opts.markHz, opts.spaceHz);
+      return;
+    }
+    if (opts.mode === "CW" && this.cw) {
+      this.cw.retune(opts.pitchHz);
       return;
     }
     if (this.timer) {
@@ -660,8 +696,20 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
       this.timer = null;
     }
     this.buffer = [];
-    this.streamMode = mode;
-    this.stream = new RttyDemodulator({ sampleRate: this.inputRate, ...opts });
+    this.rtty = null;
+    this.cw = null;
+    this.streamMode = opts.mode;
+    if (opts.mode === "RTTY") {
+      const { mode: _m, ...rest } = opts;
+      this.rtty = new RttyDemodulator({ sampleRate: this.inputRate, ...rest });
+    } else {
+      this.cw = new CwDemodulator({
+        sampleRate: this.inputRate,
+        pitchHz: opts.pitchHz,
+        wpm: opts.wpm,
+        thresholdDb: opts.thresholdDb,
+      });
+    }
     this.streamSamples = 0;
     this.streamNextBeat = Math.round((this.inputRate * STREAM_HEARTBEAT_MS) / 1000);
   }
@@ -675,17 +723,32 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
     this.streamSamples += samples.length;
     if (this.streamSamples >= this.streamNextBeat) {
       this.streamNextBeat += Math.round((this.inputRate * STREAM_HEARTBEAT_MS) / 1000);
-      const s = demod.statistics;
-      this.emit("stream", {
-        mode,
-        seconds: Math.floor(this.streamSamples / this.inputRate),
-        chars: s.chars,
-        framingErrors: s.framingErrors,
-        weak: s.weak,
-        mark: s.mark,
-        space: s.space,
-        decision: s.decision,
-      });
+      const seconds = Math.floor(this.streamSamples / this.inputRate);
+      if (this.rtty) {
+        const s = this.rtty.statistics;
+        this.emit("stream", {
+          mode: "RTTY",
+          seconds,
+          chars: s.chars,
+          framingErrors: s.framingErrors,
+          weak: s.weak,
+          mark: s.mark,
+          space: s.space,
+          decision: s.decision,
+        });
+      } else if (this.cw) {
+        const s = this.cw.statistics;
+        this.emit("stream", {
+          mode: "CW",
+          seconds,
+          chars: s.chars,
+          wpm: s.wpm,
+          peak: s.peak,
+          floor: s.floor,
+          keyed: s.keyed,
+          unknown: s.unknown,
+        });
+      }
     }
   }
 

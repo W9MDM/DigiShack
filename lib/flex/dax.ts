@@ -5,6 +5,7 @@ import {
   DecodePipeline,
   STREAM_HEARTBEAT_MS,
   type DecodePipelineEvents,
+  isStreamMode,
   type StreamOptions,
 } from "@/lib/radio/decode-pipeline";
 import {
@@ -104,7 +105,7 @@ export interface DaxDecode {
   /** Time offset of the transmission within its window, seconds. */
   dt: number;
   message: string;
-  mode: "FT8" | "FT4" | "FT2" | "WSPR" | "RTTY";
+  mode: "FT8" | "FT4" | "FT2" | "WSPR" | "RTTY" | "CW";
   /** UTC start of the window this came from. */
   windowStart: Date;
 }
@@ -114,7 +115,7 @@ export interface DaxSourceOptions {
   port?: number;
   /** DAX channel the slice routes audio to (slice property `dax`). */
   daxChannel?: number;
-  mode?: "FT8" | "FT4" | "FT2" | "WSPR" | "RTTY";
+  mode?: "FT8" | "FT4" | "FT2" | "WSPR" | "RTTY" | "CW";
   /**
    * Decoder depth. 2 is the live default: measured at ~0.6 s per window against
    * real 20 m traffic, comfortably inside the ~2.4 s gap between cycles. Depth 3
@@ -617,7 +618,7 @@ export class FlexDaxSource extends EventEmitter<Events> {
     this.pipeline = new DecodePipeline({
       // A stream mode is not a window mode; the pipeline is built on FT8 and switched to
       // the stream right after.
-      mode: this.opts.mode === "RTTY" ? "FT8" : this.opts.mode,
+      mode: isStreamMode(this.opts.mode) ? "FT8" : this.opts.mode,
       inputSampleRate: DAX_SAMPLE_RATE,
       depth: this.opts.depth,
       silenceRms: this.opts.silenceRms,
@@ -636,7 +637,8 @@ export class FlexDaxSource extends EventEmitter<Events> {
     this.pipeline.on("error", (e) => this.emit("error", e));
     this.pipeline.on("text", (t) => this.emit("text", t));
     this.pipeline.on("stream", (s) => this.emit("stream", s));
-    if (this.opts.mode === "RTTY") this.pipeline.setStream("RTTY", this.rttyOptions);
+    if (this.opts.mode === "RTTY") this.pipeline.setStream(this.rttyOptions);
+    if (this.opts.mode === "CW") this.pipeline.setStream(this.cwOptions);
   }
 
   private readonly pipeline: DecodePipeline;
@@ -651,13 +653,13 @@ export class FlexDaxSource extends EventEmitter<Events> {
   }
 
   get periodMs(): number {
-    if (this.opts.mode === "RTTY") return STREAM_HEARTBEAT_MS;
+    if (isStreamMode(this.opts.mode)) return STREAM_HEARTBEAT_MS;
     if (this.opts.mode === "WSPR") return WSPR_PERIOD_MS;
     if (this.opts.mode === "FT2") return FT2_PERIOD_MS;
     return this.opts.mode === "FT4" ? FT4_PERIOD_MS : FT8_PERIOD_MS;
   }
 
-  get mode(): "FT8" | "FT4" | "FT2" | "WSPR" | "RTTY" {
+  get mode(): "FT8" | "FT4" | "FT2" | "WSPR" | "RTTY" | "CW" {
     return this.opts.mode;
   }
 
@@ -669,13 +671,15 @@ export class FlexDaxSource extends EventEmitter<Events> {
    * discarded: a partly-filled FT8 window is not a valid FT4 window, and feeding
    * it to the FT4 decoder would produce nothing while looking like a fault.
    */
-  setMode(mode: "FT8" | "FT4" | "FT2" | "WSPR" | "RTTY"): boolean {
+  setMode(mode: "FT8" | "FT4" | "FT2" | "WSPR" | "RTTY" | "CW"): boolean {
     if (mode === this.opts.mode) return false;
     this.opts.mode = mode;
     if (mode === "RTTY") {
       // A stream, not a window: the pipeline stops cutting and feeds the demodulator
       // instead. The tones are whatever was last set; the bridge sets them right after.
-      this.pipeline.setStream("RTTY", this.rttyOptions);
+      this.pipeline.setStream(this.rttyOptions);
+    } else if (mode === "CW") {
+      this.pipeline.setStream(this.cwOptions);
     } else {
       this.pipeline.setStream(null);
       this.pipeline.setMode(mode);
@@ -687,12 +691,19 @@ export class FlexDaxSource extends EventEmitter<Events> {
    * The RTTY tone pair and code options. Takes effect at once while streaming RTTY, and
    * at the next switch to it otherwise.
    */
-  setRttyOptions(opts: StreamOptions): void {
+  setRttyOptions(opts: Extract<StreamOptions, { mode: "RTTY" }>): void {
     this.rttyOptions = opts;
-    if (this.pipeline.streaming === "RTTY") this.pipeline.setStream("RTTY", opts);
+    if (this.pipeline.streaming === "RTTY") this.pipeline.setStream(opts);
   }
 
-  private rttyOptions: StreamOptions = { markHz: 2295, spaceHz: 2125 };
+  /** The CW pitch and speed guess. Takes effect at once while streaming CW. */
+  setCwOptions(opts: Extract<StreamOptions, { mode: "CW" }>): void {
+    this.cwOptions = opts;
+    if (this.pipeline.streaming === "CW") this.pipeline.setStream(opts);
+  }
+
+  private rttyOptions: Extract<StreamOptions, { mode: "RTTY" }> = { mode: "RTTY", markHz: 2295, spaceHz: 2125 };
+  private cwOptions: Extract<StreamOptions, { mode: "CW" }> = { mode: "CW", pitchHz: 600 };
 
 
   /**

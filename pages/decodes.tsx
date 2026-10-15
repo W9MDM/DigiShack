@@ -8,7 +8,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Waterfall, type WaterfallMarker } from "@/components/digital/Waterfall";
-import { RttyPanel, type StreamStats } from "@/components/digital/RttyPanel";
+import { StreamPanel, type StreamStats } from "@/components/digital/StreamPanel";
 import {
   Badge,
   Button,
@@ -54,6 +54,8 @@ const STREAM_TEXT_MAX = 8_000;
 interface RigStatus {
   /** The RTTY tone pair while listening to RTTY. */
   rtty?: { centreHz: number; shiftHz: number; sideband: "USB" | "LSB"; markHz: number; spaceHz: number } | null;
+  /** The CW pitch and sending speed while on CW. */
+  cw?: { pitchHz: number; wpm: number; pitchFromRadio: boolean } | null;
   connected: boolean;
   dialFrequency: number | null;
   band: string | null;
@@ -1135,6 +1137,9 @@ export default function DigitalPage({ wsUrl }: Props) {
         { hz: status.rtty.spaceHz, label: "RTTY space", emphasis: false },
       ];
     }
+    if (status?.subMode === "CW" && status.cw) {
+      return [{ hz: status.cw.pitchHz, label: "CW pitch", emphasis: true }];
+    }
     if (rows.length === 0) return [];
     const newest = rows[0]!.timestamp;
     return rows
@@ -1144,7 +1149,7 @@ export default function DigitalPage({ wsUrl }: Props) {
         label: r.message,
         emphasis: mentionsMe(r.message),
       }));
-  }, [rows, mentionsMe, status?.subMode, status?.rtty]);
+  }, [rows, mentionsMe, status?.subMode, status?.rtty, status?.cw]);
 
   const cyclePct = ((now % scale.periodMs) / scale.periodMs) * 100;
 
@@ -1284,10 +1289,19 @@ export default function DigitalPage({ wsUrl }: Props) {
   /** Send a line of RTTY. The bridge answers as soon as the radio is keyed; the line appears in the stream as [TX]. */
   const sendRtty = useCallback(async (text: string) => {
     try {
-      await apiPost("/api/bridge/control", { action: "rtty-send", text });
+      await apiPost("/api/bridge/control", { action: "text-send", text });
       setRttyError(null);
     } catch (err) {
       setRttyError(err instanceof ApiError ? err.message : "Could not send");
+    }
+  }, []);
+  /** The CW sending speed, through the radio's keyer. */
+  const setCwWpm = useCallback(async (wpm: number) => {
+    try {
+      await apiPost("/api/bridge/control", { action: "cw", wpm: Math.max(5, Math.min(60, wpm)) });
+      setRttyError(null);
+    } catch (err) {
+      setRttyError(err instanceof ApiError ? err.message : "Could not set the CW speed");
     }
   }, []);
   const decodingAs = status?.subMode ?? status?.mode ?? "—";
@@ -1305,7 +1319,9 @@ export default function DigitalPage({ wsUrl }: Props) {
           ? "WSPR"
           : decodingAs === "RTTY"
             ? "RTTY"
-            : "FT8";
+            : decodingAs === "CW"
+              ? "CW"
+              : "FT8";
 
   /**
    * Is there anything to halt? Transmitting now, a contact in flight, or an automatic
@@ -2201,17 +2217,20 @@ export default function DigitalPage({ wsUrl }: Props) {
               {rowCallNote && (
                 <p className="mb-2 text-xs text-accent-bright">{rowCallNote.text}</p>
               )}
-              {decodingAs === "RTTY" ? (
-                <RttyPanel
+              {decodingAs === "RTTY" || decodingAs === "CW" ? (
+                <StreamPanel
+                  mode={decodingAs}
                   text={streamText}
                   stats={streamStats}
                   rtty={status?.rtty ?? null}
+                  cw={status?.cw ?? null}
                   canTune={canSwitch}
                   canSend={canSwitch}
                   myCall={myCall}
                   transmitting={status?.transmitting ?? false}
                   error={rttyError}
                   onTune={(centreHz, shiftHz) => void tuneRtty(centreHz, shiftHz)}
+                  onCwWpm={(wpm) => void setCwWpm(wpm)}
                   onSend={(text) => void sendRtty(text)}
                   onClear={() => setStreamText("")}
                 />
@@ -3538,7 +3557,7 @@ function BandButtons({
           to a one-row stats block). */}
       <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-1">
         <div className="flex gap-1" role="group" aria-label="Digital mode">
-          {(["FT8", "FT4", "FT2", "WSPR", "RTTY"] as const).map((m) => {
+          {(["FT8", "FT4", "FT2", "WSPR", "RTTY", "CW"] as const).map((m) => {
           const active = decodingAs === m;
           const target = bandFor(m);
           const canSwitch = active || target !== null;

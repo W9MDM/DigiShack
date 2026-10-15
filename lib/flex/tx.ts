@@ -11,6 +11,7 @@ import {
 } from "@/lib/radio/timing";
 import { buildWaveform, samplesPerSymbol } from "@/lib/radio/waveform";
 import { rttyDurationMs, rttyWaveform } from "@/lib/digital/rtty";
+import { cwDurationMs } from "@/lib/digital/cw";
 
 // Native FT8/FT4 transmit over FlexRadio DAX TX. No external decoder, no WSJT-X.
 //
@@ -65,12 +66,12 @@ const PACKET_CLASS_TX_S16 = 0x0123;
  * past the last one. Using 144 here would size the watchdog 27 ms short of the
  * actual transmission.
  */
-const SYMBOLS_PER_FRAME = { FT8: 79, FT4: 105, FT2: 146, WSPR: 162, RTTY: 0 } as const;
+const SYMBOLS_PER_FRAME = { FT8: 79, FT4: 105, FT2: 146, WSPR: 162, RTTY: 0, CW: 0 } as const;
 
 /** Extra time before the watchdog fires, allowing for scheduling jitter. */
 const WATCHDOG_MARGIN_MS = 2_000;
 
-export type TxMode = "FT8" | "FT4" | "FT2" | "WSPR" | "RTTY";
+export type TxMode = "FT8" | "FT4" | "FT2" | "WSPR" | "RTTY" | "CW";
 
 /**
  * Above this percentage of the radio's rated output, say something.
@@ -180,6 +181,8 @@ export interface TransmitRequest {
 
 /** A line of text to send as it is: RTTY, at a tone pair, now. */
 export interface TextTransmitRequest {
+  /** RTTY goes out as audio through DAX; CW is handed to the radio's own keyer (CWX). */
+  mode: "RTTY" | "CW";
   text: string;
   /** Centre of the tone pair, Hz audio. */
   centreHz: number;
@@ -187,6 +190,8 @@ export interface TextTransmitRequest {
   sideband: "USB" | "LSB";
   figures?: "us" | "ita2";
   usos?: boolean;
+  /** CW speed, words per minute. Default 20. */
+  wpm?: number;
 }
 
 export interface TransmitResult {
@@ -798,8 +803,8 @@ export class FlexDaxTransmitter {
     }
     // RTTY is typed, not framed: it will go out as text through its own path (part three
     // of the mode). Nothing here keys the radio on an RTTY frequency until then.
-    if (req.mode === "RTTY") {
-      return { ...base, reason: "RTTY transmit is not enabled yet: this release listens to RTTY" };
+    if (req.mode === "RTTY" || req.mode === "CW") {
+      return { ...base, reason: `${req.mode} is sent as text, not as a timed frame` };
     }
 
     const refused = await this.gateRefusal(base);
@@ -1050,6 +1055,7 @@ export class FlexDaxTransmitter {
    * empty line or one over the cap, so a bad line is refused before the radio is looked at.
    */
   buildTextWaveform(req: TextTransmitRequest): Float32Array {
+    if (req.mode === "CW") throw new Error("CW is keyed by the radio (CWX), not sent as audio");
     const text = req.text.trim();
     if (!text) throw new Error("Nothing to send");
     const ms = rttyDurationMs(text);
@@ -1074,7 +1080,8 @@ export class FlexDaxTransmitter {
    * empty or over-long one is refused without touching the radio.
    */
   async transmitText(req: TextTransmitRequest): Promise<TransmitResult> {
-    const base: TransmitResult = { sent: false, message: req.text, mode: "RTTY", offsetHz: req.centreHz };
+    const base: TransmitResult = { sent: false, message: req.text, mode: req.mode, offsetHz: req.centreHz };
+    if (req.mode === "CW") return this.transmitCw(req, base);
     let wave: Float32Array;
     try {
       wave = this.buildTextWaveform(req);
@@ -1092,6 +1099,53 @@ export class FlexDaxTransmitter {
     } catch (err) {
       await this.unkey();
       return { ...base, reason: err instanceof Error ? err.message : "Transmission failed" };
+    } finally {
+      if (gen === this.txGen) {
+        this.busy = false;
+        this.busySince = null;
+        this.busyForWindow = null;
+        this.pendingKey = null;
+      }
+    }
+  }
+
+  /**
+   * Send a line of CW through the radio's own keyer. CWX takes a speed and a string and
+   * keys the transmitter itself, character by character, with its own rise times; nothing
+   * is streamed and nothing here keys. The transmitter stays busy for the line's length
+   * so no framed transmission can collide with it. The slice must be in CW mode with
+   * break-in on, which is how the CW chip leaves it; the radio's reply says otherwise.
+   */
+  private async transmitCw(req: TextTransmitRequest, base: TransmitResult): Promise<TransmitResult> {
+    const text = req.text.trim().replace(/["\r\n]+/g, " ");
+    if (!text) return { ...base, reason: "Nothing to send" };
+    const wpm = Math.max(5, Math.min(60, Math.round(req.wpm ?? 20)));
+    const ms = cwDurationMs(text, wpm);
+    if (ms > FlexDaxTransmitter.MAX_TEXT_MS) {
+      return {
+        ...base,
+        reason: `${text.length} characters is ${(ms / 1000).toFixed(0)} s of CW at ${wpm} wpm, over the ${FlexDaxTransmitter.MAX_TEXT_MS / 1000} s cap - send it in pieces`,
+      };
+    }
+    const refused = await this.gateRefusal(base);
+    if (refused) return refused;
+    if (!this.client) return { ...base, reason: "Transmitter is not started" };
+    this.busy = true;
+    this.busySince = nowMs();
+    this.busyForWindow = null;
+    const gen = ++this.txGen;
+    try {
+      const speed = await this.client.command(`cwx wpm ${wpm}`);
+      if (speed.status !== 0) {
+        return { ...base, reason: `Radio refused cwx wpm (0x${speed.status.toString(16)})${speed.message ? `: ${speed.message}` : ""}` };
+      }
+      const keyedAt = nowMs();
+      const sent = await this.client.command(`cwx send "${text}"`);
+      if (sent.status !== 0) {
+        return { ...base, reason: `Radio refused cwx send (0x${sent.status.toString(16)})${sent.message ? `: ${sent.message}` : ""}` };
+      }
+      await new Promise((r) => setTimeout(r, ms));
+      return { ...base, sent: true, keyedAt, unkeyedAt: Date.now(), timingErrorMs: 0, packetsSent: 0 };
     } finally {
       if (gen === this.txGen) {
         this.busy = false;

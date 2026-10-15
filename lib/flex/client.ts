@@ -146,6 +146,8 @@ export interface FlexRadioState {
    * says, and the conservative default applies until then.
    */
   txFilterHiHz: number | null;
+  /** The radio's CW pitch - sidetone and receive centre - Hz, from the transmit status. */
+  cwPitchHz: number | null;
 
   /**
    * Antenna ports, accumulated from every status line that mentions them.
@@ -192,6 +194,7 @@ export class FlexClient extends EventEmitter<Events> {
     numSlice: null,
     antennas: NO_ANTENNA_PORTS,
     txFilterHiHz: null,
+    cwPitchHz: null,
     numTx: null,
   };
 
@@ -410,6 +413,9 @@ export class FlexClient extends EventEmitter<Events> {
       // carries only the fields that changed, and most `transmit` lines carry neither.
       const hi = Number(fields.hi);
       if (Number.isFinite(hi) && hi > 0) this.state.txFilterHiHz = hi;
+      // The CW pitch, when the line carries it: where the CW decoder listens.
+      const pitch = Number(fields.cw_pitch);
+      if (Number.isFinite(pitch) && pitch > 0) this.state.cwPitchHz = pitch;
     } else if (object === "interlock") {
       // state=TRANSMITTING is the authoritative TX indicator.
       const st = fields.state;

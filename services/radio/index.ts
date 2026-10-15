@@ -142,6 +142,8 @@ import { runUploads } from "@/lib/integrations/upload-runner";
 import { locksFor } from "@/lib/radio/api";
 import { postWsprSpots, wsprSpotOf, type WsprSpotReport } from "@/lib/wsprnet/upload";
 import { RTTY_CENTRE_HZ, RTTY_SHIFT_HZ, rttyDurationMs, rttyTones } from "@/lib/digital/rtty";
+import { cwDurationMs } from "@/lib/digital/cw";
+import { isStreamMode } from "@/lib/radio/decode-pipeline";
 import { collectReceptionReports } from "@/lib/pskreporter/collect";
 import { MIN_QUERY_INTERVAL_MS } from "@/lib/pskreporter/retrieve";
 import type { PskReporterUploader } from "@/lib/pskreporter/upload";
@@ -181,6 +183,8 @@ interface RigStatus {
   subMode: string | null;
   /** The RTTY tone pair while listening to RTTY, for the page's panel and waterfall. */
   rtty: { centreHz: number; shiftHz: number; sideband: "USB" | "LSB"; markHz: number; spaceHz: number } | null;
+  /** The CW pitch the decoder listens on and the speed the keyer sends at, while on CW. */
+  cw: { pitchHz: number; wpm: number; pitchFromRadio: boolean } | null;
   dxCall: string | null;
   deCall: string | null;
   deGrid: string | null;
@@ -315,6 +319,7 @@ const status: RigStatus = {
   mode: null,
   subMode: null,
   rtty: null,
+  cw: null,
   dxCall: null,
   deCall: null,
   deGrid: null,
@@ -1088,7 +1093,7 @@ function sendJson(res: ServerResponse, code: number, body: unknown): void {
 }
 
 /** Modes with nothing for a sequencer to answer: no automatic mode runs on them and nothing is called. */
-const NO_SEQUENCER_MODES: ReadonlySet<string> = new Set(["WSPR", "RTTY"]);
+const NO_SEQUENCER_MODES: ReadonlySet<string> = new Set(["WSPR", "RTTY", "CW"]);
 function noSequencerReason(mode: string): string {
   return mode === "WSPR"
     ? "WSPR is receive-only: tune to an FT8, FT4 or FT2 frequency before starting an automatic mode"
@@ -1107,6 +1112,11 @@ const rttyTuning = { centreHz: RTTY_CENTRE_HZ, shiftHz: RTTY_SHIFT_HZ };
 let rttyCode: { figures: "us" | "ita2"; usos: boolean; squelch: number } = { figures: "us", usos: true, squelch: 0.7 };
 /** Set by the live source: recomputes the tones from the tuning and the slice's sideband. */
 let rttyApply: (() => void) | null = null;
+
+/** CW: the sending speed, and the pitch to fall back on when the radio has not said. */
+const cwTuning = { pitchHz: 600, wpm: 20, thresholdDb: 16 };
+/** Set by the live source: puts the decoder on the radio's pitch. */
+let cwApply: (() => void) | null = null;
 
 /** The last few thousand characters of stream text, replayed to a page that connects. */
 const STREAM_TEXT_MAX = 8_000;
@@ -1386,7 +1396,9 @@ async function startFlexSource(): Promise<() => Promise<void>> {
             ? "WSPR"
             : configuredMode === "rtty"
               ? "RTTY"
-              : "FT8",
+              : configuredMode === "cw"
+                ? "CW"
+                : "FT8",
     depth,
     // Shared with the Icom: the passband is a property of the operating convention,
     // not of the radio.
@@ -1560,11 +1572,22 @@ async function startFlexSource(): Promise<() => Promise<void>> {
     usos: await getBooleanSetting("rtty.usos", true),
     squelch: await getNumberSetting("rtty.squelch", 0.7),
   };
+  cwTuning.pitchHz = await getNumberSetting("cw.pitchHz", 600);
+  cwTuning.wpm = await getNumberSetting("cw.wpm", 20);
+  cwTuning.thresholdDb = await getNumberSetting("cw.thresholdDb", 16);
   rttyApply = () => {
     const sideband: "USB" | "LSB" = /LSB|DIGL/i.test(status.mode ?? "") ? "LSB" : "USB";
     const tones = rttyTones(rttyTuning.centreHz, rttyTuning.shiftHz, sideband);
-    source.setRttyOptions({ ...tones, ...rttyCode });
+    source.setRttyOptions({ mode: "RTTY", ...tones, ...rttyCode });
     status.rtty = { centreHz: rttyTuning.centreHz, shiftHz: rttyTuning.shiftHz, sideband, ...tones };
+  };
+  // The CW decoder listens where the radio's sidetone is. The pitch arrives in the
+  // transmit status when the radio reports it; the setting stands in until then.
+  cwApply = () => {
+    const fromRadio = rig.state.cwPitchHz;
+    const pitchHz = fromRadio ?? cwTuning.pitchHz;
+    source.setCwOptions({ mode: "CW", pitchHz, wpm: cwTuning.wpm, thresholdDb: cwTuning.thresholdDb });
+    status.cw = { pitchHz, wpm: cwTuning.wpm, pitchFromRadio: fromRadio !== null };
   };
 
   source.on("window", (w) => {
@@ -1857,7 +1880,10 @@ async function startFlexSource(): Promise<() => Promise<void>> {
     // nothing. The dial frequency is the reliable discriminator, so unless the
     // mode is pinned in Settings it is inferred from where the radio is tuned.
     if (configuredMode === "auto") {
-      const inferred = inferDigitalMode(slice.freqHz);
+      // A slice in CW mode is CW whatever the dial says: the operator switched the radio.
+      const inferred: ModeGuess = /^CW/i.test(slice.mode ?? "")
+        ? { mode: "CW", certain: true, matched: null }
+        : inferDigitalMode(slice.freqHz);
       // A mode chosen by name holds while the dial wanders where nothing has a calling
       // frequency (an RTTY segment), and lets go when the dial lands on one.
       if (stickyMode && inferred.certain && inferred.mode !== stickyMode) stickyMode = null;
@@ -1872,7 +1898,7 @@ async function startFlexSource(): Promise<() => Promise<void>> {
                 ? ` (no calling frequency nearby — staying on ${guess.mode}, as chosen)`
                 : " (no known calling frequency nearby — defaulting to FT8)"),
         );
-        if (guess.mode === "RTTY") streamText = "";
+        if (isStreamMode(guess.mode)) streamText = "";
         // The window length changed, so the deadline for "no window arrived" must too.
         // Armed on FT8 and left alone, it fired 136 s into the first WSPR window and the
         // restart resumed FT8 - which looked exactly like WSPR not working.
@@ -1892,6 +1918,7 @@ async function startFlexSource(): Promise<() => Promise<void>> {
     // sequencer listening to beacons and CQing over them. The retune was the operator's;
     // stopping auto is the only safe reading of it.
     if (status.subMode === "RTTY") rttyApply?.();
+    if (status.subMode === "CW") cwApply?.();
     if (status.subMode && NO_SEQUENCER_MODES.has(status.subMode)) {
       const a = activeAuto();
       if (a && a.state.mode !== "off") {
@@ -1953,6 +1980,8 @@ async function startFlexSource(): Promise<() => Promise<void>> {
     broadcast({ kind: "status", status });
   });
   rig.on("status", (st) => {
+    // The radio's CW pitch changed: the decoder follows it.
+    if (st.object === "transmit" && st.fields.cw_pitch !== undefined && status.subMode === "CW") cwApply?.();
     // The transmit object carries rfpower; surface it so the UI slider can show
     // the radio's actual setting rather than an optimistic guess.
     if (st.object.split(/\s+/)[0] !== "transmit") return;
@@ -3859,22 +3888,39 @@ async function main(): Promise<void> {
       // is driving. On the Icom that meant going looking for a Flex slice and failing
       // with "the radio has no active slice to tune" — about a radio that was not even
       // selected. Rig control belongs to the process that owns the radio.
-      // POST /rtty-send — key the radio and send a line of RTTY at the current tone pair.
+      // POST /cw — the CW sending speed. The pitch is the radio's own and is not set here.
+      if (url.pathname === "/cw") {
+        const body = await readJson(req);
+        const wpm = Number(body.wpm);
+        if (!Number.isFinite(wpm) || wpm < 5 || wpm > 60) {
+          sendJson(res, 400, { error: "wpm must be between 5 and 60" });
+          return;
+        }
+        cwTuning.wpm = Math.round(wpm);
+        cwApply?.();
+        broadcast({ kind: "status", status });
+        sendJson(res, 200, { ok: true, cw: status.cw });
+        return;
+      }
+
+      // POST /text-send — send a line in the stream mode the decoder is on: RTTY as audio
+      // at the current tone pair, CW through the radio's keyer at the speed set.
       //
       // Answers 202 as soon as the transmission has started rather than when it ends: a
       // line of text is five to forty seconds on the air and the web tier's proxy waits
       // five. The outcome goes to the log and to every page as a `[TX]` line in the
       // stream, or a `[TX refused: ...]` one, which is where the operator is looking.
-      if (url.pathname === "/rtty-send") {
+      if (url.pathname === "/text-send" || url.pathname === "/rtty-send") {
         const body = await readJson(req);
         const text = String(body.text ?? "").replace(/\s+$/, "");
         if (!text.trim()) {
           sendJson(res, 400, { error: "text is required" });
           return;
         }
-        if (status.subMode !== "RTTY" || !status.rtty) {
+        const streamMode = isStreamMode(status.subMode) ? status.subMode : null;
+        if (!streamMode || (streamMode === "RTTY" && !status.rtty)) {
           sendJson(res, 409, {
-            error: `Tune to RTTY first: the decoder is on ${status.subMode ?? "nothing"}, and text goes out at the pair it is listening on`,
+            error: `Tune to RTTY or CW first: the decoder is on ${status.subMode ?? "nothing"}, and text goes out where it is listening`,
           });
           return;
         }
@@ -3893,25 +3939,32 @@ async function main(): Promise<void> {
           sendJson(res, 409, { error: "The radio is transmitting; wait for it to finish" });
           return;
         }
-        const req2 = {
-          text,
-          centreHz: status.rtty.centreHz,
-          shiftHz: status.rtty.shiftHz,
-          sideband: status.rtty.sideband,
-          figures: rttyCode.figures,
-          usos: rttyCode.usos,
-        };
+        const rtty = status.rtty;
+        const req2 =
+          streamMode === "CW" || !rtty
+            ? { mode: "CW" as const, text, centreHz: 0, shiftHz: 0, sideband: "USB" as const, wpm: cwTuning.wpm }
+            : {
+                mode: "RTTY" as const,
+                text,
+                centreHz: rtty.centreHz,
+                shiftHz: rtty.shiftHz,
+                sideband: rtty.sideband,
+                figures: rttyCode.figures,
+                usos: rttyCode.usos,
+              };
+        const tag = streamMode.toLowerCase();
         void tx.transmitText(req2).then(
           (r) => {
             const line = r.sent ? `\n[TX] ${text}\n` : `\n[TX refused: ${r.reason ?? "unknown"}]\n`;
             streamText = (streamText + line).slice(-STREAM_TEXT_MAX);
-            broadcast({ kind: "text", mode: "RTTY", text: line, at: Date.now(), tx: true });
-            if (r.sent) console.log(`[rtty] sent ${text.length} chars (${r.packetsSent ?? 0} packets)`);
-            else console.warn(`[rtty] not sent: ${r.reason}`);
+            broadcast({ kind: "text", mode: streamMode, text: line, at: Date.now(), tx: true });
+            if (r.sent) console.log(`[${tag}] sent ${text.length} chars${r.packetsSent ? ` (${r.packetsSent} packets)` : ""}`);
+            else console.warn(`[${tag}] not sent: ${r.reason}`);
           },
-          (err) => console.error(`[rtty] send failed: ${err instanceof Error ? err.message : String(err)}`),
+          (err) => console.error(`[${tag}] send failed: ${err instanceof Error ? err.message : String(err)}`),
         );
-        sendJson(res, 202, { ok: true, chars: text.length, durationMs: Math.round(rttyDurationMs(text)) });
+        const durationMs = streamMode === "CW" ? cwDurationMs(text, cwTuning.wpm) : rttyDurationMs(text);
+        sendJson(res, 202, { ok: true, mode: streamMode, chars: text.length, durationMs: Math.round(durationMs) });
         return;
       }
 
@@ -3941,8 +3994,8 @@ async function main(): Promise<void> {
         const body = await readJson(req);
         const band = String(body.band ?? "").toUpperCase();
         const mode = String(body.mode ?? "FT8").toUpperCase() as DigitalMode;
-        if (!["FT8", "FT4", "FT2", "WSPR", "RTTY"].includes(mode)) {
-          sendJson(res, 400, { error: "mode must be FT8, FT4, FT2, WSPR or RTTY" });
+        if (!["FT8", "FT4", "FT2", "WSPR", "RTTY", "CW"].includes(mode)) {
+          sendJson(res, 400, { error: "mode must be FT8, FT4, FT2, WSPR, RTTY or CW" });
           return;
         }
         const hz = callingFrequencyHz(band, mode, ituRegionFromGrid(status.deGrid));
@@ -3982,6 +4035,14 @@ async function main(): Promise<void> {
           const reply = await client.command(
             `slice tune ${flexSliceIndex ?? 0} ${(hz / 1_000_000).toFixed(6)}`,
           );
+          // CW is a modulation as well as a mode: the radio's filters, pitch and keyer
+          // apply only with the slice in CW. Leaving CW for a data mode restores DIGU.
+          if (reply.status === 0) {
+            const wantCw = mode === "CW";
+            const isCw = /^CW/i.test(status.mode ?? "");
+            if (wantCw && !isCw) await client.command(`slice set ${flexSliceIndex ?? 0} mode=CW`);
+            else if (!wantCw && isCw) await client.command(`slice set ${flexSliceIndex ?? 0} mode=DIGU`);
+          }
           sendJson(res, reply.status === 0 ? 200 : 502, {
             ok: reply.status === 0,
             band,
@@ -4608,7 +4669,7 @@ async function main(): Promise<void> {
                 error:
                   status.subMode === "WSPR"
                     ? "WSPR is receive-only: a beacon cannot be called"
-                    : "RTTY has no sequencer: nothing here can call a station in RTTY yet",
+                    : `${status.subMode} has no sequencer: nothing here can call a station in ${status.subMode} yet`,
               });
               return;
             }
@@ -4870,7 +4931,7 @@ async function main(): Promise<void> {
       try {
         ws.send(JSON.stringify({ kind: "status", status }));
         ws.send(JSON.stringify({ kind: "backlog", decodes: recentDecodes.slice(-50) }));
-        if (streamText) ws.send(JSON.stringify({ kind: "text-backlog", mode: "RTTY", text: streamText }));
+        if (streamText) ws.send(JSON.stringify({ kind: "text-backlog", mode: status.subMode ?? "RTTY", text: streamText }));
         if (lastSpectrum) ws.send(JSON.stringify(lastSpectrum));
         if (lastPanadapter) ws.send(JSON.stringify(lastPanadapter));
         // The auto and QSO states are otherwise only broadcast when they CHANGE, so a

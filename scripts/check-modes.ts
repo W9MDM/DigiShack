@@ -114,6 +114,9 @@ console.log("\nis this a frequency an automatic mode may run on");
   eq(callingFrequencyFor("40M", "FT8", 2), 7_074_000, "FT8 is unchanged by the region");
   eq(callingFrequencyFor("40M", "RTTY", null), 7_040_000, "with no region known, the first listed - which is why the bridge passes the station's grid");
   eq(callingFrequencyFor("2M", "RTTY", 2), null, "a band with no RTTY entry is null");
+  eq(callingFrequencyFor("40M", "CW", 2), 7_030_000, "40 m CW is 7.030 for everyone");
+  eq(callingFrequencyFor("20M", "CW", null), 14_040_000, "20 m CW is 14.040");
+  eq(callingFrequencyFor("6M", "CW", 2), 50_095_000, "and 6 m has a CW segment too");
 
   // FT4 lives elsewhere, so the mode is part of the question.
   ok(digitalCallingFrequency(14_080_000, "FT4") !== null, "14.080 is FT4");
@@ -132,10 +135,13 @@ console.log("\nis this a frequency an automatic mode may run on");
   // needs a radio. The rule is the part that was wrong.
   const resolveMode = (st: { subMode: string | null; mode: string | null }): TxMode => {
     const m = (st.subMode || st.mode || "FT8").toUpperCase();
-    return m === "FT4" ? "FT4" : m === "FT2" ? "FT2" : m === "WSPR" ? "WSPR" : m === "RTTY" ? "RTTY" : "FT8";
+    return m === "FT4" ? "FT4" : m === "FT2" ? "FT2" : m === "WSPR" ? "WSPR" : m === "RTTY" ? "RTTY" : m === "CW" ? "CW" : "FT8";
   };
   eq(resolveMode({ subMode: "WSPR", mode: "DIGU" }), "WSPR", "listening to WSPR resolves to WSPR");
   eq(resolveMode({ subMode: "RTTY", mode: "DIGU" }), "RTTY", "listening to RTTY resolves to RTTY");
+  eq(resolveMode({ subMode: "CW", mode: "CW" }), "CW", "listening to CW resolves to CW");
+  eq(modulationForFrequency(7_030_000, "CW"), "CW", "CW is its own modulation, whatever the frequency");
+  eq(modulationForFrequency(7_074_000, "FT8"), "USB-D", "and FT8 is still data");
 
   eq(resolveMode({ subMode: "FT4", mode: "DIGU" }), "FT4", "a Flex in FT4 resolves to FT4");
   eq(resolveMode({ subMode: "FT8", mode: "DIGU" }), "FT8", "and in FT8, to FT8");
