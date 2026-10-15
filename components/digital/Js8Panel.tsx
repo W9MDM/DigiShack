@@ -20,7 +20,11 @@ export interface Js8SendState {
   offsetHz: number;
 }
 
+export type Js8Speed = "normal" | "fast" | "turbo" | "slow";
+
 interface Props {
+  speed: Js8Speed;
+  onSpeed: (s: Js8Speed) => void;
   /** Messages joined from their frames, one line each, with [TX] lines for what went out. */
   text: string;
   myCall: string | null;
@@ -40,7 +44,16 @@ const hhmmss = (ms: number) => `${new Date(ms).toISOString().slice(11, 19)}Z`;
 
 const BUTTON = "px-2 py-1 text-xs border border-line rounded-sm hover:text-fg disabled:opacity-50";
 
+const SPEEDS: { id: Js8Speed; label: string }[] = [
+  { id: "normal", label: "Normal 15 s" },
+  { id: "fast", label: "Fast 10 s" },
+  { id: "turbo", label: "Turbo 6 s" },
+  { id: "slow", label: "Slow 30 s" },
+];
+
 export function Js8Panel({
+  speed,
+  onSpeed,
   text,
   myCall,
   myGrid,
@@ -65,7 +78,23 @@ export function Js8Panel({
   return (
     <div className="mb-3">
       <div className="flex items-center justify-between text-xs text-fg-muted mb-1">
-        <span>Messages, joined from their frames</span>
+        <span className="flex items-center gap-2">
+          Messages, joined from their frames
+          <select
+            className="bg-bg-raised border border-line rounded-sm px-1 py-0.5 text-xs"
+            value={speed}
+            onChange={(e) => onSpeed(e.target.value as Js8Speed)}
+            disabled={!canSend || sending}
+            aria-label="JS8 speed"
+            title="Both ends must use the same speed; most stations run Normal"
+          >
+            {SPEEDS.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.label}
+              </option>
+            ))}
+          </select>
+        </span>
         <button type="button" className="hover:text-fg" onClick={onClear}>
           Clear
         </button>

@@ -27,6 +27,7 @@ be read: `DATABASE_URL`, `SETTINGS_KEY` and `PORT`.
 - [DXCC reference data](#dxcc-reference-data) — 2 settings
 - [PSKReporter](#pskreporter) — 4 settings
 - [RTTY](#rtty) — 5 settings
+- [JS8](#js8) — 1 setting
 - [Olivia](#olivia) — 5 settings
 - [PSK31](#psk31) — 3 settings
 - [CW](#cw) — 3 settings
@@ -184,6 +185,14 @@ Where the RTTY tone pair starts in the audio passband and how the decoder reads 
 | Figures case | `rtty.figures` | text | `us` | us \| ita2. Which characters the FIGURES case carries where the standards differ: US TTY ($ ! & # ; ") is what amateur software uses; ITA2 proper has ' WRU BELL + = there instead. |
 | Unshift on space | `rtty.usos` | on/off | `true` | A received space returns the decoder to the letters case, the amateur convention. Leave on unless the station you are reading sends figures across spaces without re-shifting. |
 | RTTY squelch | `rtty.squelch` | number | `0.7` | 0 to 1. How sure the decoder must be of a character's bits before printing it. Band noise alone passes the frame check about twice a second; at 0.7 it passes a few characters a minute and a signal needs about 6 dB over the noise, which is where RTTY copy begins anyway. Lower it for a weak station you can hear but not read; 0 prints everything. |
+
+## JS8
+
+Which of JS8Call's speeds this station listens and sends at. The JS8 panel changes it live; this is the speed the bridge starts with.
+
+| Setting | Key | Type | Default | What it does |
+|---|---|---|---|---|
+| JS8 speed | `js8.speed` | text | `normal` | normal \| fast \| turbo \| slow: JS8Call's speeds, 15, 10, 6 and 30 second windows on the same frequencies. Both ends must use the same one; Normal is what most stations run. The JS8 panel changes it for the session. |
 
 ## Olivia
 

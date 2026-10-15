@@ -124,6 +124,22 @@ async function main(): Promise<void> {
     );
   }
 
+  console.log("\nthe radio is left in the right slice mode");
+  {
+    const src = fs.readFileSync("services/radio/index.ts", "utf8");
+    ok(
+      src.includes("else if (!wantCw && !/^DIG[UL]$/.test(cur)) await client.command(`slice set ${flexSliceIndex ?? 0} mode=DIGU`)"),
+      "a data-mode chip sets DIGU on a slice in USB or LSB, not only on one in CW",
+    );
+    const at = src.indexOf("function saveLastTune");
+    const save = src.slice(at, at + 900);
+    const cancel = save.indexOf("clearTimeout(lastTuneTimer)");
+    ok(
+      cancel >= 0 && cancel < save.indexOf("if (next === lastTuneSaved) return;"),
+      "a pending tune save is cancelled before the unchanged check, so a passing USB is never saved",
+    );
+  }
+
   console.log(`\n${passed} passed, ${failed} failed`);
   if (failed) process.exit(1);
 }

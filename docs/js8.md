@@ -21,9 +21,12 @@ their last frame arrives (or, after a minute and a half without it, with an elli
 | 30 m | 10.130 | 10 m | 28.078 |
 | 20 m | 14.078 | 6 m | 50.318 |
 
-Only the normal submode (15 s) is listened to. JS8Call's fast, turbo, slow and ultra
-submodes share the frame at other speeds; the codec knows them and the decoder does not
-yet run them.
+**Speed.** The picker beside the message box chooses JS8Call's speed: Normal (15 s
+windows, what most stations run), Fast (10 s), Turbo (6 s) or Slow (30 s, the weakest
+signals). All four share the same frequencies, and both ends must use the same one - a
+Fast station is not read by a decoder on Normal. The station listens and sends at one
+speed at a time; `js8.speed` in Settings is the one it starts with. Ultra (4 s) is left
+out: nobody runs it.
 
 ## Frames and messages
 
@@ -108,4 +111,3 @@ than send a tail without its head, and moving the dial off JS8 cancels what is l
 
 - The automatic replies JS8Call stations expect (SNR?, QUERY, ACK, relays).
 - A panel of stations heard and conversations, rather than frames in a table.
-- The other submodes.

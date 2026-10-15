@@ -72,6 +72,7 @@ interface RigStatus {
   olivia?: { centreHz: number; tones: number; bandwidth: number; code?: "olivia" | "contestia" } | null;
   /** A JS8 message going out, or the last one. */
   js8?: Js8SendState | null;
+  js8Speed?: "normal" | "fast" | "turbo" | "slow";
   connected: boolean;
   dialFrequency: number | null;
   band: string | null;
@@ -1398,6 +1399,14 @@ export default function DigitalPage({ wsUrl }: Props) {
     },
     [js8OffsetHz],
   );
+  const setJs8Speed = useCallback(async (speed: "normal" | "fast" | "turbo" | "slow") => {
+    try {
+      await apiPost("/api/bridge/control", { action: "js8-speed", speedName: speed });
+      setJs8Error(null);
+    } catch (err) {
+      setJs8Error(err instanceof ApiError ? err.message : "Could not change the JS8 speed");
+    }
+  }, []);
   const cancelJs8 = useCallback(async () => {
     try {
       await apiPost("/api/bridge/control", { action: "js8-cancel" });
@@ -2467,6 +2476,8 @@ export default function DigitalPage({ wsUrl }: Props) {
                     line each as the bridge finishes them, sit above. */}
                 {decodingAs === "JS8" && (
                   <Js8Panel
+                    speed={status?.js8Speed ?? "normal"}
+                    onSpeed={(s) => void setJs8Speed(s)}
                     text={streamText}
                     myCall={myCall}
                     myGrid={status?.deGrid ?? null}

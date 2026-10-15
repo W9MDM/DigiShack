@@ -66,7 +66,7 @@ export class Js8Thread {
     return w;
   }
 
-  async decode(audio: Float32Array, sampleRate: number): Promise<Js8ThreadResult> {
+  async decode(audio: Float32Array, sampleRate: number, submode: "A" | "B" | "C" | "E" | "I" = "A"): Promise<Js8ThreadResult> {
     if (this.closed) return { decodes: [], ms: 0, error: "decoder closed" };
     const w = this.ensure();
     const id = ++this.seq;
@@ -81,7 +81,7 @@ export class Js8Thread {
       w.ref();
       // Transferred, not copied: the pipeline hands over its own buffer and does not read
       // it again.
-      w.postMessage({ id, audio, sampleRate }, [audio.buffer as ArrayBuffer]);
+      w.postMessage({ id, audio, sampleRate, submode }, [audio.buffer as ArrayBuffer]);
     });
   }
 

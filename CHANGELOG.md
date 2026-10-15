@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.201.9 - public release
+## 1.202.1 - public release
 
 Development happens in a private repository; this is where the public history starts.
 Earlier entries are not reproduced - they quote real operators by callsign, include
@@ -22,6 +22,9 @@ Notes for anyone running this:
 
 ## Release history
 
+- **1.202.1** — The slice mode, properly
+- **1.202.0** — JS8 at every speed
+- **1.201.9** — And in the same slice mode
 - **1.201.8** — A bridge restart puts the radio back where it was
 - **1.201.7** — Band activity survives PSKReporter refusals; RTTY acquisition; restarts keep the radio
 - **1.201.6** — Stream decoders keep their sync through status updates
