@@ -828,7 +828,7 @@ export class FlexDaxTransmitter {
       return { ...base, reason: `${req.mode} is sent as text, not as a timed frame` };
     }
     if (req.mode === "SSTV") {
-      return { ...base, reason: "SSTV is received here, not sent" };
+      return { ...base, reason: "SSTV is sent as a picture, not as a timed frame" };
     }
     // JS8 goes out as frames from the message layer, one per window; the frame rides on
     // the request and the waveform is built from it below. Without one there is nothing
@@ -1137,6 +1137,46 @@ export class FlexDaxTransmitter {
       wave = this.buildTextWaveform(req);
     } catch (err) {
       return { ...base, reason: err instanceof Error ? err.message : "Could not encode the text" };
+    }
+    const refused = await this.gateRefusal(base);
+    if (refused) return refused;
+    this.busy = true;
+    this.busySince = nowMs();
+    this.busyForWindow = null;
+    const gen = ++this.txGen;
+    try {
+      return await this.keyAndStream(wave, base, null, 0);
+    } catch (err) {
+      await this.unkey();
+      return { ...base, reason: err instanceof Error ? err.message : "Transmission failed" };
+    } finally {
+      if (gen === this.txGen) {
+        this.busy = false;
+        this.busySince = null;
+        this.busyForWindow = null;
+        this.pendingKey = null;
+      }
+    }
+  }
+
+  /**
+   * Send a prepared stretch of audio now - an SSTV picture - through the same gate and the
+   * same key, stream, unkey path as a line of RTTY. `build` makes the audio at this
+   * transmitter's rate; it runs before anything keys, so a picture that cannot be built
+   * never touches the radio. `maxMs` is the caller's cap, checked against the audio built.
+   * `unkey()` stops it part way: the stream loop stops on the next packet.
+   */
+  async transmitAudio(build: (sampleRate: number) => Float32Array, label: string, mode: TxMode, maxMs: number): Promise<TransmitResult> {
+    const base: TransmitResult = { sent: false, message: label, mode, offsetHz: 0 };
+    let wave: Float32Array;
+    try {
+      wave = build(DAX_RATE);
+    } catch (err) {
+      return { ...base, reason: err instanceof Error ? err.message : "Could not build the audio" };
+    }
+    const ms = (wave.length / DAX_RATE) * 1000;
+    if (ms > maxMs) {
+      return { ...base, reason: `${(ms / 1000).toFixed(0)} s on the air is over the ${(maxMs / 1000).toFixed(0)} s cap` };
     }
     const refused = await this.gateRefusal(base);
     if (refused) return refused;

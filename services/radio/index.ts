@@ -165,6 +165,8 @@ import {
 import { Js8Sender, type Js8SenderState } from "@/lib/radio/js8-sender";
 import { Js8AutoReplier, type Js8AutoReplyLevel } from "@/lib/radio/js8-autoreply";
 import { encodePng } from "@/lib/digital/png";
+import { sstvModeByName, sstvWaveform } from "@/lib/digital/sstv";
+import { parseLicenceClass, sstvTransmitRefusal } from "@/lib/radio/sstv-licence";
 import type { SstvEvent } from "@/lib/radio/decode-pipeline";
 import { js8SubmodeNow, PERIOD_MS, setJs8Submode } from "@/lib/radio/timing";
 import { gateAutomation, hopModeFor, NO_SEQUENCER_MODES, noSequencerReason } from "@/lib/radio/automation-gate";
@@ -1509,6 +1511,38 @@ function scheduleJs8Pump(delayMs: number): void {
     void pumpJs8Replies();
   }, delayMs);
   js8PumpTimer.unref?.();
+}
+
+/**
+ * SSTV sending. The modes offered are the common ones on the air; the longest, Scottie DX,
+ * is four and a half minutes, which is the cap. A picture is a long, steady carrier - a
+ * Martin 1 is nearly two minutes at full duty, where an FT8 transmission is 12.6 s - so it
+ * goes out at sstv.powerPct (50 unless set), never higher than the power already set, and
+ * the power is put back afterwards. The PA must be cool to start.
+ */
+const SSTV_SEND_MODES = ["Martin 1", "Martin 2", "Scottie 1", "Scottie 2", "Scottie DX", "Robot 36", "Robot 72", "PD 90", "PD 120", "PD 180"];
+const SSTV_MAX_TX_MS = 5 * 60_000;
+const SSTV_PA_MAX_C = 60;
+let sstvSending: { mode: string; startedAt: number; durationMs: number } | null = null;
+
+/** The radio's RF power, in percent, on whichever radio is active. True when it took. */
+async function setRfPowerPct(pct: number): Promise<boolean> {
+  try {
+    if (status.source === "icom") {
+      if (!icomSource) return false;
+      await icomSource.setRfPowerPercent(pct);
+    } else {
+      const c = flexGuiClient ?? flexRig;
+      if (!c) return false;
+      const r = await c.command(`transmit set rfpower=${pct}`);
+      if (r.status !== 0) return false;
+    }
+    status.rfPower = pct;
+    broadcast({ kind: "status", status });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** A line into the JS8 message box: what went out, and how it ended. */
@@ -4515,6 +4549,91 @@ async function main(): Promise<void> {
       }
 
       // POST /js8-cancel — stop after the frame on the air, if one is.
+      // POST /sstv-send — a picture, already at the mode's size with the callsign on it.
+      // Answers 202 once the radio is keyed; `sstv-tx` messages follow it to the end.
+      if (url.pathname === "/sstv-send") {
+        const body = await readJson(req);
+        const mode = sstvModeByName(String(body.mode ?? ""));
+        if (!mode || !SSTV_SEND_MODES.includes(mode.name)) {
+          sendJson(res, 400, { error: `mode must be one of ${SSTV_SEND_MODES.join(", ")}` });
+          return;
+        }
+        const width = Number(body.width);
+        const height = Number(body.height);
+        const rgb = Buffer.from(String(body.rgb ?? ""), "base64");
+        if (width !== mode.width || height !== mode.height || rgb.length !== width * height * 3) {
+          sendJson(res, 400, { error: `${mode.name} is ${mode.width}x${mode.height}; the picture sent is not` });
+          return;
+        }
+        if (status.subMode !== "SSTV" || !status.dialFrequency) {
+          sendJson(res, 409, { error: "Tune to SSTV first: a picture goes out where the station is listening" });
+          return;
+        }
+        if (sstvSending || status.transmitting) {
+          sendJson(res, 409, { error: "Already transmitting; wait for it to finish or press Stop" });
+          return;
+        }
+        if (sstvLive) {
+          sendJson(res, 409, { error: `A ${sstvLive.mode} picture is coming in on this frequency; wait for it to finish` });
+          return;
+        }
+        const sideband: "USB" | "LSB" = /LSB|DIGL/i.test(status.mode ?? "") ? "LSB" : "USB";
+        const licence = sstvTransmitRefusal(parseLicenceClass(await getSetting("station.licenceClass")), status.dialFrequency, sideband);
+        if (licence) {
+          sendJson(res, 403, { error: licence });
+          return;
+        }
+        if (!(await transmitArmed())) {
+          sendJson(res, 403, { error: `Transmit is off. Turn on "Allow transmit" in Settings → ${gateSettingsTab()} before sending.` });
+          return;
+        }
+        const pa = (lastTelemetry as { paTempC?: number | null } | null)?.paTempC ?? null;
+        if (pa !== null && pa > SSTV_PA_MAX_C) {
+          sendJson(res, 409, { error: `The PA is at ${pa} °C; a picture is minutes of carrier, so it waits for under ${SSTV_PA_MAX_C} °C` });
+          return;
+        }
+        const tx = activeTx;
+        if (!tx?.transmitAudio) {
+          sendJson(res, 503, { error: "Sending pictures is not available on this radio" });
+          return;
+        }
+        const img = { width, height, rgb: new Uint8ClampedArray(rgb) };
+        const want = Math.max(5, Math.min(100, Math.round(await getNumberSetting("sstv.powerPct", 50))));
+        const before = status.rfPower;
+        const lowered = before !== null && before > want ? await setRfPowerPct(want) : false;
+        const durationMs = Math.round((sstvWaveform(mode, img, { sampleRate: 8000, leadMs: 0 }).length / 8000) * 1000);
+        sstvSending = { mode: mode.name, startedAt: Date.now(), durationMs };
+        broadcast({ kind: "sstv-tx", sending: true, ...sstvSending, powerPct: lowered ? want : before });
+        console.log(`[sstv] sending ${mode.name} (${(durationMs / 1000).toFixed(0)} s) at ${lowered ? want : (before ?? "?")}% power`);
+        void tx
+          .transmitAudio((rate) => sstvWaveform(mode, img, { sampleRate: rate, leadMs: 300 }), `SSTV ${mode.name}`, "SSTV", SSTV_MAX_TX_MS)
+          .then(
+            (r) => {
+              if (r.sent) console.log(`[sstv] sent ${mode.name}`);
+              else console.warn(`[sstv] not sent: ${r.reason ?? "no reason given"}`);
+              broadcast({ kind: "sstv-tx", sending: false, mode: mode.name, sent: r.sent, reason: r.reason ?? null });
+            },
+            (err) => {
+              console.error(`[sstv] send failed: ${err instanceof Error ? err.message : String(err)}`);
+              broadcast({ kind: "sstv-tx", sending: false, mode: mode.name, sent: false, reason: "send failed" });
+            },
+          )
+          .finally(() => {
+            sstvSending = null;
+            if (lowered && before !== null) void setRfPowerPct(before);
+          });
+        sendJson(res, 202, { ok: true, mode: mode.name, durationMs, powerPct: lowered ? want : before });
+        return;
+      }
+
+      // POST /sstv-stop — stop a picture going out, now.
+      if (url.pathname === "/sstv-stop") {
+        const was = sstvSending;
+        if (was) await activeTx?.unkey();
+        sendJson(res, 200, { ok: true, stopped: was !== null });
+        return;
+      }
+
       // POST /js8-speed — Normal, Fast, Turbo or Slow. The window length changes, so the
       // cut is re-armed and the watchdog retimed; a message going out is stopped first,
       // since its frames were built for the old speed.

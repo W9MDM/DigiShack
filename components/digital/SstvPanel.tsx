@@ -6,6 +6,7 @@
 import { useCallback, useEffect, useImperativeHandle, useRef, useState, forwardRef } from "react";
 
 import { useApi } from "@/lib/client/api";
+import { SstvSend, type SstvTxState } from "@/components/digital/SstvSend";
 
 export interface SstvStats {
   mode: "SSTV";
@@ -42,7 +43,10 @@ function decodeBase64(b64: string): Uint8Array {
 
 const time = (iso: string) => `${iso.slice(11, 16)}Z`;
 
-export const SstvPanel = forwardRef<SstvPanelHandle, { stats: SstvStats | null }>(function SstvPanel({ stats }, ref) {
+export const SstvPanel = forwardRef<
+  SstvPanelHandle,
+  { stats: SstvStats | null; myCall: string | null; canSend: boolean; tx: SstvTxState | null }
+>(function SstvPanel({ stats, myCall, canSend, tx }, ref) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const [live, setLive] = useState<{ mode: string; width: number; height: number; rows: number } | null>(null);
   const [picked, setPicked] = useState<Picture | null>(null);
@@ -153,6 +157,8 @@ export const SstvPanel = forwardRef<SstvPanelHandle, { stats: SstvStats | null }
           </div>
         )}
       </div>
+
+      <SstvSend myCall={myCall} canSend={canSend} galleryFile={showing?.file ?? null} tx={tx} />
 
       {pictures.length > 0 && (
         <div>

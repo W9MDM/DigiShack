@@ -164,6 +164,8 @@ export interface DigitalTransmitter {
    * Text modes (RTTY): key, send a string as it is, unkey - no window, no timing. Not
    * every radio has it; the bridge answers 503 where it is missing.
    */
+  /** Prepared audio now (an SSTV picture): built at the transmitter's rate, capped, gated. */
+  transmitAudio?(build: (sampleRate: number) => Float32Array, label: string, mode: DigitalMode, maxMs: number): Promise<TransmitOutcome>;
   transmitText?(req: {
     /** RTTY, PSK31 and Olivia go out as audio; CW is handed to the radio's own keyer. */
     mode: "RTTY" | "CW" | "PSK31" | "OLIVIA";
