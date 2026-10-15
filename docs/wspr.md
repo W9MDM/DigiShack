@@ -58,7 +58,12 @@ publishes — every field identical, the ninth a marginal decode lost to roundin
 recording is the check's fixture. See the changelog for 1.185.0 and 1.186.0.
 
 The decoder runs on its own thread: a two-minute window takes about three seconds of CPU,
-and the bridge's main thread cannot be away that long while DAX audio keeps arriving.
+and the bridge's main thread cannot be away that long while DAX audio keeps arriving. The
+thread loads `lib/radio/wspr-worker.bundle.mjs`, plain JavaScript that esbuild builds from
+the TypeScript decoder (`npm run build:wspr-worker`), because a worker thread on Node 20
+does not inherit the bridge's TypeScript loader. The bundle is committed: after changing
+anything under `lib/digital/wspr*` or the worker, rebuild it, and `npm run check` fails
+while it is stale.
 
 ## Not yet
 

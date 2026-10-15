@@ -1,8 +1,11 @@
 // The main-thread side of the WSPR decoder thread. See lib/radio/wspr-worker.ts for why
-// there is a thread at all, and lib/radio/decode-thread.ts for the FT8/FT4 one this
-// mirrors: one job at a time, a timeout that treats a stuck window as empty, a restart on
-// a crash, and `unref` so an idle thread never keeps the process alive.
+// there is a thread at all and why the thread loads a BUNDLE of it (wspr-worker.bundle.mjs,
+// plain JavaScript: a worker thread on Node 20 does not inherit tsx), and
+// lib/radio/decode-thread.ts for the FT8/FT4 one this mirrors: one job at a time, a timeout
+// that treats a stuck window as empty, a restart on a crash, and `unref` so an idle thread
+// never keeps the process alive.
 
+import { existsSync } from "node:fs";
 import { Worker } from "node:worker_threads";
 
 import type { WsprDecode } from "@/lib/digital/wsprdemod";
@@ -28,7 +31,15 @@ export class WsprThread {
 
   private ensure(): Worker {
     if (this.worker) return this.worker;
-    const w = new Worker(new URL("./wspr-worker.ts", import.meta.url));
+    // The bundle, never the .ts: see the header. Said once per spawn when it is missing,
+    // because the Worker's own error ("Cannot find module") does not say what to run.
+    const url = new URL("./wspr-worker.bundle.mjs", import.meta.url);
+    if (!existsSync(url)) {
+      this.onLog?.(
+        "[wspr] lib/radio/wspr-worker.bundle.mjs is missing - run `npm run build:wspr-worker`; every WSPR window decodes as empty until it exists",
+      );
+    }
+    const w = new Worker(url);
     w.on("message", (m: WsprJobResult) => {
       const job = this.pending.get(m.id);
       if (!job) return;
