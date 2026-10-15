@@ -24,6 +24,7 @@ import { float32ToS16le, type IcomAudioStream } from "@/lib/icom/audio-stream";
 import type { IcomSerialStream } from "@/lib/icom/serial-stream";
 import { transmitStartAt } from "@/lib/radio/timing";
 import {
+  buildJs8Waveform,
   buildWaveform,
   MAX_TRANSMIT_MS,
   type TxMode,
@@ -99,6 +100,8 @@ export class IcomTransmitter implements RadioTransmitter {
     message: string;
     mode: TxMode;
     offsetHz: number;
+    /** JS8: the frame to send; the waveform is built from it, not from `message`. */
+    js8?: { frame: string; txType: number };
     /** A period boundary in UTC ms. The mode's start offset is applied here. */
     startAt?: number;
   }): Promise<TransmitOutcome> {
@@ -137,7 +140,9 @@ export class IcomTransmitter implements RadioTransmitter {
     // Generate first. A message that fails to encode must never leave the radio keyed.
     let wave: Float32Array;
     try {
-      wave = buildWaveform(req.message, req.mode, req.offsetHz, ICOM_TX_RATE);
+      wave = req.js8
+        ? buildJs8Waveform(req.js8, req.offsetHz, ICOM_TX_RATE)
+        : buildWaveform(req.message, req.mode, req.offsetHz, ICOM_TX_RATE);
     } catch (err) {
       return refuse(err instanceof Error ? err.message : "Could not build the waveform");
     }

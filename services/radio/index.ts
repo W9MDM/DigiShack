@@ -150,7 +150,15 @@ import { postWsprSpots, wsprSpotOf, type WsprSpotReport } from "@/lib/wsprnet/up
 import { RTTY_CENTRE_HZ, RTTY_SHIFT_HZ, rttyDurationMs, rttyTones } from "@/lib/digital/rtty";
 import { cwDurationMs } from "@/lib/digital/cw";
 import { isStreamMode, type Js8DecodeExtra } from "@/lib/radio/decode-pipeline";
-import { Js8MessageAssembler, js8StationOf, type Js8ParsedFrame } from "@/lib/digital/js8-message";
+import {
+  Js8MessageAssembler,
+  js8BuildFrames,
+  js8ParseFrame,
+  js8StationOf,
+  type Js8OutFrame,
+  type Js8ParsedFrame,
+} from "@/lib/digital/js8-message";
+import { Js8Sender, type Js8SenderState } from "@/lib/radio/js8-sender";
 import { gateAutomation, hopModeFor, NO_SEQUENCER_MODES, noSequencerReason } from "@/lib/radio/automation-gate";
 import type { SchedulableAuto } from "@/lib/radio/schedule-runner";
 import { collectReceptionReports } from "@/lib/pskreporter/collect";
@@ -194,6 +202,8 @@ interface RigStatus {
   rtty: { centreHz: number; shiftHz: number; sideband: "USB" | "LSB"; markHz: number; spaceHz: number } | null;
   /** The CW pitch the decoder listens on and the speed the keyer sends at, while on CW. */
   cw: { pitchHz: number; wpm: number; pitchFromRadio: boolean } | null;
+  /** A JS8 message going out, or the last one, with the offset it uses. See lib/radio/js8-sender.ts. */
+  js8: (Js8SenderState & { offsetHz: number }) | null;
   dxCall: string | null;
   deCall: string | null;
   deGrid: string | null;
@@ -329,6 +339,7 @@ const status: RigStatus = {
   subMode: null,
   rtty: null,
   cw: null,
+  js8: null,
   dxCall: null,
   deCall: null,
   deGrid: null,
@@ -1260,6 +1271,40 @@ const automationGate = {
   log: (line: string) => console.log(`[radio] ${line}`),
 };
 
+/** Where JS8 goes out, Hz audio: the page sends it with every message, and this is the last one used. */
+let js8OffsetHz = 1500;
+
+/** A line into the JS8 message box: what went out, and how it ended. */
+function appendJs8Text(line: string): void {
+  streamText = (streamText + line).slice(-STREAM_TEXT_MAX);
+  broadcast({ kind: "text", mode: "JS8", text: line, at: Date.now(), tx: true });
+}
+
+/**
+ * JS8 sending: one frame per window through the framed transmitter, the frame riding on
+ * the request (lib/flex/tx.ts builds the waveform from it). Each frame is logged as
+ * JS8Call would print it; the message box gets a [TX] line when a message starts (in the
+ * handler) and when it ends (here).
+ */
+const js8Sender = new Js8Sender({
+  send: async (frame, index, windowStart) => {
+    const tx = activeTx;
+    if (!tx) return { sent: false, reason: "The transmitter is not available" };
+    const display = js8ParseFrame(frame.frame, frame.txType).display;
+    const r = await tx.transmit({ message: display, mode: "JS8", offsetHz: js8OffsetHz, startAt: windowStart, js8: frame });
+    if (r.sent) console.log(`[js8] sent frame ${index + 1}: ${display} at ${js8OffsetHz} Hz`);
+    else console.warn(`[js8] frame ${index + 1} not sent: ${r.reason ?? "no reason given"}`);
+    return { sent: r.sent, reason: r.reason ?? undefined };
+  },
+  onProgress: (s) => {
+    status.js8 = { ...s, offsetHz: js8OffsetHz };
+    if (!s.sending) {
+      appendJs8Text(s.stopped ? `[TX stopped: ${s.stopped}]\n` : `[TX done: ${s.frames} frame${s.frames === 1 ? "" : "s"}]\n`);
+    }
+    broadcast({ kind: "status", status });
+  },
+});
+
 /**
  * WSPR spots to wsprnet, when the operator has opted in. A beacon is not a CQ: these never
  * reach PSKReporter's path, and nothing about them reaches the sequencer.
@@ -2056,6 +2101,11 @@ async function startFlexSource(): Promise<() => Promise<void>> {
                 : " (no known calling frequency nearby — defaulting to FT8)"),
         );
         if (isStreamMode(guess.mode) || guess.mode === "JS8") streamText = "";
+        // A message half sent on a dial that moved would leave the far end a partial.
+        if (guess.mode !== "JS8" && js8Sender.current.sending) {
+          js8Sender.cancel();
+          console.log("[js8] message cancelled: the decoder left JS8");
+        }
         // The window length changed, so the deadline for "no window arrived" must too.
         // Armed on FT8 and left alone, it fired 136 s into the first WSPR window and the
         // restart resumed FT8 - which looked exactly like WSPR not working.
@@ -4074,6 +4124,71 @@ async function main(): Promise<void> {
       // line of text is five to forty seconds on the air and the web tier's proxy waits
       // five. The outcome goes to the log and to every page as a `[TX]` line in the
       // stream, or a `[TX refused: ...]` one, which is where the operator is looking.
+      // POST /js8-send — a line of JS8: a heartbeat, a CQ, a directed message or text, as
+      // the frames the message layer builds, one per window at the offset given. Answers
+      // 202 once the first frame is scheduled; the frames go out on their own windows.
+      if (url.pathname === "/js8-send") {
+        const body = await readJson(req);
+        const text = String(body.text ?? "").trim();
+        if (!text) {
+          sendJson(res, 400, { error: "text is required" });
+          return;
+        }
+        if (status.subMode !== "JS8") {
+          sendJson(res, 409, {
+            error: `Tune to JS8 first: the decoder is on ${status.subMode ?? "nothing"}, and a message goes out where it is listening`,
+          });
+          return;
+        }
+        if (!(await transmitArmed())) {
+          sendJson(res, 403, {
+            error: `Transmit is off. Turn on "Allow transmit" in Settings → ${gateSettingsTab()} before sending.`,
+          });
+          return;
+        }
+        if (!activeTx) {
+          sendJson(res, 503, { error: "The transmitter is not available on this radio" });
+          return;
+        }
+        if (!status.deCall) {
+          sendJson(res, 409, { error: "Set your callsign in Settings first: every JS8 frame names its sender" });
+          return;
+        }
+        const offset = body.offsetHz === undefined ? js8OffsetHz : Number(body.offsetHz);
+        if (!Number.isFinite(offset) || offset < 200 || offset > 2800) {
+          sendJson(res, 400, { error: "offsetHz must be between 200 and 2800" });
+          return;
+        }
+        let frames: Js8OutFrame[];
+        try {
+          frames = js8BuildFrames(status.deCall, status.deGrid ?? "", text);
+        } catch (err) {
+          sendJson(res, 400, { error: err instanceof Error ? err.message : "That line cannot be sent as JS8" });
+          return;
+        }
+        if (frames.length === 0) {
+          sendJson(res, 400, { error: "That line has nothing JS8 can carry" });
+          return;
+        }
+        js8OffsetHz = Math.round(offset);
+        const r = js8Sender.start(text, frames);
+        if (!r.ok) {
+          sendJson(res, 409, { error: r.reason });
+          return;
+        }
+        const at = `${new Date(r.firstWindow).toISOString().slice(11, 19)}Z`;
+        appendJs8Text(`[TX] ${text} - ${r.frames} frame${r.frames === 1 ? "" : "s"} at ${js8OffsetHz} Hz from ${at}\n`);
+        console.log(`[js8] sending "${text}": ${r.frames} frame(s) from ${at} at ${js8OffsetHz} Hz`);
+        sendJson(res, 202, { ok: true, frames: r.frames, firstWindow: r.firstWindow, durationMs: r.durationMs, offsetHz: js8OffsetHz });
+        return;
+      }
+
+      // POST /js8-cancel — stop after the frame on the air, if one is.
+      if (url.pathname === "/js8-cancel") {
+        sendJson(res, 200, { ok: true, cancelled: js8Sender.cancel() });
+        return;
+      }
+
       if (url.pathname === "/text-send" || url.pathname === "/rtty-send") {
         const body = await readJson(req);
         const text = String(body.text ?? "").replace(/\s+$/, "");

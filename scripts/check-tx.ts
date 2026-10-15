@@ -19,6 +19,8 @@ import {
 } from "@/lib/flex/tx";
 import { rttyDurationMs, rttyTones } from "@/lib/digital/rtty";
 import { RttyDemodulator } from "@/lib/digital/rttydemod";
+import { js8BuildFrames } from "@/lib/digital/js8-message";
+import { buildJs8Waveform } from "@/lib/radio/waveform";
 
 let pass = 0;
 let fail = 0;
@@ -295,6 +297,35 @@ async function safetyChecks(): Promise<void> {
     startAt: Date.now() + 1000,
   });
   ok(!badMsg.sent, "refuses an out-of-range offset");
+
+  // JS8: the frame rides on the request, and the waveform is built from it.
+  const noFrame = await enabled.transmit({
+    message: "K9XYZ: @HB HEARTBEAT EN61",
+    mode: "JS8",
+    offsetHz: 1500,
+    startAt: Date.now() + 1000,
+  });
+  ok(!noFrame.sent, "JS8 without a frame is refused");
+  ok(/frames from the message layer/.test(noFrame.reason ?? ""), "before anything else, and says why", noFrame.reason);
+  const hb = js8BuildFrames("K9XYZ", "EN61", "@HB HEARTBEAT");
+  ok(hb.length === 1, "a heartbeat is one frame");
+  const withFrame = await enabled.transmit({
+    message: "K9XYZ: @HB HEARTBEAT EN61",
+    mode: "JS8",
+    offsetHz: 1500,
+    startAt: Date.now() + 1000,
+    js8: hb[0],
+  });
+  ok(!withFrame.sent && /not started/i.test(withFrame.reason ?? ""), "with a frame it reaches the gate FT8 reaches: refused only because nothing is started", withFrame.reason);
+  const js8Wave = buildJs8Waveform(hb[0]!, 1500, DAX_RATE);
+  ok(js8Wave.length === 303_360, "a JS8 frame is 12.64 s at 24 kHz, as an FT8 one", `${js8Wave.length}`);
+  let thrown = "";
+  try {
+    buildJs8Waveform(hb[0]!, 50, DAX_RATE);
+  } catch (err) {
+    thrown = err instanceof Error ? err.message : "?";
+  }
+  ok(/outside/.test(thrown), "and an offset outside the passband is refused before keying", thrown);
 
   ok(!enabled.isKeyed, "never reports keyed after a refusal");
   ok(!enabled.isBusy, "does not stay busy after a refusal");

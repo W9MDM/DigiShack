@@ -8,6 +8,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Waterfall, type WaterfallMarker } from "@/components/digital/Waterfall";
+import { Js8Panel, type Js8SendState } from "@/components/digital/Js8Panel";
 import { StreamPanel, type StreamStats } from "@/components/digital/StreamPanel";
 import {
   Badge,
@@ -56,6 +57,8 @@ interface RigStatus {
   rtty?: { centreHz: number; shiftHz: number; sideband: "USB" | "LSB"; markHz: number; spaceHz: number } | null;
   /** The CW pitch and sending speed while on CW. */
   cw?: { pitchHz: number; wpm: number; pitchFromRadio: boolean } | null;
+  /** A JS8 message going out, or the last one. */
+  js8?: Js8SendState | null;
   connected: boolean;
   dialFrequency: number | null;
   band: string | null;
@@ -504,6 +507,9 @@ export default function DigitalPage({ wsUrl }: Props) {
   const [streamText, setStreamText] = useState("");
   const [streamStats, setStreamStats] = useState<StreamStats | null>(null);
   const [rttyError, setRttyError] = useState<string | null>(null);
+  /** Where a JS8 message goes out, Hz audio: typed, or picked on the waterfall. */
+  const [js8OffsetHz, setJs8OffsetHz] = useState(1500);
+  const [js8Error, setJs8Error] = useState<string | null>(null);
 
   // Why each station is worth calling — the same scoring Auto Hunt ranks by, so the
   // badges an operator sees and the choices the software makes cannot disagree.
@@ -1342,6 +1348,25 @@ export default function DigitalPage({ wsUrl }: Props) {
       setRttyError(err instanceof ApiError ? err.message : "Could not send");
     }
   }, []);
+  /** Send a line of JS8: the bridge builds the frames and sends one per window from the next boundary. */
+  const sendJs8 = useCallback(
+    async (text: string) => {
+      try {
+        await apiPost("/api/bridge/control", { action: "js8-send", text, offsetHz: js8OffsetHz });
+        setJs8Error(null);
+      } catch (err) {
+        setJs8Error(err instanceof ApiError ? err.message : "Could not send");
+      }
+    },
+    [js8OffsetHz],
+  );
+  const cancelJs8 = useCallback(async () => {
+    try {
+      await apiPost("/api/bridge/control", { action: "js8-cancel" });
+    } catch (err) {
+      setJs8Error(err instanceof ApiError ? err.message : "Could not cancel");
+    }
+  }, []);
   /** The CW sending speed, through the radio's keyer. */
   const setCwWpm = useCallback(async (wpm: number) => {
     try {
@@ -1923,7 +1948,13 @@ export default function DigitalPage({ wsUrl }: Props) {
             binHz={scale.binHz}
             maxHz={scale.maxHz}
             markers={markers}
-            onPickHz={decodingAs === "RTTY" && canSwitch ? (hz) => void tuneRtty(hz) : undefined}
+            onPickHz={
+              decodingAs === "RTTY" && canSwitch
+                ? (hz) => void tuneRtty(hz)
+                : decodingAs === "JS8" && canSwitch
+                  ? (hz) => setJs8OffsetHz(Math.round(hz))
+                  : undefined
+            }
             txHz={status?.txDF ?? null}
             gain={gain}
             // Was `compact ? 120 : 300`. Both numbers were defensible and neither was
@@ -2368,17 +2399,20 @@ export default function DigitalPage({ wsUrl }: Props) {
                 {/* JS8: the frames are the rows below; the messages they join into, one
                     line each as the bridge finishes them, sit above. */}
                 {decodingAs === "JS8" && (
-                  <div className="mb-3">
-                    <div className="flex items-center justify-between text-xs text-fg-muted mb-1">
-                      <span>Messages, joined from their frames</span>
-                      <button type="button" className="hover:text-fg" onClick={() => setStreamText("")}>
-                        Clear
-                      </button>
-                    </div>
-                    <pre className="font-mono text-sm whitespace-pre-wrap break-words bg-bg-raised border border-line rounded-sm p-3 max-h-56 overflow-y-auto">
-                      {streamText || "No complete message yet. Frames appear below as they decode; a message prints here when its last frame arrives."}
-                    </pre>
-                  </div>
+                  <Js8Panel
+                    text={streamText}
+                    myCall={myCall}
+                    myGrid={status?.deGrid ?? null}
+                    offsetHz={js8OffsetHz}
+                    onOffsetHz={setJs8OffsetHz}
+                    state={status?.js8 ?? null}
+                    transmitting={status?.transmitting ?? false}
+                    canSend={canSwitch}
+                    error={js8Error}
+                    onSend={(text) => void sendJs8(text)}
+                    onCancel={() => void cancelJs8()}
+                    onClear={() => setStreamText("")}
+                  />
                 )}
                 <div className="-mx-4 overflow-x-auto lg:overflow-auto lg:max-h-[52rem]">
                   {/* The size is set HERE and inherited, so one number moves the header,

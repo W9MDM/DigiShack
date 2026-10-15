@@ -157,6 +157,8 @@ export interface DigitalTransmitter {
     mode: DigitalMode;
     offsetHz: number;
     startAt: number;
+    /** JS8: the frame to send; the waveform is built from it, not from `message`. */
+    js8?: { frame: string; txType: number };
   }): Promise<TransmitOutcome>;
   /**
    * Text modes (RTTY): key, send a string as it is, unkey - no window, no timing. Not
@@ -249,6 +251,8 @@ export interface RadioTransmitter {
     mode: DigitalMode;
     offsetHz: number;
     startAt?: number;
+    /** JS8: the frame to send; the waveform is built from it, not from `message`. */
+    js8?: { frame: string; txType: number };
   }): Promise<TransmitOutcome>;
 
   /** Stop immediately and drop carrier. Must be safe to call when idle. */

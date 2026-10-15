@@ -10,6 +10,8 @@
 // is a property of the mode, not of the radio.
 
 import { ft2Encode } from "@/lib/digital/ft2";
+import { js8EncodeFrame, js8Waveform } from "@/lib/digital/js8";
+import type { Js8OutFrame } from "@/lib/digital/js8-message";
 import { encodeFT4, encodeFT8 } from "@e04/ft8ts";
 
 export type TxMode = "FT8" | "FT4" | "FT2" | "WSPR" | "RTTY" | "CW" | "JS8";
@@ -85,11 +87,11 @@ export function buildWaveform(
   if (mode === "RTTY" || mode === "CW") {
     throw new Error(`${mode} is not a framed mode: nothing builds a ${mode} waveform from a structured message`);
   }
-  // JS8 frames are built by lib/digital/js8.ts from the message layer's twelve characters
-  // and a transmission type, not from a structured message; the transmit path for them is
-  // part five of the mode.
+  // JS8 frames are built from the message layer's twelve characters and a transmission
+  // type, not from a structured message: buildJs8Waveform below, from the frame on the
+  // transmit request. A request that names the mode without a frame has nothing to send.
   if (mode === "JS8") {
-    throw new Error("JS8 transmit is not enabled yet: this release listens to JS8");
+    throw new Error("JS8 is sent as frames from the message layer; this request carries none");
   }
   let wave: Float32Array;
   if (mode === "FT2") {
@@ -115,4 +117,20 @@ export function buildWaveform(
   }
 
   return wave;
+}
+
+/**
+ * One JS8 frame as audio, at an offset, for the framed transmitter. The frame is the
+ * message layer's: twelve characters and the transmission type that marks the first and
+ * last frames of a message (lib/digital/js8-message.ts); the physical layer makes the 79
+ * tones and the GFSK waveform (lib/digital/js8.ts). 12.64 s at full scale, as FT8.
+ */
+export function buildJs8Waveform(frame: Js8OutFrame, offsetHz: number, sampleRate: number): Float32Array {
+  if (!Number.isFinite(offsetHz) || offsetHz < MIN_OFFSET_HZ || offsetHz > MAX_OFFSET_HZ) {
+    throw new Error(
+      `Audio offset ${offsetHz} Hz is outside ${MIN_OFFSET_HZ}-${MAX_OFFSET_HZ} Hz; the transmit filter would clip it`,
+    );
+  }
+  const { tones } = js8EncodeFrame(frame.frame, frame.txType);
+  return js8Waveform(tones, { sampleRate, baseHz: offsetHz });
 }
