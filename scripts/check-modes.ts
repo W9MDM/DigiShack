@@ -126,6 +126,10 @@ console.log("\nis this a frequency an automatic mode may run on");
   eq(inferDigitalMode(14_070_000).mode, "PSK31", "a 14.070 dial infers PSK31");
   eq(inferDigitalMode(14_074_000).mode, "FT8", "and 14.074 is still FT8, 4 kHz away");
   eq(inferDigitalMode(18_097_000).mode, "PSK31", "17 m PSK31 at 18.097, below the FT8 dial at 18.100");
+  eq(callingFrequencyFor("20M", "OLIVIA", 2), 14_071_000, "20 m Olivia is the 14.071 dial: the published 14.0725 centre, 1.5 kHz down");
+  eq(inferDigitalMode(14_071_000).mode, "OLIVIA", "and a 14.071 dial infers Olivia");
+  eq(inferDigitalMode(14_070_000).mode, "PSK31", "while 14.070 is still PSK31, a kilohertz away");
+  eq(inferDigitalMode(18_103_500).mode, "OLIVIA", "17 m Olivia at 18.1035, clear of the RTTY segment's 18.102");
   eq(digitalCallingFrequency(7_078_000, "JS8"), 7_078_000, "7.078 is JS8");
   eq(digitalCallingFrequency(7_078_000, "FT8"), 7_074_000, "and also the top of FT8's 7.074 passband as a dial - which is why auto infers by 500 Hz, not by passband");
   eq(inferDigitalMode(18_104_000).mode, "FT4", "17 m: FT4 and JS8 share 18.104, and auto prefers FT4 there");
@@ -150,8 +154,9 @@ console.log("\nis this a frequency an automatic mode may run on");
   // needs a radio. The rule is the part that was wrong.
   const resolveMode = (st: { subMode: string | null; mode: string | null }): TxMode => {
     const m = (st.subMode || st.mode || "FT8").toUpperCase();
-    return m === "FT4" ? "FT4" : m === "FT2" ? "FT2" : m === "WSPR" ? "WSPR" : m === "RTTY" ? "RTTY" : m === "CW" ? "CW" : m === "JS8" ? "JS8" : m === "PSK31" ? "PSK31" : "FT8";
+    return m === "FT4" ? "FT4" : m === "FT2" ? "FT2" : m === "WSPR" ? "WSPR" : m === "RTTY" ? "RTTY" : m === "CW" ? "CW" : m === "JS8" ? "JS8" : m === "PSK31" ? "PSK31" : m === "OLIVIA" ? "OLIVIA" : "FT8";
   };
+  eq(resolveMode({ subMode: "OLIVIA", mode: "DIGU" }), "OLIVIA", "listening to Olivia resolves to Olivia");
   eq(resolveMode({ subMode: "PSK31", mode: "DIGU" }), "PSK31", "listening to PSK31 resolves to PSK31");
   eq(resolveMode({ subMode: "JS8", mode: "DIGU" }), "JS8", "listening to JS8 resolves to JS8");
   eq(resolveMode({ subMode: "WSPR", mode: "DIGU" }), "WSPR", "listening to WSPR resolves to WSPR");

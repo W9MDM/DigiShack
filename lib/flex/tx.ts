@@ -13,6 +13,7 @@ import { buildJs8Waveform, buildWaveform, samplesPerSymbol } from "@/lib/radio/w
 import type { Js8OutFrame } from "@/lib/digital/js8-message";
 import { rttyDurationMs, rttyWaveform } from "@/lib/digital/rtty";
 import { psk31DurationMs, psk31Waveform } from "@/lib/digital/psk31";
+import { oliviaDurationMs, oliviaSymbols, oliviaWaveform, type OliviaBandwidth, type OliviaTones } from "@/lib/digital/olivia";
 import { cwDurationMs } from "@/lib/digital/cw";
 
 // Native FT8/FT4 transmit over FlexRadio DAX TX. No external decoder, no WSJT-X.
@@ -68,12 +69,12 @@ const PACKET_CLASS_TX_S16 = 0x0123;
  * past the last one. Using 144 here would size the watchdog 27 ms short of the
  * actual transmission.
  */
-const SYMBOLS_PER_FRAME = { FT8: 79, FT4: 105, FT2: 146, WSPR: 162, RTTY: 0, CW: 0, JS8: 79, PSK31: 0 } as const;
+const SYMBOLS_PER_FRAME = { FT8: 79, FT4: 105, FT2: 146, WSPR: 162, RTTY: 0, CW: 0, JS8: 79, PSK31: 0, OLIVIA: 0 } as const;
 
 /** Extra time before the watchdog fires, allowing for scheduling jitter. */
 const WATCHDOG_MARGIN_MS = 2_000;
 
-export type TxMode = "FT8" | "FT4" | "FT2" | "WSPR" | "RTTY" | "CW" | "JS8" | "PSK31";
+export type TxMode = "FT8" | "FT4" | "FT2" | "WSPR" | "RTTY" | "CW" | "JS8" | "PSK31" | "OLIVIA";
 
 /**
  * Above this percentage of the radio's rated output, say something.
@@ -185,8 +186,8 @@ export interface TransmitRequest {
 
 /** A line of text to send as it is: RTTY at a tone pair, PSK31 on a carrier, now. */
 export interface TextTransmitRequest {
-  /** RTTY and PSK31 go out as audio through DAX; CW is handed to the radio's own keyer (CWX). */
-  mode: "RTTY" | "CW" | "PSK31";
+  /** RTTY, PSK31 and Olivia go out as audio through DAX; CW is handed to the radio's own keyer (CWX). */
+  mode: "RTTY" | "CW" | "PSK31" | "OLIVIA";
   text: string;
   /** Centre of the tone pair, Hz audio. */
   centreHz: number;
@@ -198,6 +199,9 @@ export interface TextTransmitRequest {
   wpm?: number;
   /** PSK: 31.25, 62.5 or 125 baud. Default 31. */
   speed?: 31 | 63 | 125;
+  /** Olivia: the size. Default 500/16. */
+  tones?: OliviaTones;
+  bandwidth?: OliviaBandwidth;
 }
 
 export interface TransmitResult {
@@ -809,7 +813,7 @@ export class FlexDaxTransmitter {
     }
     // RTTY is typed, not framed: it will go out as text through its own path (part three
     // of the mode). Nothing here keys the radio on an RTTY frequency until then.
-    if (req.mode === "RTTY" || req.mode === "CW" || req.mode === "PSK31") {
+    if (req.mode === "RTTY" || req.mode === "CW" || req.mode === "PSK31" || req.mode === "OLIVIA") {
       return { ...base, reason: `${req.mode} is sent as text, not as a timed frame` };
     }
     // JS8 goes out as frames from the message layer, one per window; the frame rides on
@@ -1070,6 +1074,16 @@ export class FlexDaxTransmitter {
     if (req.mode === "CW") throw new Error("CW is keyed by the radio (CWX), not sent as audio");
     const text = req.text.trim();
     if (!text) throw new Error("Nothing to send");
+    if (req.mode === "OLIVIA") {
+      const size = { tones: req.tones ?? 16, bandwidth: req.bandwidth ?? 500 } as const;
+      const olMs = oliviaDurationMs(text, size);
+      if (olMs > FlexDaxTransmitter.MAX_TEXT_MS) {
+        throw new Error(
+          `${text.length} characters is ${(olMs / 1000).toFixed(0)} s of Olivia ${size.bandwidth}/${size.tones}, over the ${FlexDaxTransmitter.MAX_TEXT_MS / 1000} s cap - send it in pieces`,
+        );
+      }
+      return oliviaWaveform(oliviaSymbols(text, size), { ...size, sampleRate: DAX_RATE, centreHz: req.centreHz });
+    }
     if (req.mode === "PSK31") {
       const pskMs = psk31DurationMs(text, { speed: req.speed });
       if (pskMs > FlexDaxTransmitter.MAX_TEXT_MS) {

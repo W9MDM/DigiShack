@@ -22,6 +22,7 @@ import { RttyDemodulator } from "@/lib/digital/rttydemod";
 import { js8BuildFrames } from "@/lib/digital/js8-message";
 import { buildJs8Waveform } from "@/lib/radio/waveform";
 import { psk31DurationMs } from "@/lib/digital/psk31";
+import { oliviaDurationMs } from "@/lib/digital/olivia";
 
 let pass = 0;
 let fail = 0;
@@ -366,6 +367,19 @@ async function safetyChecks(): Promise<void> {
     pskLong = err instanceof Error ? err.message : "?";
   }
   ok(/over the .* cap/.test(pskLong), "400 characters of PSK31 is over the cap and refused before keying", pskLong);
+  // Olivia through the same text path: a tone set at the centre, one idle block either side.
+  const olReq = { mode: "OLIVIA" as const, text: "CQ de W1AW", centreHz: 1500, shiftHz: 0, sideband: "USB" as const, tones: 16 as const, bandwidth: 500 as const };
+  const olWave = enabled.buildTextWaveform(olReq);
+  ok(Math.abs(olWave.length / DAX_RATE - oliviaDurationMs("CQ de W1AW", { tones: 16, bandwidth: 500 }) / 1000) < 0.01, "Olivia text builds a waveform the length its duration says", `${olWave.length}`);
+  const olRefused = await enabled.transmitText(olReq);
+  ok(!olRefused.sent && /not started/i.test(olRefused.reason ?? ""), "and transmitText(OLIVIA) reaches the gate RTTY reaches", olRefused.reason);
+  let olLong = "";
+  try {
+    enabled.buildTextWaveform({ ...olReq, text: "X".repeat(200) });
+  } catch (err) {
+    olLong = err instanceof Error ? err.message : "?";
+  }
+  ok(/over the .* cap/.test(olLong), "200 characters of Olivia 500/16 is over the cap and refused before keying", olLong);
   const lsbDemod = new RttyDemodulator({ sampleRate: 24_000, ...rttyTones(2210, 170, "LSB") });
   ok(lsbDemod.feed(lsb) === "RY", "and on LSB the pair is swapped to match");
 

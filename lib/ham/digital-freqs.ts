@@ -9,7 +9,7 @@
 // The dial frequency is the reliable discriminator: the two modes use distinct,
 // well-established watering holes on every band.
 
-export type DigitalMode = "FT8" | "FT4" | "FT2" | "WSPR" | "RTTY" | "CW" | "JS8" | "PSK31";
+export type DigitalMode = "FT8" | "FT4" | "FT2" | "WSPR" | "RTTY" | "CW" | "JS8" | "PSK31" | "OLIVIA";
 
 
 export interface DigitalFrequency {
@@ -191,6 +191,24 @@ const PSK31: [number, string, (1 | 2 | 3)?][] = [
   [50_290_000, "6M"],
 ];
 
+/**
+ * Olivia dials: the published centres (14.0725 for 500/16 on 20 m, 7.0725 on 40 m) are
+ * the signal's centre, and the decoder listens 1500 Hz up, so the dial is 1.5 kHz below
+ * each. A kilohertz above the PSK31 dials, which the inference's half-kilohertz
+ * tolerance keeps apart. 17 m sits 1.5 kHz above the RTTY segment's centre for the same
+ * reason.
+ */
+const OLIVIA: [number, string, (1 | 2 | 3)?][] = [
+  [3_581_000, "80M"],
+  [7_071_000, "40M"],
+  [10_141_000, "30M"],
+  [14_071_000, "20M"],
+  [18_103_500, "17M"],
+  [21_071_000, "15M"],
+  [24_921_000, "12M"],
+  [28_121_000, "10M"],
+];
+
 export const DIGITAL_FREQUENCIES: readonly DigitalFrequency[] = [
   ...FT8.map(([hz, band, region]): DigitalFrequency => ({ hz, mode: "FT8", band, region })),
   ...FT4.map(([hz, band, region]): DigitalFrequency => ({ hz, mode: "FT4", band, region })),
@@ -207,6 +225,7 @@ export const DIGITAL_FREQUENCIES: readonly DigitalFrequency[] = [
   ...CW.map(([hz, band, region]): DigitalFrequency => ({ hz, mode: "CW", band, region })),
   ...JS8.map(([hz, band, region]): DigitalFrequency => ({ hz, mode: "JS8", band, region })),
   ...PSK31.map(([hz, band, region]): DigitalFrequency => ({ hz, mode: "PSK31", band, region })),
+  ...OLIVIA.map(([hz, band, region]): DigitalFrequency => ({ hz, mode: "OLIVIA", band, region })),
 ];
 
 /**
@@ -329,6 +348,7 @@ const PERIOD_MS: Record<DigitalMode, number> = {
   JS8: 15_000,
   /** A stream, as RTTY. */
   PSK31: 1_000,
+  OLIVIA: 1_000,
 };
 
 export function periodMsFor(mode: DigitalMode): number {

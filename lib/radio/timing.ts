@@ -32,6 +32,7 @@ export const PERIOD_MS: Record<TxMode, number> = {
   JS8: 15_000,
   /** A stream, as RTTY: the heartbeat interval. */
   PSK31: 1_000,
+  OLIVIA: 1_000,
 };
 
 /**
@@ -52,6 +53,7 @@ export const TX_START_OFFSET_MS: Record<TxMode, number> = {
   /** Half a second after the boundary, as FT8 (ASTART in js8a_params.f90). */
   JS8: 500,
   PSK31: 0,
+  OLIVIA: 0,
 };
 
 /**
@@ -78,6 +80,7 @@ export const TRANSMISSION_MS: Record<TxMode, number> = {
   /** 79 symbols at 6.25 baud: FT8's 12.64 s. */
   JS8: 12_640,
   PSK31: 0,
+  OLIVIA: 0,
 };
 
 /** A late transmission may never eat more of the window's margin than it leaves behind. */
@@ -115,6 +118,7 @@ const DECODABLE_LATE_MS: Record<TxMode, number> = {
   CW: 0,
   JS8: 1_860,
   PSK31: 0,
+  OLIVIA: 0,
 };
 
 /**
