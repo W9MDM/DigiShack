@@ -126,7 +126,9 @@ console.log("the alphabet and the frame");
   eq(JS8_ALPHABET.indexOf("."), 66, "the full stop is 66");
   eq(JS8_ALPHABET.indexOf(" "), 67, "and the 68th character is a space - the Fortran declares 68 and writes 67, and index() finds the blank");
   eq(js8WordsFor("ABCDEFGHIJKL"), [10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21], "a message as twelve six-bit values");
-  eq(js8WordsFor("A B"), [10, 67, 11, 0, 0, 0, 0, 0, 0, 0, 0, 0], "a space is value 67");
+  eq(js8WordsFor("A B"), [10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], "a space (67) does not fit in six bits: the encoder stops there, as the reference aborts there");
+  eq(js8WordsFor("A/B"), [10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], "nor a slash (64) - the usable alphabet is the first 64 characters");
+  eq(js8WordsFor("A+-b"), [10, 63, 62, 37, 0, 0, 0, 0, 0, 0, 0, 0], "plus and minus (63, 62) are the last that do");
   eq(js8WordsFor("A!B"), [10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], "the reference stops at the first character outside the alphabet and leaves zeros");
   eq(JS8_INFO_BITS, 87, "72 + 3 + 12 information bits");
   eq(JS8_CODEWORD_BITS, 174, "to 174");
@@ -178,7 +180,7 @@ console.log("\nthe code");
 // ---------------------------------------------------------------------------
 {
   ok(js8GraphConsistent(), "the sparse graph's two tables agree: every bit is in exactly the checks that list it");
-  for (const text of ["ABCDEFGHIJKL", "000000000000", "zzzzzzzzzzzz", "CQCQCQ+-/?.0", "Hello1234567"]) {
+  for (const text of ["ABCDEFGHIJKL", "000000000000", "zzzzzzzzzzzz", "CQCQCQ+-ab12", "Hello1234567"]) {
     for (const type of [0, 3, 7]) {
       const info = js8PackFrame(text, type);
       const cw = js8Encode(info);
@@ -245,7 +247,7 @@ console.log("\nthe waveform");
   ok(Math.abs(js8GfskPulse(2, 0) - 1) < 1e-3, "the GFSK pulse is 1 at the symbol centre (BT 2)");
   ok(js8GfskPulse(2, 1.5) < 1e-6, "and gone a symbol and a half away");
   ok(Math.abs(js8GfskPulse(2, 0.5) - 0.5) < 1e-3, "and half at the symbol edge");
-  const { tones } = js8EncodeFrame("CQCQCQ+-/?.0", 3, "A");
+  const { tones } = js8EncodeFrame("CQCQCQ+-ab12", 3, "A");
   const fs = 12_000;
   const w = js8Waveform(tones, { sampleRate: fs, baseHz: 1000 });
   eq(w.length, 79 * 1920, "79 symbols of 1920 samples at 12 kHz");
@@ -260,7 +262,7 @@ console.log("\nthe waveform");
   ok(maxStep < 2 * Math.sin((Math.PI * top) / fs) * 1.02, "phase-continuous: no step beyond the highest tone's own", maxStep);
   const w24 = js8Waveform(tones, { sampleRate: 24_000, baseHz: 1500 });
   eq(w24.length, 79 * 3840, "and at the FlexRadio's 24 kHz, 3840 samples a symbol");
-  const fast = js8Waveform(js8EncodeFrame("CQCQCQ+-/?.0", 3, "B").tones, { sampleRate: fs, baseHz: 1000, submode: "B" });
+  const fast = js8Waveform(js8EncodeFrame("CQCQCQ+-ab12", 3, "B").tones, { sampleRate: fs, baseHz: 1000, submode: "B" });
   eq(fast.length, 79 * 1200, "fast mode: 1200 samples a symbol");
 }
 

@@ -157,12 +157,22 @@ export function js8Crc12(words: ArrayLike<number>, frameType: number): number {
 // The 87 information bits.
 // ---------------------------------------------------------------------------
 
-/** Text of up to 12 alphabet characters to the 12 six-bit values; shorter text is padded with "0"... no: the reference stops at the first non-alphabet character and leaves the rest zero. */
+/** The characters a six-bit value can hold: the first 64 of the alphabet. */
+export const JS8_USABLE_CHARS = 64;
+
+/**
+ * Text to the twelve six-bit values. The reference stops at the first character it cannot
+ * place and leaves the rest zero; here that includes the alphabet's last four (slash,
+ * question mark, full stop, space - values 64 to 67), which do not fit in six bits. The
+ * Fortran's format overflows on them and the program aborts, so JS8Call never hands them
+ * to the encoder: the message layer spells them differently. A frame's text is the 64
+ * characters 0-9, A-Z, a-z, minus and plus.
+ */
 export function js8WordsFor(text: string): number[] {
   const words = new Array<number>(JS8_MESSAGE_CHARS).fill(0);
   for (let i = 0; i < JS8_MESSAGE_CHARS && i < text.length; i++) {
     const v = JS8_ALPHABET.indexOf(text[i]!);
-    if (v < 0) break;
+    if (v < 0 || v >= JS8_USABLE_CHARS) break;
     words[i] = v;
   }
   return words;
