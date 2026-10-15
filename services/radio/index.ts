@@ -1139,6 +1139,64 @@ function sendJson(res: ServerResponse, code: number, body: unknown): void {
  */
 let stickyMode: DigitalMode | null = null;
 
+/**
+ * Where the station was: dial, slice mode, and the mode chosen by name, saved as it
+ * changes and read back at start.
+ *
+ * The bridge's slice belongs to its own connection to the FlexRadio, so the radio deletes
+ * it when the bridge restarts, and the bridge used to recreate it at flex.defaultFreqHz -
+ * 7.074 FT8. Every deploy moved the radio off whatever the operator was watching: four
+ * times on 15 October, from 14.085 RTTY and 14.040 CW. Now a recreated slice comes back
+ * where the last one was, in the same slice mode, with the same chosen mode.
+ *
+ * State, not configuration: written directly, never on the Settings page.
+ */
+const KEY_LAST_TUNE = "radio.lastTune";
+interface LastTune {
+  hz: number;
+  sliceMode: string | null;
+  sticky: DigitalMode | null;
+  at: number;
+}
+let lastTuneSaved = "";
+let lastTuneTimer: NodeJS.Timeout | null = null;
+
+async function readLastTune(): Promise<LastTune | null> {
+  try {
+    const raw = await getSetting(KEY_LAST_TUNE);
+    if (!raw) return null;
+    const t = JSON.parse(raw) as LastTune;
+    if (!Number.isFinite(t.hz) || t.hz < 1_000_000 || t.hz > 60_000_000) return null;
+    return t;
+  } catch {
+    return null;
+  }
+}
+
+/** Saved a few seconds after the dial settles, and only when something changed. */
+function saveLastTune(hz: number | null, sliceMode: string | null): void {
+  if (!hz) return;
+  const next = JSON.stringify({ hz, sliceMode, sticky: stickyMode });
+  if (next === lastTuneSaved) return;
+  if (lastTuneTimer) clearTimeout(lastTuneTimer);
+  lastTuneTimer = setTimeout(() => {
+    lastTuneTimer = null;
+    const t: LastTune = { hz, sliceMode, sticky: stickyMode, at: Date.now() };
+    const value = JSON.stringify(t);
+    void prisma.setting
+      .upsert({
+        where: { key: KEY_LAST_TUNE },
+        create: { key: KEY_LAST_TUNE, value, encrypted: false },
+        update: { value },
+      })
+      .then(() => {
+        lastTuneSaved = next;
+      })
+      .catch(() => {});
+  }, 5_000);
+  lastTuneTimer.unref?.();
+}
+
 /** RTTY tuning: the tone pair's centre and shift. The sideband comes from the slice. */
 const rttyTuning = { centreHz: RTTY_CENTRE_HZ, shiftHz: RTTY_SHIFT_HZ, reverse: false, baud: 45.45 };
 let rttyCode: { figures: "us" | "ita2"; usos: boolean; squelch: number } = { figures: "us", usos: true, squelch: 0.7 };
@@ -1603,6 +1661,15 @@ async function startFlexSource(): Promise<() => Promise<void>> {
     ];
   };
 
+  // Where the station was, for a slice the bridge has to create. See KEY_LAST_TUNE.
+  const lastTune = await readLastTune();
+  if (lastTune?.sticky) stickyMode = lastTune.sticky;
+  if (lastTune) {
+    lastTuneSaved = JSON.stringify({ hz: lastTune.hz, sliceMode: lastTune.sliceMode, sticky: lastTune.sticky });
+    console.log(
+      `[bridge] last on ${(lastTune.hz / 1e6).toFixed(4)} MHz ${lastTune.sliceMode ?? ""}${lastTune.sticky ? ` (${lastTune.sticky})` : ""} - a new slice goes back there`,
+    );
+  }
   const source: FlexDaxSource = new FlexDaxSource({
     host,
     daxChannel,
@@ -1631,7 +1698,8 @@ async function startFlexSource(): Promise<() => Promise<void>> {
     passbandHz: await getNumberSetting("digital.passbandHz", 3_000),
     // Where a bare radio comes up: the source creates its own slice here when
     // nothing else (SmartSDR, AetherSDR) has one open.
-    freqHz: await getNumberSetting("flex.defaultFreqHz", 7_074_000),
+    freqHz: lastTune?.hz ?? (await getNumberSetting("flex.defaultFreqHz", 7_074_000)),
+    sliceMode: lastTune?.sliceMode && /^(CW|DIGU|DIGL|USB|LSB)$/i.test(lastTune.sliceMode) ? lastTune.sliceMode.toUpperCase() : undefined,
     // The antenna port, applied only to a slice DigiShack owns. See the option.
     antenna,
     // RF spectrum, a second source alongside the audio waterfall rather than a
@@ -2127,6 +2195,7 @@ async function startFlexSource(): Promise<() => Promise<void>> {
     status.dialFrequency = slice.freqHz;
     status.band = freqToBand(slice.freqHz);
     status.mode = slice.mode;
+    saveLastTune(slice.freqHz, slice.mode ?? null);
     // On this radio `mode` IS the modulation, so the two agree — but reported in the shared
     // vocabulary, because SmartSDR says DIGU where this project says USB-D and the CAT panel
     // offers one list. Unmapped, the picker fell through to its placeholder and read "DIGU",
@@ -2213,6 +2282,13 @@ async function startFlexSource(): Promise<() => Promise<void>> {
       const a = activeAuto();
       if (a && a.state.mode !== "off") {
         a.setMode("off");
+        // Saved, as the operator turning it off is: the landing was the operator's choice
+        // of mode. Unsaved, the next bridge restart resumed the stored hunt, and the
+        // automation gate dutifully pulled the radio off the RTTY signal being watched and
+        // back to FT8 - three times in one afternoon on 14.085. The schedule still starts
+        // the station at its next boundary; only the resume of a run the operator left is
+        // gone.
+        void persistAutoMode("off");
         console.log(`[bridge] ${status.subMode} has nothing for a sequencer to answer - automatic mode stopped`);
       }
     }

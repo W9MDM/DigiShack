@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.201.6 - public release
+## 1.201.9 - public release
 
 Development happens in a private repository; this is where the public history starts.
 Earlier entries are not reproduced - they quote real operators by callsign, include
@@ -22,6 +22,8 @@ Notes for anyone running this:
 
 ## Release history
 
+- **1.201.8** — A bridge restart puts the radio back where it was
+- **1.201.7** — Band activity survives PSKReporter refusals; RTTY acquisition; restarts keep the radio
 - **1.201.6** — Stream decoders keep their sync through status updates
 - **1.201.5** — RTTY: the panel says which speed and polarity
 - **1.201.4** — RTTY: Rev and a speed picker

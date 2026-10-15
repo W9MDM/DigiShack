@@ -53,49 +53,79 @@ interface Cached<T> {
   value: T;
 }
 
-let pskCache: (Cached<PskBandActivity[]> & { mode: string }) | null = null;
+/** The last good figures per mode, in this process. */
+const pskCache = new Map<string, Cached<PskBandActivity[]>>();
 let pskInFlight: Promise<PskBandActivity[] | null> | null = null;
 
 /**
- * The band figures, shared between processes through the database.
+ * At most one activity query per this long for the whole installation, whatever the mode.
+ *
+ * The interval above is per mode, and the decodes page asks for the mode the decoder is
+ * on. Switching FT8, RTTY, PSK31 and JS8 in an afternoon asked four times in a few
+ * minutes, and on 15 October PSKReporter answered "Your IP has made too many queries too
+ * often" - with a body that was not a report list, which the old code read as no stations
+ * on any band and cached for everyone.
+ */
+const PSK_GLOBAL_GAP_MS = 5 * 60_000;
+
+/**
+ * The band figures, the last query time and any stand-off, shared between processes
+ * through the database.
  *
  * A module-level cache is per-process, and the bridge and the web application are two
  * processes on one IP address. However well each behaved on its own, together they
- * doubled the query rate to a service that counts queries per IP — and PSKReporter
- * refused us outright for it. Whichever process fetches now, both see the result, so
- * the rate is one query per interval for the whole installation rather than one per
- * process.
+ * doubled the query rate to a service that counts queries per IP - and PSKReporter
+ * refused us outright for it. Whichever process fetches now, both see the result, the
+ * budget and the stand-off.
  *
  * State, not configuration: written directly and never shown on the Settings page.
  */
 const KEY_PSK_SHARED = "psk.bandActivityCache";
 
-async function readSharedPsk(
-  mode: string,
-): Promise<{ at: number; value: PskBandActivity[] } | null> {
+interface SharedPsk {
+  modes: Record<string, Cached<PskBandActivity[]>>;
+  lastQueryAt: number;
+  blockedUntil: number;
+}
+
+async function readSharedPsk(): Promise<SharedPsk> {
+  const empty: SharedPsk = { modes: {}, lastQueryAt: 0, blockedUntil: 0 };
   try {
     const row = await prisma.setting.findUnique({ where: { key: KEY_PSK_SHARED } });
-    if (!row?.value) return null;
-    const parsed = JSON.parse(row.value) as { at: number; mode: string; value: PskBandActivity[] };
-    if (parsed.mode !== mode || !Array.isArray(parsed.value)) return null;
-    return { at: parsed.at, value: parsed.value };
+    if (!row?.value) return empty;
+    const parsed = JSON.parse(row.value) as Partial<SharedPsk> & { at?: number; mode?: string; value?: PskBandActivity[] };
+    // The single-mode shape this replaced.
+    if (parsed.mode && Array.isArray(parsed.value)) {
+      return { modes: { [parsed.mode]: { at: parsed.at ?? 0, value: parsed.value } }, lastQueryAt: parsed.at ?? 0, blockedUntil: 0 };
+    }
+    return {
+      modes: parsed.modes && typeof parsed.modes === "object" ? parsed.modes : {},
+      lastQueryAt: Number(parsed.lastQueryAt) || 0,
+      blockedUntil: Number(parsed.blockedUntil) || 0,
+    };
   } catch {
     // A cache that cannot be read is a cache miss, never an error worth surfacing.
-    return null;
+    return empty;
   }
 }
 
-async function writeSharedPsk(mode: string, value: PskBandActivity[]): Promise<void> {
+async function writeSharedPsk(update: (cur: SharedPsk) => SharedPsk): Promise<void> {
   try {
-    const payload = JSON.stringify({ at: Date.now(), mode, value });
+    const next = update(await readSharedPsk());
+    const payload = JSON.stringify(next);
     await prisma.setting.upsert({
       where: { key: KEY_PSK_SHARED },
       create: { key: KEY_PSK_SHARED, value: payload, encrypted: false },
       update: { value: payload },
     });
   } catch {
-    /* the fetch already succeeded; failing to share it must not fail the caller */
+    /* sharing is an optimisation; failing to share must not fail the caller */
   }
+}
+
+/** Whether a 200 response is actually a report list. PSKReporter refuses with JSON. */
+export function isReportList(body: string): boolean {
+  return /<receptionReports\b/i.test(body);
 }
 let solarCache: Cached<SolarConditions> | null = null;
 
@@ -267,21 +297,24 @@ export async function fetchPskActivity(opts: {
 }): Promise<PskBandActivity[] | null> {
   const now = Date.now();
   const key = opts.mode.toUpperCase();
-  if (pskCache && pskCache.mode === key && now - pskCache.at < PSK_MIN_INTERVAL_MS) {
-    return pskCache.value;
-  }
+  const mine = pskCache.get(key);
+  if (mine && now - mine.at < PSK_MIN_INTERVAL_MS) return mine.value;
   // Collapse concurrent callers onto one request: several browser tabs polling would
   // otherwise each fire one and trip the rate limit together.
-  if (pskInFlight) return pskInFlight;
+  if (pskInFlight) return mine?.value ?? null;
 
-  // Has the OTHER process already asked recently? The bridge and the web application
-  // each keep their own memory cache and neither can see the other's, which is how
-  // one installation came to be querying twice per interval from a single IP.
-  const shared = await readSharedPsk(key);
-  if (shared && now - shared.at < PSK_MIN_INTERVAL_MS) {
-    pskCache = { at: shared.at, mode: key, value: shared.value };
-    return shared.value;
+  // Has the OTHER process already asked recently, been refused, or spent the budget?
+  const shared = await readSharedPsk();
+  const theirs = shared.modes[key];
+  if (theirs && now - theirs.at < PSK_MIN_INTERVAL_MS) {
+    pskCache.set(key, theirs);
+    return theirs.value;
   }
+  const lastGood = mine ?? theirs ?? null;
+  if (now < shared.blockedUntil) return lastGood?.value ?? null;
+  if (now - shared.lastQueryAt < PSK_GLOBAL_GAP_MS) return lastGood?.value ?? null;
+  // Spend the budget before asking, so the other process sees it at once.
+  await writeSharedPsk((cur) => ({ ...cur, lastQueryAt: now }));
 
   // 15 minutes is the sweet spot — long enough to catch a few transmit cycles on every
   // band, short enough that "right now" means it.
@@ -303,28 +336,19 @@ export async function fetchPskActivity(opts: {
         headers: { "User-Agent": "DigiShack (amateur radio logger)" },
         signal: AbortSignal.timeout(30_000),
       });
-      if (!res.ok) {
-        // Keep the LAST GOOD figures rather than replacing them with nothing.
-        //
-        // The old line cached an empty array on failure, so one refusal blanked the
-        // band strip to a row of dashes for everyone — and band conditions are the
-        // one thing on that page that changes slowly enough for a stale reading to
-        // still be worth having. Losing the data outright is the worse answer, and
-        // it looks like a broken application rather than a service saying "later".
-        //
-        // The stand-off is longer than the ordinary interval: the answer to "you are
-        // asking too often" cannot be to keep asking at the same rate.
-        const keep = pskCache?.value ?? [];
-        pskCache = { at: now + (PSK_BACKOFF_MS - PSK_MIN_INTERVAL_MS), mode: key, value: keep };
-        if (res.status === 503) {
-          console.warn(
-            "[psk] refused (503) — holding the last band figures and standing off for " +
-              `${Math.round(PSK_BACKOFF_MS / 60_000)} min`,
-          );
-        }
-        return keep;
+      const body = await res.text();
+      if (!res.ok || !isReportList(body)) {
+        // Refused - by status, or by a 200 whose body is a message rather than reports
+        // ("Your IP has made too many queries too often"). Keep THIS mode's last good
+        // figures, never another mode's, and stand off for everyone.
+        const until = Date.now() + PSK_BACKOFF_MS;
+        await writeSharedPsk((cur) => ({ ...cur, blockedUntil: until }));
+        console.warn(
+          `[psk] band activity refused (${res.status}${res.ok ? ", not a report list" : ""}) - holding the last ${key} figures and standing off for ${Math.round(PSK_BACKOFF_MS / 60_000)} min`,
+        );
+        return lastGood?.value ?? null;
       }
-      const reports = parseReceptionReports(await res.text());
+      const reports = parseReceptionReports(body);
 
       const perBand = new Map<
         string,
@@ -338,7 +362,7 @@ export async function fetchPskActivity(opts: {
       >();
 
       for (const r of reports) {
-        if (r.mode && r.mode.toUpperCase() !== key) continue;
+        if (r.mode && !r.mode.toUpperCase().startsWith(key)) continue;
         const band = freqToBand(r.frequency);
         if (!band) continue;
         const e =
@@ -370,13 +394,14 @@ export async function fetchPskActivity(opts: {
         }))
         .sort((a, b) => b.transmitting - a.transmitting);
 
-      pskCache = { at: Date.now(), mode: key, value };
+      const fresh = { at: Date.now(), value };
+      pskCache.set(key, fresh);
       // Hand it to the other process too, so its next call costs no query.
-      await writeSharedPsk(key, value);
+      await writeSharedPsk((cur) => ({ ...cur, modes: { ...cur.modes, [key]: fresh } }));
       return value;
     } catch {
-      // Offline, DNS failure, timeout. Keep what we had; the UI copes with null.
-      return pskCache?.value ?? null;
+      // Offline, DNS failure, timeout. Keep what this mode had; the UI copes with null.
+      return lastGood?.value ?? null;
     } finally {
       pskInFlight = null;
     }

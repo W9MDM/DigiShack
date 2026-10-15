@@ -6,6 +6,7 @@
 // valid XML, a parse that drops the SNR reads as a station with no signal report, and a
 // matcher that is too generous attributes a reception to the wrong contact.
 
+import { isReportList } from "@/lib/propagation";
 import {
   MATCH_MARGIN_MS,
   pickQso,
@@ -231,6 +232,19 @@ console.log("\nwhich contact a report belongs to");
     pickQso(report(T + MATCH_MARGIN_MS + 1_000), [open]),
     null,
     "measured from its start, since that is all there is",
+  );
+}
+
+console.log("\na refusal is not an empty band");
+{
+  // 15 October: PSKReporter answered the band-activity query with this, status 200, and
+  // the old code parsed it as zero reports and cached "nobody on any band" for everyone.
+  const refusal = '{ "message": "Your IP has made too many queries too often. Please moderate your requests." }';
+  ok(!isReportList(refusal), "the rate-limit message is not a report list");
+  ok(parseReceptionReports(refusal).length === 0, "and parses to nothing, which is why it must be caught before parsing");
+  ok(
+    isReportList('<receptionReports><activeReceiver callsign="K1ABC"/></receptionReports>'),
+    "an empty but genuine report list is one",
   );
 }
 
