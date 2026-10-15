@@ -27,6 +27,7 @@ be read: `DATABASE_URL`, `SETTINGS_KEY` and `PORT`.
 - [N3FJP Amateur Contact Log](#n3fjp-amateur-contact-log) — 2 settings
 - [DXCC reference data](#dxcc-reference-data) — 2 settings
 - [PSKReporter](#pskreporter) — 4 settings
+- [WSPR](#wspr) — 1 setting
 - [Digital modes](#digital-modes) — 8 settings
 - [DigiShack bridge](#digishack-bridge) — 4 settings
 - [External decoder (WSJT-X)](#external-decoder-wsjt-x) — 3 settings
@@ -182,6 +183,14 @@ PSKReporter asks developers to identify their traffic and to poll no more than o
 | Report my decodes | `pskreporter.upload` | on/off | `false` | Send the stations we decode to PSKReporter, so DigiShack appears as a receiver on the coverage maps. Separate from the lookup setting below: this uploads, that downloads. One small datagram every five minutes. |
 | Antenna description | `pskreporter.antenna` | text | — | Shown alongside your spots on pskreporter.info. Optional. |
 | Collect reception reports | `pskreporter.enabled` | on/off | `false` | Ask PSKReporter which receivers heard our transmissions, and attach their reports to the contacts they belong to — the 'Heard by' panel on a contact. Downloads; the setting above uploads. Queried every five minutes, which is the most often PSKReporter permits. Most reports are of CQs that led to no contact and cannot be attached to one, so they are counted and discarded. |
+
+## WSPR
+
+DigiShack listens to WSPR beacons whenever the radio is on a WSPR dial frequency, and can report what it hears to wsprnet.org. Receive only: nothing on a WSPR frequency is called or answered, and the automatic modes will not start there.
+
+| Setting | Key | Type | Default | What it does |
+|---|---|---|---|---|
+| Report spots to wsprnet.org | `wsprnet.enabled` | on/off | `false` | Send every WSPR station decoded to wsprnet.org, one request per spot in the format WSJT-X sends, under this station's callsign and grid. Off by default because a spot puts both on a public map. Failures are logged once a minute at most and never cost a decode. |
 
 ## Digital modes
 

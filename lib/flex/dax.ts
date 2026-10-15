@@ -13,6 +13,7 @@ import { EventEmitter } from "node:events";
 
 import { decodeFT4, decodeFT8, HashCallBook } from "@e04/ft8ts";
 
+import { WSPR_PERIOD_MS } from "@/lib/digital/wspr";
 import { FlexClient } from "@/lib/flex/client";
 import { hasAntennaChoice, resolveAntenna } from "@/lib/flex/antennas";
 import {
@@ -98,7 +99,7 @@ export interface DaxDecode {
   /** Time offset of the transmission within its window, seconds. */
   dt: number;
   message: string;
-  mode: "FT8" | "FT4" | "FT2";
+  mode: "FT8" | "FT4" | "FT2" | "WSPR";
   /** UTC start of the window this came from. */
   windowStart: Date;
 }
@@ -108,7 +109,7 @@ export interface DaxSourceOptions {
   port?: number;
   /** DAX channel the slice routes audio to (slice property `dax`). */
   daxChannel?: number;
-  mode?: "FT8" | "FT4" | "FT2";
+  mode?: "FT8" | "FT4" | "FT2" | "WSPR";
   /**
    * Decoder depth. 2 is the live default: measured at ~0.6 s per window against
    * real 20 m traffic, comfortably inside the ~2.4 s gap between cycles. Depth 3
@@ -637,11 +638,12 @@ export class FlexDaxSource extends EventEmitter<Events> {
   }
 
   get periodMs(): number {
+    if (this.opts.mode === "WSPR") return WSPR_PERIOD_MS;
     if (this.opts.mode === "FT2") return FT2_PERIOD_MS;
     return this.opts.mode === "FT4" ? FT4_PERIOD_MS : FT8_PERIOD_MS;
   }
 
-  get mode(): "FT8" | "FT4" | "FT2" {
+  get mode(): "FT8" | "FT4" | "FT2" | "WSPR" {
     return this.opts.mode;
   }
 
@@ -649,11 +651,11 @@ export class FlexDaxSource extends EventEmitter<Events> {
    * Switch mode while running — used when the operator retunes from an FT8
    * frequency to an FT4 one.
    *
-   * The window length changes with the mode (15 / 7.5 / 2.5 s), so the buffer is
+   * The window length changes with the mode (15 / 7.5 / 2.5 / 120 s), so the buffer is
    * discarded: a partly-filled FT8 window is not a valid FT4 window, and feeding
    * it to the FT4 decoder would produce nothing while looking like a fault.
    */
-  setMode(mode: "FT8" | "FT4" | "FT2"): boolean {
+  setMode(mode: "FT8" | "FT4" | "FT2" | "WSPR"): boolean {
     if (mode === this.opts.mode) return false;
     this.opts.mode = mode;
     this.pipeline.setMode(mode);

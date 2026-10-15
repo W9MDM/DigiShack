@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.187.0 - public release
+## 1.188.0 - public release
 
 Development happens in a private repository; this is where the public history starts.
 Earlier entries are not reproduced - they quote real operators by callsign, include
@@ -22,6 +22,7 @@ Notes for anyone running this:
 
 ## Release history
 
+- **1.188.0** — WSPR, part three: a mode you can listen to, and spots to wsprnet
 - **1.187.0** — A radio API for a knob: /api/v1/radio
 - **1.186.1** — Seven mirror pushes that never happened
 - **1.186.0** — WSPR, part two: the demodulator, eight of the reference's nine from a real recording

@@ -26,6 +26,7 @@ and a backup moves the whole installation.
 | [FT8 Battle Royale](ft8battle.md) | BR mode: points on the waterfall, the broadcast, and tracking who holds what |
 | [Architecture](architecture.md) | What runs where, and why the radio is its own process |
 | [Radio API](radio-api.md) | Driving the active receiver from a dial or other controller through /api/v1/radio |
+| [WSPR](wspr.md) | Listening to WSPR beacons, and reporting what is heard to wsprnet |
 | [Icom protocol](icom-protocol.md) | The RS-BA1 wire format, for anyone working on the driver |
 | [Troubleshooting](troubleshooting.md) | Symptoms, in the order you are likely to meet them |
 | [Development](development.md) | Conventions, the test suite, how to add things |

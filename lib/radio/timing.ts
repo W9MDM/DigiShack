@@ -24,6 +24,7 @@ export const PERIOD_MS: Record<TxMode, number> = {
   FT8: 15_000,
   FT4: 7_500,
   FT2: 3_750,
+  WSPR: 120_000,
 };
 
 /**
@@ -37,6 +38,8 @@ export const TX_START_OFFSET_MS: Record<TxMode, number> = {
   FT8: 500,
   FT4: 500,
   FT2: 0,
+  /** One second after the even minute, per the WSPR protocol. */
+  WSPR: 1_000,
 };
 
 /**
@@ -55,6 +58,8 @@ export const TRANSMISSION_MS: Record<TxMode, number> = {
   FT8: 12_640,
   FT4: 5_040,
   FT2: 1_947,
+  /** 162 symbols of 8192 samples at 12 kHz. */
+  WSPR: 110_592,
 };
 
 /** A late transmission may never eat more of the window's margin than it leaves behind. */
@@ -86,6 +91,8 @@ const DECODABLE_LATE_MS: Record<TxMode, number> = {
   FT8: 1_860,
   FT4: 800,
   FT2: 0,
+  /** The search spans several seconds of DT; nothing here transmits WSPR, so this is only a table entry. */
+  WSPR: 2_000,
 };
 
 /**

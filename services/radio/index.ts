@@ -140,6 +140,7 @@ import { reconcileLotwSent } from "@/lib/integrations/lotw-reconcile";
 import { startFt8brTracker } from "@/lib/contest/ft8battle-tracker";
 import { runUploads } from "@/lib/integrations/upload-runner";
 import { locksFor } from "@/lib/radio/api";
+import { postWsprSpots, wsprSpotOf, type WsprSpotReport } from "@/lib/wsprnet/upload";
 import { collectReceptionReports } from "@/lib/pskreporter/collect";
 import { MIN_QUERY_INTERVAL_MS } from "@/lib/pskreporter/retrieve";
 import type { PskReporterUploader } from "@/lib/pskreporter/upload";
@@ -1082,6 +1083,43 @@ function sendJson(res: ServerResponse, code: number, body: unknown): void {
   res.end(text);
 }
 
+/**
+ * WSPR spots to wsprnet, when the operator has opted in. A beacon is not a CQ: these never
+ * reach PSKReporter's path, and nothing about them reaches the sequencer.
+ */
+async function reportWsprSpots(
+  decodes: { message: string; snr: number; dt: number; freqOffset: number }[],
+  windowStart: Date,
+): Promise<void> {
+  try {
+    if (!(await getBooleanSetting("wsprnet.enabled", false))) return;
+    if (!status.dialFrequency || !status.deCall || !status.deGrid) return;
+    const spots: WsprSpotReport[] = [];
+    for (const d of decodes) {
+      const spot = wsprSpotOf(d.message);
+      if (!spot) continue;
+      spots.push({
+        rcall: status.deCall,
+        rgrid: status.deGrid,
+        dialHz: status.dialFrequency,
+        at: windowStart,
+        tcall: spot.tcall,
+        tgrid: spot.tgrid,
+        dbm: spot.dbm,
+        snrDb: d.snr,
+        dtS: d.dt,
+        driftHz: 0,
+        txHz: status.dialFrequency + d.freqOffset,
+      });
+    }
+    if (spots.length === 0) return;
+    const n = await postWsprSpots(spots, (line) => console.log(`[radio] ${line}`));
+    console.log(`[radio] [wsprnet] reported ${n} of ${spots.length} spot(s)`);
+  } catch (err) {
+    console.warn(`[radio] [wsprnet] skipped: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
 async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = [];
   for await (const c of req) chunks.push(c as Buffer);
@@ -1119,6 +1157,7 @@ function onDecodedWindow(
   depthSetting: string,
 ): void {
     status.lastHeartbeat = Date.now();
+    if (status.subMode === "WSPR") void reportWsprSpots(decodes, windowStart);
 
     // Queue for PSKReporter. Uploading is what makes us visible as a receiver on
     // the coverage maps, and it costs one small datagram every five minutes.
@@ -1764,6 +1803,16 @@ async function startFlexSource(): Promise<() => Promise<void>> {
       status.subMode = guess.mode;
     } else {
       status.subMode = source.mode;
+    }
+    // Landing on a WSPR frequency with an automatic mode running would mean an FT8
+    // sequencer listening to beacons and CQing over them. The retune was the operator's;
+    // stopping auto is the only safe reading of it.
+    if (status.subMode === "WSPR") {
+      const a = activeAuto();
+      if (a && a.state.mode !== "off") {
+        a.setMode("off");
+        console.log("[bridge] WSPR is receive-only - automatic mode stopped");
+      }
     }
 
     broadcast({ kind: "status", status });
@@ -3729,8 +3778,8 @@ async function main(): Promise<void> {
         const body = await readJson(req);
         const band = String(body.band ?? "").toUpperCase();
         const mode = String(body.mode ?? "FT8").toUpperCase() as DigitalMode;
-        if (!["FT8", "FT4", "FT2"].includes(mode)) {
-          sendJson(res, 400, { error: "mode must be FT8, FT4 or FT2" });
+        if (!["FT8", "FT4", "FT2", "WSPR"].includes(mode)) {
+          sendJson(res, 400, { error: "mode must be FT8, FT4, FT2 or WSPR" });
           return;
         }
         const hz = callingFrequencyHz(band, mode);
@@ -3948,6 +3997,14 @@ async function main(): Promise<void> {
         }
         const body = await readJson(req);
         const mode = String(body.mode ?? "off") as AutoMode;
+        // WSPR IS RECEIVE-ONLY. Every automatic mode keys the radio, and the decoder is
+        // listening to beacons no FT8 sequence can answer.
+        if (mode !== "off" && status.subMode === "WSPR") {
+          sendJson(res, 409, {
+            error: "WSPR is receive-only: tune to an FT8, FT4 or FT2 frequency before starting an automatic mode",
+          });
+          return;
+        }
         // Every mode except `off` will eventually key the radio, so enabling one with
         // the gate shut is a request that cannot be honoured. Saying so now beats a
         // status line that reads "hunting K1ABC" forever while nothing transmits.
@@ -4383,6 +4440,10 @@ async function main(): Promise<void> {
         const body = await readJson(req);
         switch (url.pathname) {
           case "/call": {
+            if (status.subMode === "WSPR") {
+              sendJson(res, 409, { error: "WSPR is receive-only: a beacon cannot be called" });
+              return;
+            }
             // Refuse here rather than accepting and failing a cycle later.
             //
             // This used to return 200, and the panel would say "Calling — waiting for

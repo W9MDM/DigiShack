@@ -107,7 +107,7 @@ const PARTNER_MESSAGE = "K5AAA W6BBB R-09";
 const EMPTY_OFFSET = 2150;
 
 /** Where in the period a correctly-timed station starts. Same table check:pipeline uses. */
-const TX_START_MS: Record<TxMode, number> = { FT8: 500, FT4: 500, FT2: 0 };
+const TX_START_MS: Record<TxMode, number> = { FT8: 500, FT4: 500, FT2: 0, WSPR: 1000 };
 
 /** A deterministic LCG, so a timing or decode assertion cannot pass on Tuesday. */
 function lcg(seed: number): () => number {

@@ -236,6 +236,16 @@ export const SETTING_GROUPS: SettingGroup[] = [
       "PSKReporter asks developers to identify their traffic and to poll no more than once per callsign every 5 minutes. Anonymous polling risks being blocked.",
   },
   {
+    id: "wspr",
+    doc: "wspr",
+    docLabel: "Listening to WSPR, and reporting spots to wsprnet",
+    title: "WSPR",
+    blurb:
+      "DigiShack listens to WSPR beacons whenever the radio is on a WSPR dial frequency, and " +
+      "can report what it hears to wsprnet.org. Receive only: nothing on a WSPR frequency is " +
+      "called or answered, and the automatic modes will not start there.",
+  },
+  {
     id: "digital",
     doc: "digital-modes",
     docLabel: "FT8, FT4 and FT2 — windows, decoding and what each setting costs",
@@ -964,6 +974,18 @@ export const SETTINGS: SettingDef[] = [
     type: "boolean",
     group: "pskreporter",
     help: "Ask PSKReporter which receivers heard our transmissions, and attach their reports to the contacts they belong to — the 'Heard by' panel on a contact. Downloads; the setting above uploads. Queried every five minutes, which is the most often PSKReporter permits. Most reports are of CQs that led to no contact and cannot be attached to one, so they are counted and discarded.",
+    default: "false",
+  },
+  {
+    key: "wsprnet.enabled",
+    label: "Report spots to wsprnet.org",
+    type: "boolean",
+    group: "wspr",
+    help:
+      "Send every WSPR station decoded to wsprnet.org, one request per spot in the format " +
+      "WSJT-X sends, under this station's callsign and grid. Off by default because a spot " +
+      "puts both on a public map. Failures are logged once a minute at most and never cost " +
+      "a decode.",
     default: "false",
   },
 

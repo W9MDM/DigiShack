@@ -102,6 +102,8 @@ async function runWindow(
   return { decodes, rms, skipped };
 }
 
+import { wsprChannelSymbols, wsprWaveform } from "../lib/digital/wspr";
+
 const MESSAGE = "CQ K9XYZ EN52";
 const OFFSET = 1200;
 
@@ -122,7 +124,7 @@ const OFFSET = 1200;
  * that gate. A decode test that feeds a bare transmission is not testing the pipeline,
  * because the pipeline never sees one.
  */
-const TX_START_MS: Record<TxMode, number> = { FT8: 500, FT4: 500, FT2: 0 };
+const TX_START_MS: Record<TxMode, number> = { FT8: 500, FT4: 500, FT2: 0, WSPR: 1000 };
 
 function liveWindow(mode: TxMode, wave: Float32Array): Float32Array {
   const lead = Math.round((DAX_SAMPLE_RATE * TX_START_MS[mode]) / 1000);
@@ -159,6 +161,31 @@ async function main(): Promise<void> {
       ok(Math.abs(hit.dt) < 0.1, `${mode}: a correctly-timed signal decodes at dt near zero`, `${hit.dt}`);
       // Clean synthetic audio, so the reported SNR should be high rather than marginal.
       ok(hit.snr > 0, `${mode}: a noiseless signal reports a positive SNR`, `${hit.snr} dB`);
+    }
+  }
+
+  console.log("\na WSPR transmission through the same pipeline");
+  {
+    // The waveform comes from the codec directly: buildWaveform refuses WSPR, because the
+    // transmitter does. 1500 Hz is where every WSPR signal sits above the dial. This is
+    // the whole receive path at the FlexRadio's rate - decimation, the two-minute cut, the
+    // decoder on its thread - with a known spot in and the same spot expected out.
+    const symbols = wsprChannelSymbols("K9AN EN50 33");
+    ok(symbols !== null, "WSPR: the message encodes");
+    const wave = wsprWaveform(symbols!, { audioHz: 1500, sampleRate: DAX_SAMPLE_RATE });
+    const { decodes, skipped } = await runWindow("WSPR", liveWindow("WSPR", wave));
+    ok(!skipped, "WSPR: the two-minute window is decoded, not skipped as silence");
+    const hit = decodes.find((d) => d.message === "K9AN EN50 33");
+    ok(
+      hit !== undefined,
+      "WSPR: the spot round-trips through the pipeline and the decoder thread",
+      decodes.map((d) => d.message).join(" | ") || "nothing decoded",
+    );
+    if (hit) {
+      eq(hit.mode, "WSPR", "WSPR: tagged with the right mode");
+      ok(Math.abs(hit.freqOffset - 1500) <= 2, `WSPR: frequency lands within 2 Hz of 1500 (${hit.freqOffset})`);
+      ok(Math.abs(hit.dt) <= 0.2, `WSPR: a correctly-timed signal decodes at dt near zero (${hit.dt})`);
+      ok(hit.snr > 0, `WSPR: a noiseless signal reports a positive SNR (${hit.snr} dB)`);
     }
   }
 

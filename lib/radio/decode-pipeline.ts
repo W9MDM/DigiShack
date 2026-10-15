@@ -21,6 +21,7 @@ import { HashCallBook } from "@e04/ft8ts";
 import { DecodeThread } from "@/lib/radio/decode-thread";
 
 import { ft2DecodeAudio } from "@/lib/digital/ft2demod";
+import { WsprThread } from "@/lib/radio/wspr-thread";
 import { HashCallBook as Ft2HashCallBook } from "@/lib/digital/pack77";
 import { PERIOD_MS, TRANSMISSION_MS } from "@/lib/radio/timing";
 import type { TxMode } from "@/lib/radio/waveform";
@@ -443,6 +444,8 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
    * own port in lib/digital and still runs inline, which is a much shorter decode.
    */
   private readonly thread = new DecodeThread((line) => this.emit("error", new Error(line)));
+  /** WSPR decodes on a thread of its own: three seconds of CPU per window. See wspr-worker.ts. */
+  private readonly wsprThread = new WsprThread((line) => this.emit("error", new Error(line)));
   /**
    * KEPT ONLY FOR FT2, which decodes on this thread.
    *
@@ -583,6 +586,7 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
     // The decoder thread is NOT unref'd — see decode-thread.ts — so it has to be closed
     // explicitly or the process will not exit. Anything mid-decode resolves empty.
     void this.thread.close();
+    void this.wsprThread.close();
   }
 
   /**
@@ -793,7 +797,20 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
     const started = Date.now();
     let decoded: { freq: number; snr: number; dt: number; msg: string }[];
     try {
-      if (this.mode === "FT2") {
+      if (this.mode === "WSPR") {
+        // WSPR is decoded by our own port, on its own thread. The audio frequency becomes
+        // the offset and the message is the spot as wsprd prints it - "K1ABC FN42 37" -
+        // which parses as "other" downstream, so no sequencer or reporter mistakes a
+        // beacon for a CQ. The transfer hands over the buffer; nothing here reads it again.
+        const r = await this.wsprThread.decode(Float32Array.from(p.audio), DECODE_SAMPLE_RATE);
+        if (r.error) this.emit("error", new Error(`wspr thread: ${r.error}`));
+        decoded = r.decodes.map((d) => ({
+          freq: Math.round(d.audioHz),
+          snr: d.snrDb,
+          dt: d.dtS,
+          msg: d.message,
+        }));
+      } else if (this.mode === "FT2") {
         // FT2 is decoded by our own port in lib/digital, not @e04/ft8ts, which does not
         // implement it. Mapped onto the same shape so nothing downstream has to know.
         decoded = ft2DecodeAudio(p.audio, {
