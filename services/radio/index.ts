@@ -1412,6 +1412,12 @@ const SSTV_DIR = path.join(process.cwd(), "data", "sstv");
 let sstvLive: { mode: string; width: number; height: number; rgb: Uint8ClampedArray; rows: number; at: number } | null = null;
 
 function onSstvEvent(e: SstvEvent): void {
+  if (e.kind === "vis") {
+    // Every header, so one that cannot be drawn still says what it was.
+    if (!e.decoded) console.log(`[sstv] heard a ${e.name} header (VIS ${e.code}) - not a mode decoded here`);
+    broadcast({ kind: "sstv-vis", code: e.code, name: e.name, decoded: e.decoded, at: e.at });
+    return;
+  }
   if (e.kind === "start") {
     sstvLive = { mode: e.mode, width: e.width, height: e.height, rgb: new Uint8ClampedArray(e.width * e.height * 3), rows: 0, at: e.at };
     console.log(`[sstv] receiving ${e.mode} (${e.width}x${e.height})`);
@@ -5496,6 +5502,24 @@ async function main(): Promise<void> {
         ws.send(JSON.stringify({ kind: "status", status }));
         ws.send(JSON.stringify({ kind: "backlog", decodes: recentDecodes.slice(-50) }));
         if (streamText) ws.send(JSON.stringify({ kind: "text-backlog", mode: status.subMode ?? "RTTY", text: streamText }));
+        // An SSTV picture half way in: the start and every row so far, so a page opened
+        // mid-picture draws it rather than saying it is waiting - which it did for the first
+        // picture ever received here, N3CHX on 14.230.
+        if (sstvLive) {
+          const live = sstvLive;
+          ws.send(JSON.stringify({ kind: "sstv-start", mode: live.mode, width: live.width, height: live.height, at: live.at }));
+          if (live.rows > 0) {
+            ws.send(
+              JSON.stringify({
+                kind: "sstv-rows",
+                from: 0,
+                to: live.rows,
+                width: live.width,
+                rgb: Buffer.from(live.rgb.subarray(0, live.rows * live.width * 3)).toString("base64"),
+              }),
+            );
+          }
+        }
         if (lastSpectrum) ws.send(JSON.stringify(lastSpectrum));
         if (lastPanadapter) ws.send(JSON.stringify(lastPanadapter));
         // The auto and QSO states are otherwise only broadcast when they CHANGE, so a

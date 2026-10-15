@@ -23,16 +23,18 @@ the same, Robot 36 thirty-six seconds, PD 120 just over two minutes.
 SSTV operators run lower sideband on 80 and 40 m, so the chip puts the slice in DIGL
 there and DIGU above. 14.230 is the busiest by far, at weekends especially.
 
-The modes: Martin 1 and 2, Scottie 1, 2 and DX, Robot 36, and PD 90, 120 and 180 - the
-ones heard on the air. The header names the mode, so there is nothing to choose; a
-picture in a mode outside these is heard (the panel counts headers) but not drawn.
+The modes: Martin 1 and 2, Scottie 1, 2 and DX, Robot 36, and PD 50, 90, 120, 160, 180
+and 240. The header names the mode, so there is nothing to choose. A picture in a mode
+outside these - Robot 72, Wraase, Pasokon, the MMSSTV extended modes - is heard but not
+drawn: the panel and the bridge log say which it was ("Last header: Robot 72"), so a
+missing mode shows up by name rather than as a count.
 
 ## The gallery
 
 Every finished picture is saved as a PNG under `data/sstv` on the station, named by the
 time and the mode, and listed under the picture as thumbnails, newest first. Click one to
 show it; the next picture to start takes the display back. A page opened half way
-through a picture shows it from the next one on.
+through a picture gets everything received so far and carries on from there.
 
 ## How it reads a picture
 
@@ -44,6 +46,14 @@ between the two is followed, so a sending sound card a little fast or slow does 
 the picture. In noise the picture is snowy and washed out toward grey, as on any
 decoder. `scripts/check-sstv.ts` and `check-sstv-pipeline.ts` test all nine modes,
 noise and clock error on generated pictures.
+
+## On the air
+
+The first picture, 22:05 UTC on 15 October 2026, 14.230: N3CHX in Martin 1, decoded off
+the air two minutes after the decoder was deployed. The streaks are ordinary HF fading
+and interference; the picture underneath is whole.
+
+![N3CHX, Martin 1, 14.230](sstv-first-n3chx.png)
 
 ## Not yet
 

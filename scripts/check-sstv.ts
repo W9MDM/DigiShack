@@ -159,6 +159,37 @@ console.log("\nthe Icom's 48 kHz, noise, and a sound card 0.1% slow");
   ok(s1skew.img !== null && error(s1card, s1skew.img) < 15, `Scottie 1 sent 0.1% fast (${s1skew.img ? error(s1card, s1skew.img).toFixed(1) : "none"})`);
 }
 
+console.log("\na header for a mode not decoded here");
+{
+  // Robot 72 (VIS 12): heard, named, counted once, and no picture started.
+  const segs = sstvVisSegments(12);
+  let total = 0;
+  for (const [, ms] of segs) total += ms;
+  const lead = Math.round(fs24 * 0.5);
+  const w = new Float32Array(lead + Math.round((fs24 * (total + 2000)) / 1000));
+  let ph = 0;
+  let t = 0;
+  let n = lead;
+  for (const [hz, ms] of segs) {
+    t += ms;
+    const end = lead + Math.round((t * fs24) / 1000);
+    for (; n < end; n++) {
+      w[n] = 0.8 * Math.sin(ph);
+      ph += (2 * Math.PI * hz) / fs24;
+    }
+  }
+  for (; n < w.length; n++) {
+    w[n] = 0.8 * Math.sin(ph);
+    ph += (2 * Math.PI * 1500) / fs24;
+  }
+  const heard: string[] = [];
+  let started = 0;
+  const d = new SstvDecoder(fs24, { onVis: (_c, name) => heard.push(name), onStart: () => started++ });
+  for (let i = 0; i < w.length; i += 256) d.feed(w.subarray(i, i + 256));
+  ok(heard.length === 1 && heard[0] === "Robot 72", `the header is named and counted once (${heard.join(", ") || "nothing"})`);
+  ok(started === 0 && d.statistics.visHeard === 1, "and starts no picture");
+}
+
 console.log("\nnoise alone starts nothing");
 {
   const rnd = random(7);

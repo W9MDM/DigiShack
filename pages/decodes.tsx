@@ -997,7 +997,7 @@ export default function DigitalPage({ wsUrl }: Props) {
             setStreamText(msg.text as string);
           } else if (msg.kind === "stream" && msg.mode === "SSTV") setSstvStats(msg as unknown as SstvStats);
           else if (msg.kind === "stream") setStreamStats(msg as unknown as StreamStats);
-          else if (msg.kind === "sstv-start" || msg.kind === "sstv-rows" || msg.kind === "sstv-image") {
+          else if (msg.kind === "sstv-vis" || msg.kind === "sstv-start" || msg.kind === "sstv-rows" || msg.kind === "sstv-image") {
             sstvPanel.current?.receive(msg as SstvMessage);
           }
           else if (msg.kind === "spectrum") {

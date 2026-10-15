@@ -300,6 +300,7 @@ export function isStreamMode(mode: string | null | undefined): mode is StreamMod
 
 /** SSTV's events: a picture starting, rows as they arrive, the picture complete. */
 export type SstvEvent =
+  | { kind: "vis"; code: number; name: string; decoded: boolean; at: number }
   | { kind: "start"; mode: string; width: number; height: number; at: number }
   | { kind: "rows"; from: number; to: number; width: number; rgb: Uint8ClampedArray }
   | { kind: "image"; mode: string; width: number; height: number; rgb: Uint8ClampedArray; at: number };
@@ -888,6 +889,7 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
       });
     } else if (opts.mode === "SSTV") {
       this.sstv = new SstvDecoder(this.inputRate, {
+        onVis: (code, name, decoded) => this.emit("sstv", { kind: "vis", code, name, decoded, at: Date.now() }),
         onStart: (m) => this.emit("sstv", { kind: "start", mode: m.name, width: m.width, height: m.height, at: Date.now() }),
         onRows: (img, from, to) =>
           this.emit("sstv", { kind: "rows", from, to, width: img.width, rgb: img.rgb.slice(from * img.width * 3, to * img.width * 3) }),

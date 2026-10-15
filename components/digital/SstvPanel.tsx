@@ -18,6 +18,7 @@ export interface SstvStats {
 
 /** What the page's socket handler hands the panel. */
 export type SstvMessage =
+  | { kind: "sstv-vis"; code: number; name: string; decoded: boolean; at: number }
   | { kind: "sstv-start"; mode: string; width: number; height: number; at: number }
   | { kind: "sstv-rows"; from: number; to: number; width: number; rgb: string }
   | { kind: "sstv-image"; file: string; mode: string; at: number };
@@ -45,10 +46,16 @@ export const SstvPanel = forwardRef<SstvPanelHandle, { stats: SstvStats | null }
   const canvas = useRef<HTMLCanvasElement>(null);
   const [live, setLive] = useState<{ mode: string; width: number; height: number; rows: number } | null>(null);
   const [picked, setPicked] = useState<Picture | null>(null);
+  /** The last header heard, so one that cannot be drawn still says what it was. */
+  const [lastVis, setLastVis] = useState<{ name: string; decoded: boolean; at: number } | null>(null);
   const { data, reload } = useApi<{ pictures: Picture[]; total: number }>("/api/sstv?limit=48");
 
   const receive = useCallback(
     (msg: SstvMessage) => {
+      if (msg.kind === "sstv-vis") {
+        setLastVis({ name: msg.name, decoded: msg.decoded, at: msg.at });
+        return;
+      }
       if (msg.kind === "sstv-start") {
         setPicked(null);
         setLive({ mode: msg.mode, width: msg.width, height: msg.height, rows: 0 });
@@ -113,6 +120,11 @@ export const SstvPanel = forwardRef<SstvPanelHandle, { stats: SstvStats | null }
         {stats && (
           <span>
             {stats.pictures} received this session · {stats.visHeard} headers heard
+          </span>
+        )}
+        {lastVis && !lastVis.decoded && (
+          <span>
+            Last header: {lastVis.name} at {new Date(lastVis.at).toISOString().slice(11, 16)}Z - not a mode decoded here
           </span>
         )}
         <span className="text-fg-subtle">Martin, Scottie, Robot 36 and PD modes, named by the header</span>
