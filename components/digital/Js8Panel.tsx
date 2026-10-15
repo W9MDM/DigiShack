@@ -5,7 +5,7 @@
 // which frame is out and when the next window is, and can stop a message after the frame
 // on the air.
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 /** What the bridge reports about a message going out, from `status.js8`. */
 export interface Js8SendState {
@@ -23,6 +23,12 @@ export interface Js8SendState {
 export type Js8Speed = "normal" | "fast" | "turbo" | "slow";
 
 interface Props {
+  /**
+   * A station picked from the decode list: the line starts with its callsign, ready for a
+   * command or text. `n` changes on every pick, so picking the same station twice still
+   * fills the line.
+   */
+  prefill?: { call: string; n: number } | null;
   speed: Js8Speed;
   onSpeed: (s: Js8Speed) => void;
   /** Messages joined from their frames, one line each, with [TX] lines for what went out. */
@@ -52,6 +58,7 @@ const SPEEDS: { id: Js8Speed; label: string }[] = [
 ];
 
 export function Js8Panel({
+  prefill,
   speed,
   onSpeed,
   text,
@@ -68,7 +75,13 @@ export function Js8Panel({
   onClear,
 }: Props) {
   const [draft, setDraft] = useState("");
+  const input = useRef<HTMLInputElement>(null);
   const sending = state?.sending ?? false;
+  useEffect(() => {
+    if (!prefill) return;
+    setDraft(`${prefill.call} `);
+    input.current?.focus();
+  }, [prefill]);
   const send = (line: string) => {
     const t = line.trim();
     if (t) onSend(t);
@@ -113,6 +126,7 @@ export function Js8Panel({
           }}
         >
           <input
+            ref={input}
             className="flex-1 min-w-[12rem] bg-bg-raised border border-line rounded-sm px-2 py-1 text-sm font-mono"
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
@@ -148,6 +162,23 @@ export function Js8Panel({
           >
             HB
           </button>
+          {/* The usual first things to say to a station picked from the list. */}
+          {draft.trim() && /^[A-Z0-9/]+$/i.test(draft.trim()) &&
+            [" SNR?", " GRID?", " INFO?", " HELLO"].map((c) => (
+              <button
+                key={c}
+                type="button"
+                className={BUTTON}
+                disabled={sending || !myCall}
+                onClick={() => {
+                  send(`${draft.trim()}${c}`);
+                  setDraft("");
+                }}
+                title={`Send ${draft.trim()}${c}`}
+              >
+                {c.trim()}
+              </button>
+            ))}
           <button
             type="button"
             className={BUTTON}

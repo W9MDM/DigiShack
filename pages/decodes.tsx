@@ -525,6 +525,8 @@ export default function DigitalPage({ wsUrl }: Props) {
   const audio = useReceiverAudio(wsUrl);
   /** Where a JS8 message goes out, Hz audio: typed, or picked on the waterfall. */
   const [js8OffsetHz, setJs8OffsetHz] = useState(1500);
+  /** A JS8 station picked from the list, for the message line. See callFromRow. */
+  const [js8Prefill, setJs8Prefill] = useState<{ call: string; n: number } | null>(null);
   const [js8Error, setJs8Error] = useState<string | null>(null);
 
   // Why each station is worth calling — the same scoring Auto Hunt ranks by, so the
@@ -739,6 +741,15 @@ export default function DigitalPage({ wsUrl }: Props) {
   const callFromRow = useCallback(
     async (d: DecodeEvent) => {
       if (!d.callsign) return;
+      // JS8 has no exchange to run: a station is worked by sending it directed messages.
+      // Picking one starts that message - its callsign on the JS8 line, with SNR?, GRID?,
+      // INFO? and HELLO beside it - rather than asking the FT8 sequencer, which refused
+      // with "JS8 has no sequencer" every time a JS8 row was clicked.
+      if (status?.subMode === "JS8") {
+        setRowCallNote(null);
+        setJs8Prefill((p) => ({ call: d.callsign!.toUpperCase(), n: (p?.n ?? 0) + 1 }));
+        return;
+      }
       setTarget(d);
       setRowCallNote(null);
       try {
@@ -768,7 +779,7 @@ export default function DigitalPage({ wsUrl }: Props) {
         });
       }
     },
-    [],
+    [status?.subMode],
   );
 
   const suggestSlot = useCallback(
@@ -2542,6 +2553,7 @@ export default function DigitalPage({ wsUrl }: Props) {
                     line each as the bridge finishes them, sit above. */}
                 {decodingAs === "JS8" && (
                   <Js8Panel
+                    prefill={js8Prefill}
                     speed={status?.js8Speed ?? "normal"}
                     onSpeed={(s) => void setJs8Speed(s)}
                     text={streamText}
@@ -2831,10 +2843,14 @@ export default function DigitalPage({ wsUrl }: Props) {
 
                                   stopPropagation because the row handler does the
                                   same thing — without it the click runs twice. */}
-                              {d.callsign && decodingAs !== "WSPR" && decodingAs !== "JS8" && (
+                              {d.callsign && decodingAs !== "WSPR" && (
                                 <button
                                   type="button"
-                                  title={`Call ${d.callsign} now. Click the row instead to select without transmitting.`}
+                                  title={
+                                    decodingAs === "JS8"
+                                      ? `Start a message to ${d.callsign}: the JS8 line fills with the callsign, ready for SNR?, GRID?, INFO? or text`
+                                      : `Call ${d.callsign} now. Click the row instead to select without transmitting.`
+                                  }
                                   onClick={(e) => {
                                     e.stopPropagation();
                                     void callFromRow(d);
