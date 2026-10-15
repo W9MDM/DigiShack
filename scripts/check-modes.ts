@@ -124,9 +124,10 @@ console.log("\nis this a frequency an automatic mode may run on");
   // needs a radio. The rule is the part that was wrong.
   const resolveMode = (st: { subMode: string | null; mode: string | null }): TxMode => {
     const m = (st.subMode || st.mode || "FT8").toUpperCase();
-    return m === "FT4" ? "FT4" : m === "FT2" ? "FT2" : m === "WSPR" ? "WSPR" : "FT8";
+    return m === "FT4" ? "FT4" : m === "FT2" ? "FT2" : m === "WSPR" ? "WSPR" : m === "RTTY" ? "RTTY" : "FT8";
   };
   eq(resolveMode({ subMode: "WSPR", mode: "DIGU" }), "WSPR", "listening to WSPR resolves to WSPR");
+  eq(resolveMode({ subMode: "RTTY", mode: "DIGU" }), "RTTY", "listening to RTTY resolves to RTTY");
 
   eq(resolveMode({ subMode: "FT4", mode: "DIGU" }), "FT4", "a Flex in FT4 resolves to FT4");
   eq(resolveMode({ subMode: "FT8", mode: "DIGU" }), "FT8", "and in FT8, to FT8");

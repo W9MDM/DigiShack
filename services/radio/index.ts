@@ -129,7 +129,7 @@ import { startScheduleRunner } from "@/lib/radio/schedule-runner";
 import { FlexDaxSource, DAX_SAMPLE_RATE } from "@/lib/flex/dax";
 import { discoverRadios } from "@/lib/flex/discovery";
 import { freqToBand } from "@/lib/ham/bands";
-import { inferDigitalMode, type DigitalMode } from "@/lib/ham/digital-freqs";
+import { inferDigitalMode, type DigitalMode, type ModeGuess } from "@/lib/ham/digital-freqs";
 import { clearAlert, raiseAlert } from "@/lib/alerts";
 import { guardFaultsCleared, watchGuardFaults } from "./guard-alerts";
 import { TxPowerTracker, dbmToWatts } from "@/lib/radio/power";
@@ -141,6 +141,7 @@ import { startFt8brTracker } from "@/lib/contest/ft8battle-tracker";
 import { runUploads } from "@/lib/integrations/upload-runner";
 import { locksFor } from "@/lib/radio/api";
 import { postWsprSpots, wsprSpotOf, type WsprSpotReport } from "@/lib/wsprnet/upload";
+import { RTTY_CENTRE_HZ, RTTY_SHIFT_HZ, rttyTones } from "@/lib/digital/rtty";
 import { collectReceptionReports } from "@/lib/pskreporter/collect";
 import { MIN_QUERY_INTERVAL_MS } from "@/lib/pskreporter/retrieve";
 import type { PskReporterUploader } from "@/lib/pskreporter/upload";
@@ -178,6 +179,8 @@ interface RigStatus {
   band: string | null;
   mode: string | null;
   subMode: string | null;
+  /** The RTTY tone pair while listening to RTTY, for the page's panel and waterfall. */
+  rtty: { centreHz: number; shiftHz: number; sideband: "USB" | "LSB"; markHz: number; spaceHz: number } | null;
   dxCall: string | null;
   deCall: string | null;
   deGrid: string | null;
@@ -311,6 +314,7 @@ const status: RigStatus = {
   band: null,
   mode: null,
   subMode: null,
+  rtty: null,
   dxCall: null,
   deCall: null,
   deGrid: null,
@@ -1083,6 +1087,31 @@ function sendJson(res: ServerResponse, code: number, body: unknown): void {
   res.end(text);
 }
 
+/** Modes with nothing for a sequencer to answer: no automatic mode runs on them and nothing is called. */
+const NO_SEQUENCER_MODES: ReadonlySet<string> = new Set(["WSPR", "RTTY"]);
+function noSequencerReason(mode: string): string {
+  return mode === "WSPR"
+    ? "WSPR is receive-only: tune to an FT8, FT4 or FT2 frequency before starting an automatic mode"
+    : `${mode} has no sequencer: there are no structured messages to answer. Tune to an FT8, FT4 or FT2 frequency for the automatic modes.`;
+}
+
+/**
+ * The mode the operator chose by name. It holds while the dial moves where nothing has a
+ * calling frequency (an RTTY segment) and lets go the moment the dial lands on another
+ * mode's calling frequency, so FT8 at 14.074 still means FT8.
+ */
+let stickyMode: DigitalMode | null = null;
+
+/** RTTY tuning: the tone pair's centre and shift. The sideband comes from the slice. */
+const rttyTuning = { centreHz: RTTY_CENTRE_HZ, shiftHz: RTTY_SHIFT_HZ };
+let rttyCode: { figures: "us" | "ita2"; usos: boolean } = { figures: "us", usos: true };
+/** Set by the live source: recomputes the tones from the tuning and the slice's sideband. */
+let rttyApply: (() => void) | null = null;
+
+/** The last few thousand characters of stream text, replayed to a page that connects. */
+const STREAM_TEXT_MAX = 8_000;
+let streamText = "";
+
 /**
  * WSPR spots to wsprnet, when the operator has opted in. A beacon is not a CQ: these never
  * reach PSKReporter's path, and nothing about them reaches the sequencer.
@@ -1348,7 +1377,16 @@ async function startFlexSource(): Promise<() => Promise<void>> {
     host,
     daxChannel,
     // Refined from the dial frequency below once the slice is known.
-    mode: configuredMode === "ft4" ? "FT4" : configuredMode === "ft2" ? "FT2" : "FT8",
+    mode:
+      configuredMode === "ft4"
+        ? "FT4"
+        : configuredMode === "ft2"
+          ? "FT2"
+          : configuredMode === "wspr"
+            ? "WSPR"
+            : configuredMode === "rtty"
+              ? "RTTY"
+              : "FT8",
     depth,
     // Shared with the Icom: the passband is a property of the operating convention,
     // not of the radio.
@@ -1512,6 +1550,22 @@ async function startFlexSource(): Promise<() => Promise<void>> {
   const txSpans: [number, number][] = [];
   let txSpanStart: number | null = null;
 
+  // The RTTY tone pair follows the slice's sideband: mark is the higher radio frequency,
+  // so the higher audio tone on USB and the lower on LSB. Recomputed on every slice update
+  // while on RTTY and on every /rtty request; the pipeline keeps its state across a retune.
+  rttyTuning.centreHz = await getNumberSetting("rtty.centreHz", RTTY_CENTRE_HZ);
+  rttyTuning.shiftHz = await getNumberSetting("rtty.shiftHz", RTTY_SHIFT_HZ);
+  rttyCode = {
+    figures: ((await getSetting("rtty.figures")) ?? "us").toLowerCase() === "ita2" ? "ita2" : "us",
+    usos: await getBooleanSetting("rtty.usos", true),
+  };
+  rttyApply = () => {
+    const sideband: "USB" | "LSB" = /LSB|DIGL/i.test(status.mode ?? "") ? "LSB" : "USB";
+    const tones = rttyTones(rttyTuning.centreHz, rttyTuning.shiftHz, sideband);
+    source.setRttyOptions({ ...tones, ...rttyCode });
+    status.rtty = { centreHz: rttyTuning.centreHz, shiftHz: rttyTuning.shiftHz, sideband, ...tones };
+  };
+
   source.on("window", (w) => {
     // The liveness heartbeat. A window arrives once per T/R period whether or not
     // anything decoded, so it stops only when the machinery stops — which is the
@@ -1562,6 +1616,17 @@ async function startFlexSource(): Promise<() => Promise<void>> {
     }
   });
 
+  // Stream modes: text as it completes, and a heartbeat once a second of audio carrying
+  // the tone levels for the page's tuning display. The heartbeat is the liveness beat
+  // here, since no window will ever arrive while streaming.
+  source.on("text", (t) => {
+    streamText = (streamText + t.text).slice(-STREAM_TEXT_MAX);
+    broadcast({ kind: "text", mode: t.mode, text: t.text, at: t.at });
+  });
+  source.on("stream", (s) => {
+    watchdog?.beat();
+    broadcast({ kind: "stream", ...s });
+  });
   source.on("decodes", (d) => onDecodedWindow(d, "flex.decodeDepth"));
 
   // The partner's slice, about a second ahead of the rest of the band.
@@ -1791,14 +1856,22 @@ async function startFlexSource(): Promise<() => Promise<void>> {
     // nothing. The dial frequency is the reliable discriminator, so unless the
     // mode is pinned in Settings it is inferred from where the radio is tuned.
     if (configuredMode === "auto") {
-      const guess = inferDigitalMode(slice.freqHz);
+      const inferred = inferDigitalMode(slice.freqHz);
+      // A mode chosen by name holds while the dial wanders where nothing has a calling
+      // frequency (an RTTY segment), and lets go when the dial lands on one.
+      if (stickyMode && inferred.certain && inferred.mode !== stickyMode) stickyMode = null;
+      const guess: ModeGuess =
+        stickyMode && !inferred.certain ? { mode: stickyMode, certain: false, matched: null } : inferred;
       if (source.setMode(guess.mode)) {
         console.log(
           `[bridge] ${(slice.freqHz / 1e6).toFixed(3)} MHz -> decoding ${guess.mode}` +
             (guess.certain
               ? ` (${guess.matched?.band} calling frequency)`
-              : " (no known calling frequency nearby — defaulting to FT8)"),
+              : stickyMode
+                ? ` (no calling frequency nearby — staying on ${guess.mode}, as chosen)`
+                : " (no known calling frequency nearby — defaulting to FT8)"),
         );
+        if (guess.mode === "RTTY") streamText = "";
         // The window length changed, so the deadline for "no window arrived" must too.
         // Armed on FT8 and left alone, it fired 136 s into the first WSPR window and the
         // restart resumed FT8 - which looked exactly like WSPR not working.
@@ -1817,11 +1890,12 @@ async function startFlexSource(): Promise<() => Promise<void>> {
     // Landing on a WSPR frequency with an automatic mode running would mean an FT8
     // sequencer listening to beacons and CQing over them. The retune was the operator's;
     // stopping auto is the only safe reading of it.
-    if (status.subMode === "WSPR") {
+    if (status.subMode === "RTTY") rttyApply?.();
+    if (status.subMode && NO_SEQUENCER_MODES.has(status.subMode)) {
       const a = activeAuto();
       if (a && a.state.mode !== "off") {
         a.setMode("off");
-        console.log("[bridge] WSPR is receive-only - automatic mode stopped");
+        console.log(`[bridge] ${status.subMode} has nothing for a sequencer to answer - automatic mode stopped`);
       }
     }
 
@@ -3784,12 +3858,34 @@ async function main(): Promise<void> {
       // is driving. On the Icom that meant going looking for a Flex slice and failing
       // with "the radio has no active slice to tune" — about a radio that was not even
       // selected. Rig control belongs to the process that owns the radio.
+      // POST /rtty — move the RTTY tone pair: centre and shift, Hz audio. The sideband is
+      // the slice's. Takes effect at once; the starting values live in Settings (rtty.*).
+      if (url.pathname === "/rtty") {
+        const body = await readJson(req);
+        const centre = body.centreHz === undefined ? rttyTuning.centreHz : Number(body.centreHz);
+        const shift = body.shiftHz === undefined ? rttyTuning.shiftHz : Number(body.shiftHz);
+        if (!Number.isFinite(centre) || centre < 300 || centre > 5000) {
+          sendJson(res, 400, { error: "centreHz must be between 300 and 5000" });
+          return;
+        }
+        if (!Number.isFinite(shift) || shift < 23 || shift > 1000) {
+          sendJson(res, 400, { error: "shiftHz must be between 23 and 1000" });
+          return;
+        }
+        rttyTuning.centreHz = Math.round(centre);
+        rttyTuning.shiftHz = Math.round(shift);
+        rttyApply?.();
+        broadcast({ kind: "status", status });
+        sendJson(res, 200, { ok: true, rtty: status.rtty });
+        return;
+      }
+
       if (url.pathname === "/tune") {
         const body = await readJson(req);
         const band = String(body.band ?? "").toUpperCase();
         const mode = String(body.mode ?? "FT8").toUpperCase() as DigitalMode;
-        if (!["FT8", "FT4", "FT2", "WSPR"].includes(mode)) {
-          sendJson(res, 400, { error: "mode must be FT8, FT4, FT2 or WSPR" });
+        if (!["FT8", "FT4", "FT2", "WSPR", "RTTY"].includes(mode)) {
+          sendJson(res, 400, { error: "mode must be FT8, FT4, FT2, WSPR or RTTY" });
           return;
         }
         const hz = callingFrequencyHz(band, mode);
@@ -3797,6 +3893,8 @@ async function main(): Promise<void> {
           sendJson(res, 404, { error: `No ${mode} calling frequency is listed for ${band}` });
           return;
         }
+        // Chosen by name: holds while the dial moves where nothing has a calling frequency.
+        stickyMode = mode;
 
         if (status.source === "icom") {
           if (!icomSource) {
@@ -4009,10 +4107,8 @@ async function main(): Promise<void> {
         const mode = String(body.mode ?? "off") as AutoMode;
         // WSPR IS RECEIVE-ONLY. Every automatic mode keys the radio, and the decoder is
         // listening to beacons no FT8 sequence can answer.
-        if (mode !== "off" && status.subMode === "WSPR") {
-          sendJson(res, 409, {
-            error: "WSPR is receive-only: tune to an FT8, FT4 or FT2 frequency before starting an automatic mode",
-          });
+        if (mode !== "off" && status.subMode && NO_SEQUENCER_MODES.has(status.subMode)) {
+          sendJson(res, 409, { error: noSequencerReason(status.subMode) });
           return;
         }
         // Every mode except `off` will eventually key the radio, so enabling one with
@@ -4450,8 +4546,13 @@ async function main(): Promise<void> {
         const body = await readJson(req);
         switch (url.pathname) {
           case "/call": {
-            if (status.subMode === "WSPR") {
-              sendJson(res, 409, { error: "WSPR is receive-only: a beacon cannot be called" });
+            if (status.subMode && NO_SEQUENCER_MODES.has(status.subMode)) {
+              sendJson(res, 409, {
+                error:
+                  status.subMode === "WSPR"
+                    ? "WSPR is receive-only: a beacon cannot be called"
+                    : "RTTY has no sequencer: nothing here can call a station in RTTY yet",
+              });
               return;
             }
             // Refuse here rather than accepting and failing a cycle later.
@@ -4712,6 +4813,7 @@ async function main(): Promise<void> {
       try {
         ws.send(JSON.stringify({ kind: "status", status }));
         ws.send(JSON.stringify({ kind: "backlog", decodes: recentDecodes.slice(-50) }));
+        if (streamText) ws.send(JSON.stringify({ kind: "text-backlog", mode: "RTTY", text: streamText }));
         if (lastSpectrum) ws.send(JSON.stringify(lastSpectrum));
         if (lastPanadapter) ws.send(JSON.stringify(lastPanadapter));
         // The auto and QSO states are otherwise only broadcast when they CHANGE, so a

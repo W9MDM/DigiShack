@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.189.0 - public release
+## 1.190.0 - public release
 
 Development happens in a private repository; this is where the public history starts.
 Earlier entries are not reproduced - they quote real operators by callsign, include
@@ -22,6 +22,7 @@ Notes for anyone running this:
 
 ## Release history
 
+- **1.190.0** — RTTY, part two: listening - stream pipeline, sticky mode, terminal
 - **1.189.0** — RTTY, part one: code, frame, waveform, streaming demodulator
 - **1.188.2** — The WSPR thread loads plain JavaScript
 - **1.188.1** — The liveness watchdog learns that a WSPR window is two minutes

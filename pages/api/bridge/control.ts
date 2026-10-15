@@ -31,6 +31,7 @@ const bodySchema = z.object({
     "voice",
     "pan-span",
     "stream",
+    "rtty",
   ]),
   /** Which radio to drive. Changing it stops any automatic mode. */
   kind: z.enum(["flex", "icom", "wsjtx"]).optional(),
@@ -58,6 +59,9 @@ const bodySchema = z.object({
   tune: z.boolean().optional(),
   autoMode: z.enum(["off", "cq", "hunt", "hunt-pota", "pota-chase"]).optional(),
   percent: z.number().min(1).max(100).optional(),
+  /** RTTY tone pair, for action "rtty": centre and shift in Hz audio. */
+  centreHz: z.number().min(300).max(5000).optional(),
+  shiftHz: z.number().min(23).max(1000).optional(),
   theirCall: z.string().trim().toUpperCase().max(16).optional(),
   theirGrid: z.string().trim().toUpperCase().max(8).nullish(),
   theirSnr: z.number().min(-50).max(50).optional(),

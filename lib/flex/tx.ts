@@ -64,12 +64,12 @@ const PACKET_CLASS_TX_S16 = 0x0123;
  * past the last one. Using 144 here would size the watchdog 27 ms short of the
  * actual transmission.
  */
-const SYMBOLS_PER_FRAME = { FT8: 79, FT4: 105, FT2: 146, WSPR: 162 } as const;
+const SYMBOLS_PER_FRAME = { FT8: 79, FT4: 105, FT2: 146, WSPR: 162, RTTY: 0 } as const;
 
 /** Extra time before the watchdog fires, allowing for scheduling jitter. */
 const WATCHDOG_MARGIN_MS = 2_000;
 
-export type TxMode = "FT8" | "FT4" | "FT2" | "WSPR";
+export type TxMode = "FT8" | "FT4" | "FT2" | "WSPR" | "RTTY";
 
 /**
  * Above this percentage of the radio's rated output, say something.
@@ -783,6 +783,11 @@ export class FlexDaxTransmitter {
     // nothing about an operator's settings can turn a listening mode into a beacon.
     if (req.mode === "WSPR") {
       return { ...base, reason: "WSPR is receive-only in this release; nothing is transmitted on a WSPR frequency" };
+    }
+    // RTTY is typed, not framed: it will go out as text through its own path (part three
+    // of the mode). Nothing here keys the radio on an RTTY frequency until then.
+    if (req.mode === "RTTY") {
+      return { ...base, reason: "RTTY transmit is not enabled yet: this release listens to RTTY" };
     }
 
     // Re-read the gate, so turning it off in Settings takes effect on the very next

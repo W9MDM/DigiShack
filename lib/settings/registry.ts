@@ -236,6 +236,16 @@ export const SETTING_GROUPS: SettingGroup[] = [
       "PSKReporter asks developers to identify their traffic and to poll no more than once per callsign every 5 minutes. Anonymous polling risks being blocked.",
   },
   {
+    id: "rtty",
+    doc: "rtty",
+    docLabel: "Listening to RTTY: tones, sideband, and the text panel",
+    title: "RTTY",
+    blurb:
+      "Where the RTTY tone pair starts in the audio passband and how the decoder reads the " +
+      "code. The decodes page moves the tones live (click a signal on the waterfall); these " +
+      "are the values the bridge loads.",
+  },
+  {
     id: "wspr",
     doc: "wspr",
     docLabel: "Listening to WSPR, and reporting spots to wsprnet",
@@ -989,6 +999,40 @@ export const SETTINGS: SettingDef[] = [
     default: "false",
   },
 
+  // --- RTTY ---
+  {
+    key: "rtty.centreHz",
+    label: "RTTY tone centre (Hz)",
+    type: "number",
+    group: "rtty",
+    help: "Centre of the mark/space pair in the audio passband, Hz. 2210 is the classic 2125/2295 pair. The decodes page moves it live; this is where it starts.",
+    default: "2210",
+  },
+  {
+    key: "rtty.shiftHz",
+    label: "RTTY shift (Hz)",
+    type: "number",
+    group: "rtty",
+    help: "Distance between mark and space, Hz. 170 is the amateur standard; 850 the old commercial one.",
+    default: "170",
+  },
+  {
+    key: "rtty.figures",
+    label: "Figures case",
+    type: "string",
+    group: "rtty",
+    help: "us | ita2. Which characters the FIGURES case carries where the standards differ: US TTY ($ ! & # ; \") is what amateur software uses; ITA2 proper has ' WRU BELL + = there instead.",
+    default: "us",
+  },
+  {
+    key: "rtty.usos",
+    label: "Unshift on space",
+    type: "boolean",
+    group: "rtty",
+    help: "A received space returns the decoder to the letters case, the amateur convention. Leave on unless the station you are reading sends figures across spaces without re-shifting.",
+    default: "true",
+  },
+
   // --- Digital source selection ---
   {
     key: "digital.source",
@@ -1063,7 +1107,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Digital mode",
     type: "string",
     group: "digital",
-    help: "auto | ft8 | ft4 | ft2. Auto infers the mode from the dial frequency, which is the only reliable way — a DIGU slice does not say which mode it carries, and the three use different window lengths (15 / 7.5 / 3.75 s). FT2 has provisional calling frequencies so auto does find it, except on 60 m where it shares 5.357 MHz with FT4 and auto resolves to FT4; pin ft2 here to run it there or anywhere off-frequency.",
+    help: "auto | ft8 | ft4 | ft2 | wspr | rtty. Auto infers the mode from the dial frequency, which is the only reliable way — a DIGU slice does not say which mode it carries, and the three use different window lengths (15 / 7.5 / 3.75 s). FT2 has provisional calling frequencies so auto does find it, except on 60 m where it shares 5.357 MHz with FT4 and auto resolves to FT4; pin ft2 here to run it there or anywhere off-frequency.",
     default: "auto",
   },
   {

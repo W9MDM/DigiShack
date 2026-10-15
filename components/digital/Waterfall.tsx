@@ -32,6 +32,8 @@ export interface WaterfallProps {
   height?: number;
   /** Gain applied to byte values before colouring. */
   gain?: number;
+  /** Called with the audio frequency under a click, when the display is a control as well as a picture. */
+  onPickHz?: (hz: number) => void;
 }
 
 export function Waterfall({
@@ -42,6 +44,7 @@ export function Waterfall({
   txHz = null,
   height = 320,
   gain = 1,
+  onPickHz,
 }: WaterfallProps) {
   // The ruler and markers are an overlay rather than being drawn into the
   // waterfall, so they stay put instead of scrolling away with the history.
@@ -80,6 +83,17 @@ export function Waterfall({
           </div>
         ))}
       </div>
+
+      {onPickHz && (
+        <div
+          className="absolute inset-0 cursor-crosshair"
+          title="Click to put the RTTY tones here"
+          onClick={(e) => {
+            const r = e.currentTarget.getBoundingClientRect();
+            if (r.width > 0) onPickHz(Math.round(((e.clientX - r.left) / r.width) * maxHz));
+          }}
+        />
+      )}
 
       <div className="absolute right-1 bottom-1 text-[10px] text-white/40 tnum">
         {binHz.toFixed(1)} Hz/bin

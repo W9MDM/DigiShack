@@ -12,7 +12,7 @@
 import { ft2Encode } from "@/lib/digital/ft2";
 import { encodeFT4, encodeFT8 } from "@e04/ft8ts";
 
-export type TxMode = "FT8" | "FT4" | "FT2" | "WSPR";
+export type TxMode = "FT8" | "FT4" | "FT2" | "WSPR" | "RTTY";
 
 /**
  * Symbol rates, in baud.
@@ -29,6 +29,8 @@ export const SYMBOL_RATE: Record<TxMode, number> = {
   FT2: 75,
   /** 12000 / 8192: the slowest thing here by a factor of fifty. */
   WSPR: 12_000 / 8_192,
+  /** 45.45 baud: a stream of characters, never a frame. See lib/digital/rtty.ts. */
+  RTTY: 1_000 / 22,
 };
 
 /** Nothing legitimate runs this long; a longer waveform is a bug, not a transmission. */
@@ -73,6 +75,11 @@ export function buildWaveform(
   // beacon on a schedule at a chosen power is its own feature, with its own gate.
   if (mode === "WSPR") {
     throw new Error("WSPR transmit is not enabled: DigiShack listens to WSPR and does not beacon");
+  }
+  // RTTY is text, not a framed message: lib/digital/rtty.ts makes its waveform from a
+  // string, and the transmit path for that is part three of the mode.
+  if (mode === "RTTY") {
+    throw new Error("RTTY is not a framed mode: nothing builds an RTTY waveform from a structured message");
   }
   let wave: Float32Array;
   if (mode === "FT2") {
