@@ -141,7 +141,7 @@ import { startFt8brTracker } from "@/lib/contest/ft8battle-tracker";
 import { runUploads } from "@/lib/integrations/upload-runner";
 import { locksFor } from "@/lib/radio/api";
 import { postWsprSpots, wsprSpotOf, type WsprSpotReport } from "@/lib/wsprnet/upload";
-import { RTTY_CENTRE_HZ, RTTY_SHIFT_HZ, rttyTones } from "@/lib/digital/rtty";
+import { RTTY_CENTRE_HZ, RTTY_SHIFT_HZ, rttyDurationMs, rttyTones } from "@/lib/digital/rtty";
 import { collectReceptionReports } from "@/lib/pskreporter/collect";
 import { MIN_QUERY_INTERVAL_MS } from "@/lib/pskreporter/retrieve";
 import type { PskReporterUploader } from "@/lib/pskreporter/upload";
@@ -3859,6 +3859,62 @@ async function main(): Promise<void> {
       // is driving. On the Icom that meant going looking for a Flex slice and failing
       // with "the radio has no active slice to tune" — about a radio that was not even
       // selected. Rig control belongs to the process that owns the radio.
+      // POST /rtty-send — key the radio and send a line of RTTY at the current tone pair.
+      //
+      // Answers 202 as soon as the transmission has started rather than when it ends: a
+      // line of text is five to forty seconds on the air and the web tier's proxy waits
+      // five. The outcome goes to the log and to every page as a `[TX]` line in the
+      // stream, or a `[TX refused: ...]` one, which is where the operator is looking.
+      if (url.pathname === "/rtty-send") {
+        const body = await readJson(req);
+        const text = String(body.text ?? "").replace(/\s+$/, "");
+        if (!text.trim()) {
+          sendJson(res, 400, { error: "text is required" });
+          return;
+        }
+        if (status.subMode !== "RTTY" || !status.rtty) {
+          sendJson(res, 409, {
+            error: `Tune to RTTY first: the decoder is on ${status.subMode ?? "nothing"}, and text goes out at the pair it is listening on`,
+          });
+          return;
+        }
+        if (!(await transmitArmed())) {
+          sendJson(res, 403, {
+            error: `Transmit is off. Turn on "Allow transmit" in Settings → ${gateSettingsTab()} before sending.`,
+          });
+          return;
+        }
+        const tx = activeTx;
+        if (!tx?.transmitText) {
+          sendJson(res, 503, { error: "Text transmit is not available on this radio" });
+          return;
+        }
+        if (status.transmitting) {
+          sendJson(res, 409, { error: "The radio is transmitting; wait for it to finish" });
+          return;
+        }
+        const req2 = {
+          text,
+          centreHz: status.rtty.centreHz,
+          shiftHz: status.rtty.shiftHz,
+          sideband: status.rtty.sideband,
+          figures: rttyCode.figures,
+          usos: rttyCode.usos,
+        };
+        void tx.transmitText(req2).then(
+          (r) => {
+            const line = r.sent ? `\n[TX] ${text}\n` : `\n[TX refused: ${r.reason ?? "unknown"}]\n`;
+            streamText = (streamText + line).slice(-STREAM_TEXT_MAX);
+            broadcast({ kind: "text", mode: "RTTY", text: line, at: Date.now(), tx: true });
+            if (r.sent) console.log(`[rtty] sent ${text.length} chars (${r.packetsSent ?? 0} packets)`);
+            else console.warn(`[rtty] not sent: ${r.reason}`);
+          },
+          (err) => console.error(`[rtty] send failed: ${err instanceof Error ? err.message : String(err)}`),
+        );
+        sendJson(res, 202, { ok: true, chars: text.length, durationMs: Math.round(rttyDurationMs(text)) });
+        return;
+      }
+
       // POST /rtty — move the RTTY tone pair: centre and shift, Hz audio. The sideband is
       // the slice's. Takes effect at once; the starting values live in Settings (rtty.*).
       if (url.pathname === "/rtty") {

@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.190.1 - public release
+## 1.191.0 - public release
 
 Development happens in a private repository; this is where the public history starts.
 Earlier entries are not reproduced - they quote real operators by callsign, include
@@ -22,6 +22,7 @@ Notes for anyone running this:
 
 ## Release history
 
+- **1.191.0** — RTTY, part three: sending a line
 - **1.190.1** — RTTY: the region's 40 m segment, and a squelch
 - **1.190.0** — RTTY, part two: listening - stream pipeline, sticky mode, terminal
 - **1.189.0** — RTTY, part one: code, frame, waveform, streaming demodulator

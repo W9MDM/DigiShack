@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { cn } from "@/lib/utils";
 
@@ -28,8 +28,13 @@ interface Props {
   stats: StreamStats | null;
   rtty: RttyTuning | null;
   canTune: boolean;
+  /** Sending needs an operator and a station callsign for the macros. */
+  canSend: boolean;
+  myCall: string | null;
+  transmitting: boolean;
   error?: string | null;
   onTune: (centreHz?: number, shiftHz?: number) => void;
+  onSend: (text: string) => void;
   onClear: () => void;
 }
 
@@ -44,8 +49,26 @@ const SHIFTS = [170, 182, 200, 425, 850];
  * waterfall: a click there moves the centre, which is what every RTTY program does with
  * its own display.
  */
-export function RttyPanel({ text, stats, rtty, canTune, error, onTune, onClear }: Props) {
+export function RttyPanel({
+  text,
+  stats,
+  rtty,
+  canTune,
+  canSend,
+  myCall,
+  transmitting,
+  error,
+  onTune,
+  onSend,
+  onClear,
+}: Props) {
   const scroller = useRef<HTMLPreElement>(null);
+  const [draft, setDraft] = useState("");
+  const send = (line: string) => {
+    const t = line.trim();
+    if (!t) return;
+    onSend(t);
+  };
   useEffect(() => {
     const el = scroller.current;
     if (el) el.scrollTop = el.scrollHeight;
@@ -126,6 +149,55 @@ export function RttyPanel({ text, stats, rtty, canTune, error, onTune, onClear }
       </div>
 
       {error && <p className="text-xs text-danger">{error}</p>}
+
+      {/* Sending: a line at a time. 45.45 baud is about six characters a second, so a
+          line is seconds on the air and the far end reads it as it arrives. The two
+          macros are the lines every RTTY contact begins and ends with. */}
+      {canSend && (
+        <form
+          className="flex flex-wrap items-center gap-2"
+          onSubmit={(e) => {
+            e.preventDefault();
+            send(draft);
+            setDraft("");
+          }}
+        >
+          <input
+            className="flex-1 min-w-[12rem] bg-bg-raised border border-line rounded-sm px-2 py-1 text-sm font-mono"
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            maxLength={240}
+            placeholder="Type a line; Enter sends it (about 6 characters a second)"
+            aria-label="RTTY text to send"
+          />
+          <button
+            type="submit"
+            className="px-3 py-1 text-xs border border-line rounded-sm hover:text-fg disabled:opacity-50"
+            disabled={!draft.trim() || transmitting}
+          >
+            Send
+          </button>
+          <button
+            type="button"
+            className="px-2 py-1 text-xs border border-line rounded-sm hover:text-fg disabled:opacity-50 tnum"
+            disabled={transmitting || !myCall}
+            onClick={() => myCall && send(`CQ CQ CQ DE ${myCall} ${myCall} ${myCall} K`)}
+            title="Call CQ"
+          >
+            CQ
+          </button>
+          <button
+            type="button"
+            className="px-2 py-1 text-xs border border-line rounded-sm hover:text-fg disabled:opacity-50 tnum"
+            disabled={transmitting || !myCall}
+            onClick={() => myCall && send(`TNX 73 DE ${myCall} SK`)}
+            title="Sign off"
+          >
+            73
+          </button>
+          {transmitting && <span className="text-xs text-accent-bright">TX</span>}
+        </form>
+      )}
 
       <pre
         ref={scroller}

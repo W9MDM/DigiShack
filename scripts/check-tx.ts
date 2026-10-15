@@ -17,6 +17,8 @@ import {
   nextWindowStart,
   transmitDurationMs,
 } from "@/lib/flex/tx";
+import { rttyDurationMs, rttyTones } from "@/lib/digital/rtty";
+import { RttyDemodulator } from "@/lib/digital/rttydemod";
 
 let pass = 0;
 let fail = 0;
@@ -302,6 +304,25 @@ async function safetyChecks(): Promise<void> {
   ok(!enabled.isKeyed, "unkey is safe when not connected");
   await enabled.unkey();
   ok(true, "unkey is idempotent");
+
+  console.log("\ntext transmit (RTTY): the same gate, and a round trip at the DAX rate");
+  const tones = { centreHz: 2210, shiftHz: 170, sideband: "USB" as const };
+  const t1 = await disabled.transmitText({ text: "RYRY", ...tones });
+  ok(!t1.sent && /disabled/i.test(t1.reason ?? ""), "text refuses when allowTransmit is false", t1.reason);
+  const t2 = await enabled.transmitText({ text: "RYRY", ...tones });
+  ok(!t2.sent && /not started/i.test(t2.reason ?? ""), "and when not started", t2.reason);
+  const empty = await enabled.transmitText({ text: "   ", ...tones });
+  ok(!empty.sent && /nothing/i.test(empty.reason ?? ""), "refuses an empty line before looking at the radio", empty.reason);
+  const long = await enabled.transmitText({ text: "X".repeat(400), ...tones });
+  ok(!long.sent && /cap/i.test(long.reason ?? ""), "refuses a line over the transmission cap", long.reason);
+  ok(!enabled.isKeyed && !enabled.isBusy, "and is neither keyed nor busy afterwards");
+  const wave = enabled.buildTextWaveform({ text: "RYRY CQ DE W1AW", ...tones });
+  near((wave.length / 24_000) * 1000, rttyDurationMs("RYRY CQ DE W1AW"), 2, "the text waveform at 24 kHz is as long as the codec says");
+  const demod = new RttyDemodulator({ sampleRate: 24_000, ...rttyTones(2210, 170, "USB") });
+  ok(demod.feed(wave) === "RYRY CQ DE W1AW", "and decodes back to the text at the DAX rate - the exact audio the radio would get");
+  const lsb = enabled.buildTextWaveform({ text: "RY", centreHz: 2210, shiftHz: 170, sideband: "LSB" });
+  const lsbDemod = new RttyDemodulator({ sampleRate: 24_000, ...rttyTones(2210, 170, "LSB") });
+  ok(lsbDemod.feed(lsb) === "RY", "and on LSB the pair is swapped to match");
 }
 
 void safetyChecks().then(() => {

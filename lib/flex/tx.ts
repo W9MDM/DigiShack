@@ -10,6 +10,7 @@ import {
   transmitStartAt,
 } from "@/lib/radio/timing";
 import { buildWaveform, samplesPerSymbol } from "@/lib/radio/waveform";
+import { rttyDurationMs, rttyWaveform } from "@/lib/digital/rtty";
 
 // Native FT8/FT4 transmit over FlexRadio DAX TX. No external decoder, no WSJT-X.
 //
@@ -175,6 +176,17 @@ export interface TransmitRequest {
    * boundary by the caller; this class does not guess timing.
    */
   startAt: number;
+}
+
+/** A line of text to send as it is: RTTY, at a tone pair, now. */
+export interface TextTransmitRequest {
+  text: string;
+  /** Centre of the tone pair, Hz audio. */
+  centreHz: number;
+  shiftHz: number;
+  sideband: "USB" | "LSB";
+  figures?: "us" | "ita2";
+  usos?: boolean;
 }
 
 export interface TransmitResult {
@@ -790,80 +802,8 @@ export class FlexDaxTransmitter {
       return { ...base, reason: "RTTY transmit is not enabled yet: this release listens to RTTY" };
     }
 
-    // Re-read the gate, so turning it off in Settings takes effect on the very next
-    // transmission rather than at the next restart. Falls back to the snapshot when
-    // no provider was supplied.
-    let allowed = this.opts.allowTransmit;
-    if (this.opts.isTransmitAllowed) {
-      try {
-        allowed = await this.opts.isTransmitAllowed();
-        this.opts.allowTransmit = allowed;
-      } catch {
-        // If the setting cannot be read, refuse. An unreadable master gate is not
-        // an invitation to key the radio.
-        allowed = false;
-      }
-    }
-    if (!allowed) {
-      return {
-        ...base,
-        reason:
-          "Transmit is disabled. Enable flex.allowTransmit in Settings, and be sure the radio is connected to a suitable load.",
-      };
-    }
-    if (!this.client || !this.socket || !this.streamId) {
-      return { ...base, reason: "Transmitter is not started" };
-    }
-    // SUPERSEDE A TRANSMISSION THAT HAS NOT KEYED YET.
-    //
-    // `busy` is held across the pre-transmission wait so that two transmissions can never
-    // be scheduled at once, and that much is right. But `startCall` schedules up to a
-    // period ahead — the live log carries `first transmission in 27.9s` forty times in one
-    // day — and for those whole 28 seconds every other request was refused with a message
-    // saying a transmission was in progress when the radio was silent. Measured at 13% of
-    // all refusals.
-    //
-    // A request for the SAME window or an EARLIER one is not a competitor, it is a
-    // correction: the sequencer has decided something newer, and the queued transmission is
-    // stale. So the pending wait is aborted and this request takes over.
-    //
-    // The moment `keyed` is true this does not apply at any price — there is RF on the air
-    // and taking the transmitter would truncate a real transmission mid-symbol.
-    // ANY un-keyed pending transmission is superseded, not just an earlier-or-equal one.
-    //
-    // The first version compared `req.startAt <= pendingKey.startAt`, on the reasoning that
-    // a request for a LATER window is not urgent enough to displace a queued one. That is
-    // the wrong model: the transmitter is not a queue, and the sequencer does not schedule
-    // speculatively. If it has decided something new, the queued message is what it decided
-    // BEFORE — a station that has since answered, or been abandoned, or been superseded by
-    // one worth more. Sending the stale one and refusing the fresh one is exactly backwards.
-    //
-    // `keyed` still stops everything: there is RF on the air and taking the transmitter
-    // would truncate a real transmission mid-symbol.
-    if (this.busy && !this.keyed && this.pendingKey) {
-      this.pendingKey.abort();
-      this.pendingKey = null;
-      this.busy = false;
-      this.busySince = null;
-      this.busyForWindow = null;
-    }
-
-    if (this.busy || this.keyed) {
-      // WHICH flag, and for how long. The two mean different things: `keyed` is the radio
-      // actually on the air, `busy` is this object holding the transmitter - including
-      // across the pre-transmission wait below, which can legitimately be tens of seconds
-      // and is the one case where "in progress" is not literally true.
-      const held = this.busySince === null ? null : Math.round(nowMs() - this.busySince);
-      const which = this.keyed && this.busy ? "keyed and busy" : this.keyed ? "keyed" : "busy";
-      const forWin =
-        this.busyForWindow === null ? "" : `, holding for window ${this.busyForWindow}`;
-      return {
-        ...base,
-        reason:
-          `A transmission is already in progress (${which}` +
-          `${held === null ? "" : ` for ${held}ms`}${forWin})`,
-      };
-    }
+    const refused = await this.gateRefusal(base);
+    if (refused) return refused;
 
     // Generate FIRST. If this throws we have not keyed, which is the whole point
     // of doing it before rather than during.
@@ -957,44 +897,7 @@ export class FlexDaxTransmitter {
       // Watchdog armed BEFORE keying, and deliberately not cleared by the send
       // loop's own success path alone — unkey() is idempotent, so a redundant
       // unkey is harmless while a missed one is not.
-      this.armWatchdog(durationMs + WATCHDOG_MARGIN_MS);
-
-      const keyedAt = nowMs();
-      const keyResult = await this.client.command("xmit 1");
-      if (keyResult.status !== 0) {
-        this.clearWatchdog();
-        this.busy = false;
-        // Status -1 is the client's own code for "never reached the radio"
-        // (socket closed, or the reply timed out) — not a refusal by the radio.
-        // Distinguishing them matters: one is a dead TCP connection while DAX
-        // audio keeps flowing over UDP, which looks like a healthy session.
-        return {
-          ...base,
-          reason:
-            keyResult.status === -1
-              ? `Could not reach the radio to key it: ${keyResult.message}. The command connection is down (DAX audio can still be arriving — it is a separate UDP socket).`
-              : `Radio refused to key (0x${keyResult.status.toString(16)})`,
-        };
-      }
-      this.keyed = true;
-
-      const packetsSent = await this.streamAudio(wave);
-
-      await this.unkey();
-      const unkeyedAt = Date.now();
-
-      return {
-        ...base,
-        sent: true,
-        keyedAt,
-        unkeyedAt,
-        // Against the instant audio was due, not the raw boundary — and in ON-AIR
-        // terms: keying is deliberately linkLagMs early so the signal arrives on
-        // time, and reporting the raw difference would show every compensated
-        // transmission as "early" by exactly the compensation.
-        timingErrorMs: keyedAt + linkLagMs - audioStartAt,
-        packetsSent,
-      };
+      return await this.keyAndStream(wave, base, audioStartAt, linkLagMs);
     } catch (err) {
       // Any failure at all must leave the transmitter down.
       await this.unkey();
@@ -1023,6 +926,182 @@ export class FlexDaxTransmitter {
    * error, and FT8 decoding depends on the transmission staying aligned to its
    * window.
    */
+  /**
+   * The gate every transmission passes before its waveform is built: transmit allowed in
+   * Settings (re-read each time), the transmitter started, and nothing already on the air.
+   * Shared by framed and text transmissions. The refusal to return, or null to go on.
+   */
+  private async gateRefusal(base: TransmitResult): Promise<TransmitResult | null> {
+    // Re-read the gate, so turning it off in Settings takes effect on the very next
+    // transmission rather than at the next restart. Falls back to the snapshot when
+    // no provider was supplied.
+    let allowed = this.opts.allowTransmit;
+    if (this.opts.isTransmitAllowed) {
+      try {
+        allowed = await this.opts.isTransmitAllowed();
+        this.opts.allowTransmit = allowed;
+      } catch {
+        // If the setting cannot be read, refuse. An unreadable master gate is not
+        // an invitation to key the radio.
+        allowed = false;
+      }
+    }
+    if (!allowed) {
+      return {
+        ...base,
+        reason:
+          "Transmit is disabled. Enable flex.allowTransmit in Settings, and be sure the radio is connected to a suitable load.",
+      };
+    }
+    if (!this.client || !this.socket || !this.streamId) {
+      return { ...base, reason: "Transmitter is not started" };
+    }
+    // SUPERSEDE A TRANSMISSION THAT HAS NOT KEYED YET.
+    //
+    // `busy` is held across the pre-transmission wait so that two transmissions can never
+    // be scheduled at once, and that much is right. But `startCall` schedules up to a
+    // period ahead — the live log carries `first transmission in 27.9s` forty times in one
+    // day — and for those whole 28 seconds every other request was refused with a message
+    // saying a transmission was in progress when the radio was silent. Measured at 13% of
+    // all refusals.
+    //
+    // A request for the SAME window or an EARLIER one is not a competitor, it is a
+    // correction: the sequencer has decided something newer, and the queued transmission is
+    // stale. So the pending wait is aborted and this request takes over. ANY un-keyed
+    // pending transmission is superseded, not just an earlier-or-equal one: the transmitter
+    // is not a queue, and the sequencer does not schedule speculatively. If it has decided
+    // something new, the queued message is what it decided BEFORE.
+    //
+    // The moment `keyed` is true this does not apply at any price — there is RF on the air
+    // and taking the transmitter would truncate a real transmission mid-symbol.
+    if (this.busy && !this.keyed && this.pendingKey) {
+      this.pendingKey.abort();
+      this.pendingKey = null;
+      this.busy = false;
+      this.busySince = null;
+      this.busyForWindow = null;
+    }
+
+    if (this.busy || this.keyed) {
+      // WHICH flag, and for how long. The two mean different things: `keyed` is the radio
+      // actually on the air, `busy` is this object holding the transmitter - including
+      // across the pre-transmission wait, which can legitimately be tens of seconds and is
+      // the one case where "in progress" is not literally true.
+      const held = this.busySince === null ? null : Math.round(nowMs() - this.busySince);
+      const which = this.keyed && this.busy ? "keyed and busy" : this.keyed ? "keyed" : "busy";
+      const forWin =
+        this.busyForWindow === null ? "" : `, holding for window ${this.busyForWindow}`;
+      return {
+        ...base,
+        reason:
+          `A transmission is already in progress (${which}` +
+          `${held === null ? "" : ` for ${held}ms`}${forWin})`,
+      };
+    }
+    return null;
+  }
+
+  /**
+   * Key, stream a waveform in real time, unkey. The caller holds `busy` and clears it.
+   * `audioStartAt` is the intended keying instant, for the timing report, or null for a
+   * transmission that goes now.
+   */
+  private async keyAndStream(
+    wave: Float32Array,
+    base: TransmitResult,
+    audioStartAt: number | null,
+    linkLagMs: number,
+  ): Promise<TransmitResult> {
+    if (!this.client) return { ...base, reason: "Transmitter is not started" };
+    const durationMs = (wave.length / DAX_RATE) * 1000;
+    this.armWatchdog(durationMs + WATCHDOG_MARGIN_MS);
+    const keyedAt = nowMs();
+    const keyResult = await this.client.command("xmit 1");
+    if (keyResult.status !== 0) {
+      this.clearWatchdog();
+      this.busy = false;
+      return {
+        ...base,
+        reason:
+          keyResult.status === -1
+            ? `Could not reach the radio to key it: ${keyResult.message}. The command connection is down (DAX audio can still be arriving — it is a separate UDP socket).`
+            : `Radio refused to key (0x${keyResult.status.toString(16)})`,
+      };
+    }
+    this.keyed = true;
+    const packetsSent = await this.streamAudio(wave);
+    await this.unkey();
+    const unkeyedAt = Date.now();
+    return {
+      ...base,
+      sent: true,
+      keyedAt,
+      unkeyedAt,
+      timingErrorMs: audioStartAt === null ? 0 : keyedAt + linkLagMs - audioStartAt,
+      packetsSent,
+    };
+  }
+
+  /** How long a line of RTTY may be on the air: 240 characters, about forty seconds. */
+  static readonly MAX_TEXT_MS = 40_000;
+
+  /**
+   * The audio a line of RTTY is handed to the radio as, at the DAX rate. Throws for an
+   * empty line or one over the cap, so a bad line is refused before the radio is looked at.
+   */
+  buildTextWaveform(req: TextTransmitRequest): Float32Array {
+    const text = req.text.trim();
+    if (!text) throw new Error("Nothing to send");
+    const ms = rttyDurationMs(text);
+    if (ms > FlexDaxTransmitter.MAX_TEXT_MS) {
+      throw new Error(
+        `${text.length} characters is ${(ms / 1000).toFixed(0)} s of RTTY, over the ${FlexDaxTransmitter.MAX_TEXT_MS / 1000} s cap - send it in pieces`,
+      );
+    }
+    return rttyWaveform(text, {
+      sampleRate: DAX_RATE,
+      centreHz: req.centreHz,
+      shiftHz: req.shiftHz,
+      sideband: req.sideband,
+      figures: req.figures,
+      usos: req.usos,
+    });
+  }
+
+  /**
+   * Send a line of RTTY now: the same gate and the same key, stream, unkey path as a
+   * framed transmission, with no window to wait for. The line is checked first, so an
+   * empty or over-long one is refused without touching the radio.
+   */
+  async transmitText(req: TextTransmitRequest): Promise<TransmitResult> {
+    const base: TransmitResult = { sent: false, message: req.text, mode: "RTTY", offsetHz: req.centreHz };
+    let wave: Float32Array;
+    try {
+      wave = this.buildTextWaveform(req);
+    } catch (err) {
+      return { ...base, reason: err instanceof Error ? err.message : "Could not encode the text" };
+    }
+    const refused = await this.gateRefusal(base);
+    if (refused) return refused;
+    this.busy = true;
+    this.busySince = nowMs();
+    this.busyForWindow = null;
+    const gen = ++this.txGen;
+    try {
+      return await this.keyAndStream(wave, base, null, 0);
+    } catch (err) {
+      await this.unkey();
+      return { ...base, reason: err instanceof Error ? err.message : "Transmission failed" };
+    } finally {
+      if (gen === this.txGen) {
+        this.busy = false;
+        this.busySince = null;
+        this.busyForWindow = null;
+        this.pendingKey = null;
+      }
+    }
+  }
+
   private async streamAudio(wave: Float32Array): Promise<number> {
     const socket = this.socket;
     if (!socket) throw new Error("Socket closed");

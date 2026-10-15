@@ -158,6 +158,18 @@ export interface DigitalTransmitter {
     offsetHz: number;
     startAt: number;
   }): Promise<TransmitOutcome>;
+  /**
+   * Text modes (RTTY): key, send a string as it is, unkey - no window, no timing. Not
+   * every radio has it; the bridge answers 503 where it is missing.
+   */
+  transmitText?(req: {
+    text: string;
+    centreHz: number;
+    shiftHz: number;
+    sideband: "USB" | "LSB";
+    figures?: "us" | "ita2";
+    usos?: boolean;
+  }): Promise<TransmitOutcome>;
   unkey(): Promise<void>;
 }
 
