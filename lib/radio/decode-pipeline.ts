@@ -257,6 +257,31 @@ export interface Decode {
   js8?: Js8DecodeExtra;
 }
 
+/** Compare effective settings separately from tuning so status refreshes preserve sync. */
+function streamConfigurationKey(opts: StreamOptions, includeTuning = true): string {
+  let configuration: unknown[];
+  let tuning: number[];
+  switch (opts.mode) {
+    case "RTTY":
+      configuration = [opts.mode, opts.baud ?? 45.45, opts.figures ?? "us", opts.usos ?? true, opts.squelch ?? 0.7];
+      tuning = [opts.markHz, opts.spaceHz];
+      break;
+    case "CW":
+      configuration = [opts.mode, opts.wpm ?? 20, opts.thresholdDb ?? 16];
+      tuning = [opts.pitchHz];
+      break;
+    case "PSK31":
+      configuration = [opts.mode, opts.speed ?? 31, opts.squelch ?? 0.5];
+      tuning = [opts.centreHz];
+      break;
+    case "OLIVIA":
+      configuration = [opts.mode, opts.tones, opts.bandwidth, opts.code ?? "olivia", opts.syncThreshold ?? 4];
+      tuning = [opts.centreHz];
+      break;
+  }
+  return JSON.stringify(includeTuning ? [...configuration, ...tuning] : configuration);
+}
+
 /**
  * A mode decoded as a continuous stream rather than in windows. RTTY has no T/R period:
  * the line idles on mark between keystrokes and the decoder runs the whole time. CW is
@@ -587,6 +612,7 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
     return this.rtty ?? this.cw ?? this.psk ?? this.olivia;
   }
   private streamMode: StreamMode | null = null;
+  private streamConfiguration: StreamOptions | null = null;
   private pskSpeed: 31 | 63 | 125 = 31;
   private rttyBaud = 45.45;
   /** Shadow decoders at the other speeds and polarity: see lib/digital/rtty-probe.ts. */
@@ -746,11 +772,12 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
    *
    * Entering a stream stops the cut timer and discards the partial window: a stream has
    * no windows. Leaving one re-arms the schedule for the current window mode. Setting the
-   * same stream again only retunes it, keeping the demodulator's state: the bridge does
+   * same settings again is a no-op; changing only tuning keeps the demodulator. The bridge calls
    * that on every slice update, and a retune must not lose a character in flight.
    */
   setStream(opts: StreamOptions | null): void {
     if (opts === null) {
+      this.streamConfiguration = null;
       if (!this.streamMode) return;
       this.rtty = null;
       this.cw = null;
@@ -760,23 +787,29 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
       this.start();
       return;
     }
+    const previous = this.streamConfiguration;
+    if (previous && this.stream && streamConfigurationKey(previous) === streamConfigurationKey(opts)) return;
+    const canRetune = previous !== null &&
+      streamConfigurationKey(previous, false) === streamConfigurationKey(opts, false);
+    this.streamConfiguration = { ...opts };
     // A retune keeps the demodulator; a speed change cannot, because the bit clock and the
     // filters are per baud.
-    if (opts.mode === "RTTY" && this.rtty && (opts.baud ?? 45.45) === this.rttyBaud) {
+    if (canRetune && opts.mode === "RTTY" && this.rtty && (opts.baud ?? 45.45) === this.rttyBaud) {
       this.rtty.retune(opts.markHz, opts.spaceHz);
       // The probe's shadows sit on the old tones; they start again on the new ones.
       this.rttyProbe = new RttyProbe(this.inputRate, opts.markHz, opts.spaceHz, this.rttyBaud);
       return;
     }
-    if (opts.mode === "CW" && this.cw) {
+    if (canRetune && opts.mode === "CW" && this.cw) {
       this.cw.retune(opts.pitchHz);
       return;
     }
-    if (opts.mode === "PSK31" && this.psk && (opts.speed ?? 31) === this.pskSpeed) {
+    if (canRetune && opts.mode === "PSK31" && this.psk && (opts.speed ?? 31) === this.pskSpeed) {
       this.psk.retune(opts.centreHz);
       return;
     }
     if (
+      canRetune &&
       opts.mode === "OLIVIA" &&
       this.olivia &&
       opts.tones === this.oliviaSize.tones &&
