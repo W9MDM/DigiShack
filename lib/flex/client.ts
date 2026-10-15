@@ -413,8 +413,9 @@ export class FlexClient extends EventEmitter<Events> {
       // carries only the fields that changed, and most `transmit` lines carry neither.
       const hi = Number(fields.hi);
       if (Number.isFinite(hi) && hi > 0) this.state.txFilterHiHz = hi;
-      // The CW pitch, when the line carries it: where the CW decoder listens.
-      const pitch = Number(fields.cw_pitch);
+      // The CW pitch, when the line carries it: where the CW decoder listens. SmartSDR calls it
+      // `pitch` in the transmit status (measured on a FLEX-6400), not `cw_pitch`.
+      const pitch = Number(fields.pitch ?? fields.cw_pitch);
       if (Number.isFinite(pitch) && pitch > 0) this.state.cwPitchHz = pitch;
     } else if (object === "interlock") {
       // state=TRANSMITTING is the authoritative TX indicator.

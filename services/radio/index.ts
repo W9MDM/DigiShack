@@ -1981,7 +1981,7 @@ async function startFlexSource(): Promise<() => Promise<void>> {
   });
   rig.on("status", (st) => {
     // The radio's CW pitch changed: the decoder follows it.
-    if (st.object === "transmit" && st.fields.cw_pitch !== undefined && status.subMode === "CW") cwApply?.();
+    if (st.object === "transmit" && (st.fields.pitch !== undefined || st.fields.cw_pitch !== undefined) && status.subMode === "CW") cwApply?.();
     // The transmit object carries rfpower; surface it so the UI slider can show
     // the radio's actual setting rather than an optimistic guess.
     if (st.object.split(/\s+/)[0] !== "transmit") return;
