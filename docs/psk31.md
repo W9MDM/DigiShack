@@ -56,7 +56,15 @@ the same products averaged as unit vectors. `scripts/check-psk31.ts` runs it on 
 signals clean, off frequency, in noise to −10 dB and on noise alone; `check-psk31-pipeline`
 runs a line through the real pipeline at the FlexRadio's 24 kHz.
 
+## On the air so far
+
+The plumbing, on the station: the chip put the dial on 14.070 and 7.070 with the slice in
+DIGU, the decoder streamed with a heartbeat a second, the carrier moved on request, and the
+squelch held through twelve minutes of empty passband without printing a character. No
+PSK31 station was on either dial at 17:00 UTC on a weekday, so the decoder has read only
+the generated signals of its check; the first real one goes in the changelog.
+
 ## Not yet
 
 - QPSK31.
-- A real-signal report: see the changelog for what 20 m did.
+- A real-signal report.
