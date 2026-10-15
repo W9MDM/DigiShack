@@ -21,6 +21,15 @@ export interface WaterfallMarker {
   emphasis?: boolean;
 }
 
+/** A labelled, clickable tag on the waterfall: "found +78", and a click goes there. */
+export interface WaterfallTag {
+  hz: number;
+  label: string;
+  /** What hovering says the click does. */
+  title: string;
+  onClick: () => void;
+}
+
 export interface WaterfallProps {
   /** Latest row, one byte per bin. Push a new object to advance the display. */
   row: { bins: Uint8Array; at: number } | null;
@@ -34,6 +43,8 @@ export interface WaterfallProps {
   gain?: number;
   /** Called with the audio frequency under a click, when the display is a control as well as a picture. */
   onPickHz?: (hz: number) => void;
+  /** Clickable tags drawn over the display, above the click layer. */
+  tags?: WaterfallTag[];
 }
 
 export function Waterfall({
@@ -45,6 +56,7 @@ export function Waterfall({
   height = 320,
   gain = 1,
   onPickHz,
+  tags = [],
 }: WaterfallProps) {
   // The ruler and markers are an overlay rather than being drawn into the
   // waterfall, so they stay put instead of scrolling away with the history.
@@ -84,16 +96,39 @@ export function Waterfall({
         ))}
       </div>
 
+      {/* pointer-events-auto, explicitly: SpectrumCanvas wraps every overlay in a
+          pointer-events-none layer so the ruler and markers never eat a scroll or a
+          touch, and a click layer inside it inherits that and receives nothing. That is
+          how "click the waterfall to set the centre" did nothing for RTTY, PSK31, Olivia
+          and the JS8 offset alike. scripts/check-waterfall-pick.ts asserts the class. */}
       {onPickHz && (
         <div
-          className="absolute inset-0 cursor-crosshair"
-          title="Click to put the RTTY tones here"
+          className="absolute inset-0 cursor-crosshair pointer-events-auto"
+          title="Click to listen here"
           onClick={(e) => {
             const r = e.currentTarget.getBoundingClientRect();
             if (r.width > 0) onPickHz(Math.round(((e.clientX - r.left) / r.width) * maxHz));
           }}
         />
       )}
+
+      {/* Tags sit above the click layer and opt into pointer events themselves, for the
+          same reason the click layer does: the canvas wraps overlays inert. */}
+      {tags.map((t, i) => (
+        <button
+          key={`${t.hz}-${i}`}
+          type="button"
+          className="absolute top-5 -translate-x-1/2 pointer-events-auto rounded-sm border border-accent bg-bg/80 px-1.5 py-0.5 text-[11px] text-accent-bright tnum hover:bg-accent hover:text-bg focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+          style={{ left: `${Math.min(97, Math.max(3, (t.hz / maxHz) * 100))}%` }}
+          title={t.title}
+          onClick={(e) => {
+            e.stopPropagation();
+            t.onClick();
+          }}
+        >
+          {t.label}
+        </button>
+      ))}
 
       <div className="absolute right-1 bottom-1 text-[10px] text-white/40 tnum">
         {binHz.toFixed(1)} Hz/bin
