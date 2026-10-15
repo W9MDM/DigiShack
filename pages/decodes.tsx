@@ -55,7 +55,15 @@ const STREAM_TEXT_MAX = 8_000;
 
 interface RigStatus {
   /** The RTTY tone pair while listening to RTTY. */
-  rtty?: { centreHz: number; shiftHz: number; sideband: "USB" | "LSB"; markHz: number; spaceHz: number } | null;
+  rtty?: {
+    centreHz: number;
+    shiftHz: number;
+    sideband: "USB" | "LSB";
+    markHz: number;
+    spaceHz: number;
+    reverse?: boolean;
+    baud?: number;
+  } | null;
   /** The CW pitch and sending speed while on CW. */
   cw?: { pitchHz: number; wpm: number; pitchFromRadio: boolean } | null;
   /** The PSK31 carrier and speed while on PSK31. */
@@ -1306,9 +1314,9 @@ export default function DigitalPage({ wsUrl }: Props) {
     );
   }
   /** Move the RTTY tone pair: the centre from a click on the waterfall or the ± buttons, the shift from its picker. */
-  const tuneRtty = useCallback(async (centreHz?: number, shiftHz?: number) => {
+  const tuneRtty = useCallback(async (centreHz?: number, shiftHz?: number, extra?: { reverse?: boolean; baud?: number }) => {
     try {
-      await apiPost("/api/bridge/control", { action: "rtty", centreHz, shiftHz });
+      await apiPost("/api/bridge/control", { action: "rtty", centreHz, shiftHz, reverse: extra?.reverse, baud: extra?.baud });
       setRttyError(null);
     } catch (err) {
       setRttyError(err instanceof ApiError ? err.message : "Could not move the RTTY tones");
@@ -2385,7 +2393,7 @@ export default function DigitalPage({ wsUrl }: Props) {
                   myCall={myCall}
                   transmitting={status?.transmitting ?? false}
                   error={rttyError}
-                  onTune={(centreHz, shiftHz) => void tuneRtty(centreHz, shiftHz)}
+                  onTune={(centreHz, shiftHz, extra) => void tuneRtty(centreHz, shiftHz, extra)}
                   onCwWpm={(wpm) => void setCwWpm(wpm)}
                   onPskTune={(centreHz, speed) => void tunePsk(centreHz, speed)}
                   onOliviaTune={(centreHz, size, code) => void tuneOlivia(centreHz, size, code)}

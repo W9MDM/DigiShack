@@ -54,7 +54,11 @@ export interface RttyTuning {
   sideband: "USB" | "LSB";
   markHz: number;
   spaceHz: number;
+  reverse?: boolean;
+  baud?: number;
 }
+
+const BAUDS = [45.45, 50, 75, 100];
 
 export interface CwTuning {
   /** The radio's CW pitch, Hz: where the decoder listens. */
@@ -103,7 +107,7 @@ interface Props {
   myCall: string | null;
   transmitting: boolean;
   error?: string | null;
-  onTune: (centreHz?: number, shiftHz?: number) => void;
+  onTune: (centreHz?: number, shiftHz?: number, extra?: { reverse?: boolean; baud?: number }) => void;
   onCwWpm: (wpm: number) => void;
   onPskTune: (centreHz?: number, speed?: 31 | 63 | 125) => void;
   onOliviaTune: (centreHz?: number, size?: { tones: number; bandwidth: number }, code?: "olivia" | "contestia") => void;
@@ -396,6 +400,32 @@ export function StreamPanel({
                 </option>
               ))}
             </select>
+            <select
+              className="bg-bg-raised border border-line rounded-sm px-1 py-0.5 text-xs"
+              value={rtty?.baud ?? 45.45}
+              onChange={(e) => onTune(undefined, undefined, { baud: Number(e.target.value) })}
+              disabled={!rtty}
+              aria-label="RTTY speed"
+            >
+              {BAUDS.map((b) => (
+                <option key={b} value={b}>
+                  {b} bd
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              className={cn(
+                "px-2 py-0.5 border rounded-sm tnum",
+                rtty?.reverse ? "border-accent text-accent-bright" : "border-line hover:text-fg",
+              )}
+              onClick={() => rtty && onTune(undefined, undefined, { reverse: !rtty.reverse })}
+              disabled={!rtty}
+              aria-pressed={rtty?.reverse ?? false}
+              title="Swap mark and space, for a station sending the other way round"
+            >
+              Rev
+            </button>
             <span className="text-fg-subtle">· click the waterfall to set the centre</span>
           </span>
         )}

@@ -274,6 +274,8 @@ export type StreamOptions =
       markHz: number;
       spaceHz: number;
       figures?: "us" | "ita2";
+      /** 45.45 unless said otherwise; 50, 75 and 100 are on the air too. */
+      baud?: number;
       usos?: boolean;
       /** 0 to 1; see RttyDemodOptions.squelch. */
       squelch?: number;
@@ -583,6 +585,7 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
   }
   private streamMode: StreamMode | null = null;
   private pskSpeed: 31 | 63 | 125 = 31;
+  private rttyBaud = 45.45;
   private oliviaSize: { tones: OliviaTones; bandwidth: OliviaBandwidth; code: OliviaCode } = { tones: 16, bandwidth: 500, code: "olivia" };
   private streamSamples = 0;
   private streamNextBeat = 0;
@@ -752,7 +755,9 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
       this.start();
       return;
     }
-    if (opts.mode === "RTTY" && this.rtty) {
+    // A retune keeps the demodulator; a speed change cannot, because the bit clock and the
+    // filters are per baud.
+    if (opts.mode === "RTTY" && this.rtty && (opts.baud ?? 45.45) === this.rttyBaud) {
       this.rtty.retune(opts.markHz, opts.spaceHz);
       return;
     }
@@ -786,7 +791,8 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
     this.streamMode = opts.mode;
     if (opts.mode === "RTTY") {
       const { mode: _m, ...rest } = opts;
-      this.rtty = new RttyDemodulator({ sampleRate: this.inputRate, ...rest });
+      this.rttyBaud = opts.baud ?? 45.45;
+      this.rtty = new RttyDemodulator({ sampleRate: this.inputRate, ...rest, baud: opts.baud ?? 1000 / 22 });
     } else if (opts.mode === "CW") {
       this.cw = new CwDemodulator({
         sampleRate: this.inputRate,

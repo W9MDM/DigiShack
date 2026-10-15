@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.201.3 - public release
+## 1.201.4 - public release
 
 Development happens in a private repository; this is where the public history starts.
 Earlier entries are not reproduced - they quote real operators by callsign, include
@@ -22,6 +22,7 @@ Notes for anyone running this:
 
 ## Release history
 
+- **1.201.4** — RTTY: Rev and a speed picker
 - **1.201.3** — Listen on the Decodes page
 - **1.201.2** — Found tags on the waterfall
 - **1.201.1** — The waterfall click works

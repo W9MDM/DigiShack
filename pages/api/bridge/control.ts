@@ -68,6 +68,10 @@ const bodySchema = z.object({
   percent: z.number().min(1).max(100).optional(),
   /** RTTY tone pair, for action "rtty": centre and shift in Hz audio. */
   centreHz: z.number().min(300).max(5000).optional(),
+  /** RTTY: swap mark and space, for action "rtty". */
+  reverse: z.boolean().optional(),
+  /** RTTY speed, for action "rtty". */
+  baud: z.union([z.literal(45.45), z.literal(50), z.literal(75), z.literal(100)]).optional(),
   shiftHz: z.number().min(23).max(1000).optional(),
   /** A line of RTTY or CW to send, for action "text-send". 240 characters is about forty seconds of RTTY. */
   text: z.string().min(1).max(240).optional(),
