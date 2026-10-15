@@ -246,6 +246,8 @@ export interface StreamOptions {
   spaceHz: number;
   figures?: "us" | "ita2";
   usos?: boolean;
+  /** 0 to 1; see RttyDemodOptions.squelch. */
+  squelch?: number;
 }
 
 /** How often a stream mode reports: once per second of audio. The liveness watchdog beats on it. */
@@ -262,6 +264,8 @@ export type DecodePipelineEvents = {
       seconds: number;
       chars: number;
       framingErrors: number;
+      /** Well-framed characters the squelch dropped as noise. */
+      weak: number;
       mark: number;
       space: number;
       decision: number;
@@ -677,6 +681,7 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
         seconds: Math.floor(this.streamSamples / this.inputRate),
         chars: s.chars,
         framingErrors: s.framingErrors,
+        weak: s.weak,
         mark: s.mark,
         space: s.space,
         decision: s.decision,

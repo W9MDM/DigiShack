@@ -257,7 +257,14 @@ console.log("\nthe demodulator, end to end");
   const noiseOnly = new Float32Array(fs * 5);
   for (let n = 0; n < noiseOnly.length; n++) noiseOnly[n] = 0.3 * g();
   const garbage = silence.feed(noiseOnly);
-  ok(garbage.length < 40, "five seconds of noise alone produce little text (framing errors drop most of it)", `${garbage.length} chars, ${silence.statistics.framingErrors} framing errors`);
+  ok(garbage.length <= 3, "five seconds of noise alone print almost nothing: the squelch drops what the frame check lets through", `${garbage.length} chars, ${silence.statistics.framingErrors} framing errors, ${silence.statistics.weak} weak`);
+  ok(silence.statistics.weak > 5, "and counts what it dropped", silence.statistics.weak);
+  const open = new RttyDemodulator({ sampleRate: fs, ...tones, squelch: 0 });
+  const unsquelched = open.feed(noiseOnly);
+  ok(unsquelched.length > garbage.length + 5, "with the squelch off the same noise prints characters - about two a second on the live station", `${unsquelched.length} chars`);
+  const strict = new RttyDemodulator({ sampleRate: fs, ...tones, squelch: 0.9 });
+  eq(strict.feed(rttyWaveform(TEXT, { sampleRate: fs })), TEXT, "a clean signal passes even a 0.9 squelch: its bits carry conviction");
+  eq(strict.statistics.weak, 0, "and loses nothing to it");
 }
 
 console.log("");

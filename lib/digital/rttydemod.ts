@@ -38,6 +38,16 @@ export interface RttyDemodOptions extends RttyCodeOptions {
   markHz: number;
   spaceHz: number;
   baud?: number;
+  /**
+   * Squelch, 0 to 1: the mean |decision| over a character's sampled bits below which the
+   * character is dropped as noise. On an empty channel the decision signal is uniformly
+   * random, so the frame check alone passes about two noise characters a second (measured
+   * on the live station: 337 characters and 533 framing errors in 150 s of band noise).
+   * A character of real signal sits near 1; at 0.7 a signal needs about 6 dB over the
+   * noise in the one-bit filter, which is where RTTY copy begins anyway, and noise passes
+   * about four characters a minute. 0 disables it. Default 0.7.
+   */
+  squelch?: number;
 }
 
 export interface RttyDemodStats {
@@ -45,6 +55,8 @@ export interface RttyDemodStats {
   chars: number;
   /** Start bits that were followed by a bad stop bit. */
   framingErrors: number;
+  /** Well-framed characters dropped by the squelch as too weak to trust. */
+  weak: number;
   /** Tone magnitudes at the last sample, linear, for a tuning display. */
   mark: number;
   space: number;
@@ -107,10 +119,15 @@ export class RttyDemodulator {
   private code = 0;
   private lastDecision = 1;
 
-  private readonly stats: RttyDemodStats = { chars: 0, framingErrors: 0, mark: 0, space: 0, decision: 1 };
+  private readonly stats: RttyDemodStats = { chars: 0, framingErrors: 0, weak: 0, mark: 0, space: 0, decision: 1 };
+  private readonly squelch: number;
+  /** Sum of |decision| at the sampled instants of the character in progress, and how many. */
+  private confidence = 0;
+  private confidenceN = 0;
 
   constructor(opts: RttyDemodOptions) {
     this.fs = opts.sampleRate;
+    this.squelch = Math.max(0, Math.min(1, opts.squelch ?? 0.7));
     this.samplesPerBit = opts.sampleRate / (opts.baud ?? RTTY_BAUD);
     const len = Math.max(4, Math.round(this.samplesPerBit));
     this.mark = new ToneFilter(opts.sampleRate, opts.markHz, len);
@@ -167,6 +184,8 @@ export class RttyDemodulator {
               this.state = "data";
               this.bitIndex = 0;
               this.code = 0;
+              this.confidence = -d;
+              this.confidenceN = 1;
               this.nextSampleAt = 1.5 * spb;
             } else {
               this.state = "idle";
@@ -176,20 +195,26 @@ export class RttyDemodulator {
         case "data":
           this.sinceEdge++;
           if (this.sinceEdge >= this.nextSampleAt) {
+            this.confidence += Math.abs(d);
+            this.confidenceN++;
             if (this.bitIndex < RTTY_DATA_BITS) {
               if (d >= 0) this.code |= 1 << this.bitIndex;
               this.bitIndex++;
               this.nextSampleAt = (1.5 + this.bitIndex) * spb;
             } else {
               // The stop bit, at edge + 6.5 bits. Mark, or the frame was not one.
-              if (d >= 0) {
+              if (d < 0) {
+                this.stats.framingErrors++;
+              } else if (this.confidence / this.confidenceN < this.squelch) {
+                // Well framed but no conviction behind the bits: noise that happened to
+                // end on mark. See `squelch` for the arithmetic.
+                this.stats.weak++;
+              } else {
                 const text = this.ita2.push(this.code);
                 if (text) {
                   out += text;
                   this.stats.chars += text.length;
                 }
-              } else {
-                this.stats.framingErrors++;
               }
               // Back to the idle mark. The next start edge is at least half a bit away
               // (the rest of the 1.5-bit stop), and the edge detector needs to see mark

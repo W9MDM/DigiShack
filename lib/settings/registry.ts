@@ -1032,6 +1032,14 @@ export const SETTINGS: SettingDef[] = [
     help: "A received space returns the decoder to the letters case, the amateur convention. Leave on unless the station you are reading sends figures across spaces without re-shifting.",
     default: "true",
   },
+  {
+    key: "rtty.squelch",
+    label: "RTTY squelch",
+    type: "number",
+    group: "rtty",
+    help: "0 to 1. How sure the decoder must be of a character's bits before printing it. Band noise alone passes the frame check about twice a second; at 0.7 it passes a few characters a minute and a signal needs about 6 dB over the noise, which is where RTTY copy begins anyway. Lower it for a weak station you can hear but not read; 0 prints everything.",
+    default: "0.7",
+  },
 
   // --- Digital source selection ---
   {

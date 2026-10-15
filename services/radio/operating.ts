@@ -40,7 +40,7 @@ import { TxPowerTracker } from "@/lib/radio/power";
 import type { WorkedIndex } from "@/lib/digital/worth";
 import { resolveDxcc } from "@/lib/dxcc/resolve";
 import { freqToBand } from "@/lib/ham/bands";
-import { DIGITAL_FREQUENCIES, type DigitalMode } from "@/lib/ham/digital-freqs";
+import { callingFrequencyFor, type DigitalMode } from "@/lib/ham/digital-freqs";
 import { runUploads } from "@/lib/integrations/upload-runner";
 import { linkWindow, sentByEither } from "@/lib/digital/decode-link";
 import { setSigRefs } from "@/lib/pota/refs";
@@ -442,8 +442,8 @@ export function databaseOperatingData(opts: {
  * Both radios need this and neither owns it: `retune(band, mode)` is a band change on
  * the Flex and a frequency change on the Icom, but the frequency is the same one.
  */
-export function callingFrequencyHz(band: string, mode: DigitalMode): number | null {
-  return DIGITAL_FREQUENCIES.find((x) => x.band === band && x.mode === mode)?.hz ?? null;
+export function callingFrequencyHz(band: string, mode: DigitalMode, region: 1 | 2 | 3 | null = null): number | null {
+  return callingFrequencyFor(band, mode, region);
 }
 
 export async function buildOperating(deps: OperatingDeps): Promise<Operating> {

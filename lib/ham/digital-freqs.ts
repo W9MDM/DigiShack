@@ -181,6 +181,22 @@ export function frequenciesForRegion(
 }
 
 /**
+ * The frequency the mode button tunes to on a band, for a station in a region.
+ *
+ * A band can list one frequency per ITU region (40 m RTTY: 7.080 in Region 2, 7.040 in
+ * Regions 1 and 3). The station's own region wins; a worldwide entry is next; and with
+ * no region known, whatever is listed first - which is how a Region 2 station was tuned
+ * to 7.040 on the first live try.
+ */
+export function callingFrequencyFor(band: string, mode: DigitalMode, region: 1 | 2 | 3 | null = null): number | null {
+  const candidates = DIGITAL_FREQUENCIES.filter((x) => x.band === band && x.mode === mode);
+  if (candidates.length === 0) return null;
+  const own = region === null ? undefined : candidates.find((x) => x.region === region);
+  const worldwide = candidates.find((x) => x.region === undefined);
+  return (own ?? worldwide ?? candidates[0]!).hz;
+}
+
+/**
  * How far the dial may sit from a listed frequency and still count as that mode.
  *
  * 500 Hz rather than something generous: FT8 on 30 m is 10.136 and FT4 is 10.140,

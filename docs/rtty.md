@@ -44,6 +44,15 @@ The decoder unshifts on space (a received space returns it to letters), which is
 every amateur RTTY program does by default, and reads the figures case as US TTY
 (`$ ! & # ; "`). Both are settings.
 
+So is the squelch. An empty channel is not silent to an RTTY decoder: band noise trips
+the start-bit detector and about two characters a second survive the frame check (the
+first live try printed 337 characters of nothing in 150 s). The squelch asks how sure the
+decoder was of each bit and drops a character below the mark - at the default of 0.7 a
+signal needs about 6 dB over the noise in the one-bit filter, which is where RTTY copy
+begins anyway, and noise prints a few characters a minute. The panel counts what was
+dropped as "weak" beside the framing errors; lower the setting for a station you can
+hear but not read.
+
 ## What the automatic modes do
 
 Nothing. RTTY has no structured messages, so there is nothing for a sequencer to answer:

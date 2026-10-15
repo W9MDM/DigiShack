@@ -16,6 +16,7 @@ import {
   toCivMode,
   toFlexMode,
 } from "@/lib/radio/modes";
+import { callingFrequencyFor } from "@/lib/ham/digital-freqs";
 
 let pass = 0;
 let fail = 0;
@@ -106,6 +107,13 @@ console.log("\nis this a frequency an automatic mode may run on");
   ok(digitalCallingFrequency(7_200_000) === null, "7.200 is NOT — that is a phone frequency");
   ok(digitalCallingFrequency(14_250_000) === null, "nor is 14.250");
   ok(digitalCallingFrequency(10_000_000) === null, "nor WWV");
+  eq(callingFrequencyFor("40M", "RTTY", 2), 7_080_000, "40 m RTTY for a Region 2 station is 7.080");
+  eq(callingFrequencyFor("40M", "RTTY", 1), 7_040_000, "and 7.040 in Region 1");
+  eq(callingFrequencyFor("40M", "RTTY", 3), 7_040_000, "and Region 3");
+  eq(callingFrequencyFor("20M", "RTTY", 2), 14_085_000, "a worldwide entry serves every region");
+  eq(callingFrequencyFor("40M", "FT8", 2), 7_074_000, "FT8 is unchanged by the region");
+  eq(callingFrequencyFor("40M", "RTTY", null), 7_040_000, "with no region known, the first listed - which is why the bridge passes the station's grid");
+  eq(callingFrequencyFor("2M", "RTTY", 2), null, "a band with no RTTY entry is null");
 
   // FT4 lives elsewhere, so the mode is part of the question.
   ok(digitalCallingFrequency(14_080_000, "FT4") !== null, "14.080 is FT4");

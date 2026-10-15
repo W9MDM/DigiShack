@@ -26,7 +26,7 @@ be read: `DATABASE_URL`, `SETTINGS_KEY` and `PORT`.
 - [N3FJP Amateur Contact Log](#n3fjp-amateur-contact-log) — 2 settings
 - [DXCC reference data](#dxcc-reference-data) — 2 settings
 - [PSKReporter](#pskreporter) — 4 settings
-- [RTTY](#rtty) — 4 settings
+- [RTTY](#rtty) — 5 settings
 - [WSPR](#wspr) — 1 setting
 - [Digital modes](#digital-modes) — 8 settings
 - [DigiShack bridge](#digishack-bridge) — 4 settings
@@ -180,6 +180,7 @@ Where the RTTY tone pair starts in the audio passband and how the decoder reads 
 | RTTY shift (Hz) | `rtty.shiftHz` | number | `170` | Distance between mark and space, Hz. 170 is the amateur standard; 850 the old commercial one. |
 | Figures case | `rtty.figures` | text | `us` | us \| ita2. Which characters the FIGURES case carries where the standards differ: US TTY ($ ! & # ; ") is what amateur software uses; ITA2 proper has ' WRU BELL + = there instead. |
 | Unshift on space | `rtty.usos` | on/off | `true` | A received space returns the decoder to the letters case, the amateur convention. Leave on unless the station you are reading sends figures across spaces without re-shifting. |
+| RTTY squelch | `rtty.squelch` | number | `0.7` | 0 to 1. How sure the decoder must be of a character's bits before printing it. Band noise alone passes the frame check about twice a second; at 0.7 it passes a few characters a minute and a signal needs about 6 dB over the noise, which is where RTTY copy begins anyway. Lower it for a weak station you can hear but not read; 0 prints everything. |
 
 ## WSPR
 
