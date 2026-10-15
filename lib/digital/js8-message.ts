@@ -543,6 +543,16 @@ export interface Js8ParsedFrame {
   last: boolean;
 }
 
+/**
+ * The station a frame is from, for a decode row or a spot: the sender, unless the frame
+ * came from a group (@ALLCALL, @HB) or names nobody (data). Never the station a directed
+ * frame is TO - "N0GES: KQ4DNM HEARTBEAT SNR -18" is N0GES on the air, not KQ4DNM.
+ */
+export function js8StationOf(frame: Pick<Js8ParsedFrame, "from">): string | null {
+  const from = frame.from?.trim();
+  return from && !from.startsWith("@") ? from : null;
+}
+
 /** Interpret a frame's twelve characters and its 3-bit transmission type. */
 export function js8ParseFrame(text: string, txType: number, jscDecode?: (bits: Uint8Array) => string | null): Js8ParsedFrame {
   const first = (txType & JS8_TX_FIRST) !== 0;

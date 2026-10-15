@@ -12,7 +12,7 @@
 import { ft2Encode } from "@/lib/digital/ft2";
 import { encodeFT4, encodeFT8 } from "@e04/ft8ts";
 
-export type TxMode = "FT8" | "FT4" | "FT2" | "WSPR" | "RTTY" | "CW";
+export type TxMode = "FT8" | "FT4" | "FT2" | "WSPR" | "RTTY" | "CW" | "JS8";
 
 /**
  * Symbol rates, in baud.
@@ -33,6 +33,8 @@ export const SYMBOL_RATE: Record<TxMode, number> = {
   RTTY: 1_000 / 22,
   /** No symbols here: the radio's own keyer sends CW. */
   CW: 0,
+  /** JS8 normal mode: FT8's 6.25 baud. */
+  JS8: 6.25,
 };
 
 /** Nothing legitimate runs this long; a longer waveform is a bug, not a transmission. */
@@ -82,6 +84,12 @@ export function buildWaveform(
   // string, and the transmit path for that is part three of the mode.
   if (mode === "RTTY" || mode === "CW") {
     throw new Error(`${mode} is not a framed mode: nothing builds a ${mode} waveform from a structured message`);
+  }
+  // JS8 frames are built by lib/digital/js8.ts from the message layer's twelve characters
+  // and a transmission type, not from a structured message; the transmit path for them is
+  // part five of the mode.
+  if (mode === "JS8") {
+    throw new Error("JS8 transmit is not enabled yet: this release listens to JS8");
   }
   let wave: Float32Array;
   if (mode === "FT2") {

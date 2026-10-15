@@ -16,7 +16,7 @@ import {
   toCivMode,
   toFlexMode,
 } from "@/lib/radio/modes";
-import { callingFrequencyFor } from "@/lib/ham/digital-freqs";
+import { callingFrequencyFor, inferDigitalMode } from "@/lib/ham/digital-freqs";
 
 let pass = 0;
 let fail = 0;
@@ -117,6 +117,15 @@ console.log("\nis this a frequency an automatic mode may run on");
   eq(callingFrequencyFor("40M", "CW", 2), 7_030_000, "40 m CW is 7.030 for everyone");
   eq(callingFrequencyFor("20M", "CW", null), 14_040_000, "20 m CW is 14.040");
   eq(callingFrequencyFor("6M", "CW", 2), 50_095_000, "and 6 m has a CW segment too");
+  eq(callingFrequencyFor("40M", "JS8", 2), 7_078_000, "40 m JS8 is 7.078, JS8Call's default");
+  eq(callingFrequencyFor("20M", "JS8", 2), 14_078_000, "20 m JS8 is 14.078");
+  eq(callingFrequencyFor("12M", "RTTY", 2), 24_920_000, "12 m RTTY moved to 24.920 so JS8's 24.922 is its own bin");
+  eq(digitalCallingFrequency(7_078_000, "JS8"), 7_078_000, "7.078 is JS8");
+  eq(digitalCallingFrequency(7_078_000, "FT8"), 7_074_000, "and also the top of FT8's 7.074 passband as a dial - which is why auto infers by 500 Hz, not by passband");
+  eq(inferDigitalMode(18_104_000).mode, "FT4", "17 m: FT4 and JS8 share 18.104, and auto prefers FT4 there");
+  eq(inferDigitalMode(50_318_000).mode, "FT4", "6 m: the same on 50.318");
+  eq(digitalCallingFrequency(18_104_000, "JS8"), 18_104_000, "but 18.104 is JS8's too, for the chip to hold on it");
+  eq(inferDigitalMode(14_078_000).mode, "JS8", "20 m: 14.078 is 2 kHz from FT4's 14.080, outside the tolerance, so it is JS8");
 
   // FT4 lives elsewhere, so the mode is part of the question.
   ok(digitalCallingFrequency(14_080_000, "FT4") !== null, "14.080 is FT4");
@@ -135,8 +144,9 @@ console.log("\nis this a frequency an automatic mode may run on");
   // needs a radio. The rule is the part that was wrong.
   const resolveMode = (st: { subMode: string | null; mode: string | null }): TxMode => {
     const m = (st.subMode || st.mode || "FT8").toUpperCase();
-    return m === "FT4" ? "FT4" : m === "FT2" ? "FT2" : m === "WSPR" ? "WSPR" : m === "RTTY" ? "RTTY" : m === "CW" ? "CW" : "FT8";
+    return m === "FT4" ? "FT4" : m === "FT2" ? "FT2" : m === "WSPR" ? "WSPR" : m === "RTTY" ? "RTTY" : m === "CW" ? "CW" : m === "JS8" ? "JS8" : "FT8";
   };
+  eq(resolveMode({ subMode: "JS8", mode: "DIGU" }), "JS8", "listening to JS8 resolves to JS8");
   eq(resolveMode({ subMode: "WSPR", mode: "DIGU" }), "WSPR", "listening to WSPR resolves to WSPR");
   eq(resolveMode({ subMode: "RTTY", mode: "DIGU" }), "RTTY", "listening to RTTY resolves to RTTY");
   eq(resolveMode({ subMode: "CW", mode: "CW" }), "CW", "listening to CW resolves to CW");

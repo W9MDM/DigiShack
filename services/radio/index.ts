@@ -129,7 +129,13 @@ import { startScheduleRunner } from "@/lib/radio/schedule-runner";
 import { FlexDaxSource, DAX_SAMPLE_RATE } from "@/lib/flex/dax";
 import { discoverRadios } from "@/lib/flex/discovery";
 import { freqToBand } from "@/lib/ham/bands";
-import { inferDigitalMode, ituRegionFromGrid, type DigitalMode, type ModeGuess } from "@/lib/ham/digital-freqs";
+import {
+  DIGITAL_FREQUENCIES,
+  inferDigitalMode,
+  ituRegionFromGrid,
+  type DigitalMode,
+  type ModeGuess,
+} from "@/lib/ham/digital-freqs";
 import { clearAlert, raiseAlert } from "@/lib/alerts";
 import { guardFaultsCleared, watchGuardFaults } from "./guard-alerts";
 import { TxPowerTracker, dbmToWatts } from "@/lib/radio/power";
@@ -143,7 +149,10 @@ import { locksFor } from "@/lib/radio/api";
 import { postWsprSpots, wsprSpotOf, type WsprSpotReport } from "@/lib/wsprnet/upload";
 import { RTTY_CENTRE_HZ, RTTY_SHIFT_HZ, rttyDurationMs, rttyTones } from "@/lib/digital/rtty";
 import { cwDurationMs } from "@/lib/digital/cw";
-import { isStreamMode } from "@/lib/radio/decode-pipeline";
+import { isStreamMode, type Js8DecodeExtra } from "@/lib/radio/decode-pipeline";
+import { Js8MessageAssembler, js8StationOf, type Js8ParsedFrame } from "@/lib/digital/js8-message";
+import { gateAutomation, hopModeFor, NO_SEQUENCER_MODES, noSequencerReason } from "@/lib/radio/automation-gate";
+import type { SchedulableAuto } from "@/lib/radio/schedule-runner";
 import { collectReceptionReports } from "@/lib/pskreporter/collect";
 import { MIN_QUERY_INTERVAL_MS } from "@/lib/pskreporter/retrieve";
 import type { PskReporterUploader } from "@/lib/pskreporter/upload";
@@ -700,7 +709,7 @@ async function resumeHeldAutoMode(): Promise<void> {
   }
   const a = activeAuto();
   if (!a) return;
-  a.setMode(resume);
+  gateAutomation(a, automationGate).setMode(resume);
   // Carry the original run forward so the wall-clock watchdog still bounds the whole
   // session across the outage.
   activeGuards?.beginRun(autoRunStartedAt ?? undefined, autoQsosThisRun);
@@ -1092,13 +1101,8 @@ function sendJson(res: ServerResponse, code: number, body: unknown): void {
   res.end(text);
 }
 
-/** Modes with nothing for a sequencer to answer: no automatic mode runs on them and nothing is called. */
-const NO_SEQUENCER_MODES: ReadonlySet<string> = new Set(["WSPR", "RTTY", "CW"]);
-function noSequencerReason(mode: string): string {
-  return mode === "WSPR"
-    ? "WSPR is receive-only: tune to an FT8, FT4 or FT2 frequency before starting an automatic mode"
-    : `${mode} has no sequencer: there are no structured messages to answer. Tune to an FT8, FT4 or FT2 frequency for the automatic modes.`;
-}
+// NO_SEQUENCER_MODES and noSequencerReason live in lib/radio/automation-gate.ts, beside the
+// gate that keeps the schedule and the restart resume off those modes.
 
 /**
  * The mode the operator chose by name. It holds while the dial moves where nothing has a
@@ -1121,6 +1125,140 @@ let cwApply: (() => void) | null = null;
 /** The last few thousand characters of stream text, replayed to a page that connects. */
 const STREAM_TEXT_MAX = 8_000;
 let streamText = "";
+
+/** JS8 frames joined into messages, per frequency, as a receiver must. */
+const js8Assembler = new Js8MessageAssembler();
+
+/**
+ * A JS8 window's decodes: heartbeats and CQs to PSKReporter (they carry a callsign and
+ * usually a grid, which is exactly a spot), every frame joined into messages, and each
+ * finished message to the page as a line of stream text.
+ */
+function onJs8Decodes(
+  decodes: { message: string; snr: number; freqOffset: number; js8?: Js8DecodeExtra }[],
+  windowStart: Date,
+): void {
+  const now = windowStart.getTime();
+  for (const d of decodes) {
+    const x = d.js8;
+    if (!x) continue;
+    const station = js8StationOf(x);
+    if (pskUploader && status.dialFrequency && x.kind === "heartbeat" && station) {
+      if (!(status.deCall && station.toUpperCase() === status.deCall.toUpperCase())) {
+        pskUploader.add({
+          callsign: station,
+          grid: x.grid ?? null,
+          freqHz: status.dialFrequency + d.freqOffset,
+          snr: d.snr,
+          mode: "JS8",
+          at: windowStart,
+        });
+      }
+    }
+    const parsed = {
+      kind: x.kind as Js8ParsedFrame["kind"],
+      display: d.message,
+      from: x.from,
+      to: x.to,
+      grid: x.grid,
+      text: x.text,
+      first: x.first,
+      last: x.last,
+    };
+    const done = js8Assembler.push(parsed, d.freqOffset, now);
+    if (done) emitJs8Message(done.hz, done.text, windowStart);
+  }
+  for (const stale of js8Assembler.expire(now, 90_000)) emitJs8Message(stale.hz, stale.text + " …", windowStart);
+}
+
+function emitJs8Message(hz: number, text: string, at: Date): void {
+  const hh = String(at.getUTCHours()).padStart(2, "0");
+  const mm = String(at.getUTCMinutes()).padStart(2, "0");
+  const line = `${hh}:${mm} ${Math.round(hz)} Hz  ${text}\n`;
+  streamText = (streamText + line).slice(-STREAM_TEXT_MAX);
+  broadcast({ kind: "text", mode: "JS8", text: line, at: at.getTime() });
+}
+
+/**
+ * The station a decode row names. For a JS8 frame it is the sender the message layer
+ * read; the FT8 parser, given "N0GES: KQ4DNM HEARTBEAT SNR -18", names KQ4DNM, the station
+ * being answered, which 1.197.0 did on the air. Everything else is the FT8 parser's call.
+ */
+function rowCallsign(d: { message: string; js8?: Js8DecodeExtra }): string | null {
+  return d.js8 ? js8StationOf(d.js8) : callsignFromMessage(d.message);
+}
+
+/**
+ * Put the radio on a band's calling frequency for a mode, as the mode chips do and as the
+ * automation gate does before a scheduled start. Chosen by name: the mode holds while the
+ * dial moves where nothing has a calling frequency, and a FlexRadio slice follows CW in
+ * and out as a modulation.
+ */
+async function tuneToCalling(
+  band: string,
+  mode: DigitalMode,
+): Promise<{ ok: true; hz: number } | { ok: false; code: number; error: string; hz?: number }> {
+  const hz = callingFrequencyHz(band, mode, ituRegionFromGrid(status.deGrid));
+  if (hz === null) return { ok: false, code: 404, error: `No ${mode} calling frequency is listed for ${band}` };
+  // Chosen by name: holds while the dial moves where nothing has a calling frequency.
+  stickyMode = mode;
+
+  if (status.source === "icom") {
+    if (!icomSource) return { ok: false, code: 503, error: "The Icom is not connected", hz };
+    try {
+      await icomSource.setFrequencyHz(hz);
+      // A digital calling frequency implies the mode. The transmitter sets this
+      // before every transmission anyway; doing it here means the RECEIVER is
+      // right too, which is what decodes depend on.
+      await icomSource.setDataMode().catch(() => {});
+      return { ok: true, hz };
+    } catch (err) {
+      return { ok: false, code: 502, error: err instanceof Error ? err.message : "The radio would not tune", hz };
+    }
+  }
+
+  if (status.source === "flex") {
+    const client = flexGuiClient ?? flexRig;
+    if (!client) return { ok: false, code: 503, error: "The FlexRadio is not connected", hz };
+    const reply = await client.command(`slice tune ${flexSliceIndex ?? 0} ${(hz / 1_000_000).toFixed(6)}`);
+    if (reply.status !== 0) {
+      return { ok: false, code: 502, error: `The radio rejected the retune (0x${reply.status.toString(16)})`, hz };
+    }
+    // CW is a modulation as well as a mode: the radio's filters, pitch and keyer
+    // apply only with the slice in CW. Leaving CW for a data mode restores DIGU.
+    const wantCw = mode === "CW";
+    const isCw = /^CW/i.test(status.mode ?? "");
+    if (wantCw && !isCw) await client.command(`slice set ${flexSliceIndex ?? 0} mode=CW`);
+    else if (!wantCw && isCw) await client.command(`slice set ${flexSliceIndex ?? 0} mode=DIGU`);
+    return { ok: true, hz };
+  }
+
+  return { ok: false, code: 503, error: "Rig control needs a native radio — the external decoder path has none", hz };
+}
+
+/**
+ * Before the schedule or a restart resume starts an automatic mode on a mode with nothing
+ * to answer: FT8 on the same band. Nobody is at the screen on those paths, and a station
+ * left on JS8 the evening before should still hunt at six.
+ */
+async function leaveNoSequencerMode(from: string): Promise<boolean> {
+  const band = status.dialFrequency ? freqToBand(status.dialFrequency) : null;
+  if (!band) {
+    console.log(`[radio] cannot leave ${from} for FT8: the dial is not on a known band`);
+    return false;
+  }
+  const r = await tuneToCalling(band, "FT8");
+  if (r.ok) console.log(`[radio] left ${from} for ${band} FT8 (${(r.hz / 1e6).toFixed(3)} MHz) so the automatic mode has something to answer`);
+  else console.log(`[radio] could not tune ${band} to FT8: ${r.error}`);
+  return r.ok;
+}
+
+/** What the automation gate needs from the bridge. See lib/radio/automation-gate.ts. */
+const automationGate = {
+  subMode: () => status.subMode,
+  leave: leaveNoSequencerMode,
+  log: (line: string) => console.log(`[radio] ${line}`),
+};
 
 /**
  * WSPR spots to wsprnet, when the operator has opted in. A beacon is not a CQ: these never
@@ -1190,18 +1328,23 @@ async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> 
 function onDecodedWindow(
   { windowStart, decodes, decodeMs }: {
     windowStart: Date;
-    decodes: { message: string; snr: number; dt: number; freqOffset: number; mode: string }[];
+    decodes: { message: string; snr: number; dt: number; freqOffset: number; mode: string; js8?: Js8DecodeExtra }[];
     decodeMs: number;
   },
   depthSetting: string,
 ): void {
     status.lastHeartbeat = Date.now();
     if (status.subMode === "WSPR") void reportWsprSpots(decodes, windowStart);
+    if (status.subMode === "JS8") onJs8Decodes(decodes, windowStart);
 
     // Queue for PSKReporter. Uploading is what makes us visible as a receiver on
     // the coverage maps, and it costs one small datagram every five minutes.
     if (pskUploader && status.dialFrequency) {
       for (const d of decodes) {
+        // JS8 rows are spotted above from what the message layer read. The FT8 parser,
+        // given "N0GES: KQ4DNM HEARTBEAT SNR -18", would spot KQ4DNM - the station being
+        // answered - at N0GES's frequency, and 1.197.0 did exactly that on the air.
+        if (d.js8 || d.mode === "JS8") continue;
         const p = parseMessage(d.message);
         const call = p.kind === "cq" ? p.from : p.kind === "directed" ? p.from : null;
         if (!call) continue;
@@ -1280,7 +1423,7 @@ function onDecodedWindow(
           offsetHz: d.freqOffset,
           dialHz: status.dialFrequency,
           message: d.message,
-          callsign: callsignFromMessage(d.message),
+          callsign: rowCallsign(d),
           radio: status.radio?.model ?? null,
         })),
       );
@@ -1298,7 +1441,7 @@ function onDecodedWindow(
         mode: d.mode,
         band,
         message: d.message,
-        callsign: callsignFromMessage(d.message),
+        callsign: rowCallsign(d),
         lowConfidence: false,
       };
 
@@ -1398,7 +1541,9 @@ async function startFlexSource(): Promise<() => Promise<void>> {
               ? "RTTY"
               : configuredMode === "cw"
                 ? "CW"
-                : "FT8",
+                : configuredMode === "js8"
+                  ? "JS8"
+                  : "FT8",
     depth,
     // Shared with the Icom: the passband is a property of the operating convention,
     // not of the radio.
@@ -1786,7 +1931,10 @@ async function startFlexSource(): Promise<() => Promise<void>> {
       retune: async (band, mode) => {
         const shared = source.shared;
         if (!shared) return false;
-        const hz = callingFrequencyHz(band, mode, ituRegionFromGrid(status.deGrid));
+        // A hop while the decoder is on a mode with nothing to answer goes to the next
+        // band's FT8 frequency, never its JS8 one: 1.197.0's resumed hunt hopped 40 m
+        // JS8 to 14.078 and stopped itself on landing there.
+        const hz = callingFrequencyHz(band, hopModeFor(mode), ituRegionFromGrid(status.deGrid));
         if (hz === null) return false;
         const mhz = (hz / 1_000_000).toFixed(6);
         const reply = await shared.client.command(`slice tune ${shared.sliceIndex} ${mhz}`);
@@ -1881,12 +2029,21 @@ async function startFlexSource(): Promise<() => Promise<void>> {
     // mode is pinned in Settings it is inferred from where the radio is tuned.
     if (configuredMode === "auto") {
       // A slice in CW mode is CW whatever the dial says: the operator switched the radio.
-      const inferred: ModeGuess = /^CW/i.test(slice.mode ?? "")
+      let inferred: ModeGuess = /^CW/i.test(slice.mode ?? "")
         ? { mode: "CW", certain: true, matched: null }
         : inferDigitalMode(slice.freqHz);
       // A mode chosen by name holds while the dial wanders where nothing has a calling
-      // frequency (an RTTY segment), and lets go when the dial lands on one.
-      if (stickyMode && inferred.certain && inferred.mode !== stickyMode) stickyMode = null;
+      // frequency (an RTTY segment), and lets go when the dial lands on one - unless the
+      // chosen mode shares that frequency. JS8 and FT4 both sit on 18.104 and 50.318, and
+      // the inference prefers FT4 there; a shared frequency is exactly where the choice
+      // has to count, so the chosen mode stays and is certain.
+      if (stickyMode && inferred.certain && inferred.mode !== stickyMode) {
+        const chosen = stickyMode;
+        const hz = slice.freqHz ?? NaN;
+        const shared = DIGITAL_FREQUENCIES.find((f) => f.mode === chosen && Math.abs(f.hz - hz) <= 500);
+        if (shared) inferred = { mode: shared.mode, certain: true, matched: shared };
+        else stickyMode = null;
+      }
       const guess: ModeGuess =
         stickyMode && !inferred.certain ? { mode: stickyMode, certain: false, matched: null } : inferred;
       if (source.setMode(guess.mode)) {
@@ -1898,7 +2055,7 @@ async function startFlexSource(): Promise<() => Promise<void>> {
                 ? ` (no calling frequency nearby — staying on ${guess.mode}, as chosen)`
                 : " (no known calling frequency nearby — defaulting to FT8)"),
         );
-        if (isStreamMode(guess.mode)) streamText = "";
+        if (isStreamMode(guess.mode) || guess.mode === "JS8") streamText = "";
         // The window length changed, so the deadline for "no window arrived" must too.
         // Armed on FT8 and left alone, it fired 136 s into the first WSPR window and the
         // restart resumed FT8 - which looked exactly like WSPR not working.
@@ -2120,7 +2277,13 @@ async function startFlexSource(): Promise<() => Promise<void>> {
 
   // The operating schedule. Read once at start, like every other bridge setting.
   //
-  const stopSchedule = runSchedule({ ...schedule, auto: () => autoOperator });
+  // Through the automation gate: a scheduled start on JS8, WSPR, RTTY or CW first puts the
+  // radio on FT8 on the same band. The operator at the screen gets a refusal instead
+  // (POST /auto below); the schedule has nobody to refuse to.
+  const stopSchedule = runSchedule({
+    ...schedule,
+    auto: () => (autoOperator ? gateAutomation(autoOperator, automationGate) : null),
+  });
 
   status.commandChannel = true;
   broadcast({ kind: "status", status });
@@ -2534,7 +2697,8 @@ function runSchedule(opts: {
   paDuty: PaDutyTracker;
   /** The schedule's persisted last answer, so a restart is not a fresh change. */
   lastApplied: AutoMode | null;
-  auto: () => AutoOperator | null;
+  /** The operator behind the automation gate: see lib/radio/automation-gate.ts. */
+  auto: () => SchedulableAuto | null;
 }): () => void {
   // A disabled schedule must also CLEAR the display — the setting can be turned off
   // between source rebuilds, and a stale "Scheduled hunt until 22:00" from the
@@ -3994,71 +4158,13 @@ async function main(): Promise<void> {
         const body = await readJson(req);
         const band = String(body.band ?? "").toUpperCase();
         const mode = String(body.mode ?? "FT8").toUpperCase() as DigitalMode;
-        if (!["FT8", "FT4", "FT2", "WSPR", "RTTY", "CW"].includes(mode)) {
-          sendJson(res, 400, { error: "mode must be FT8, FT4, FT2, WSPR, RTTY or CW" });
+        if (!["FT8", "FT4", "FT2", "WSPR", "RTTY", "CW", "JS8"].includes(mode)) {
+          sendJson(res, 400, { error: "mode must be FT8, FT4, FT2, WSPR, RTTY, CW or JS8" });
           return;
         }
-        const hz = callingFrequencyHz(band, mode, ituRegionFromGrid(status.deGrid));
-        if (hz === null) {
-          sendJson(res, 404, { error: `No ${mode} calling frequency is listed for ${band}` });
-          return;
-        }
-        // Chosen by name: holds while the dial moves where nothing has a calling frequency.
-        stickyMode = mode;
-
-        if (status.source === "icom") {
-          if (!icomSource) {
-            sendJson(res, 503, { error: "The Icom is not connected" });
-            return;
-          }
-          try {
-            await icomSource.setFrequencyHz(hz);
-            // A digital calling frequency implies the mode. The transmitter sets this
-            // before every transmission anyway; doing it here means the RECEIVER is
-            // right too, which is what decodes depend on.
-            await icomSource.setDataMode().catch(() => {});
-            sendJson(res, 200, { ok: true, band, mode, freqHz: hz });
-          } catch (err) {
-            sendJson(res, 502, {
-              error: err instanceof Error ? err.message : "The radio would not tune",
-            });
-          }
-          return;
-        }
-
-        if (status.source === "flex") {
-          const client = flexGuiClient ?? flexRig;
-          if (!client) {
-            sendJson(res, 503, { error: "The FlexRadio is not connected" });
-            return;
-          }
-          const reply = await client.command(
-            `slice tune ${flexSliceIndex ?? 0} ${(hz / 1_000_000).toFixed(6)}`,
-          );
-          // CW is a modulation as well as a mode: the radio's filters, pitch and keyer
-          // apply only with the slice in CW. Leaving CW for a data mode restores DIGU.
-          if (reply.status === 0) {
-            const wantCw = mode === "CW";
-            const isCw = /^CW/i.test(status.mode ?? "");
-            if (wantCw && !isCw) await client.command(`slice set ${flexSliceIndex ?? 0} mode=CW`);
-            else if (!wantCw && isCw) await client.command(`slice set ${flexSliceIndex ?? 0} mode=DIGU`);
-          }
-          sendJson(res, reply.status === 0 ? 200 : 502, {
-            ok: reply.status === 0,
-            band,
-            mode,
-            freqHz: hz,
-            error:
-              reply.status === 0
-                ? undefined
-                : `The radio rejected the retune (0x${reply.status.toString(16)})`,
-          });
-          return;
-        }
-
-        sendJson(res, 503, {
-          error: "Rig control needs a native radio — the external decoder path has none",
-        });
+        const r = await tuneToCalling(band, mode);
+        if (r.ok) sendJson(res, 200, { ok: true, band, mode, freqHz: r.hz });
+        else sendJson(res, r.code, { ok: false, band, mode, freqHz: r.hz, error: r.error });
         return;
       }
 
@@ -5404,7 +5510,9 @@ async function main(): Promise<void> {
 
       const a = activeAuto();
       if (!a) return;
-      a.setMode(stored);
+      // Through the automation gate: the dial may have moved to JS8 while the bridge was
+      // down (1.197.0's own live test did), and hunt must not resume there.
+      gateAutomation(a, automationGate).setMode(stored);
       activeGuards?.beginRun(Number.isFinite(startedAt) ? startedAt : undefined, 0);
       console.log(
         `[radio] resumed auto "${stored}" after restart (run started ${startedRaw || "now"})`,

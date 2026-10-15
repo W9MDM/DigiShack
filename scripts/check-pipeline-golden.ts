@@ -103,6 +103,8 @@ async function runWindow(
 }
 
 import { wsprChannelSymbols, wsprWaveform } from "../lib/digital/wspr";
+import { js8EncodeFrame, js8Waveform } from "../lib/digital/js8";
+import { js8PackHeartbeat } from "../lib/digital/js8-message";
 
 const MESSAGE = "CQ K9XYZ EN52";
 const OFFSET = 1200;
@@ -124,7 +126,7 @@ const OFFSET = 1200;
  * that gate. A decode test that feeds a bare transmission is not testing the pipeline,
  * because the pipeline never sees one.
  */
-const TX_START_MS: Record<TxMode, number> = { FT8: 500, FT4: 500, FT2: 0, WSPR: 1000, RTTY: 0, CW: 0 };
+const TX_START_MS: Record<TxMode, number> = { FT8: 500, FT4: 500, FT2: 0, WSPR: 1000, RTTY: 0, CW: 0, JS8: 500 };
 
 function liveWindow(mode: TxMode, wave: Float32Array): Float32Array {
   const lead = Math.round((DAX_SAMPLE_RATE * TX_START_MS[mode]) / 1000);
@@ -186,6 +188,33 @@ async function main(): Promise<void> {
       ok(Math.abs(hit.freqOffset - 1500) <= 2, `WSPR: frequency lands within 2 Hz of 1500 (${hit.freqOffset})`);
       ok(Math.abs(hit.dt) <= 0.2, `WSPR: a correctly-timed signal decodes at dt near zero (${hit.dt})`);
       ok(hit.snr > 0, `WSPR: a noiseless signal reports a positive SNR (${hit.snr} dB)`);
+    }
+  }
+
+  console.log("\na JS8 heartbeat through the same pipeline");
+  {
+    // A heartbeat frame from the message layer, through the physical layer's encoder, at
+    // the FlexRadio's rate, 500 ms into the window as a JS8 station sends it. The decoder
+    // thread reads it back with the message layer, so the printed form is the message.
+    const frame = js8PackHeartbeat("W1AW", "HB", "FN31")!;
+    const { tones } = js8EncodeFrame(frame, 3, "A");
+    const wave = js8Waveform(tones, { sampleRate: DAX_SAMPLE_RATE, baseHz: 1500, amplitude: 0.5 });
+    const { decodes, skipped } = await runWindow("JS8", liveWindow("JS8", wave));
+    ok(!skipped, "JS8: the window is decoded, not skipped as silence");
+    const hit = decodes.find((d) => d.message === "W1AW: @HB HEARTBEAT FN31");
+    ok(
+      hit !== undefined,
+      "JS8: the heartbeat round-trips through the pipeline and the decoder thread, printed as JS8Call prints it",
+      decodes.map((d) => d.message).join(" | ") || "nothing decoded",
+    );
+    if (hit) {
+      eq(hit.mode, "JS8", "JS8: tagged with the right mode");
+      ok(Math.abs(hit.freqOffset - 1500) <= 2, `JS8: frequency lands within 2 Hz of 1500 (${hit.freqOffset})`);
+      ok(Math.abs(hit.dt) <= 0.1, `JS8: a correctly-timed signal decodes at dt near zero (${hit.dt})`);
+      eq(hit.js8?.kind, "heartbeat", "JS8: the message layer's reading rides beside it");
+      eq(hit.js8?.from, "W1AW", "JS8: with the sender");
+      eq(hit.js8?.grid, "FN31", "JS8: and the grid");
+      ok(hit.js8?.first === true && hit.js8?.last === true, "JS8: a one-frame message is first and last");
     }
   }
 

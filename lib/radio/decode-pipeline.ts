@@ -22,6 +22,7 @@ import { DecodeThread } from "@/lib/radio/decode-thread";
 
 import { ft2DecodeAudio } from "@/lib/digital/ft2demod";
 import { WsprThread } from "@/lib/radio/wspr-thread";
+import { Js8Thread } from "@/lib/radio/js8-thread";
 import { RttyDemodulator } from "@/lib/digital/rttydemod";
 import { CwDemodulator } from "@/lib/digital/cwdemod";
 import { HashCallBook as Ft2HashCallBook } from "@/lib/digital/pack77";
@@ -227,6 +228,20 @@ const PRIORITY_MATCH_HZ = 10;
  */
 const DEFER_POLL_MS = 100;
 
+/** What the message layer read from a JS8 frame, carried beside the printed form. */
+export interface Js8DecodeExtra {
+  frame: string;
+  txType: number;
+  kind: string;
+  from?: string;
+  to?: string;
+  grid?: string;
+  /** A data frame's text, or null when it needed the dictionary and the thread had none. */
+  text?: string | null;
+  first: boolean;
+  last: boolean;
+}
+
 export interface Decode {
   freqOffset: number;
   snr: number;
@@ -234,6 +249,8 @@ export interface Decode {
   message: string;
   mode: TxMode;
   windowStart: Date;
+  /** JS8 only. */
+  js8?: Js8DecodeExtra;
 }
 
 /**
@@ -509,6 +526,7 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
   private readonly thread = new DecodeThread((line) => this.emit("error", new Error(line)));
   /** WSPR decodes on a thread of its own: three seconds of CPU per window. See wspr-worker.ts. */
   private readonly wsprThread = new WsprThread((line) => this.emit("error", new Error(line)));
+  private readonly js8Thread = new Js8Thread((line) => this.emit("error", new Error(line)));
 
   // A stream mode replaces the window schedule: audio goes to a demodulator as it arrives.
   private rtty: RttyDemodulator | null = null;
@@ -760,6 +778,7 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
     // explicitly or the process will not exit. Anything mid-decode resolves empty.
     void this.thread.close();
     void this.wsprThread.close();
+    void this.js8Thread.close();
   }
 
   /**
@@ -976,9 +995,32 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
    */
   private async runFullPass(p: DeferredPass): Promise<void> {
     const started = Date.now();
-    let decoded: { freq: number; snr: number; dt: number; msg: string }[];
+    let decoded: { freq: number; snr: number; dt: number; msg: string; js8?: Js8DecodeExtra }[];
     try {
-      if (this.mode === "WSPR") {
+      if (this.mode === "JS8") {
+        // JS8 is decoded by our own port on its own thread, which also reads each frame
+        // with the message layer; the printed form is the message, and what the layer read
+        // rides beside it for the bridge to join frames and spot heartbeats.
+        const r = await this.js8Thread.decode(Float32Array.from(p.audio), DECODE_SAMPLE_RATE);
+        if (r.error) this.emit("error", new Error(`js8 thread: ${r.error}`));
+        decoded = r.decodes.map((d) => ({
+          freq: Math.round(d.freqHz),
+          snr: d.snrDb,
+          dt: d.dtS,
+          msg: d.parsed.display,
+          js8: {
+            frame: d.frame,
+            txType: d.txType,
+            kind: d.parsed.kind,
+            from: d.parsed.from,
+            to: d.parsed.to,
+            grid: d.parsed.grid,
+            text: d.parsed.text,
+            first: d.parsed.first,
+            last: d.parsed.last,
+          },
+        }));
+      } else if (this.mode === "WSPR") {
         // WSPR is decoded by our own port, on its own thread. The audio frequency becomes
         // the offset and the message is the spot as wsprd prints it - "K1ABC FN42 37" -
         // which parses as "other" downstream, so no sequencer or reporter mistakes a
@@ -1035,6 +1077,7 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
       message: d.msg.trim(),
       mode: this.mode,
       windowStart: p.windowStart,
+      ...(d.js8 ? { js8: d.js8 } : {}),
     }));
 
     this.emit("decodes", {

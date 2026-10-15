@@ -66,12 +66,12 @@ const PACKET_CLASS_TX_S16 = 0x0123;
  * past the last one. Using 144 here would size the watchdog 27 ms short of the
  * actual transmission.
  */
-const SYMBOLS_PER_FRAME = { FT8: 79, FT4: 105, FT2: 146, WSPR: 162, RTTY: 0, CW: 0 } as const;
+const SYMBOLS_PER_FRAME = { FT8: 79, FT4: 105, FT2: 146, WSPR: 162, RTTY: 0, CW: 0, JS8: 79 } as const;
 
 /** Extra time before the watchdog fires, allowing for scheduling jitter. */
 const WATCHDOG_MARGIN_MS = 2_000;
 
-export type TxMode = "FT8" | "FT4" | "FT2" | "WSPR" | "RTTY" | "CW";
+export type TxMode = "FT8" | "FT4" | "FT2" | "WSPR" | "RTTY" | "CW" | "JS8";
 
 /**
  * Above this percentage of the radio's rated output, say something.
@@ -805,6 +805,9 @@ export class FlexDaxTransmitter {
     // of the mode). Nothing here keys the radio on an RTTY frequency until then.
     if (req.mode === "RTTY" || req.mode === "CW") {
       return { ...base, reason: `${req.mode} is sent as text, not as a timed frame` };
+    }
+    if (req.mode === "JS8") {
+      return { ...base, reason: "JS8 transmit is not enabled yet: this release listens to JS8" };
     }
 
     const refused = await this.gateRefusal(base);

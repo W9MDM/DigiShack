@@ -28,6 +28,8 @@ export const PERIOD_MS: Record<TxMode, number> = {
   /** A stream: no period. One second, the decoder's heartbeat interval. */
   RTTY: 1_000,
   CW: 1_000,
+  /** JS8 normal mode keeps FT8's period. */
+  JS8: 15_000,
 };
 
 /**
@@ -45,6 +47,8 @@ export const TX_START_OFFSET_MS: Record<TxMode, number> = {
   WSPR: 1_000,
   RTTY: 0,
   CW: 0,
+  /** Half a second after the boundary, as FT8 (ASTART in js8a_params.f90). */
+  JS8: 500,
 };
 
 /**
@@ -68,6 +72,8 @@ export const TRANSMISSION_MS: Record<TxMode, number> = {
   /** Text has no fixed length. */
   RTTY: 0,
   CW: 0,
+  /** 79 symbols at 6.25 baud: FT8's 12.64 s. */
+  JS8: 12_640,
 };
 
 /** A late transmission may never eat more of the window's margin than it leaves behind. */
@@ -103,6 +109,7 @@ const DECODABLE_LATE_MS: Record<TxMode, number> = {
   WSPR: 2_000,
   RTTY: 0,
   CW: 0,
+  JS8: 1_860,
 };
 
 /**

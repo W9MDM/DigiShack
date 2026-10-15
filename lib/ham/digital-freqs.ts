@@ -9,7 +9,7 @@
 // The dial frequency is the reliable discriminator: the two modes use distinct,
 // well-established watering holes on every band.
 
-export type DigitalMode = "FT8" | "FT4" | "FT2" | "WSPR" | "RTTY" | "CW";
+export type DigitalMode = "FT8" | "FT4" | "FT2" | "WSPR" | "RTTY" | "CW" | "JS8";
 
 
 export interface DigitalFrequency {
@@ -131,7 +131,10 @@ const RTTY: [number, string, (1 | 2 | 3)?][] = [
   [14_085_000, "20M"],
   [18_102_000, "17M"],
   [21_085_000, "15M"],
-  [24_922_000, "12M"],
+  // 24.920, not 24.922: JS8's 12 m calling frequency is 24.922, and on the same dial the
+  // inference would take the first entry in the table, RTTY, for every 12 m JS8 dial.
+  // RTTY has a segment, JS8 has a frequency; the segment moves.
+  [24_920_000, "12M"],
   [28_085_000, "10M"],
 ];
 
@@ -153,6 +156,20 @@ const CW: [number, string, (1 | 2 | 3)?][] = [
   [50_095_000, "6M"],
 ];
 
+/** JS8 calling frequencies: JS8Call's defaults. Everyone listens in the same 4 kHz, as FT8. */
+const JS8: [number, string, (1 | 2 | 3)?][] = [
+  [1_842_000, "160M"],
+  [3_578_000, "80M"],
+  [7_078_000, "40M"],
+  [10_130_000, "30M"],
+  [14_078_000, "20M"],
+  [18_104_000, "17M"],
+  [21_078_000, "15M"],
+  [24_922_000, "12M"],
+  [28_078_000, "10M"],
+  [50_318_000, "6M"],
+];
+
 export const DIGITAL_FREQUENCIES: readonly DigitalFrequency[] = [
   ...FT8.map(([hz, band, region]): DigitalFrequency => ({ hz, mode: "FT8", band, region })),
   ...FT4.map(([hz, band, region]): DigitalFrequency => ({ hz, mode: "FT4", band, region })),
@@ -167,6 +184,7 @@ export const DIGITAL_FREQUENCIES: readonly DigitalFrequency[] = [
   ...WSPR.map(([hz, band, region]): DigitalFrequency => ({ hz, mode: "WSPR", band, region })),
   ...RTTY.map(([hz, band, region]): DigitalFrequency => ({ hz, mode: "RTTY", band, region })),
   ...CW.map(([hz, band, region]): DigitalFrequency => ({ hz, mode: "CW", band, region })),
+  ...JS8.map(([hz, band, region]): DigitalFrequency => ({ hz, mode: "JS8", band, region })),
 ];
 
 /**
@@ -285,6 +303,8 @@ const PERIOD_MS: Record<DigitalMode, number> = {
   /** A stream, not a period: the decoder reports once per second of audio. */
   RTTY: 1_000,
   CW: 1_000,
+  /** JS8 normal mode: FT8's period. */
+  JS8: 15_000,
 };
 
 export function periodMsFor(mode: DigitalMode): number {
