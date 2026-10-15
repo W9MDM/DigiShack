@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.185.2 - public release
+## 1.186.1 - public release
 
 Development happens in a private repository; this is where the public history starts.
 Earlier entries are not reproduced - they quote real operators by callsign, include
@@ -22,6 +22,8 @@ Notes for anyone running this:
 
 ## Release history
 
+- **1.186.1** — Seven mirror pushes that never happened
+- **1.186.0** — WSPR, part two: the demodulator, eight of the reference's nine from a real recording
 - **1.185.2** — Correct Flex FFT polarity and preserve audio across packet boundaries
 - **1.185.1** — Golden vectors that survive the scrub
 - **1.185.0** — WSPR, part one: the codec, checked against the reference binaries
