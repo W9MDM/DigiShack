@@ -14,6 +14,14 @@ SNR in 2500 Hz, its DT, and its audio frequency. Compound calls arrive as `PJ4/K
 and six-character grids as `<PJ4/K1ABC> FK52UD 37` once the station's plain transmission
 has been heard; before that the hash shows as `<...>`, exactly as WSJT-X shows it.
 
+The first decode after a retune takes a while. Windows are cut at the even UTC minute
+plus the 110.6 s transmission, and a window that began before the retune is too short to
+decode, so a retune at the wrong moment waits up to about four minutes for its first
+decode. The bridge's liveness watchdog, which restarts a pipeline that cuts no window,
+allows WSPR six minutes (three of its own periods) rather than FT8's two. Until 1.188.1
+it did not, and restarted the bridge back onto FT8 before the first WSPR window could
+arrive, which looked exactly like the decoder not working.
+
 The standard dial frequencies (the WSPR signal sits 1500 Hz above the dial):
 
 | Band | Dial (MHz) | Band | Dial (MHz) |

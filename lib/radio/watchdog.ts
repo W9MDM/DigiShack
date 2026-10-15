@@ -40,9 +40,35 @@ export class LivenessWatchdog {
   private timer: NodeJS.Timeout | null = null;
   private fired = false;
   private readonly now: () => number;
+  private timeoutMs: number;
 
   constructor(private readonly opts: WatchdogOptions) {
     this.now = opts.now ?? Date.now;
+    this.timeoutMs = opts.timeoutMs;
+  }
+
+  /** The current timeout: the constructor's, or the last retime(). */
+  get timeout(): number {
+    return this.timeoutMs;
+  }
+
+  /**
+   * Change the timeout while running, for a pipeline whose period changed under it.
+   *
+   * A WSPR window is two minutes long, so a watchdog armed on FT8's fifteen-second
+   * period (two minutes, for eight of them) fires before the first WSPR window can
+   * possibly arrive: on 14 October 2026 it restarted the bridge 136 s after the decoder
+   * switched to WSPR, which put the radio back on FT8 and looked exactly like WSPR not
+   * working. The last beat is kept - it was real work - and only the deadline moves; the
+   * check interval is rebuilt because it is derived from the timeout.
+   */
+  retime(timeoutMs: number): void {
+    if (timeoutMs === this.timeoutMs) return;
+    this.timeoutMs = timeoutMs;
+    if (this.timer) {
+      this.stop();
+      this.start();
+    }
   }
 
   /**
@@ -67,7 +93,7 @@ export class LivenessWatchdog {
 
   start(): void {
     if (this.timer) return;
-    const every = this.opts.checkIntervalMs ?? Math.max(1_000, Math.floor(this.opts.timeoutMs / 6));
+    const every = this.opts.checkIntervalMs ?? Math.max(1_000, Math.floor(this.timeoutMs / 6));
     this.timer = setInterval(() => this.check(), every);
     this.timer.unref?.();
   }
@@ -82,7 +108,7 @@ export class LivenessWatchdog {
     // Never fired before the first beat: silence during startup is not a fault.
     if (this.lastBeat === null || this.fired) return;
     const since = this.now() - this.lastBeat;
-    if (since < this.opts.timeoutMs) return;
+    if (since < this.timeoutMs) return;
 
     // Latched. Without this the interval keeps firing while the process winds down,
     // and the log fills with the same line — which is how a clear diagnosis gets
@@ -109,5 +135,12 @@ export class LivenessWatchdog {
  * enough that a hang is caught in minutes rather than the five hours it took here.
  */
 export function windowTimeoutMs(periodMs: number, periods = 8): number {
-  return Math.max(60_000, periodMs * periods);
+  // `periods` counts FT8-length periods, which is what the setting has always meant on
+  // the modes it was written for (eight of them: 2 minutes). A mode with a LONGER period
+  // cannot use the same multiplier - eight WSPR windows is sixteen minutes of not
+  // noticing - but it cannot share FT8's deadline either, because its first window after
+  // a mode switch arrives up to one period plus the transmission length later, about
+  // 232 s. Three of its own periods covers that with a window to spare.
+  const ft8LengthPeriods = periods * Math.min(periodMs, 15_000);
+  return Math.max(60_000, ft8LengthPeriods, 3 * periodMs);
 }

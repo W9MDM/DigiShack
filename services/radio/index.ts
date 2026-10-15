@@ -1799,6 +1799,16 @@ async function startFlexSource(): Promise<() => Promise<void>> {
               ? ` (${guess.matched?.band} calling frequency)`
               : " (no known calling frequency nearby — defaulting to FT8)"),
         );
+        // The window length changed, so the deadline for "no window arrived" must too.
+        // Armed on FT8 and left alone, it fired 136 s into the first WSPR window and the
+        // restart resumed FT8 - which looked exactly like WSPR not working.
+        if (watchdog) {
+          const timeoutMs = windowTimeoutMs(source.periodMs, watchdogPeriods);
+          watchdog.retime(timeoutMs);
+          console.log(
+            `[bridge] liveness watchdog retimed for ${guess.mode}: restart if no decode window for ${Math.round(timeoutMs / 1000)}s`,
+          );
+        }
       }
       status.subMode = guess.mode;
     } else {

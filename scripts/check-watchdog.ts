@@ -244,6 +244,59 @@ console.log("\ntimeout sizing");
   eq(windowTimeoutMs(7_500), 60_000, "FT4 floors at 60 s");
   eq(windowTimeoutMs(3_750), 60_000, "so does FT2 — the floor stops it being twitchy");
   ok(windowTimeoutMs(15_000) > 15_000 * 4, "always several periods, never one or two");
+  eq(windowTimeoutMs(120_000), 360_000, "WSPR gets three of its own two-minute periods, not eight (16 min)");
+  ok(windowTimeoutMs(120_000) > 232_000 + 60_000, "which outlasts the first window after a mode switch (up to 232 s) with a decode to spare");
+  eq(windowTimeoutMs(15_000, 20), 300_000, "a raised bridge.watchdog.periods still means FT8-length periods");
+  eq(windowTimeoutMs(120_000, 20), 360_000, "and on WSPR the three-period rule holds unless the setting asks for longer");
+  eq(windowTimeoutMs(120_000, 30), 450_000, "thirty FT8-length periods is 7.5 minutes, so that wins");
+}
+
+// ---------------------------------------------------------------------------
+console.log("\nretiming a running watchdog when the decoder's period changes");
+// ---------------------------------------------------------------------------
+{
+  // 14 October 2026: the decoder switched FT8 -> WSPR; the watchdog, armed for FT8's
+  // 120 s, restarted the bridge 136 s later - before the first 120 s WSPR window could
+  // have arrived - and the restart resumed FT8. The fix moves the deadline when the
+  // period changes, keeping the last beat.
+  const clock = fakeClock();
+  const deaths: { sinceMs: number; label: string }[] = [];
+  const w = new LivenessWatchdog({
+    timeoutMs: windowTimeoutMs(15_000),
+    label: "flex decode pipeline",
+    now: clock.now,
+    onDead: (i) => deaths.push(i),
+  });
+  w.start();
+  w.beat();
+  eq(w.timeout, 120_000, "armed for FT8: 120 s");
+  w.retime(windowTimeoutMs(120_000));
+  eq(w.timeout, 360_000, "retimed for WSPR: 360 s");
+  clock.advance(136_000);
+  w.check();
+  eq(deaths.length, 0, "136 s of silence after the switch no longer fires it");
+  clock.advance(100_000);
+  w.check();
+  eq(deaths.length, 0, "nor 236 s - the first WSPR window can take that long to arrive");
+  w.beat();
+  clock.advance(359_000);
+  w.check();
+  eq(deaths.length, 0, "just under the new deadline, nothing");
+  clock.advance(2_000);
+  w.check();
+  eq(deaths.length, 1, "just over it, a stuck WSPR pipeline is still caught");
+  w.stop();
+  const same = new LivenessWatchdog({ timeoutMs: 120_000, now: clock.now, onDead: () => {} });
+  same.retime(120_000);
+  eq(same.timeout, 120_000, "retiming to the same value is a no-op");
+  const back = new LivenessWatchdog({ timeoutMs: 360_000, now: clock.now, onDead: (i) => deaths.push(i) });
+  back.start();
+  back.beat();
+  back.retime(windowTimeoutMs(15_000));
+  clock.advance(121_000);
+  back.check();
+  eq(deaths.length, 2, "and retiming back to FT8 tightens the deadline again");
+  back.stop();
 }
 
 console.log(`\n${pass} passed, ${fail} failed\n`);

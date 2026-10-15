@@ -269,7 +269,7 @@ Restarts the radio bridge when it stops working while still appearing to run. PM
 | Setting | Key | Type | Default | What it does |
 |---|---|---|---|---|
 | Restart the bridge if it stops decoding | `bridge.watchdog.enabled` | on/off | `true` | Exits the bridge when no decode window has arrived for a while, so PM2 restarts it. A hung event loop or a socket that stopped delivering cannot be repaired from inside the process that is hung — a fresh one is the only reliable cure. Off means a hang goes unnoticed until you look. |
-| Quiet periods before restarting | `bridge.watchdog.periods` | number | `8` | How many T/R periods of no decode window count as dead. 8 is two minutes on FT8, and never fires on a working radio — a single late window is not a fault, so this must not be set to 1 or 2. There is a 60-second floor for the faster modes. |
+| Quiet periods before restarting | `bridge.watchdog.periods` | number | `8` | How many T/R periods of no decode window count as dead. 8 is two minutes on FT8, and never fires on a working radio — a single late window is not a fault, so this must not be set to 1 or 2. There is a 60-second floor for the faster modes, and a mode with a longer period (WSPR: two minutes) gets three of its own periods instead, so the count means FT8-length periods. |
 
 ## Icom (network)
 

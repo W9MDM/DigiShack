@@ -1466,7 +1466,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Quiet periods before restarting",
     type: "number",
     group: "watchdog",
-    help: "How many T/R periods of no decode window count as dead. 8 is two minutes on FT8, and never fires on a working radio — a single late window is not a fault, so this must not be set to 1 or 2. There is a 60-second floor for the faster modes.",
+    help: "How many T/R periods of no decode window count as dead. 8 is two minutes on FT8, and never fires on a working radio — a single late window is not a fault, so this must not be set to 1 or 2. There is a 60-second floor for the faster modes, and a mode with a longer period (WSPR: two minutes) gets three of its own periods instead, so the count means FT8-length periods.",
     default: "8",
   },
 
