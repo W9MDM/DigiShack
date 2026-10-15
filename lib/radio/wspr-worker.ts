@@ -7,12 +7,14 @@
 // decode on lib/radio/decode-worker.mjs for the same reason; FT2 stays on the main thread
 // because it takes 170 ms.
 //
-// A TypeScript worker, not a .mjs one, because the decoder is TypeScript. This works under
-// tsx, which is how the bridge runs (`npm run bridge` and PM2 both launch
-// node_modules/tsx/dist/cli.mjs): a worker inherits the parent's execArgv, and tsx's loader
-// flags are in it - measured, not assumed, before this file was written. Under plain node
-// the worker would fail to load, and lib/radio/wspr-thread.ts reports that as a decode
-// error rather than hanging.
+// PLAIN JAVASCRIPT ON THE THREAD. This file is TypeScript, but the thread loads
+// lib/radio/wspr-worker.bundle.mjs, which esbuild builds from it and what it imports
+// (`npm run build:wspr-worker`; `npm run check:wspr-worker` fails while the bundle is
+// stale). The first release spawned this .ts file directly, on the measurement that a
+// worker inherits the parent's tsx loader flags - true on the Node 24 it was measured on,
+// false on the Node 20 the station runs, where every window died in the thread with
+// "Unknown file extension .ts". The FT8 worker is a plain .mjs for the same reason; this
+// one is too, by way of a build step, because the decoder it runs is TypeScript.
 //
 // One hash table for the life of the thread, as the FT8 worker keeps one hash-call book:
 // a type 3 message resolves only if its station's type 2 was heard earlier, and that
