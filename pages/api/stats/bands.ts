@@ -31,7 +31,7 @@ async function get(req: NextApiRequest, res: NextApiResponse) {
       ? req.query.current.trim().toUpperCase()
       : null;
   const mode =
-    typeof req.query.mode === "string" && /^(FT[0248]|JS8|WSPR|RTTY|CW|PSK31|OLIVIA|SSTV|HELL)$/i.test(req.query.mode.trim())
+    typeof req.query.mode === "string" && /^(FT[0248]|JS8|WSPR|RTTY|CW|PSK31|OLIVIA|SSTV|HELL|JTTY)$/i.test(req.query.mode.trim())
       ? req.query.mode.trim().toUpperCase()
       : "FT8";
 

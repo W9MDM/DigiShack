@@ -32,7 +32,7 @@ be read: `DATABASE_URL`, `SETTINGS_KEY` and `PORT`.
 - [PSK31](#psk31) — 3 settings
 - [CW](#cw) — 3 settings
 - [WSPR](#wspr) — 1 setting
-- [Digital modes](#digital-modes) — 10 settings
+- [Digital modes](#digital-modes) — 11 settings
 - [DigiShack bridge](#digishack-bridge) — 4 settings
 - [External decoder (WSJT-X)](#external-decoder-wsjt-x) — 3 settings
 - [FlexRadio (direct)](#flexradio-direct) — 15 settings
@@ -244,6 +244,7 @@ Where decodes and rig status come from. `wsjtx` takes them from an external deco
 
 | Setting | Key | Type | Default | What it does |
 |---|---|---|---|---|
+| JTTY transmit offset (Hz audio) | `jtty.txHz` | number | `1500` | Where JTTY transmits: its lowest tone, Hz above the dial, as WSJT-X's Tx frequency. 1500 is WSJT-X's default. The receiver decodes every station in the passband whatever this is; a click on the waterfall or on a station's tag moves it for the session. |
 | Feld Hell carrier (Hz audio) | `hell.centreHz` | number | `1000` | Where the Hell receiver paints and the transmitter keys when the HELL chip is pressed, Hz above the dial. 1000 puts a 14.062 dial on the Feld Hell Club calling frequency, 14.063. A click on the waterfall moves it for the session. |
 | SSTV transmit power (%) | `sstv.powerPct` | number | `50` | RF power for sending an SSTV picture, which is one to five minutes of steady carrier. Lowered to this for the picture if set higher, never raised, and put back afterwards. |
 | Decode source | `digital.source` | text | `wsjtx` | One of "wsjtx" (an external decoder over the WSJT-X UDP protocol), "flex" (direct to a FlexRadio) or "icom" (direct to a networked Icom over RS-BA1). The bridge reads this at startup. "omega" is still accepted and means "wsjtx" — that was a reference to one particular fork of WSJT-X, never to anything DigiShack does. |
@@ -252,7 +253,7 @@ Where decodes and rig status come from. `wsjtx` takes them from an external deco
 | Re-check the clock every (minutes) | `time.syncMinutes` | number | `60` | How often to re-measure. Hourly is plenty for a machine that is roughly synchronised, and one exchange is 48 bytes. 0 measures once at startup and never again. |
 | Also write every decode to CSV in | `digital.decodeCsvDir` | text | — | A directory on the server. One file per UTC day, `decodes-YYYY-MM-DD.csv`, holding every decode heard — including ones with no resolvable band, which never reach the database. Leave blank to write none. This is separate from the database copy, which is pruned after `digital.decodeRetentionDays`: the table is what the application queries, this is the raw feed kept for its own sake in a format that outlives the schema. A busy band produces around 42,000 rows a day, which is a few megabytes. |
 | Passband to decode and display (Hz) | `digital.passbandHz` | number | `3000` | Top of the audio passband: what the decoders search AND what the waterfall draws — one number, so the display cannot disagree with the decoder. 3000 is the conventional FT8 sub-band and the decoder library's own default. Raising it finds stations above 3 kHz that were being clipped: a busy band shows a hard stop at exactly 3000, which is a clipped distribution rather than a natural one. It costs decode time, so watch for the "decode took Nms" warning, and note that most radios will not TRANSMIT above about 2.9 kHz whatever the receiver hears — stations found up there can be decoded but not answered. |
-| Digital mode | `digital.mode` | text | `auto` | auto \| ft8 \| ft4 \| ft2 \| wspr \| rtty \| cw \| js8 \| psk31 \| olivia \| sstv \| hell. Auto infers the mode from the dial frequency, which is the only reliable way — a DIGU slice does not say which mode it carries, and the three use different window lengths (15 / 7.5 / 3.75 s). FT2 has provisional calling frequencies so auto does find it, except on 60 m where it shares 5.357 MHz with FT4 and auto resolves to FT4; pin ft2 here to run it there or anywhere off-frequency. |
+| Digital mode | `digital.mode` | text | `auto` | auto \| ft8 \| ft4 \| ft2 \| wspr \| rtty \| cw \| js8 \| psk31 \| olivia \| sstv \| hell \| jtty. Auto infers the mode from the dial frequency, which is the only reliable way — a DIGU slice does not say which mode it carries, and the three use different window lengths (15 / 7.5 / 3.75 s). FT2 has provisional calling frequencies so auto does find it, except on 60 m where it shares 5.357 MHz with FT4 and auto resolves to FT4; pin ft2 here to run it there or anywhere off-frequency. |
 | Keep decodes for (days) | `digital.decodeRetentionDays` | number | `30` | A busy band produces around 42,000 decodes a day — roughly 10 MB, or 3.7 GB a year — and nothing used to delete any of it. Decodes attached to a logged contact are NEVER pruned whatever this says; they are the evidence of the QSO. 0 keeps everything, which is fine if you have the disk and want the full history. |
 
 ## DigiShack bridge

@@ -14,6 +14,7 @@ import type { Js8OutFrame } from "@/lib/digital/js8-message";
 import { rttyDurationMs, rttyWaveform } from "@/lib/digital/rtty";
 import { psk31DurationMs, psk31Waveform } from "@/lib/digital/psk31";
 import { hellDurationMs, hellWaveform } from "@/lib/digital/hell";
+import { jttyDurationMs, jttyWaveform } from "@/lib/digital/jtty";
 import {
   oliviaDurationMs,
   oliviaSymbols,
@@ -77,12 +78,12 @@ const PACKET_CLASS_TX_S16 = 0x0123;
  * past the last one. Using 144 here would size the watchdog 27 ms short of the
  * actual transmission.
  */
-const SYMBOLS_PER_FRAME = { FT8: 79, FT4: 105, FT2: 146, WSPR: 162, RTTY: 0, CW: 0, JS8: 79, PSK31: 0, OLIVIA: 0, SSTV: 0, HELL: 0 } as const;
+const SYMBOLS_PER_FRAME = { FT8: 79, FT4: 105, FT2: 146, WSPR: 162, RTTY: 0, CW: 0, JS8: 79, PSK31: 0, OLIVIA: 0, SSTV: 0, HELL: 0, JTTY: 0 } as const;
 
 /** Extra time before the watchdog fires, allowing for scheduling jitter. */
 const WATCHDOG_MARGIN_MS = 2_000;
 
-export type TxMode = "FT8" | "FT4" | "FT2" | "WSPR" | "RTTY" | "CW" | "JS8" | "PSK31" | "OLIVIA" | "SSTV" | "HELL";
+export type TxMode = "FT8" | "FT4" | "FT2" | "WSPR" | "RTTY" | "CW" | "JS8" | "PSK31" | "OLIVIA" | "SSTV" | "HELL" | "JTTY";
 
 /**
  * Above this percentage of the radio's rated output, say something.
@@ -194,8 +195,8 @@ export interface TransmitRequest {
 
 /** A line of text to send as it is: RTTY at a tone pair, PSK31 on a carrier, now. */
 export interface TextTransmitRequest {
-  /** RTTY, PSK31, Olivia and Feld Hell go out as audio through DAX; CW is handed to the radio's own keyer (CWX). */
-  mode: "RTTY" | "CW" | "PSK31" | "OLIVIA" | "HELL";
+  /** RTTY, PSK31, Olivia, Feld Hell and JTTY go out as audio through DAX; CW is handed to the radio's own keyer (CWX). */
+  mode: "RTTY" | "CW" | "PSK31" | "OLIVIA" | "HELL" | "JTTY";
   text: string;
   /** Centre of the tone pair, Hz audio. */
   centreHz: number;
@@ -825,7 +826,7 @@ export class FlexDaxTransmitter {
     }
     // RTTY is typed, not framed: it will go out as text through its own path (part three
     // of the mode). Nothing here keys the radio on an RTTY frequency until then.
-    if (req.mode === "RTTY" || req.mode === "CW" || req.mode === "PSK31" || req.mode === "OLIVIA" || req.mode === "HELL") {
+    if (req.mode === "RTTY" || req.mode === "CW" || req.mode === "PSK31" || req.mode === "OLIVIA" || req.mode === "HELL" || req.mode === "JTTY") {
       return { ...base, reason: `${req.mode} is sent as text, not as a timed frame` };
     }
     if (req.mode === "SSTV") {
@@ -1098,6 +1099,14 @@ export class FlexDaxTransmitter {
         );
       }
       return oliviaWaveform(oliviaSymbols(text, size), { ...size, sampleRate: DAX_RATE, centreHz: req.centreHz });
+    }
+    if (req.mode === "JTTY") {
+      // The packing is the specification's: fewest frames, sixteen at most (30 s).
+      const jMs = jttyDurationMs(text);
+      if (jMs > FlexDaxTransmitter.MAX_TEXT_MS) {
+        throw new Error(`${(jMs / 1000).toFixed(0)} s of JTTY is over the ${FlexDaxTransmitter.MAX_TEXT_MS / 1000} s cap - send it in pieces`);
+      }
+      return jttyWaveform(text, { sampleRate: DAX_RATE, baseHz: req.centreHz });
     }
     if (req.mode === "HELL") {
       const hellMs = hellDurationMs(text);

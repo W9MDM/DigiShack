@@ -66,7 +66,7 @@ export function BandConditions({
 }) {
   const q = new URLSearchParams();
   if (currentBand) q.set("current", currentBand);
-  if (mode && /^(FT[0248]|JS8|WSPR|RTTY|CW|PSK31|OLIVIA|SSTV|HELL)$/i.test(mode)) q.set("mode", mode);
+  if (mode && /^(FT[0248]|JS8|WSPR|RTTY|CW|PSK31|OLIVIA|SSTV|HELL|JTTY)$/i.test(mode)) q.set("mode", mode);
 
   const { data, reload } = useApi<Report>(`/api/stats/bands?${q.toString()}`);
 

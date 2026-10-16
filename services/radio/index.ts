@@ -154,6 +154,7 @@ import { cwDurationMs } from "@/lib/digital/cw";
 import { PSK31_CENTRE_HZ, psk31DurationMs, type PskSpeed } from "@/lib/digital/psk31";
 import { OLIVIA_MODES, oliviaDurationMs, type OliviaBandwidth, type OliviaCode, type OliviaTones } from "@/lib/digital/olivia";
 import { HELL_CENTRE_HZ, HELL_COLUMN_RATE, hellDurationMs } from "@/lib/digital/hell";
+import { JTTY_DEFAULT_HZ, jttyDurationMs } from "@/lib/digital/jtty";
 import { isStreamMode, type Js8DecodeExtra } from "@/lib/radio/decode-pipeline";
 import {
   Js8MessageAssembler,
@@ -228,6 +229,8 @@ interface RigStatus {
   olivia: { centreHz: number; tones: OliviaTones; bandwidth: OliviaBandwidth; code: OliviaCode } | null;
   /** The Feld Hell carrier, while on Hell. */
   hell: { centreHz: number } | null;
+  /** Where JTTY transmits (the lowest tone), while on JTTY. The receiver hears the whole passband. */
+  jtty: { txHz: number } | null;
   /** A JS8 message going out, or the last one, with the offset it uses. See lib/radio/js8-sender.ts. */
   js8: (Js8SenderState & { offsetHz: number }) | null;
   /** JS8's speed: normal, fast, turbo or slow. */
@@ -370,6 +373,7 @@ const status: RigStatus = {
   psk: null,
   olivia: null,
   hell: null,
+  jtty: null,
   js8: null,
   js8Speed: "normal",
   dxCall: null,
@@ -1248,6 +1252,12 @@ let oliviaApply: (() => void) | null = null;
 /** Feld Hell: the carrier the receiver paints and the transmitter keys. */
 const hellTuning = { centreHz: HELL_CENTRE_HZ };
 let hellApply: (() => void) | null = null;
+
+/** JTTY: where the transmitter puts its lowest tone. */
+const jttyTuning = { txHz: JTTY_DEFAULT_HZ };
+function jttyApply(): void {
+  status.jtty = { txHz: jttyTuning.txHz };
+}
 /**
  * The last minute or so of painted Hell columns, sent to a page that connects so it opens
  * on the page so far rather than a blank one. 17.5 columns a second, 28 bytes each.
@@ -1901,7 +1911,9 @@ async function startFlexSource(): Promise<() => Promise<void>> {
                         ? "SSTV"
                         : configuredMode === "hell"
                           ? "HELL"
-                          : "FT8",
+                          : configuredMode === "jtty"
+                            ? "JTTY"
+                            : "FT8",
     depth,
     // Shared with the Icom: the passband is a property of the operating convention,
     // not of the radio.
@@ -2095,6 +2107,7 @@ async function startFlexSource(): Promise<() => Promise<void>> {
   }
   oliviaTuning.threshold = await getNumberSetting("olivia.threshold", 4);
   hellTuning.centreHz = await getNumberSetting("hell.centreHz", HELL_CENTRE_HZ);
+  jttyTuning.txHz = await getNumberSetting("jtty.txHz", JTTY_DEFAULT_HZ);
   {
     const speed = ((await getSetting("js8.speed")) ?? "normal").toLowerCase();
     applyJs8Speed(speed === "fast" || speed === "turbo" || speed === "slow" ? speed : "normal");
@@ -2227,6 +2240,8 @@ async function startFlexSource(): Promise<() => Promise<void>> {
   });
   source.on("sstv", (e) => onSstvEvent(e));
   source.on("hell", (e) => onHellColumns(e));
+  // Each JTTY message as a station tag for the waterfall; its text came as `text`.
+  source.on("jtty", (m) => broadcast({ kind: "jtty-msg", hz: m.hz, snr: m.snr, text: m.text, complete: m.complete, at: m.at }));
   source.on("decodes", (d) => onDecodedWindow(d, "flex.decodeDepth"));
 
   // The partner's slice, about a second ahead of the rest of the band.
@@ -2516,6 +2531,7 @@ async function startFlexSource(): Promise<() => Promise<void>> {
     if (status.subMode === "PSK31") pskApply?.();
     if (status.subMode === "OLIVIA") oliviaApply?.();
     if (status.subMode === "HELL") hellApply?.();
+    if (status.subMode === "JTTY") jttyApply();
     if (status.subMode && NO_SEQUENCER_MODES.has(status.subMode)) {
       const a = activeAuto();
       if (a && a.state.mode !== "off") {
@@ -4722,7 +4738,9 @@ async function main(): Promise<void> {
           return;
         }
         const req2 =
-          streamMode === "HELL"
+          streamMode === "JTTY"
+            ? { mode: "JTTY" as const, text, centreHz: jttyTuning.txHz, shiftHz: 0, sideband: "USB" as const }
+            : streamMode === "HELL"
             ? { mode: "HELL" as const, text, centreHz: hellTuning.centreHz, shiftHz: 0, sideband: "USB" as const }
             : streamMode === "OLIVIA"
             ? {
@@ -4770,7 +4788,9 @@ async function main(): Promise<void> {
                 ? oliviaDurationMs(text, { tones: oliviaTuning.tones, bandwidth: oliviaTuning.bandwidth, code: oliviaTuning.code })
                 : streamMode === "HELL"
                   ? hellDurationMs(text)
-                  : rttyDurationMs(text, { baud: rttyTuning.baud });
+                  : streamMode === "JTTY"
+                    ? jttyDurationMs(text)
+                    : rttyDurationMs(text, { baud: rttyTuning.baud });
         sendJson(res, 202, { ok: true, mode: streamMode, chars: text.length, durationMs: Math.round(durationMs) });
         return;
       }
@@ -4803,6 +4823,22 @@ async function main(): Promise<void> {
         oliviaApply?.();
         broadcast({ kind: "status", status });
         sendJson(res, 200, { ok: true, olivia: status.olivia });
+        return;
+      }
+
+      // POST /jtty — move where JTTY transmits (the lowest tone, Hz audio). The receiver
+      // decodes the whole passband whatever this is. Starting value: Settings (jtty.txHz).
+      if (url.pathname === "/jtty") {
+        const body = await readJson(req);
+        const tx = body.txHz === undefined ? jttyTuning.txHz : Number(body.txHz);
+        if (!Number.isFinite(tx) || tx < 200 || tx > 2800) {
+          sendJson(res, 400, { error: "txHz must be between 200 and 2800" });
+          return;
+        }
+        jttyTuning.txHz = Math.round(tx);
+        jttyApply();
+        broadcast({ kind: "status", status });
+        sendJson(res, 200, { ok: true, jtty: status.jtty });
         return;
       }
 
@@ -4877,8 +4913,8 @@ async function main(): Promise<void> {
         const body = await readJson(req);
         const band = String(body.band ?? "").toUpperCase();
         const mode = String(body.mode ?? "FT8").toUpperCase() as DigitalMode;
-        if (!["FT8", "FT4", "FT2", "WSPR", "RTTY", "CW", "JS8", "PSK31", "OLIVIA", "SSTV", "HELL"].includes(mode)) {
-          sendJson(res, 400, { error: "mode must be FT8, FT4, FT2, WSPR, RTTY, CW, JS8, PSK31, OLIVIA, SSTV or HELL" });
+        if (!["FT8", "FT4", "FT2", "WSPR", "RTTY", "CW", "JS8", "PSK31", "OLIVIA", "SSTV", "HELL", "JTTY"].includes(mode)) {
+          sendJson(res, 400, { error: "mode must be FT8, FT4, FT2, WSPR, RTTY, CW, JS8, PSK31, OLIVIA, SSTV, HELL or JTTY" });
           return;
         }
         const r = await tuneToCalling(band, mode);
