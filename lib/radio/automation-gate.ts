@@ -18,7 +18,22 @@
 // frequency, never to its JS8 one.
 
 import type { AutoMode } from "@/lib/radio/auto-mode";
+import { digitalCallingFrequency } from "@/lib/radio/modes";
 import type { SchedulableAuto } from "@/lib/radio/schedule-runner";
+
+/**
+ * Whether a running sequencer must stop because the dial is no longer on one of its
+ * calling frequencies. Starting is refused off them already; this is the same question
+ * asked again when the dial moves under a running mode or a contact in progress. On
+ * 2026-10-15 a receive-only watch retuned to 3.585, the 80 m Winlink channel, mid-QSO, and
+ * the hunt sent its next FT8 transmission there. Null when it may carry on; otherwise why.
+ */
+export function sequencerOffFrequency(subMode: string | null, dialHz: number | null, running: boolean): string | null {
+  if (!running || dialHz === null) return null;
+  if (subMode !== "FT8" && subMode !== "FT4" && subMode !== "FT2") return null;
+  if (digitalCallingFrequency(dialHz, subMode)) return null;
+  return `${(dialHz / 1e6).toFixed(3)} MHz is not a ${subMode} frequency`;
+}
 
 /** Modes with nothing for a sequencer to answer: no automatic mode runs on them and nothing is called. */
 export const NO_SEQUENCER_MODES: ReadonlySet<string> = new Set(["WSPR", "RTTY", "CW", "JS8", "PSK31", "OLIVIA", "SSTV", "HELL", "JTTY"]);
