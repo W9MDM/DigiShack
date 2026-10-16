@@ -45,6 +45,7 @@ export const MODES: readonly Mode[] = [
   { name: "MSK144", label: "MSK144", digital: true, rstStyle: "DB" },
   { name: "OLIVIA", label: "Olivia", digital: true, rstStyle: "RST" },
   { name: "CONTESTI", label: "Contestia", digital: true, rstStyle: "RST" },
+  { name: "HELL", label: "Hellschreiber", digital: true, rstStyle: "RST" },
   { name: "SSTV", label: "SSTV", digital: false, rstStyle: "RS" },
   { name: "DIGITALVOICE", label: "Digital Voice", digital: false, rstStyle: "RS" },
 ];
@@ -70,6 +71,7 @@ export const LOGGABLE_MODES: readonly string[] = [
   "MSK144",
   "OLIVIA",
   "CONTESTI",
+  "HELL",
   "SSTV",
   "DIGITALVOICE",
 ];
@@ -85,6 +87,7 @@ const RST_STYLE_BY_MODE = new Map<string, RstStyle>([
   ["PSK31", "RST"],
   ["OLIVIA", "RST"],
   ["CONTESTI", "RST"],
+  ["HELL", "RST"],
   ["FT8", "DB"],
   ["FT4", "DB"],
   ["FT2", "DB"],
@@ -106,6 +109,7 @@ const DIGITAL_MODES = new Set([
   "MSK144",
   "OLIVIA",
   "CONTESTI",
+  "HELL",
 ]);
 
 export function isLoggableMode(mode: string): boolean {

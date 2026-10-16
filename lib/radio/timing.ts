@@ -35,6 +35,7 @@ export const PERIOD_MS: Record<TxMode, number> = {
   PSK31: 1_000,
   OLIVIA: 1_000,
   SSTV: 1_000,
+  HELL: 1_000,
 };
 
 /**
@@ -57,6 +58,7 @@ export const TX_START_OFFSET_MS: Record<TxMode, number> = {
   PSK31: 0,
   OLIVIA: 0,
   SSTV: 0,
+  HELL: 0,
 };
 
 /**
@@ -85,6 +87,7 @@ export const TRANSMISSION_MS: Record<TxMode, number> = {
   PSK31: 0,
   OLIVIA: 0,
   SSTV: 0,
+  HELL: 0,
 };
 
 /** A late transmission may never eat more of the window's margin than it leaves behind. */
@@ -124,6 +127,7 @@ const DECODABLE_LATE_MS: Record<TxMode, number> = {
   PSK31: 0,
   OLIVIA: 0,
   SSTV: 0,
+  HELL: 0,
 };
 
 /**

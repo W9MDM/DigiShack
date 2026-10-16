@@ -15,7 +15,7 @@ import { js8SubmodeNow } from "@/lib/radio/timing";
 import type { Js8OutFrame } from "@/lib/digital/js8-message";
 import { encodeFT4, encodeFT8 } from "@e04/ft8ts";
 
-export type TxMode = "FT8" | "FT4" | "FT2" | "WSPR" | "RTTY" | "CW" | "JS8" | "PSK31" | "OLIVIA" | "SSTV";
+export type TxMode = "FT8" | "FT4" | "FT2" | "WSPR" | "RTTY" | "CW" | "JS8" | "PSK31" | "OLIVIA" | "SSTV" | "HELL";
 
 /**
  * Symbol rates, in baud.
@@ -44,6 +44,7 @@ export const SYMBOL_RATE: Record<TxMode, number> = {
   OLIVIA: 31.25,
   /** A picture, not symbols. */
   SSTV: 0,
+  HELL: 0,
 };
 
 /**
@@ -94,7 +95,7 @@ export function buildWaveform(
   }
   // RTTY is text, not a framed message: lib/digital/rtty.ts makes its waveform from a
   // string, and the transmit path for that is part three of the mode.
-  if (mode === "RTTY" || mode === "CW" || mode === "PSK31" || mode === "OLIVIA" || mode === "SSTV") {
+  if (mode === "RTTY" || mode === "CW" || mode === "PSK31" || mode === "OLIVIA" || mode === "SSTV" || mode === "HELL") {
     throw new Error(`${mode} is not a framed mode: nothing builds a ${mode} waveform from a structured message`);
   }
   // JS8 frames are built from the message layer's twelve characters and a transmission

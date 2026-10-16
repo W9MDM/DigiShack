@@ -29,6 +29,7 @@ import { Psk31Demodulator } from "@/lib/digital/psk31demod";
 import { RttyProbe, type RttySuggestion } from "@/lib/digital/rtty-probe";
 import { OliviaDemodulator } from "@/lib/digital/oliviademod";
 import { SstvDecoder } from "@/lib/digital/sstv";
+import { HELL_RX_ROWS, HellDemodulator } from "@/lib/digital/hell";
 import type { OliviaBandwidth, OliviaCode, OliviaTones } from "@/lib/digital/olivia";
 import { HashCallBook as Ft2HashCallBook } from "@/lib/digital/pack77";
 import { js8SubmodeNow, PERIOD_MS, TRANSMISSION_MS } from "@/lib/radio/timing";
@@ -288,6 +289,10 @@ function streamConfigurationKey(opts: StreamOptions, includeTuning = true): stri
       configuration = [opts.mode];
       tuning = [];
       break;
+    case "HELL":
+      configuration = [opts.mode];
+      tuning = [opts.centreHz];
+      break;
   }
   return JSON.stringify(includeTuning ? [...configuration, ...tuning] : configuration);
 }
@@ -297,10 +302,10 @@ function streamConfigurationKey(opts: StreamOptions, includeTuning = true): stri
  * the line idles on mark between keystrokes and the decoder runs the whole time. CW is
  * the same: a key, a tone, and text as it is sent.
  */
-export type StreamMode = "RTTY" | "CW" | "PSK31" | "OLIVIA" | "SSTV";
+export type StreamMode = "RTTY" | "CW" | "PSK31" | "OLIVIA" | "SSTV" | "HELL";
 
 export function isStreamMode(mode: string | null | undefined): mode is StreamMode {
-  return mode === "RTTY" || mode === "CW" || mode === "PSK31" || mode === "OLIVIA" || mode === "SSTV";
+  return mode === "RTTY" || mode === "CW" || mode === "PSK31" || mode === "OLIVIA" || mode === "SSTV" || mode === "HELL";
 }
 
 /** SSTV's events: a picture starting, rows as they arrive, the picture complete. */
@@ -354,6 +359,12 @@ export type StreamOptions =
   | {
       /** The VIS header names the mode; nothing to tune. */
       mode: "SSTV";
+    }
+  | {
+      /** Feld Hell: painted, not decoded. See lib/digital/hell.ts. */
+      mode: "HELL";
+      /** The carrier, Hz audio. */
+      centreHz: number;
     };
 
 /** What a stream's heartbeat carries: the running counts, and what that decoder measures. */
@@ -411,6 +422,16 @@ export type StreamHeartbeat =
       pictures: number;
       /** VIS headers heard, known mode or not. */
       visHeard: number;
+    }
+  | {
+      mode: "HELL";
+      seconds: number;
+      /** Columns painted since the receiver started. */
+      columns: number;
+      /** Peak over the noise floor, dB. */
+      levelDb: number;
+      /** Whether that is above what noise alone reaches. */
+      signal: boolean;
     };
 
 /** How often a stream mode reports: once per second of audio. The liveness watchdog beats on it. */
@@ -422,6 +443,8 @@ export type DecodePipelineEvents = {
   text: [{ mode: StreamMode; text: string; at: number }];
   /** SSTV: a picture starting, its rows, and the finished picture. */
   sstv: [SstvEvent];
+  /** Feld Hell: painted columns, `rows` bytes each (0 paper to 255 ink), bottom row first. */
+  hell: [{ rows: number; data: Uint8Array; at: number }];
   /** A stream mode's heartbeat, once per second of audio, with what its decoder measures for a tuning display. */
   stream: [StreamHeartbeat];
   /**
@@ -642,10 +665,12 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
   private psk: Psk31Demodulator | null = null;
   private olivia: OliviaDemodulator | null = null;
   private sstv: SstvDecoder | null = null;
+  /** Feld Hell paints rather than prints; its columns go out as `hell` events. */
+  private hell: HellDemodulator | null = null;
   /** SSTV prints no text; its pictures go out as `sstv` events. */
   private readonly sstvStream = { feed: (s: ArrayLike<number>): string => (this.sstv?.feed(s), "") };
   private get stream(): { feed(samples: ArrayLike<number>): string } | null {
-    return this.rtty ?? this.cw ?? this.psk ?? this.olivia ?? (this.sstv ? this.sstvStream : null);
+    return this.rtty ?? this.cw ?? this.psk ?? this.olivia ?? this.hell ?? (this.sstv ? this.sstvStream : null);
   }
   private streamMode: StreamMode | null = null;
   private streamConfiguration: StreamOptions | null = null;
@@ -833,6 +858,7 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
       this.psk = null;
       this.olivia = null;
       this.sstv = null;
+      this.hell = null;
       this.streamMode = null;
       this.start();
       return;
@@ -869,6 +895,10 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
       this.olivia.retune(opts.centreHz);
       return;
     }
+    if (canRetune && opts.mode === "HELL" && this.hell) {
+      this.hell.retune(opts.centreHz);
+      return;
+    }
     if (this.timer) {
       clearTimeout(this.timer);
       this.timer = null;
@@ -879,6 +909,7 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
     this.psk = null;
     this.olivia = null;
     this.sstv = null;
+    this.hell = null;
     this.streamMode = opts.mode;
     if (opts.mode === "RTTY") {
       const { mode: _m, ...rest } = opts;
@@ -901,6 +932,8 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
         onImage: (img, m) =>
           this.emit("sstv", { kind: "image", mode: m.name, width: img.width, height: img.height, rgb: img.rgb, at: Date.now() }),
       });
+    } else if (opts.mode === "HELL") {
+      this.hell = new HellDemodulator({ sampleRate: this.inputRate, centreHz: opts.centreHz });
     } else if (opts.mode === "OLIVIA") {
       // A size or code change is a new demodulator: the symbol, the tones, the block and
       // the sync are per size and per code.
@@ -934,6 +967,12 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
     const text = demod.feed(samples);
     if (text) this.emit("text", { mode, text, at: Date.now() });
     if (this.rtty) this.rttyProbe?.feed(samples);
+    if (this.hell) {
+      // In handfuls of four columns, about a quarter of a second: a message per DAX packet
+      // would be a hundred a second for a page that redraws at most sixty.
+      const data = this.hell.takeColumns(4);
+      if (data) this.emit("hell", { rows: HELL_RX_ROWS, data, at: Date.now() });
+    }
     this.streamSamples += samples.length;
     if (this.streamSamples >= this.streamNextBeat) {
       this.streamNextBeat += Math.round((this.inputRate * STREAM_HEARTBEAT_MS) / 1000);
@@ -989,6 +1028,9 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
       } else if (this.sstv) {
         const s = this.sstv.statistics;
         this.emit("stream", { mode: "SSTV", seconds, receiving: s.receiving, rows: s.rows, pictures: s.pictures, visHeard: s.visHeard });
+      } else if (this.hell) {
+        const s = this.hell.statistics;
+        this.emit("stream", { mode: "HELL", seconds, columns: s.columns, levelDb: s.levelDb, signal: s.signal });
       }
     }
   }

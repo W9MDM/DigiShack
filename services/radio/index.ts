@@ -153,6 +153,7 @@ import { RTTY_CENTRE_HZ, RTTY_SHIFT_HZ, rttyDurationMs, rttyTones } from "@/lib/
 import { cwDurationMs } from "@/lib/digital/cw";
 import { PSK31_CENTRE_HZ, psk31DurationMs, type PskSpeed } from "@/lib/digital/psk31";
 import { OLIVIA_MODES, oliviaDurationMs, type OliviaBandwidth, type OliviaCode, type OliviaTones } from "@/lib/digital/olivia";
+import { HELL_CENTRE_HZ, HELL_COLUMN_RATE, hellDurationMs } from "@/lib/digital/hell";
 import { isStreamMode, type Js8DecodeExtra } from "@/lib/radio/decode-pipeline";
 import {
   Js8MessageAssembler,
@@ -225,6 +226,8 @@ interface RigStatus {
   psk: { centreHz: number; speed: PskSpeed } | null;
   /** The Olivia centre, size and code, while on Olivia. */
   olivia: { centreHz: number; tones: OliviaTones; bandwidth: OliviaBandwidth; code: OliviaCode } | null;
+  /** The Feld Hell carrier, while on Hell. */
+  hell: { centreHz: number } | null;
   /** A JS8 message going out, or the last one, with the offset it uses. See lib/radio/js8-sender.ts. */
   js8: (Js8SenderState & { offsetHz: number }) | null;
   /** JS8's speed: normal, fast, turbo or slow. */
@@ -366,6 +369,7 @@ const status: RigStatus = {
   cw: null,
   psk: null,
   olivia: null,
+  hell: null,
   js8: null,
   js8Speed: "normal",
   dxCall: null,
@@ -1241,6 +1245,25 @@ const oliviaTuning: { centreHz: number; tones: OliviaTones; bandwidth: OliviaBan
 };
 let oliviaApply: (() => void) | null = null;
 
+/** Feld Hell: the carrier the receiver paints and the transmitter keys. */
+const hellTuning = { centreHz: HELL_CENTRE_HZ };
+let hellApply: (() => void) | null = null;
+/**
+ * The last minute or so of painted Hell columns, sent to a page that connects so it opens
+ * on the page so far rather than a blank one. 17.5 columns a second, 28 bytes each.
+ */
+const HELL_BACKLOG_COLUMNS = Math.round(HELL_COLUMN_RATE * 90);
+let hellBacklog: { rows: number; data: Buffer } | null = null;
+
+function onHellColumns(e: { rows: number; data: Uint8Array; at: number }): void {
+  const add = Buffer.from(e.data);
+  const prev = hellBacklog && hellBacklog.rows === e.rows ? hellBacklog.data : Buffer.alloc(0);
+  const all = Buffer.concat([prev, add]);
+  const keep = HELL_BACKLOG_COLUMNS * e.rows;
+  hellBacklog = { rows: e.rows, data: all.length > keep ? all.subarray(all.length - keep) : all };
+  broadcast({ kind: "hell-cols", rows: e.rows, data: add.toString("base64"), at: e.at });
+}
+
 /** The last few thousand characters of stream text, replayed to a page that connects. */
 const STREAM_TEXT_MAX = 8_000;
 let streamText = "";
@@ -1876,7 +1899,9 @@ async function startFlexSource(): Promise<() => Promise<void>> {
                       ? "OLIVIA"
                       : configuredMode === "sstv"
                         ? "SSTV"
-                        : "FT8",
+                        : configuredMode === "hell"
+                          ? "HELL"
+                          : "FT8",
     depth,
     // Shared with the Icom: the passband is a property of the operating convention,
     // not of the radio.
@@ -2069,6 +2094,7 @@ async function startFlexSource(): Promise<() => Promise<void>> {
     oliviaTuning.bandwidth = size.bandwidth;
   }
   oliviaTuning.threshold = await getNumberSetting("olivia.threshold", 4);
+  hellTuning.centreHz = await getNumberSetting("hell.centreHz", HELL_CENTRE_HZ);
   {
     const speed = ((await getSetting("js8.speed")) ?? "normal").toLowerCase();
     applyJs8Speed(speed === "fast" || speed === "turbo" || speed === "slow" ? speed : "normal");
@@ -2133,6 +2159,10 @@ async function startFlexSource(): Promise<() => Promise<void>> {
       code: oliviaTuning.code,
     };
   };
+  hellApply = () => {
+    source.setHellOptions({ mode: "HELL", centreHz: hellTuning.centreHz });
+    status.hell = { centreHz: hellTuning.centreHz };
+  };
 
   source.on("window", (w) => {
     // The liveness heartbeat. A window arrives once per T/R period whether or not
@@ -2196,6 +2226,7 @@ async function startFlexSource(): Promise<() => Promise<void>> {
     broadcast({ kind: "stream", ...s });
   });
   source.on("sstv", (e) => onSstvEvent(e));
+  source.on("hell", (e) => onHellColumns(e));
   source.on("decodes", (d) => onDecodedWindow(d, "flex.decodeDepth"));
 
   // The partner's slice, about a second ahead of the rest of the band.
@@ -2484,6 +2515,7 @@ async function startFlexSource(): Promise<() => Promise<void>> {
     if (status.subMode === "CW") cwApply?.();
     if (status.subMode === "PSK31") pskApply?.();
     if (status.subMode === "OLIVIA") oliviaApply?.();
+    if (status.subMode === "HELL") hellApply?.();
     if (status.subMode && NO_SEQUENCER_MODES.has(status.subMode)) {
       const a = activeAuto();
       if (a && a.state.mode !== "off") {
@@ -4685,8 +4717,14 @@ async function main(): Promise<void> {
           return;
         }
         const rtty = status.rtty;
+        if (streamMode === "SSTV") {
+          sendJson(res, 409, { error: "SSTV sends pictures, not text: use Send a picture" });
+          return;
+        }
         const req2 =
-          streamMode === "OLIVIA"
+          streamMode === "HELL"
+            ? { mode: "HELL" as const, text, centreHz: hellTuning.centreHz, shiftHz: 0, sideband: "USB" as const }
+            : streamMode === "OLIVIA"
             ? {
                 mode: "OLIVIA" as const,
                 text,
@@ -4730,7 +4768,9 @@ async function main(): Promise<void> {
               ? psk31DurationMs(text, { speed: pskTuning.speed })
               : streamMode === "OLIVIA"
                 ? oliviaDurationMs(text, { tones: oliviaTuning.tones, bandwidth: oliviaTuning.bandwidth, code: oliviaTuning.code })
-                : rttyDurationMs(text, { baud: rttyTuning.baud });
+                : streamMode === "HELL"
+                  ? hellDurationMs(text)
+                  : rttyDurationMs(text, { baud: rttyTuning.baud });
         sendJson(res, 202, { ok: true, mode: streamMode, chars: text.length, durationMs: Math.round(durationMs) });
         return;
       }
@@ -4763,6 +4803,22 @@ async function main(): Promise<void> {
         oliviaApply?.();
         broadcast({ kind: "status", status });
         sendJson(res, 200, { ok: true, olivia: status.olivia });
+        return;
+      }
+
+      // POST /hell — move the Feld Hell carrier (Hz audio). Takes effect at once; the
+      // starting value lives in Settings (hell.centreHz).
+      if (url.pathname === "/hell") {
+        const body = await readJson(req);
+        const centre = body.centreHz === undefined ? hellTuning.centreHz : Number(body.centreHz);
+        if (!Number.isFinite(centre) || centre < 300 || centre > 2800) {
+          sendJson(res, 400, { error: "centreHz must be between 300 and 2800" });
+          return;
+        }
+        hellTuning.centreHz = Math.round(centre);
+        hellApply?.();
+        broadcast({ kind: "status", status });
+        sendJson(res, 200, { ok: true, hell: status.hell });
         return;
       }
 
@@ -4821,8 +4877,8 @@ async function main(): Promise<void> {
         const body = await readJson(req);
         const band = String(body.band ?? "").toUpperCase();
         const mode = String(body.mode ?? "FT8").toUpperCase() as DigitalMode;
-        if (!["FT8", "FT4", "FT2", "WSPR", "RTTY", "CW", "JS8", "PSK31", "OLIVIA", "SSTV"].includes(mode)) {
-          sendJson(res, 400, { error: "mode must be FT8, FT4, FT2, WSPR, RTTY, CW, JS8, PSK31, OLIVIA or SSTV" });
+        if (!["FT8", "FT4", "FT2", "WSPR", "RTTY", "CW", "JS8", "PSK31", "OLIVIA", "SSTV", "HELL"].includes(mode)) {
+          sendJson(res, 400, { error: "mode must be FT8, FT4, FT2, WSPR, RTTY, CW, JS8, PSK31, OLIVIA, SSTV or HELL" });
           return;
         }
         const r = await tuneToCalling(band, mode);
@@ -5701,6 +5757,10 @@ async function main(): Promise<void> {
         ws.send(JSON.stringify({ kind: "status", status }));
         ws.send(JSON.stringify({ kind: "backlog", decodes: recentDecodes.slice(-50) }));
         if (streamText) ws.send(JSON.stringify({ kind: "text-backlog", mode: status.subMode ?? "RTTY", text: streamText }));
+        // The Hell page so far, so a page opened mid-QSO shows what has been painted.
+        if (status.subMode === "HELL" && hellBacklog && hellBacklog.data.length > 0) {
+          ws.send(JSON.stringify({ kind: "hell-backlog", rows: hellBacklog.rows, data: hellBacklog.data.toString("base64") }));
+        }
         // An SSTV picture half way in: the start and every row so far, so a page opened
         // mid-picture draws it rather than saying it is waiting - which it did for the first
         // picture ever received here, N3CHX on 14.230.

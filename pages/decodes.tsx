@@ -10,6 +10,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Waterfall, type WaterfallMarker, type WaterfallTag } from "@/components/digital/Waterfall";
 import { Js8Panel, type Js8SendState } from "@/components/digital/Js8Panel";
 import { SstvPanel, type SstvMessage, type SstvPanelHandle, type SstvStats } from "@/components/digital/SstvPanel";
+import { HellPanel, type HellMessage, type HellPanelHandle, type HellStats } from "@/components/digital/HellPanel";
 import type { SstvTxState } from "@/components/digital/SstvSend";
 import { StreamPanel, type StreamStats } from "@/components/digital/StreamPanel";
 import {
@@ -72,6 +73,8 @@ interface RigStatus {
   psk?: { centreHz: number; speed: 31 | 63 | 125 } | null;
   /** The Olivia centre, size and code while on Olivia. */
   olivia?: { centreHz: number; tones: number; bandwidth: number; code?: "olivia" | "contestia" } | null;
+  /** The Feld Hell carrier while on Hell. */
+  hell?: { centreHz: number } | null;
   /** A JS8 message going out, or the last one. */
   js8?: Js8SendState | null;
   js8Speed?: "normal" | "fast" | "turbo" | "slow";
@@ -530,6 +533,9 @@ export default function DigitalPage({ wsUrl }: Props) {
   /** The SSTV panel, handed picture rows straight from the socket rather than through state. */
   const sstvPanel = useRef<SstvPanelHandle | null>(null);
   const [sstvStats, setSstvStats] = useState<SstvStats | null>(null);
+  /** The Hell panel, handed painted columns straight from the socket, as SSTV's is. */
+  const hellPanel = useRef<HellPanelHandle | null>(null);
+  const [hellStats, setHellStats] = useState<HellStats | null>(null);
   /** A picture going out, or how the last one ended. */
   const [sstvTx, setSstvTx] = useState<SstvTxState | null>(null);
   /** A JS8 station picked from the list, for the message line. See callFromRow. */
@@ -974,6 +980,8 @@ export default function DigitalPage({ wsUrl }: Props) {
           } else if (msg.kind === "text-backlog" && typeof msg.text === "string") {
             setStreamText(msg.text as string);
           } else if (msg.kind === "stream" && msg.mode === "SSTV") setSstvStats(msg as unknown as SstvStats);
+          else if (msg.kind === "stream" && msg.mode === "HELL") setHellStats(msg as unknown as HellStats);
+          else if (msg.kind === "hell-cols" || msg.kind === "hell-backlog") hellPanel.current?.receive(msg as HellMessage);
           else if (msg.kind === "stream") setStreamStats(msg as unknown as StreamStats);
           else if (msg.kind === "sstv-tx") setSstvTx(msg as unknown as SstvTxState);
           else if (msg.kind === "sstv-vis" || msg.kind === "sstv-start" || msg.kind === "sstv-rows" || msg.kind === "sstv-image") {
@@ -1200,6 +1208,15 @@ export default function DigitalPage({ wsUrl }: Props) {
         { hz: status.olivia.centreHz + half, label: "edge", emphasis: false },
       ];
     }
+    if (status?.subMode === "HELL" && status.hell) {
+      // A Feld Hell signal is about 250 Hz wide at its strongest; the edges show where the
+      // receiver hears it, so a click inside them is close enough.
+      return [
+        { hz: status.hell.centreHz, label: "Hell carrier", emphasis: true },
+        { hz: status.hell.centreHz - 125, label: "edge", emphasis: false },
+        { hz: status.hell.centreHz + 125, label: "edge", emphasis: false },
+      ];
+    }
     if (rows.length === 0) return [];
     const newest = rows[0]!.timestamp;
     return rows
@@ -1209,7 +1226,7 @@ export default function DigitalPage({ wsUrl }: Props) {
         label: r.message,
         emphasis: mentionsMe(r.message),
       }));
-  }, [rows, mentionsMe, status?.subMode, status?.rtty, status?.cw]);
+  }, [rows, mentionsMe, status?.subMode, status?.rtty, status?.cw, status?.psk, status?.olivia, status?.hell]);
 
   const cyclePct = ((now % scale.periodMs) / scale.periodMs) * 100;
 
@@ -1355,6 +1372,15 @@ export default function DigitalPage({ wsUrl }: Props) {
       setRttyError(err instanceof ApiError ? err.message : "Could not move the PSK31 carrier");
     }
   }, []);
+  /** Move the Feld Hell carrier: a click on the waterfall or the ± buttons. */
+  const tuneHell = useCallback(async (centreHz: number) => {
+    try {
+      await apiPost("/api/bridge/control", { action: "hell", centreHz });
+      setRttyError(null);
+    } catch (err) {
+      setRttyError(err instanceof ApiError ? err.message : "Could not move the Hell carrier");
+    }
+  }, []);
   /** Move the Olivia tone set (a click on the waterfall or the ± buttons), change the size, or switch to Contestia. */
   const tuneOlivia = useCallback(async (centreHz?: number, size?: { tones: number; bandwidth: number }, code?: "olivia" | "contestia") => {
     try {
@@ -1471,7 +1497,9 @@ export default function DigitalPage({ wsUrl }: Props) {
                     ? "OLIVIA"
                     : decodingAs === "SSTV"
                       ? "SSTV"
-                      : "FT8";
+                      : decodingAs === "HELL"
+                        ? "HELL"
+                        : "FT8";
 
   /**
    * Is there anything to halt? Transmitting now, a contact in flight, or an automatic
@@ -2015,7 +2043,9 @@ export default function DigitalPage({ wsUrl }: Props) {
                     ? (hz) => void tunePsk(Math.round(hz))
                     : decodingAs === "OLIVIA" && canSwitch
                       ? (hz) => void tuneOlivia(Math.round(hz))
-                      : undefined
+                      : decodingAs === "HELL" && canSwitch
+                        ? (hz) => void tuneHell(Math.round(hz))
+                        : undefined
             }
             txHz={status?.txDF ?? null}
             gain={gain}
@@ -2415,6 +2445,21 @@ export default function DigitalPage({ wsUrl }: Props) {
               )}
               {decodingAs === "SSTV" ? (
                 <SstvPanel ref={sstvPanel} stats={sstvStats} myCall={myCall} canSend={canSwitch} tx={sstvTx} />
+              ) : decodingAs === "HELL" ? (
+                <HellPanel
+                  ref={hellPanel}
+                  stats={hellStats}
+                  hell={status?.hell ?? null}
+                  text={streamText}
+                  canTune={canSwitch}
+                  canSend={canSwitch}
+                  myCall={myCall}
+                  transmitting={status?.transmitting ?? false}
+                  error={rttyError}
+                  onTune={(hz) => void tuneHell(hz)}
+                  onSend={(text) => void sendRtty(text)}
+                  onClear={() => setStreamText("")}
+                />
               ) : decodingAs === "RTTY" || decodingAs === "CW" || decodingAs === "PSK31" || decodingAs === "OLIVIA" ? (
                 <StreamPanel
                   mode={decodingAs}
@@ -3786,7 +3831,7 @@ function BandButtons({
           to a one-row stats block). */}
       <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-1">
         <div className="flex gap-1" role="group" aria-label="Digital mode">
-          {(["FT8", "FT4", "FT2", "WSPR", "RTTY", "CW", "JS8", "PSK31", "OLIVIA", "SSTV"] as const).map((m) => {
+          {(["FT8", "FT4", "FT2", "WSPR", "RTTY", "CW", "JS8", "PSK31", "OLIVIA", "SSTV", "HELL"] as const).map((m) => {
           const active = decodingAs === m;
           const target = bandFor(m);
           const canSwitch = active || target !== null;

@@ -29,6 +29,7 @@ const TO_ADIF: Record<string, AdifMode> = {
   MSK144: { mode: "MSK144" },
   OLIVIA: { mode: "OLIVIA" },
   CONTESTI: { mode: "CONTESTI" },
+  HELL: { mode: "HELL" },
   SSTV: { mode: "SSTV" },
   DIGITALVOICE: { mode: "DIGITALVOICE" },
 };
