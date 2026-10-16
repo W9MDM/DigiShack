@@ -206,6 +206,15 @@ import {
 interface RigStatus {
   connected: boolean;
   lastHeartbeat: number | null;
+  /**
+   * The last reason a source failed to connect or dropped — the string the log already
+   * carried ("No traffic on the control stream — session lost") but which never reached
+   * the browser, so the page could only ever say "reconnecting" with no WHY. Null while
+   * connected. Surfaced by the Debug toggle on the decodes page.
+   */
+  connectionError: string | null;
+  /** Which attempt the current startup/reconnect loop is on. 0 while connected. */
+  connectAttempt: number;
   dialFrequency: number | null;
   band: string | null;
   mode: string | null;
@@ -364,6 +373,8 @@ interface RigStatus {
 const status: RigStatus = {
   connected: false,
   lastHeartbeat: null,
+  connectionError: null,
+  connectAttempt: 0,
   dialFrequency: null,
   band: null,
   mode: null,
@@ -2797,6 +2808,8 @@ async function startFlexSource(): Promise<() => Promise<void>> {
     if (releasing) return;
     status.commandChannel = false;
     status.connected = false;
+    status.connectionError = `${which} connection lost${err ? `: ${err.message}` : ""}`;
+    status.connectAttempt = 0;
     broadcast({ kind: "status", status });
     console.error(
       `[radio] ${which} connection lost${err ? `: ${err.message}` : ""} — rebuilding`,
@@ -2824,6 +2837,8 @@ async function startFlexSource(): Promise<() => Promise<void>> {
           console.log(`[radio] reconnect attempt ${attempt}…`);
           flexTeardown = await startFlexSource();
           console.log("[radio] reconnected");
+          status.connectionError = null;
+          status.connectAttempt = 0;
           void clearAlert("radio-down", "FlexRadio is back", [
             `Reconnected after ${attempt} attempt(s), down ${Math.round((Date.now() - lostAt) / 60_000)} minute(s).`,
           ]);
@@ -2834,6 +2849,9 @@ async function startFlexSource(): Promise<() => Promise<void>> {
             `[radio] reconnect attempt ${attempt} failed:`,
             e instanceof Error ? e.message : e,
           );
+          status.connectionError = e instanceof Error ? e.message : String(e);
+          status.connectAttempt = attempt;
+          broadcast({ kind: "status", status });
           // Ten attempts is ~4 minutes of backoff — past any restart blip, well
           // before "attempt 300 overnight", which is the incident this line is for.
           //
@@ -2934,6 +2952,9 @@ async function startIcomBridge(): Promise<() => Promise<void>> {
     if (releasing || restarting) return;
     restarting = true;
     console.error(`[radio] Icom session lost (${reason}) — rebuilding`);
+    status.connectionError = reason;
+    status.connectAttempt = 0;
+    broadcast({ kind: "status", status });
 
     void (async () => {
       holdAutoMode();
@@ -2952,6 +2973,8 @@ async function startIcomBridge(): Promise<() => Promise<void>> {
           console.log(`[radio] Icom reconnect attempt ${attempt}…`);
           flexTeardown = await startIcomBridge();
           console.log("[radio] Icom reconnected");
+          status.connectionError = null;
+          status.connectAttempt = 0;
           void clearAlert("radio-down", "Icom is back", [
             `Reconnected after ${attempt} attempt(s), down ${Math.round((Date.now() - lostAt) / 60_000)} minute(s).`,
           ]);
@@ -2962,6 +2985,9 @@ async function startIcomBridge(): Promise<() => Promise<void>> {
             `[radio] Icom reconnect attempt ${attempt} failed:`,
             e instanceof Error ? e.message : e,
           );
+          status.connectionError = e instanceof Error ? e.message : String(e);
+          status.connectAttempt = attempt;
+          broadcast({ kind: "status", status });
           // Same threshold and key as the Flex loop: one radio runs at a time, and
           // "the radio is down" is one condition wherever it happens.
           if (attempt === 10 || (nextReminderAt !== 0 && Date.now() >= nextReminderAt)) {
@@ -3343,6 +3369,8 @@ function retrySourceInBackground(): void {
     try {
       flexTeardown = await startActiveSource();
       console.log(`[bridge] the ${status.source} source came up on attempt ${attempt}`);
+      status.connectionError = null;
+      status.connectAttempt = 0;
       // Say so, but only if the absence was announced. clearAlert already checks that.
       void clearAlert("radio-down", "Radio is back", [
         `The ${status.source} source came up on attempt ${attempt}, after ${Math.round((Date.now() - startedAt) / 60_000)} minute(s) unavailable.`,
@@ -3358,6 +3386,12 @@ function retrySourceInBackground(): void {
           err instanceof Error ? err.message : err
         }`,
       );
+
+      // The reason the browser could not see. Broadcast every attempt so the Debug panel
+      // tracks the live retry count, not just the first failure.
+      status.connectionError = err instanceof Error ? err.message : String(err);
+      status.connectAttempt = attempt;
+      broadcast({ kind: "status", status });
 
       // AND EMAIL ABOUT IT, on the same schedule as the reconnect loop.
       //
@@ -3535,6 +3569,8 @@ async function main(): Promise<void> {
     );
     status.connected = false;
     status.commandChannel = false;
+    status.connectionError = err instanceof Error ? err.message : String(err);
+    status.connectAttempt = 0;
     retrySourceInBackground();
   }
 

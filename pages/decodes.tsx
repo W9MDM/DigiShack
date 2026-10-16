@@ -81,6 +81,12 @@ interface RigStatus {
   js8?: Js8SendState | null;
   js8Speed?: "normal" | "fast" | "turbo" | "slow";
   connected: boolean;
+  /** Bridge→radio liveness: epoch ms of the last heartbeat from the radio, or null. */
+  lastHeartbeat?: number | null;
+  /** The last reason the radio failed to connect or dropped. Null while connected. See the Debug toggle. */
+  connectionError?: string | null;
+  /** Which startup/reconnect attempt the bridge is on. 0 while connected. */
+  connectAttempt?: number;
   dialFrequency: number | null;
   band: string | null;
   mode: string | null;
@@ -670,6 +676,25 @@ export default function DigitalPage({ wsUrl }: Props) {
   const [scale, setScale] = useState({ binHz: 5.86, maxHz: 3000, periodMs: 15000 });
   const [connected, setConnected] = useState(false);
   const [attempts, setAttempts] = useState(0);
+  // The Debug box on the Radio card: a per-viewer diagnostics panel. Starts false so
+  // the server-rendered markup matches, then reads the saved choice on mount. localStorage
+  // is wrapped because a private window or blocked site-data throws on access.
+  const [debug, setDebug] = useState(false);
+  useEffect(() => {
+    try {
+      if (localStorage.getItem("digishack.debug") === "1") setDebug(true);
+    } catch {
+      /* no stored preference */
+    }
+  }, []);
+  const toggleDebug = useCallback((on: boolean) => {
+    setDebug(on);
+    try {
+      localStorage.setItem("digishack.debug", on ? "1" : "0");
+    } catch {
+      /* preference is in-memory only this session */
+    }
+  }, []);
   const [paused, setPaused] = useState(false);
   const [filter, setFilter] = useState<
     "all" | "cq" | "cq-free" | "cq-pota" | "cq-dx" | "worth" | "me"
@@ -2296,6 +2321,83 @@ export default function DigitalPage({ wsUrl }: Props) {
             )}
 
             <SourcePicker source={status?.source ?? null} />
+
+            {/* The Debug box. The page could only ever say "reconnecting" with no WHY —
+                the bridge logged the reason server-side and the browser never saw it. This
+                surfaces the bridge's own connection diagnostics (source, the last error and
+                attempt count, heartbeat age, link latency) and this browser's socket to the
+                bridge, which is a different link that fails differently. Per-viewer and
+                off by default. */}
+            <label className="mt-4 pt-3 border-t border-line flex items-center gap-1.5 text-xs text-fg-muted cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={debug}
+                onChange={(e) => toggleDebug(e.target.checked)}
+              />
+              Debug — connection diagnostics
+            </label>
+
+            {debug && (
+              <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs font-mono tabular-nums text-fg-muted">
+                <dt className="text-fg-subtle">source</dt>
+                <dd>{status?.source ?? "—"}</dd>
+
+                <dt className="text-fg-subtle">radio → bridge</dt>
+                <dd>
+                  {status?.connected ? "connected" : "down"}
+                  {status?.connected && !status.commandChannel ? " · no CAT" : ""}
+                </dd>
+
+                {!status?.connected && (status?.connectionError || status?.connectAttempt) ? (
+                  <>
+                    <dt className="text-warn">last error</dt>
+                    <dd className="text-warn break-words">
+                      {status?.connectionError ?? "—"}
+                      {status?.connectAttempt ? ` (attempt ${status.connectAttempt})` : ""}
+                    </dd>
+                  </>
+                ) : null}
+
+                <dt className="text-fg-subtle">last heartbeat</dt>
+                <dd>
+                  {status?.lastHeartbeat
+                    ? `${Math.max(0, Math.round((now - status.lastHeartbeat) / 1000))}s ago`
+                    : "—"}
+                </dd>
+
+                {status?.link ? (
+                  <>
+                    <dt className="text-fg-subtle">radio link</dt>
+                    <dd>
+                      {status.link.rttMs} ms
+                      {status.link.oneWayMs > 0 ? " · corrected" : ""}
+                    </dd>
+                  </>
+                ) : null}
+
+                <dt className="text-fg-subtle">browser → bridge</dt>
+                <dd>{connected ? "open" : linkLabel(connected, attempts)}</dd>
+
+                <dt className="text-fg-subtle">last message</dt>
+                <dd>
+                  {linkStats.current.msgAt
+                    ? `${Math.max(0, Math.round((now - linkStats.current.msgAt) / 1000))}s ago`
+                    : "—"}
+                </dd>
+
+                <dt className="text-fg-subtle">frames</dt>
+                <dd className="break-words">
+                  {Object.keys(linkStats.current.counts).length
+                    ? Object.entries(linkStats.current.counts)
+                        .map(([k, n]) => `${k}:${n}`)
+                        .join("  ")
+                    : "none yet"}
+                  {linkStats.current.parseErrors
+                    ? `  parseErr:${linkStats.current.parseErrors}`
+                    : ""}
+                </dd>
+              </dl>
+            )}
 
             <p className="mt-4 pt-3 border-t border-line text-xs text-fg-subtle">
               <Link href="/settings" className="text-accent-bright hover:underline">
