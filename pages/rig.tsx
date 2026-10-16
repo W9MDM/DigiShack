@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { SourcePicker } from "@/components/radio/SourcePicker";
 import { MODULATIONS, modulationForFrequency } from "@/lib/radio/modes";
 import { Panadapter, snapHz, tuneStepFor } from "@/components/digital/Panadapter";
+import { Waterfall } from "@/components/digital/Waterfall";
 import {
   Badge,
   Button,
@@ -152,6 +153,10 @@ export default function RigPage({ wsUrl }: Props) {
     ceilingDb: number;
     radio: string;
   } | null>(null);
+  // The audio spectrum — the same stream the Decodes page draws — so a source without an
+  // RF panadapter (the Icom today) still shows a live waterfall here instead of a bare note.
+  const [audioSpec, setAudioSpec] = useState<{ bins: Uint8Array; at: number } | null>(null);
+  const [audioScale, setAudioScale] = useState<{ binHz: number; maxHz: number } | null>(null);
   const { connected: wsConnected } = useBridgeSocket(wsUrl, (msg) => {
     if (msg.kind === "panadapter") {
       const m = msg as unknown as {
@@ -173,6 +178,12 @@ export default function RigPage({ wsUrl }: Props) {
         ceilingDb: m.ceilingDb,
         radio: m.radio,
       });
+    } else if (msg.kind === "spectrum") {
+      // The audio spectrum (receiver passband), broadcast by every source including the
+      // Icom. The RF panadapter above is FlexRadio-only today; this is the fallback.
+      const s = msg as unknown as { bins: string; binHz: number; maxHz: number; at: number };
+      setAudioSpec({ bins: decodeSpectrumBins(s.bins), at: s.at });
+      setAudioScale({ binHz: s.binHz, maxHz: s.maxHz });
     }
   });
 
@@ -915,12 +926,33 @@ export default function RigPage({ wsUrl }: Props) {
               {panScale.radio} &middot; click the spectrum to tune
             </p>
           </div>
+        ) : !caps.panadapter && audioSpec && audioScale ? (
+          // No RF scope on this source (the Icom today), so fall back to the AUDIO
+          // waterfall — the same receiver spectrum the Decodes page draws — rather than a
+          // bare "scope unavailable" note. It is the passband the radio hears, not tens of
+          // kHz of band, but it is a live picture and it is what this page used to show.
+          <div>
+            <Waterfall
+              row={audioSpec}
+              binHz={audioScale.binHz}
+              maxHz={audioScale.maxHz}
+              markers={[]}
+              height={260}
+            />
+            <p className="text-[11px] text-fg-subtle mt-1 tnum">
+              Audio waterfall — {caps.label}&apos;s receiver passband (
+              {Math.round(audioScale.maxHz)} Hz). No RF panadapter on this source; the
+              Decodes page marks decode offsets on the same spectrum.
+            </p>
+          </div>
         ) : (
           <p className="text-sm text-fg-subtle px-3 py-6 bg-bg-raised border border-line rounded-sm">
             {caps.panadapter
               ? "Waiting for the radio's panadapter. If nothing appears, turn on “RF panadapter” in Settings → FlexRadio."
-              : (caps.panadapterNote ??
-                "No RF spectrum is available from this source.")}
+              : status?.connected
+                ? "Waiting for receiver audio…"
+                : (caps.panadapterNote ??
+                  "No RF spectrum is available from this source.")}
           </p>
         )}
 
