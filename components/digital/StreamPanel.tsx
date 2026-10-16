@@ -48,6 +48,15 @@ export type StreamStats =
       snr: number;
       freqOffsetHz: number;
       open: boolean;
+    }
+  | {
+      mode: "JTTY";
+      seconds: number;
+      frames: number;
+      messages: number;
+      candidates: number;
+      lastSnr: number | null;
+      lastHz: number | null;
     };
 
 export interface RttyTuning {
@@ -103,6 +112,8 @@ interface Props {
   cw: CwTuning | null;
   psk: PskTuning | null;
   olivia: OliviaTuning | null;
+  /** JTTY: where it transmits. The receiver hears the whole passband. */
+  jtty?: { txHz: number } | null;
   canTune: boolean;
   /** Sending needs an operator and a station callsign for the macros. */
   canSend: boolean;
@@ -113,6 +124,7 @@ interface Props {
   onCwWpm: (wpm: number) => void;
   onPskTune: (centreHz?: number, speed?: 31 | 63 | 125) => void;
   onOliviaTune: (centreHz?: number, size?: { tones: number; bandwidth: number }, code?: "olivia" | "contestia") => void;
+  onJttyTune?: (txHz: number) => void;
   onSend: (text: string) => void;
   onClear: () => void;
 }
@@ -136,6 +148,7 @@ export function StreamPanel({
   cw,
   psk,
   olivia,
+  jtty = null,
   canTune,
   canSend,
   myCall,
@@ -145,6 +158,7 @@ export function StreamPanel({
   onCwWpm,
   onPskTune,
   onOliviaTune,
+  onJttyTune,
   onSend,
   onClear,
 }: Props) {
@@ -163,9 +177,11 @@ export function StreamPanel({
   const cwStats = stats && stats.mode === "CW" ? stats : null;
   const pskStats = stats && stats.mode === "PSK31" ? stats : null;
   const oliviaStats = stats && stats.mode === "OLIVIA" ? stats : null;
+  const jttyStats = stats && stats.mode === "JTTY" ? stats : null;
   const isCw = mode === "CW";
   const isPsk = mode === "PSK31";
   const isOlivia = mode === "OLIVIA";
+  const isJtty = mode === "JTTY";
 
   // Bars. RTTY: mark and space, relative to the stronger. CW: the key's peak and the
   // noise floor it stands over, relative to the peak.
@@ -197,10 +213,16 @@ export function StreamPanel({
     barB = oliviaStats.open ? 100 : 0;
     quiet = oliviaStats.snr < 1;
     idle = oliviaStats.open;
+  } else if (jttyStats) {
+    // JTTY: the last frame's S/N on a -20 to +10 dB scale, and whether anything has decoded.
+    barA = jttyStats.lastSnr === null ? 0 : Math.round(Math.max(0, Math.min(1, (jttyStats.lastSnr + 20) / 30)) * 100);
+    barB = jttyStats.frames > 0 ? 100 : 0;
+    quiet = jttyStats.frames === 0;
   }
 
-  const cqLine = myCall ? `CQ CQ CQ DE ${myCall} ${myCall} ${myCall} K` : "";
-  const byeLine = myCall ? (isCw ? `TU 73 DE ${myCall} SK` : `TNX 73 DE ${myCall} SK`) : "";
+  // JTTY's own: "CQ K1ABC CQ" and "TU K1ABC CQ" are one 1.9 s frame each, as WSJT-X's F1 and F3 send them.
+  const cqLine = myCall ? (isJtty ? `CQ ${myCall} CQ` : `CQ CQ CQ DE ${myCall} ${myCall} ${myCall} K`) : "";
+  const byeLine = myCall ? (isJtty ? `TU ${myCall} CQ` : isCw ? `TU 73 DE ${myCall} SK` : `TNX 73 DE ${myCall} SK`) : "";
 
   return (
     <div className="flex flex-col gap-2">
@@ -220,6 +242,21 @@ export function StreamPanel({
             </span>
           ) : (
             <span>Waiting for the bridge to report the pitch…</span>
+          )
+        ) : isJtty ? (
+          jtty ? (
+            <span className="tnum">
+              transmitting at <span className="text-fg">{jtty.txHz}</span> Hz · decoding the whole passband
+              {jttyStats && jttyStats.frames > 0 && (
+                <>
+                  {" "}
+                  · last <span className="text-fg">{jttyStats.lastSnr! >= 0 ? "+" : ""}{jttyStats.lastSnr}</span> dB at{" "}
+                  <span className="text-fg">{jttyStats.lastHz}</span> Hz
+                </>
+              )}
+            </span>
+          ) : (
+            <span>Waiting for the bridge to report the offset…</span>
           )
         ) : isOlivia ? (
           olivia ? (
@@ -263,6 +300,29 @@ export function StreamPanel({
           </span>
         ) : (
           <span>Waiting for the bridge to report the tones…</span>
+        )}
+        {canTune && isJtty && (
+          <span className="flex items-center gap-1">
+            <button
+              type="button"
+              className="px-2 py-0.5 border border-line rounded-sm hover:text-fg tnum"
+              onClick={() => jtty && onJttyTune?.(jtty.txHz - 10)}
+              disabled={!jtty}
+              title="Transmit 10 Hz lower"
+            >
+              −10
+            </button>
+            <button
+              type="button"
+              className="px-2 py-0.5 border border-line rounded-sm hover:text-fg tnum"
+              onClick={() => jtty && onJttyTune?.(jtty.txHz + 10)}
+              disabled={!jtty}
+              title="Transmit 10 Hz higher"
+            >
+              +10
+            </button>
+            <span className="text-fg-subtle">· click the waterfall or a station's tag to transmit there</span>
+          </span>
         )}
         {canTune && isOlivia && (
           <span className="flex items-center gap-1">
@@ -369,7 +429,7 @@ export function StreamPanel({
             </button>
           </span>
         )}
-        {canTune && !isCw && !isPsk && !isOlivia && (
+        {canTune && !isCw && !isPsk && !isOlivia && !isJtty && (
           <span className="flex items-center gap-1">
             <button
               type="button"
@@ -437,12 +497,12 @@ export function StreamPanel({
       </div>
 
       <div className="grid grid-cols-[3rem_1fr_7rem] items-center gap-x-2 text-xs tnum">
-        <span className="text-fg-muted">{isCw ? "peak" : isPsk ? "quality" : isOlivia ? "S/N" : "mark"}</span>
+        <span className="text-fg-muted">{isCw ? "peak" : isPsk ? "quality" : isOlivia || isJtty ? "S/N" : "mark"}</span>
         <div className="h-1.5 bg-bg-raised rounded-sm overflow-hidden">
           <div className={cn("h-full", idle ? "bg-accent" : "bg-ok/70")} style={{ width: `${barA}%` }} />
         </div>
-        <span className="text-fg-subtle text-right">{stats ? `${stats.chars} chars` : ""}</span>
-        <span className="text-fg-muted">{isCw ? "floor" : isPsk ? "level" : isOlivia ? "sync" : "space"}</span>
+        <span className="text-fg-subtle text-right">{stats ? ("chars" in stats ? `${stats.chars} chars` : `${stats.frames} frames`) : ""}</span>
+        <span className="text-fg-muted">{isCw ? "floor" : isPsk ? "level" : isOlivia ? "sync" : isJtty ? "copy" : "space"}</span>
         <div className="h-1.5 bg-bg-raised rounded-sm overflow-hidden">
           <div className="h-full bg-ok/70" style={{ width: `${barB}%` }} />
         </div>
@@ -455,7 +515,9 @@ export function StreamPanel({
                 ? "Varicodes no character has"
                 : isOlivia
                   ? "Blocks printed"
-                  : "Bad stop bits, and well-framed characters the squelch dropped"
+                  : isJtty
+                    ? "Messages printed, and sync peaks tried"
+                    : "Bad stop bits, and well-framed characters the squelch dropped"
           }
         >
           {rttyStats
@@ -466,7 +528,9 @@ export function StreamPanel({
                 ? `${pskStats.errors} unread`
                 : oliviaStats
                   ? `${oliviaStats.blocks} blocks`
-                  : ""}
+                  : jttyStats
+                    ? `${jttyStats.messages} msgs · ${jttyStats.candidates} tried`
+                    : ""}
         </span>
       </div>
 
@@ -515,7 +579,9 @@ export function StreamPanel({
                   ? "Type a line; Enter sends it (about 5 characters a second at BPSK31)"
                   : isOlivia
                     ? "Type a line; Enter sends it (about 2 characters a second at 500/16)"
-                    : "Type a line; Enter sends it (about 6 characters a second)"
+                    : isJtty
+                      ? "Type a line; Enter sends it (calls and exchanges a frame each, plain text five characters a frame, 1.9 s a frame)"
+                      : "Type a line; Enter sends it (about 6 characters a second)"
             }
             aria-label={`${mode} text to send`}
           />
@@ -561,6 +627,8 @@ export function StreamPanel({
                 ? "No signal at the carrier yet. Tune the radio to a PSK31 signal and click it on the waterfall."
                 : isOlivia
                   ? "No Olivia block has synced yet. Click the signal's centre on the waterfall; a block takes two seconds, and the first prints a few blocks later."
+                  : isJtty
+                  ? "Listening across the whole passband. Each message prints when it ends: the station's frequency, its S/N, and the text."
                   : "No audio at the tones yet. Tune the radio to an RTTY signal and click it on the waterfall."
             : idle
               ? isCw

@@ -41,7 +41,7 @@ copies there is always a whole one. Read whichever copy is complete. Lines that 
 the clocks differ, and the text still reads.
 
 **The level.** The header shows the peak over the noise floor in dB. Noise alone reads 13 to
-15 dB; anything over 16.5 dB is reported as a signal.
+17 dB on the air; anything over 18 dB is reported as a signal.
 
 ## Sending
 

@@ -41,6 +41,7 @@ const bodySchema = z.object({
     "psk",
     "olivia",
     "hell",
+    "jtty",
   ]),
   /** Which radio to drive. Changing it stops any automatic mode. */
   kind: z.enum(["flex", "icom", "wsjtx"]).optional(),

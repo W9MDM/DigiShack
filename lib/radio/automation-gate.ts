@@ -21,7 +21,7 @@ import type { AutoMode } from "@/lib/radio/auto-mode";
 import type { SchedulableAuto } from "@/lib/radio/schedule-runner";
 
 /** Modes with nothing for a sequencer to answer: no automatic mode runs on them and nothing is called. */
-export const NO_SEQUENCER_MODES: ReadonlySet<string> = new Set(["WSPR", "RTTY", "CW", "JS8", "PSK31", "OLIVIA", "SSTV", "HELL"]);
+export const NO_SEQUENCER_MODES: ReadonlySet<string> = new Set(["WSPR", "RTTY", "CW", "JS8", "PSK31", "OLIVIA", "SSTV", "HELL", "JTTY"]);
 
 export function noSequencerReason(mode: string): string {
   if (mode === "WSPR") return "WSPR is receive-only: tune to an FT8, FT4 or FT2 frequency before starting an automatic mode";

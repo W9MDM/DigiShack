@@ -191,8 +191,11 @@ export function hellWaveform(text: string, opts: HellWaveformOptions): Float32Ar
   return out;
 }
 
-/** The level over which the receiver reports a signal: above what noise alone reaches. */
-export const HELL_SIGNAL_DB = 16.5;
+/**
+ * The level over which the receiver reports a signal: above what noise alone reaches. Was
+ * 16.5, from generated noise; band noise on 80 m reached 17 on the air, so 18.
+ */
+export const HELL_SIGNAL_DB = 18;
 
 export interface HellDemodOptions {
   sampleRate: number;

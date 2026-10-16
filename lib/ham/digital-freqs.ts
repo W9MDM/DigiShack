@@ -9,7 +9,7 @@
 // The dial frequency is the reliable discriminator: the two modes use distinct,
 // well-established watering holes on every band.
 
-export type DigitalMode = "FT8" | "FT4" | "FT2" | "WSPR" | "RTTY" | "CW" | "JS8" | "PSK31" | "OLIVIA" | "SSTV" | "HELL";
+export type DigitalMode = "FT8" | "FT4" | "FT2" | "WSPR" | "RTTY" | "CW" | "JS8" | "PSK31" | "OLIVIA" | "SSTV" | "HELL" | "JTTY";
 
 
 export interface DigitalFrequency {
@@ -241,6 +241,24 @@ const HELL: [number, string, (1 | 2 | 3)?][] = [
   [50_285_000, "6M"],
 ];
 
+/**
+ * JTTY dials, from WSJT-X 3.3's frequency list (models/FrequencyList.cpp). Three are
+ * shared: 7.078 with JS8, 18.104 with Hell, 24.920 with PSK31. Listed last, so a bare
+ * dial there reads as the older mode; the JTTY chip makes the choice stick.
+ */
+const JTTY: [number, string, (1 | 2 | 3)?][] = [
+  [1_839_000, "160M"],
+  [3_572_000, "80M"],
+  [7_078_000, "40M"],
+  [10_140_000, "30M"],
+  [14_090_000, "20M"],
+  [18_104_000, "17M"],
+  [21_090_000, "15M"],
+  [24_920_000, "12M"],
+  [28_090_000, "10M"],
+  [50_160_000, "6M"],
+];
+
 export const DIGITAL_FREQUENCIES: readonly DigitalFrequency[] = [
   ...FT8.map(([hz, band, region]): DigitalFrequency => ({ hz, mode: "FT8", band, region })),
   ...FT4.map(([hz, band, region]): DigitalFrequency => ({ hz, mode: "FT4", band, region })),
@@ -260,6 +278,7 @@ export const DIGITAL_FREQUENCIES: readonly DigitalFrequency[] = [
   ...OLIVIA.map(([hz, band, region]): DigitalFrequency => ({ hz, mode: "OLIVIA", band, region })),
   ...SSTV.map(([hz, band, region]): DigitalFrequency => ({ hz, mode: "SSTV", band, region })),
   ...HELL.map(([hz, band, region]): DigitalFrequency => ({ hz, mode: "HELL", band, region })),
+  ...JTTY.map(([hz, band, region]): DigitalFrequency => ({ hz, mode: "JTTY", band, region })),
 ];
 
 /**
@@ -385,6 +404,7 @@ const PERIOD_MS: Record<DigitalMode, number> = {
   OLIVIA: 1_000,
   SSTV: 1_000,
   HELL: 1_000,
+  JTTY: 1_000,
 };
 
 export function periodMsFor(mode: DigitalMode): number {

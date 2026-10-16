@@ -75,6 +75,8 @@ interface RigStatus {
   olivia?: { centreHz: number; tones: number; bandwidth: number; code?: "olivia" | "contestia" } | null;
   /** The Feld Hell carrier while on Hell. */
   hell?: { centreHz: number } | null;
+  /** Where JTTY transmits while on JTTY. */
+  jtty?: { txHz: number } | null;
   /** A JS8 message going out, or the last one. */
   js8?: Js8SendState | null;
   js8Speed?: "normal" | "fast" | "turbo" | "slow";
@@ -536,6 +538,8 @@ export default function DigitalPage({ wsUrl }: Props) {
   /** The Hell panel, handed painted columns straight from the socket, as SSTV's is. */
   const hellPanel = useRef<HellPanelHandle | null>(null);
   const [hellStats, setHellStats] = useState<HellStats | null>(null);
+  /** JTTY stations heard in the last few minutes, newest message each: tags on the waterfall. */
+  const [jttyHeard, setJttyHeard] = useState<{ hz: number; snr: number; text: string; at: number }[]>([]);
   /** A picture going out, or how the last one ended. */
   const [sstvTx, setSstvTx] = useState<SstvTxState | null>(null);
   /** A JS8 station picked from the list, for the message line. See callFromRow. */
@@ -1007,6 +1011,10 @@ export default function DigitalPage({ wsUrl }: Props) {
           } else if (msg.kind === "stream" && msg.mode === "SSTV") setSstvStats(msg as unknown as SstvStats);
           else if (msg.kind === "stream" && msg.mode === "HELL") setHellStats(msg as unknown as HellStats);
           else if (msg.kind === "hell-cols" || msg.kind === "hell-backlog") hellPanel.current?.receive(msg as HellMessage);
+          else if (msg.kind === "jtty-msg" && typeof msg.hz === "number") {
+            const m = { hz: msg.hz as number, snr: Number(msg.snr), text: String(msg.text ?? ""), at: Number(msg.at) || Date.now() };
+            setJttyHeard((prev) => [...prev.filter((p) => Math.abs(p.hz - m.hz) > 20 && Date.now() - p.at < 300_000), m].slice(-12));
+          }
           else if (msg.kind === "stream") setStreamStats(msg as unknown as StreamStats);
           else if (msg.kind === "sstv-tx") setSstvTx(msg as unknown as SstvTxState);
           else if (msg.kind === "sstv-vis" || msg.kind === "sstv-start" || msg.kind === "sstv-rows" || msg.kind === "sstv-image") {
@@ -1255,6 +1263,13 @@ export default function DigitalPage({ wsUrl }: Props) {
         { hz: status.olivia.centreHz + half, label: "edge", emphasis: false },
       ];
     }
+    if (status?.subMode === "JTTY" && status.jtty) {
+      // Where this station transmits: the lowest tone, and the top of its four (94 Hz up).
+      return [
+        { hz: status.jtty.txHz, label: "JTTY Tx", emphasis: true },
+        { hz: status.jtty.txHz + 94, label: "edge", emphasis: false },
+      ];
+    }
     if (status?.subMode === "HELL" && status.hell) {
       // A Feld Hell signal is about 250 Hz wide at its strongest; the edges show where the
       // receiver hears it, so a click inside them is close enough.
@@ -1273,7 +1288,7 @@ export default function DigitalPage({ wsUrl }: Props) {
         label: r.message,
         emphasis: mentionsMe(r.message),
       }));
-  }, [rows, mentionsMe, status?.subMode, status?.rtty, status?.cw, status?.psk, status?.olivia, status?.hell]);
+  }, [rows, mentionsMe, status?.subMode, status?.rtty, status?.cw, status?.psk, status?.olivia, status?.hell, status?.jtty]);
 
   const cyclePct = ((now % scale.periodMs) / scale.periodMs) * 100;
 
@@ -1419,6 +1434,15 @@ export default function DigitalPage({ wsUrl }: Props) {
       setRttyError(err instanceof ApiError ? err.message : "Could not move the PSK31 carrier");
     }
   }, []);
+  /** Move where JTTY transmits: a click on the waterfall, a station's tag, or the ± buttons. */
+  const tuneJtty = useCallback(async (txHz: number) => {
+    try {
+      await apiPost("/api/bridge/control", { action: "jtty", txHz });
+      setRttyError(null);
+    } catch (err) {
+      setRttyError(err instanceof ApiError ? err.message : "Could not move the JTTY offset");
+    }
+  }, []);
   /** Move the Feld Hell carrier: a click on the waterfall or the ± buttons. */
   const tuneHell = useCallback(async (centreHz: number) => {
     try {
@@ -1445,6 +1469,18 @@ export default function DigitalPage({ wsUrl }: Props) {
    * onto nothing.
    */
   const foundTags = useMemo<WaterfallTag[]>(() => {
+    // JTTY: every station heard lately, by its first words; a click transmits on its frequency.
+    if (status?.subMode === "JTTY") {
+      if (!canSwitch) return [];
+      return jttyHeard
+        .filter((h) => Date.now() - h.at < 300_000)
+        .map((h) => ({
+          hz: h.hz,
+          label: h.text.split(" ").slice(0, 3).join(" ").slice(0, 18),
+          title: `${h.text} (${h.snr >= 0 ? "+" : ""}${h.snr} dB at ${h.hz} Hz) - click to transmit on this frequency`,
+          onClick: () => void tuneJtty(h.hz),
+        }));
+    }
     if (!canSwitch || !streamStats) return [];
     if (status?.subMode === "OLIVIA" && status.olivia && streamStats.mode === "OLIVIA") {
       const off = streamStats.freqOffsetHz;
@@ -1473,7 +1509,7 @@ export default function DigitalPage({ wsUrl }: Props) {
       ];
     }
     return [];
-  }, [canSwitch, streamStats, status?.subMode, status?.olivia, status?.psk, tuneOlivia, tunePsk]);
+  }, [canSwitch, streamStats, status?.subMode, status?.olivia, status?.psk, tuneOlivia, tunePsk, jttyHeard, tuneJtty]);
   /** Send a line of RTTY. The bridge answers as soon as the radio is keyed; the line appears in the stream as [TX]. */
   const sendRtty = useCallback(async (text: string) => {
     try {
@@ -1546,7 +1582,9 @@ export default function DigitalPage({ wsUrl }: Props) {
                       ? "SSTV"
                       : decodingAs === "HELL"
                         ? "HELL"
-                        : "FT8";
+                        : decodingAs === "JTTY"
+                          ? "JTTY"
+                          : "FT8";
 
   /**
    * Is there anything to halt? Transmitting now, a contact in flight, or an automatic
@@ -2111,7 +2149,9 @@ export default function DigitalPage({ wsUrl }: Props) {
                       ? (hz) => void tuneOlivia(Math.round(hz))
                       : decodingAs === "HELL" && canSwitch
                         ? (hz) => void tuneHell(Math.round(hz))
-                        : undefined
+                        : decodingAs === "JTTY" && canSwitch
+                          ? (hz) => void tuneJtty(Math.round(hz))
+                          : undefined
             }
             txHz={status?.txDF ?? null}
             gain={gain}
@@ -2526,7 +2566,7 @@ export default function DigitalPage({ wsUrl }: Props) {
                   onSend={(text) => void sendRtty(text)}
                   onClear={() => setStreamText("")}
                 />
-              ) : decodingAs === "RTTY" || decodingAs === "CW" || decodingAs === "PSK31" || decodingAs === "OLIVIA" ? (
+              ) : decodingAs === "RTTY" || decodingAs === "CW" || decodingAs === "PSK31" || decodingAs === "OLIVIA" || decodingAs === "JTTY" ? (
                 <StreamPanel
                   mode={decodingAs}
                   text={streamText}
@@ -2535,6 +2575,8 @@ export default function DigitalPage({ wsUrl }: Props) {
                   cw={status?.cw ?? null}
                   psk={status?.psk ?? null}
                   olivia={status?.olivia ?? null}
+                  jtty={status?.jtty ?? null}
+                  onJttyTune={(hz) => void tuneJtty(hz)}
                   canTune={canSwitch}
                   canSend={canSwitch}
                   myCall={myCall}
@@ -3904,7 +3946,7 @@ function BandButtons({
           to a one-row stats block). */}
       <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-1">
         <div className="flex gap-1" role="group" aria-label="Digital mode">
-          {(["FT8", "FT4", "FT2", "WSPR", "RTTY", "CW", "JS8", "PSK31", "OLIVIA", "SSTV", "HELL"] as const).map((m) => {
+          {(["FT8", "FT4", "FT2", "WSPR", "RTTY", "CW", "JS8", "PSK31", "OLIVIA", "SSTV", "HELL", "JTTY"] as const).map((m) => {
           const active = decodingAs === m;
           const target = bandFor(m);
           const canSwitch = active || target !== null;

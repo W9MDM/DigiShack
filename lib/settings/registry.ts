@@ -1088,6 +1088,15 @@ export const SETTINGS: SettingDef[] = [
     default: "0.7",
   },
 
+  // --- JTTY ---
+  {
+    key: "jtty.txHz",
+    label: "JTTY transmit offset (Hz audio)",
+    type: "number",
+    group: "digital",
+    help: "Where JTTY transmits: its lowest tone, Hz above the dial, as WSJT-X's Tx frequency. 1500 is WSJT-X's default. The receiver decodes every station in the passband whatever this is; a click on the waterfall or on a station's tag moves it for the session.",
+    default: "1500",
+  },
   // --- Feld Hell ---
   {
     key: "hell.centreHz",
@@ -1305,7 +1314,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Digital mode",
     type: "string",
     group: "digital",
-    help: "auto | ft8 | ft4 | ft2 | wspr | rtty | cw | js8 | psk31 | olivia | sstv | hell. Auto infers the mode from the dial frequency, which is the only reliable way — a DIGU slice does not say which mode it carries, and the three use different window lengths (15 / 7.5 / 3.75 s). FT2 has provisional calling frequencies so auto does find it, except on 60 m where it shares 5.357 MHz with FT4 and auto resolves to FT4; pin ft2 here to run it there or anywhere off-frequency.",
+    help: "auto | ft8 | ft4 | ft2 | wspr | rtty | cw | js8 | psk31 | olivia | sstv | hell | jtty. Auto infers the mode from the dial frequency, which is the only reliable way — a DIGU slice does not say which mode it carries, and the three use different window lengths (15 / 7.5 / 3.75 s). FT2 has provisional calling frequencies so auto does find it, except on 60 m where it shares 5.357 MHz with FT4 and auto resolves to FT4; pin ft2 here to run it there or anywhere off-frequency.",
     default: "auto",
   },
   {
