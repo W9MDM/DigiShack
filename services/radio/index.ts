@@ -171,7 +171,7 @@ import { sstvModeByName, sstvWaveform } from "@/lib/digital/sstv";
 import { parseLicenceClass, sstvTransmitRefusal } from "@/lib/radio/sstv-licence";
 import type { SstvEvent } from "@/lib/radio/decode-pipeline";
 import { js8SubmodeNow, PERIOD_MS, setJs8Submode } from "@/lib/radio/timing";
-import { gateAutomation, hopModeFor, NO_SEQUENCER_MODES, noSequencerReason } from "@/lib/radio/automation-gate";
+import { sequencerOffFrequency, gateAutomation, hopModeFor, NO_SEQUENCER_MODES, noSequencerReason } from "@/lib/radio/automation-gate";
 import type { SchedulableAuto } from "@/lib/radio/schedule-runner";
 import { collectReceptionReports } from "@/lib/pskreporter/collect";
 import { MIN_QUERY_INTERVAL_MS } from "@/lib/pskreporter/retrieve";
@@ -2546,6 +2546,24 @@ async function startFlexSource(): Promise<() => Promise<void>> {
         // gone.
         void persistAutoMode("off");
         console.log(`[bridge] ${status.subMode} has nothing for a sequencer to answer - automatic mode stopped`);
+      }
+    }
+    // A dial moved off every calling frequency for the sequencer's mode while it runs: stop
+    // it, contact and all, before its next transmission. The start is already refused there
+    // (the /auto check, after FT8 on 7.200), but nothing re-asked once running: on
+    // 2026-10-15 a receive-only VARA watch retuned the slice to 3.585, the Winlink channel,
+    // mid-QSO, and the hunt sent "D2UY K9XYZ EN61" there into a 9.9:1 SWR before the SWR
+    // guard stopped the next one. Saved as off, as the stop above is.
+    {
+      const a = activeAuto();
+      const q = activeQso();
+      const running = (a !== null && a.state.mode !== "off") || (q?.state.active ?? false);
+      const why = sequencerOffFrequency(status.subMode, slice.freqHz ?? null, running);
+      if (why) {
+        a?.setMode("off");
+        void persistAutoMode("off");
+        void q?.halt();
+        console.log(`[bridge] ${why} - automatic mode and the contact in progress stopped before anything more is sent there`);
       }
     }
 

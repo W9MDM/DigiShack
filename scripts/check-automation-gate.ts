@@ -6,7 +6,7 @@
 import fs from "node:fs";
 
 import type { AutoMode } from "@/lib/radio/auto-mode";
-import { gateAutomation, hopModeFor, NO_SEQUENCER_MODES, noSequencerReason } from "@/lib/radio/automation-gate";
+import { gateAutomation, hopModeFor, NO_SEQUENCER_MODES, noSequencerReason, sequencerOffFrequency } from "@/lib/radio/automation-gate";
 
 let passed = 0;
 let failed = 0;
@@ -139,6 +139,15 @@ async function main(): Promise<void> {
       "a pending tune save is cancelled before the unchanged check, so a passing USB is never saved",
     );
   }
+
+  console.log("\na dial moved under a running sequencer");
+  ok(sequencerOffFrequency("FT8", 3_585_000, true) !== null, "FT8 running and the dial on 3.585, the Winlink channel: stop");
+  ok(sequencerOffFrequency("FT8", 7_074_000, true) === null, "FT8 running on 7.074: carry on");
+  ok(sequencerOffFrequency("FT8", 7_075_200, true) === null, "a click up the FT8 segment: carry on");
+  ok(sequencerOffFrequency("FT4", 14_074_000, true) !== null, "FT4 on the FT8 dial: stop");
+  ok(sequencerOffFrequency("FT8", 3_585_000, false) === null, "nothing running: nothing to stop");
+  ok(sequencerOffFrequency("JTTY", 3_585_000, true) === null, "a mode with no sequencer is the stop above's business");
+  ok(sequencerOffFrequency("FT8", null, true) === null, "no dial reported yet: wait for one");
 
   console.log(`\n${passed} passed, ${failed} failed`);
   if (failed) process.exit(1);
