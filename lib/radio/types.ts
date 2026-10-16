@@ -24,7 +24,7 @@ import type { EventEmitter } from "node:events";
 
 /** The digital modes the bridge can run. Not vendor-specific; listed here so drivers
  * can report what they support without importing the Flex module. */
-export type DigitalMode = "FT8" | "FT4" | "FT2" | "WSPR" | "RTTY" | "CW" | "JS8" | "PSK31" | "OLIVIA" | "SSTV";
+export type DigitalMode = "FT8" | "FT4" | "FT2" | "WSPR" | "RTTY" | "CW" | "JS8" | "PSK31" | "OLIVIA" | "SSTV" | "HELL";
 
 /**
  * Audio sample format as it arrives from a radio.
@@ -167,8 +167,8 @@ export interface DigitalTransmitter {
   /** Prepared audio now (an SSTV picture): built at the transmitter's rate, capped, gated. */
   transmitAudio?(build: (sampleRate: number) => Float32Array, label: string, mode: DigitalMode, maxMs: number): Promise<TransmitOutcome>;
   transmitText?(req: {
-    /** RTTY, PSK31 and Olivia go out as audio; CW is handed to the radio's own keyer. */
-    mode: "RTTY" | "CW" | "PSK31" | "OLIVIA";
+    /** RTTY, PSK31, Olivia and Feld Hell go out as audio; CW is handed to the radio's own keyer. */
+    mode: "RTTY" | "CW" | "PSK31" | "OLIVIA" | "HELL";
     text: string;
     centreHz: number;
     shiftHz: number;

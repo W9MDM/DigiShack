@@ -9,7 +9,7 @@
 // The dial frequency is the reliable discriminator: the two modes use distinct,
 // well-established watering holes on every band.
 
-export type DigitalMode = "FT8" | "FT4" | "FT2" | "WSPR" | "RTTY" | "CW" | "JS8" | "PSK31" | "OLIVIA" | "SSTV";
+export type DigitalMode = "FT8" | "FT4" | "FT2" | "WSPR" | "RTTY" | "CW" | "JS8" | "PSK31" | "OLIVIA" | "SSTV" | "HELL";
 
 
 export interface DigitalFrequency {
@@ -222,6 +222,25 @@ const SSTV: [number, string, (1 | 2 | 3)?][] = [
   [28_680_000, "10M"],
 ];
 
+/**
+ * Feld Hell, from the Feld Hell Club's list: 14.063 is its calling frequency on 20 m, and
+ * the rest are where its nets and sprints run. These are the signal's frequency; the
+ * receiver and transmitter sit at 1000 Hz audio, so the dial is a kilohertz below each.
+ * Left out: 160 m (1.843, now a few hundred hertz from the FT8, FT2 and JS8 dials) and
+ * 12 m (24.924, on the FT2 dial). 40 m is at the top of the club's 7.080-7.090 and 17 m at
+ * the top of its 18.098-18.105, clear of the RTTY and FT8 dials beside them.
+ */
+const HELL: [number, string, (1 | 2 | 3)?][] = [
+  [3_584_000, "80M"],
+  [7_083_000, "40M"],
+  [10_143_000, "30M"],
+  [14_062_000, "20M"],
+  [18_104_000, "17M"],
+  [21_062_000, "15M"],
+  [28_062_000, "10M"],
+  [50_285_000, "6M"],
+];
+
 export const DIGITAL_FREQUENCIES: readonly DigitalFrequency[] = [
   ...FT8.map(([hz, band, region]): DigitalFrequency => ({ hz, mode: "FT8", band, region })),
   ...FT4.map(([hz, band, region]): DigitalFrequency => ({ hz, mode: "FT4", band, region })),
@@ -240,6 +259,7 @@ export const DIGITAL_FREQUENCIES: readonly DigitalFrequency[] = [
   ...PSK31.map(([hz, band, region]): DigitalFrequency => ({ hz, mode: "PSK31", band, region })),
   ...OLIVIA.map(([hz, band, region]): DigitalFrequency => ({ hz, mode: "OLIVIA", band, region })),
   ...SSTV.map(([hz, band, region]): DigitalFrequency => ({ hz, mode: "SSTV", band, region })),
+  ...HELL.map(([hz, band, region]): DigitalFrequency => ({ hz, mode: "HELL", band, region })),
 ];
 
 /**
@@ -364,6 +384,7 @@ const PERIOD_MS: Record<DigitalMode, number> = {
   PSK31: 1_000,
   OLIVIA: 1_000,
   SSTV: 1_000,
+  HELL: 1_000,
 };
 
 export function periodMsFor(mode: DigitalMode): number {

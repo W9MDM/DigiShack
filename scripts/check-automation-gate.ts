@@ -49,7 +49,7 @@ function make(sub: string | null, leaveResult: boolean | Error = true) {
 
 async function main(): Promise<void> {
   console.log("\nmodes with nothing to answer");
-  for (const m of ["WSPR", "RTTY", "CW", "JS8", "PSK31", "OLIVIA", "SSTV"]) ok(NO_SEQUENCER_MODES.has(m), `${m} has no sequencer`);
+  for (const m of ["WSPR", "RTTY", "CW", "JS8", "PSK31", "OLIVIA", "SSTV", "HELL"]) ok(NO_SEQUENCER_MODES.has(m), `${m} has no sequencer`);
   for (const m of ["FT8", "FT4", "FT2"]) ok(!NO_SEQUENCER_MODES.has(m), `${m} has one`);
   ok(noSequencerReason("JS8").includes("JS8"), "the JS8 reason names JS8");
   ok(noSequencerReason("WSPR").includes("receive-only"), "the WSPR reason says receive-only");
