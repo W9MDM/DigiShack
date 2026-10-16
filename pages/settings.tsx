@@ -645,7 +645,16 @@ function SettingField({
     if (s.fromEnv) {
       return `Currently from ${s.envFallback}. Saving here moves it into the database.`;
     }
-    if (s.source === "default") return `Default: ${s.value ?? "—"}`;
+    // The help comes FIRST, with the default appended — not the default INSTEAD of the
+    // help. A field at its default value is exactly when the operator is deciding whether
+    // to touch it, so hiding the documentation until after they change and save it (when
+    // `source` flips to "database" and this branch stops running) is backwards. Reported
+    // as "transmit power says default 0, and only if I change it and save does it give me
+    // documentation" — the 0 default means "leave the rig's power alone", which the help
+    // explains and which was invisible at the one moment it mattered.
+    if (s.source === "default") {
+      return s.help ? `${s.help} · Default: ${s.value ?? "—"}` : `Default: ${s.value ?? "—"}`;
+    }
     return s.help;
   })();
 
