@@ -22,6 +22,7 @@
 
 import { fftMixed } from "@/lib/dsp/fft-mixed";
 import {
+  jttyEncodePayload,
   JTTY_BAUD,
   JTTY_FRAME_SYMBOLS,
   JTTY_SYNC,
@@ -49,6 +50,14 @@ const RING = 1 << 15; // samples kept at 6 kHz: 5.4 s, nearly three frames
 const COLS = 256; // spectrogram columns kept: 2 s
 /** Sync score over which a peak is tried. Noise alone averages 0.25. */
 const SYNC_THRESHOLD = 0.42;
+/**
+ * Share of the data symbols' energy on the tones the decoded payload sends, under which a
+ * CRC pass is taken for chance. On noise a pass comes about once in 6000 tries, and the
+ * Viterbi has picked its best path, so those reach 0.45-0.50; real frames are 0.54 at
+ * -14 dB and 0.49 at -17. 80 m at night tried 12000 peaks in two minutes and printed a
+ * "7Z1DAP TU" from nothing.
+ */
+const MIN_COPY = 0.5;
 /** At most this many candidates tried per spectrogram column: a bound on the CPU a busy band can take. */
 const MAX_TRIES_PER_COLUMN = 6;
 
@@ -74,6 +83,8 @@ export interface JttyMessage {
 
 export interface JttyDemodStats {
   frames: number;
+  /** CRC passes too weak in the data symbols to be anything but chance. */
+  rejected: number;
   messages: number;
   /** Sync peaks tried since the start. */
   candidates: number;
@@ -107,7 +118,7 @@ export class JttyDemodulator {
   private recent: { start: number; hz: number }[] = [];
   private slots: Slot[] = [];
   private out = "";
-  private readonly stats: JttyDemodStats = { frames: 0, messages: 0, candidates: 0, lastSnr: null, lastHz: null };
+  private readonly stats: JttyDemodStats = { frames: 0, rejected: 0, messages: 0, candidates: 0, lastSnr: null, lastHz: null };
   private readonly fftRe = new Float64Array(NFFT);
   private readonly fftIm = new Float64Array(NFFT);
   private readonly hann = Float64Array.from({ length: NSS }, (_, i) => 0.5 - 0.5 * Math.cos((2 * Math.PI * (i + 0.5)) / NSS));
@@ -314,6 +325,14 @@ export class JttyDemodulator {
     for (const e of energies) for (let t = 0; t < 4; t++) e[t] = e[t]! / mean;
     const payload = jttyDecodeEnergies(energies);
     if (!payload) return;
+    const sent = jttyEncodePayload(payload);
+    let on = 0;
+    for (let j = 0; j < 46; j++) on += energies[j]![sent[j]!]!;
+    // energies are scaled by their mean, so their sum over 46 x 4 is 184.
+    if (on / 184 < MIN_COPY) {
+      this.stats.rejected++;
+      return;
+    }
     const u = jttyUnpackAtom(payload);
     if (!u) return;
     this.recent.push({ start, hz });

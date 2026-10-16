@@ -1403,7 +1403,9 @@ async function tuneToCalling(
     if (wantCw && !cur.startsWith("CW")) await client.command(`slice set ${flexSliceIndex ?? 0} mode=CW`);
     else if (wantLsb && cur !== "DIGL") await client.command(`slice set ${flexSliceIndex ?? 0} mode=DIGL`);
     else if (!wantCw && !wantLsb && !/^DIG[UL]$/.test(cur)) await client.command(`slice set ${flexSliceIndex ?? 0} mode=DIGU`);
-    else if (!wantCw && !wantLsb && mode === "SSTV" && cur === "DIGL") await client.command(`slice set ${flexSliceIndex ?? 0} mode=DIGU`);
+    // Out of DIGL for every data mode, not only SSTV above 10 MHz: after an SSTV session on
+    // 80 m the JTTY chip left the slice in DIGL, and every tone ran backwards.
+    else if (!wantCw && !wantLsb && cur === "DIGL") await client.command(`slice set ${flexSliceIndex ?? 0} mode=DIGU`);
     return { ok: true, hz };
   }
 
