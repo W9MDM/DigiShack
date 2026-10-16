@@ -27,9 +27,21 @@ export const SETTINGS_TABS: SettingsTab[] = [
     groups: ["general"],
   },
   {
+    // How DigiShack reaches a radio: the hardware backends and the decode plumbing. This
+    // is where someone sets up a new rig, so it holds the connection groups only — the
+    // per-mode decode settings moved to "Modes" below. Reported as "all the mode settings
+    // should be in their own modes tab, not the radio setup tab".
     id: "radio",
     label: "Radio",
-    groups: ["digital", "rtty", "cw", "psk31", "olivia", "js8", "flex", "icom", "wsjtx", "bridge"],
+    groups: ["flex", "icom", "wsjtx", "bridge"],
+  },
+  {
+    // The per-mode decode settings. "digital" carries FT8/FT4/FT2 (and the decode-source
+    // selector and clock settings that live in the same group); the rest are one group
+    // per mode.
+    id: "modes",
+    label: "Modes",
+    groups: ["digital", "rtty", "cw", "psk31", "olivia", "js8"],
   },
   {
     id: "automation",
