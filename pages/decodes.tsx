@@ -2095,6 +2095,7 @@ export default function DigitalPage({ wsUrl }: Props) {
             row={spectrum}
             binHz={scale.binHz}
             maxHz={scale.maxHz}
+            periodMs={scale.periodMs}
             markers={markers}
             tags={foundTags}
             onPickHz={
@@ -2121,9 +2122,8 @@ export default function DigitalPage({ wsUrl }: Props) {
             // Those defaults survive as the starting point; the handle below overrides
             // them per device. See useWaterfallHeight.
             //
-            // A number, not a CSS class, because the <canvas> height attribute sizes the
-            // bitmap. Changing it reallocates the canvas and so wipes the scroll history,
-            // which is correct — the rows would be the wrong height otherwise.
+            // History is retained as timestamped rows; resizing reveals or crops older
+            // rows without changing their time scale.
             height={waterfall.height}
           />
           {/* DRAG TO RESIZE. A 6px grab strip with a wider invisible hit area, because a

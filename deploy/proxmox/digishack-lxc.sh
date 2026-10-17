@@ -20,8 +20,10 @@
 # reconfiguring it, and re-running the in-container install is safe because install.sh is.
 #
 # NOT a hardened production deployment. It gives the container a root password you set,
-# runs DigiShack as root inside it, and exposes HTTP without TLS. For anything reachable
-# from outside the shack LAN, put the NGINX config in deploy/nginx in front of it.
+# runs DigiShack as root inside it, and serves plain HTTP (no TLS). nginx IS installed and
+# configured from deploy/nginx/digishack.conf, so the app is reachable on port 80 with the
+# bridge's /ws routes in place; for anything reachable from outside the shack LAN, add TLS
+# (certbot) to that config.
 
 set -euo pipefail
 
@@ -293,6 +295,20 @@ echo "==> Handing over to scripts/install.sh"
 # One install path, so there is only one thing to keep working.
 bash scripts/install.sh
 
+echo "==> nginx reverse proxy"
+# The web AND the bridge bind 127.0.0.1 only (see ecosystem.config.js — binding 0.0.0.0
+# exposed the app on the LAN past nginx's auth throttle), so without a proxy the container
+# is unreachable. Just as important: the canonical config carries the /ws/decodes and
+# /ws/audio routes to the bridge on 3101. A proxy without those — which is what a minimal
+# hand-rolled "proxy everything to :3000" config is — leaves the decode page connecting
+# forever with no waterfall, because the bridge's websocket has nowhere to land.
+apt-get install -y -qq nginx >/dev/null
+install -m 644 /opt/digishack/deploy/nginx/digishack.conf /etc/nginx/sites-available/digishack
+sed -i 's/^\s*server_name .*/    server_name _;/' /etc/nginx/sites-available/digishack
+ln -sf /etc/nginx/sites-available/digishack /etc/nginx/sites-enabled/digishack
+rm -f /etc/nginx/sites-enabled/default
+nginx -t && systemctl enable --now nginx >/dev/null 2>&1 && systemctl reload nginx
+
 echo "==> PM2 at boot"
 pm2 startup systemd -u root --hp /root >/dev/null 2>&1 || true
 pm2 save >/dev/null 2>&1 || true
@@ -306,7 +322,7 @@ IP="$(pct exec "$CTID" -- hostname -I 2>/dev/null | awk '{print $1}')"
 IP="${IP:-<no address yet>}"
 
 printf "\n${G}${B}DigiShack is installed in container %s.${N}\n\n" "$CTID"
-printf "  Web:            http://%s:3000  (first visit goes to /setup)\n" "$IP"
+printf "  Web:            http://%s  (via nginx; first visit goes to /setup)\n" "$IP"
 printf "  Shell:          pct enter %s\n" "$CTID"
 printf "  Logs:           pct exec %s -- pm2 logs\n" "$CTID"
 printf "  App directory:  /opt/digishack\n"

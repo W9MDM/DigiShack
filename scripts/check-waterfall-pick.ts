@@ -23,12 +23,13 @@ function ok(cond: boolean, what: string, extra?: unknown): void {
 }
 
 const canvas = fs.readFileSync("components/digital/spectrum-canvas.tsx", "utf8");
+const audioCanvas = fs.readFileSync("components/digital/audio-waterfall-canvas.tsx", "utf8");
 const waterfall = fs.readFileSync("components/digital/Waterfall.tsx", "utf8");
 const page = fs.readFileSync("pages/decodes.tsx", "utf8");
 const panel = fs.readFileSync("components/digital/StreamPanel.tsx", "utf8");
 
 console.log("the click reaches the waterfall");
-const wrapsInert = /pointer-events-none">\{children\}/.test(canvas);
+const wrapsInert = /pointer-events-none">\{children\}/.test(canvas + audioCanvas);
 const pick = /\{onPickHz && \(\s*<div\s+className="([^"]*)"/.exec(waterfall);
 ok(pick !== null, "the waterfall has a click layer for onPickHz");
 const cls = pick?.[1] ?? "";

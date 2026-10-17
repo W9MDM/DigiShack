@@ -156,7 +156,7 @@ export default function RigPage({ wsUrl }: Props) {
   // The audio spectrum — the same stream the Decodes page draws — so a source without an
   // RF panadapter (the Icom today) still shows a live waterfall here instead of a bare note.
   const [audioSpec, setAudioSpec] = useState<{ bins: Uint8Array; at: number } | null>(null);
-  const [audioScale, setAudioScale] = useState<{ binHz: number; maxHz: number } | null>(null);
+  const [audioScale, setAudioScale] = useState<{ binHz: number; maxHz: number; periodMs: number } | null>(null);
   const { connected: wsConnected } = useBridgeSocket(wsUrl, (msg) => {
     if (msg.kind === "panadapter") {
       const m = msg as unknown as {
@@ -181,9 +181,9 @@ export default function RigPage({ wsUrl }: Props) {
     } else if (msg.kind === "spectrum") {
       // The audio spectrum (receiver passband), broadcast by every source including the
       // Icom. The RF panadapter above is FlexRadio-only today; this is the fallback.
-      const s = msg as unknown as { bins: string; binHz: number; maxHz: number; at: number };
+      const s = msg as unknown as { bins: string; binHz: number; maxHz: number; at: number; periodMs: number };
       setAudioSpec({ bins: decodeSpectrumBins(s.bins), at: s.at });
-      setAudioScale({ binHz: s.binHz, maxHz: s.maxHz });
+      setAudioScale({ binHz: s.binHz, maxHz: s.maxHz, periodMs: s.periodMs });
     }
   });
 
@@ -936,6 +936,8 @@ export default function RigPage({ wsUrl }: Props) {
               row={audioSpec}
               binHz={audioScale.binHz}
               maxHz={audioScale.maxHz}
+              periodMs={status?.voice?.active ? null : audioScale.periodMs}
+              rowIntervalMs={status?.voice?.active ? 50 : 250}
               markers={[]}
               height={260}
             />
