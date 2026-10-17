@@ -1,0 +1,59 @@
+[
+ {
+  "callsign": "ZL4GQ-10",
+  "gridsquare": "RE43EO",
+  "distance": 4846.245552925352,
+  "azimuth": 355.6032137727506,
+  "modes": "VARA FM WIDE",
+  "freq": {
+   "hz": 144650000,
+   "khz": 144650,
+   "desc": "144.650.00 MHz"
+  },
+  "dial": {
+   "hz": 144650000,
+   "khz": 144650,
+   "desc": "144.650.00 MHz"
+  },
+  "url": "varafm:///ZL4GQ-10?freq=144650",
+  "prediction": null
+ },
+ {
+  "callsign": "ZL4GQ-10",
+  "gridsquare": "RE43EO",
+  "distance": 4846.245552925352,
+  "azimuth": 355.6032137727506,
+  "modes": "Packet 1200",
+  "freq": {
+   "hz": 144650000,
+   "khz": 144650,
+   "desc": "144.650.00 MHz"
+  },
+  "dial": {
+   "hz": 144650000,
+   "khz": 144650,
+   "desc": "144.650.00 MHz"
+  },
+  "url": "ax25:///ZL4GQ-10?freq=144650",
+  "prediction": null
+ },
+ {
+  "callsign": "ZL4AA-10",
+  "gridsquare": "RE54FC",
+  "distance": 4901.843016247632,
+  "azimuth": 270,
+  "modes": "VARA FM WIDE",
+  "freq": {
+   "hz": 144650000,
+   "khz": 144650,
+   "desc": "144.650.00 MHz"
+  },
+  "dial": {
+   "hz": 144650000,
+   "khz": 144650,
+   "desc": "144.650.00 MHz"
+  },
+  "url": "varafm:///ZL4AA-10?freq=144650",
+  "prediction": null
+ }
+]
