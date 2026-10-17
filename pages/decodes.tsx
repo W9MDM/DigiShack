@@ -26,6 +26,8 @@ import { SourcePicker } from "@/components/radio/SourcePicker";
 import { withPageAuth } from "@/lib/auth/guard";
 import { bridgeWsUrl } from "@/lib/bridge/ws-url";
 import { ApiError, apiGet, apiPatch, apiPost, useApi } from "@/lib/client/api";
+import { useDistanceUnit } from "@/lib/client/use-distance-unit";
+import { formatDistance, gridDistanceKm } from "@/lib/propagation";
 import { rankByPoints, scoreContact } from "@/lib/contest/ft8battle";
 import {
   bandKey,
@@ -529,6 +531,7 @@ const MAX_REASONS_SHOWN = 3;
 
 export default function DigitalPage({ wsUrl }: Props) {
   const [status, setStatus] = useState<RigStatus | null>(null);
+  const [unit] = useDistanceUnit();
   const [rows, setRows] = useState<DecodeEvent[]>([]);
   // Stream modes (RTTY): the rolling text and the once-a-second heartbeat with tone levels.
   const [streamText, setStreamText] = useState("");
@@ -2809,6 +2812,18 @@ export default function DigitalPage({ wsUrl }: Props) {
                       {visible.map((d) => {
                         const isCq = /^CQ\b/i.test(d.message);
                         const mine = mentionsMe(d.message);
+                        // Distance to this station, when the message carries a grid (a CQ
+                        // or a grid report) and we know our own — great-circle from the
+                        // operator's grid, in the chosen unit. Same grid parse the scoring uses.
+                        const theirGrid = (() => {
+                          const p = parseMessage(d.message);
+                          return p.kind === "cq"
+                            ? p.grid
+                            : p.kind === "directed" && p.payload.type === "grid"
+                              ? p.payload.grid
+                              : null;
+                        })();
+                        const distKm = gridDistanceKm(status?.deGrid ?? null, theirGrid);
                         const done =
                           d.callsign !== null && workedNow.has(d.callsign.toUpperCase());
                         /**
@@ -2975,6 +2990,14 @@ export default function DigitalPage({ wsUrl }: Props) {
                               </span>
                               {d.lowConfidence && (
                                 <span className="ml-2 text-fg-subtle">(low conf)</span>
+                              )}
+                              {distKm !== null && (
+                                <span
+                                  className="ml-2 text-[10px] tnum text-fg-subtle align-middle"
+                                  title={`${theirGrid} — great-circle distance from your grid`}
+                                >
+                                  {formatDistance(distKm, unit)}
+                                </span>
                               )}
                               {/* Award value, from the same scoring the auto-operator
                                   uses. Thirty rows of identical-looking text is where
@@ -3995,14 +4018,22 @@ function BandButtons({
   // Region-gated (a US operator gets no 4M button; only Region 2 sees 1.25M) and
   // deduped: 6 m has two listed FT8 frequencies (50.313 and 50.323), which
   // otherwise renders two identical 6M buttons.
+  // ALL bands this region has a frequency for in ANY mode, deduped and in table order — so
+  // the band row keeps the same length and does NOT reflow the whole bar when the mode
+  // changes. A band with no frequency for the current mode is shown DISABLED, exactly as the
+  // mode buttons already are, rather than removed. This is the "bands/modes jump around" fix.
   const bands = useMemo(
-    () => [
-      ...new Set(
+    () => [...new Set(frequenciesForRegion(region).map((f) => f.band))],
+    [region],
+  );
+  // Which of those bands actually has a frequency for the current mode — the enabled set.
+  const bandsWithMode = useMemo(
+    () =>
+      new Set(
         frequenciesForRegion(region)
           .filter((f) => f.mode === decodingAs)
           .map((f) => f.band),
       ),
-    ],
     [decodingAs, region],
   );
 
@@ -4042,12 +4073,11 @@ function BandButtons({
 
   return (
     <div className="flex flex-col items-end gap-1">
-      {/* One row: modes, then bands. The mode toggle is its own flex ITEM inside the
-          wrapping row — it stays together and wraps as a unit, which was the reason
-          it used to sit on a separate row (and made this block three rows tall next
-          to a one-row stats block). */}
-      <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-1">
-        <div className="flex gap-1" role="group" aria-label="Digital mode">
+      {/* Two left-justified rows: bands on top (their own row, with room to grow as more
+          bands are added), modes below. `order` puts the band group first visually without
+          reordering the JSX. Both wrap within their own row, so neither reflows the other. */}
+      <div className="flex flex-col gap-1">
+        <div className="flex flex-wrap gap-1 order-2" role="group" aria-label="Digital mode">
           {(["FT8", "FT4", "FT2", "WSPR", "RTTY", "CW", "JS8", "PSK31", "OLIVIA", "SSTV", "HELL", "JTTY"] as const).map((m) => {
           const active = decodingAs === m;
           const target = bandFor(m);
@@ -4080,23 +4110,30 @@ function BandButtons({
           })}
         </div>
 
-        <div className="flex flex-wrap gap-1 justify-end" role="group" aria-label="Band">
+        <div className="flex flex-wrap gap-1 order-1" role="group" aria-label="Band">
           {bands.map((band) => {
           const active = currentBand === band;
+          const hasMode = bandsWithMode.has(band);
           return (
             <button
               key={band}
               type="button"
-              disabled={busy !== null}
-              onClick={() => void tune(band, decodingAs)}
+              disabled={busy !== null || !hasMode}
+              onClick={() => hasMode && void tune(band, decodingAs)}
               className={cn(
                 "px-2 py-1 text-xs rounded-sm border tnum transition-colors",
                 active
                   ? "border-accent bg-accent/15 text-accent-bright"
-                  : "border-line text-fg-muted hover:text-fg hover:border-fg-muted",
-                busy !== null && "opacity-50 cursor-not-allowed",
+                  : hasMode
+                    ? "border-line text-fg-muted hover:text-fg hover:border-fg-muted"
+                    : "border-line/40 text-fg-subtle/40 cursor-not-allowed",
+                busy !== null && hasMode && "opacity-50 cursor-not-allowed",
               )}
-              title={`Tune to ${band} — moves the TX slice to the ${decodingAs} calling frequency`}
+              title={
+                hasMode
+                  ? `Tune to ${band} — moves the TX slice to the ${decodingAs} calling frequency`
+                  : `${band} has no listed ${decodingAs} frequency`
+              }
             >
               {busy === `${band}/${decodingAs}` ? "…" : band}
             </button>

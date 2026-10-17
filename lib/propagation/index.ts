@@ -211,6 +211,31 @@ export function distanceKm(
   return 2 * R * Math.asin(Math.min(1, Math.sqrt(h)));
 }
 
+/**
+ * Great-circle distance between two Maidenhead grids, in km, or null if either is missing
+ * or not a valid locator. A convenience over gridToLatLon + distanceKm for the log and the
+ * decode list, where both sides are grid squares rather than lat/lon.
+ */
+export function gridDistanceKm(
+  a: string | null | undefined,
+  b: string | null | undefined,
+): number | null {
+  if (!a || !b) return null;
+  const pa = gridToLatLon(a);
+  const pb = gridToLatLon(b);
+  if (!pa || !pb) return null;
+  return distanceKm(pa, pb);
+}
+
+export type DistanceUnit = "km" | "mi";
+
+/** "1,234 mi" or "1,987 km", per the operator's unit preference. Pass km from gridDistanceKm. */
+export function formatDistance(km: number, unit: DistanceUnit): string {
+  return unit === "km"
+    ? `${Math.round(km).toLocaleString()} km`
+    : `${Math.round(km * 0.621371).toLocaleString()} mi`;
+}
+
 export interface ReceptionReport {
   receiverCallsign: string;
   receiverLocator: string | null;
