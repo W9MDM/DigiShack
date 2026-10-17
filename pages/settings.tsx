@@ -13,7 +13,7 @@ import {
   Select,
 } from "@/components/ui/primitives";
 import { withPageAuth } from "@/lib/auth/guard";
-import { ApiError, apiPatch, useApi } from "@/lib/client/api";
+import { ApiError, apiGet, apiPatch, useApi } from "@/lib/client/api";
 import {
   PaCooldownField,
   RangeEditor,
@@ -564,6 +564,58 @@ function SettingsTabBar({
  * The previous value is remembered while the box is unchecked, so turning a limit off to
  * try something and back on again does not lose the number you had tuned.
  */
+/**
+ * Fill the licence class from the operator's callsign via HamDB.
+ *
+ * A US callsign no longer encodes the class (vanity calls), so this is a lookup, not a
+ * parse. It fills the field optimistically and leaves the operator to Save — a suggestion,
+ * never an automatic write, and a non-US/club/unlisted call simply says so and is set by
+ * hand. The server reads the station's own callsign; nothing here transmits.
+ */
+function LicenceLookupButton({
+  onChange,
+  disabled,
+}: {
+  onChange: (v: string) => void;
+  disabled: boolean;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState<{ text: string; warn: boolean } | null>(null);
+  const look = () => {
+    setBusy(true);
+    setNote(null);
+    void apiGet<{ found: boolean; call?: string; licenceClass?: string; name?: string | null }>(
+      "/api/station/licence-lookup",
+    )
+      .then((r) => {
+        if (r.found && r.licenceClass) {
+          onChange(r.licenceClass);
+          setNote({
+            text: `HamDB: ${r.call}${r.name ? ` (${r.name})` : ""} → ${r.licenceClass}. Press Save to keep it.`,
+            warn: false,
+          });
+        } else {
+          setNote({
+            text: `${r.call ?? "That callsign"} isn't in HamDB — set it by hand (non-US and club calls aren't listed).`,
+            warn: true,
+          });
+        }
+      })
+      .catch((e) => setNote({ text: e instanceof ApiError ? e.message : "Lookup failed.", warn: true }))
+      .finally(() => setBusy(false));
+  };
+  return (
+    <div className="flex shrink-0 flex-col items-start gap-1">
+      <Button variant="secondary" onClick={look} disabled={disabled || busy}>
+        {busy ? "Looking up…" : "Look up from callsign"}
+      </Button>
+      {note && (
+        <span className={`text-xs ${note.warn ? "text-warn" : "text-fg-muted"}`}>{note.text}</span>
+      )}
+    </div>
+  );
+}
+
 function LimitField({
   id,
   value,
@@ -779,6 +831,13 @@ function SettingField({
               )}
             </HelpTip>
           </div>
+        )}
+
+        {/* The licence class decides where SSTV may be sent. A US callsign no longer encodes
+            the class, so this fills it from a HamDB lookup instead of making the operator
+            read the help and type "us-general" exactly. */}
+        {s.key === "station.licenceClass" && (
+          <LicenceLookupButton onChange={onChange} disabled={cleared} />
         )}
       </div>
     </Field>
