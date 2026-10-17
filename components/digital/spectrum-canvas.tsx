@@ -1,8 +1,10 @@
 import { useEffect, useRef } from "react";
 
 import { remapAxis } from "@/lib/radio/panadapter";
+import { writeWaterfallRow } from "@/lib/radio/waterfall-history";
 
-// The scrolling canvas both waterfalls are drawn on.
+// The RF scrolling canvas. The timed audio view uses AudioWaterfallCanvas and shares
+// this palette and the peak-per-pixel writer, so narrow carriers survive in both views.
 //
 // Lifted out of Waterfall.tsx when the RF panadapter arrived, because the drawing is
 // not the part that differs. Scrolling a bitmap up one pixel, reducing bins to pixels
@@ -213,24 +215,7 @@ export function SpectrumCanvas({
     const px = line.data;
     const bins = row.bins;
 
-    for (let x = 0; x < w; x++) {
-      // Take the strongest bin each pixel covers, so a narrow signal stays visible
-      // whatever the canvas width relative to the bin count. Averaging would make
-      // a single-bin carrier vanish — which on a panadapter is every CW station and
-      // every FT8 tone.
-      const from = Math.floor((x * bins.length) / w);
-      const to = Math.max(from + 1, Math.floor(((x + 1) * bins.length) / w));
-      let peak = 0;
-      for (let b = from; b < to && b < bins.length; b++) {
-        if (bins[b]! > peak) peak = bins[b]!;
-      }
-      const v = Math.max(0, Math.min(255, Math.round(peak * gain)));
-      const o = x * 4;
-      px[o] = PALETTE[v * 3]!;
-      px[o + 1] = PALETTE[v * 3 + 1]!;
-      px[o + 2] = PALETTE[v * 3 + 2]!;
-      px[o + 3] = 255;
-    }
+    writeWaterfallRow(bins, px, w, gain, PALETTE);
 
     ctx.putImageData(line, 0, h - 1);
   }, [row, gain]);
