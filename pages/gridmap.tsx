@@ -20,6 +20,7 @@
 // See the Calling CQ card at the bottom for the sentence that used to conflate them.
 
 import Link from "next/link";
+import { useRouter } from "next/router";
 import type { GetServerSidePropsContext } from "next";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -150,6 +151,7 @@ export default function GridMapPage({ wsUrl }: Props) {
   const [connected, setConnected] = useState(false);
   const [band, setBand] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
+  const router = useRouter();
   const [selected, setSelected] = useState<string | null>(null);
 
   const [showLive, setShowLive] = useState(true);
@@ -508,8 +510,10 @@ export default function GridMapPage({ wsUrl }: Props) {
                     r={2.5 / zoom}
                     fill={colourFor(p.band)}
                     opacity={0.55}
+                    className="cursor-pointer"
+                    onClick={() => void router.push(`/qsos?q=${encodeURIComponent(p.callsign)}`)}
                   >
-                    <title>{`${p.callsign} · ${p.band} ${p.mode} · ${p.km.toLocaleString()} km (logged)`}</title>
+                    <title>{`${p.callsign} · ${p.band} ${p.mode} · ${p.km.toLocaleString()} km (logged) — click for this station's log`}</title>
                   </circle>
                 );
               })}
@@ -592,6 +596,12 @@ export default function GridMapPage({ wsUrl }: Props) {
                 <MapRow label="Heard" value={`${Math.round((now - sel.at) / 1000)}s ago`} />
                 <MapRow label="Message" value={sel.message} />
               </dl>
+              <Link
+                href={`/qsos?q=${encodeURIComponent(sel.callsign)}`}
+                className="mt-3 inline-block text-sm text-accent-bright hover:underline"
+              >
+                View {sel.callsign}&apos;s QSOs →
+              </Link>
               {sel.isCq && (
                 <p className="mt-3 pt-3 border-t border-line text-sm">
                   <Link href="/decodes" className="text-accent-bright hover:underline">

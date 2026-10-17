@@ -9,7 +9,8 @@
 // Coastlines would make it prettier and would not make it say more. If the day comes that
 // somebody wants the pretty version, this page is the data source for it.
 
-import { useMemo, useState } from "react";
+import { useRouter } from "next/router";
+import { useCallback, useMemo, useRef, useState } from "react";
 
 import { Card, PageHeader, Select } from "@/components/ui/primitives";
 import { withPageAuth } from "@/lib/auth/guard";
@@ -63,6 +64,45 @@ export default function MapPage() {
   const size = 560;
   const centre = size / 2;
 
+  // Zoom (wheel) and pan (drag) over the SVG viewBox, plus double-click to reset. Dots stay
+  // clickable: a click without a drag still fires their onClick, a drag pans instead.
+  const router = useRouter();
+  const [view, setView] = useState({ x: 0, y: 0, w: size, h: size });
+  const svgRef = useRef<SVGSVGElement>(null);
+  const drag = useRef<{ px: number; py: number; vx: number; vy: number } | null>(null);
+  const onWheel = useCallback(
+    (e: React.WheelEvent<SVGSVGElement>) => {
+      e.preventDefault();
+      const rect = svgRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      const fx = (e.clientX - rect.left) / rect.width;
+      const fy = (e.clientY - rect.top) / rect.height;
+      setView((v) => {
+        const factor = e.deltaY > 0 ? 1.25 : 0.8;
+        const w = Math.max(size * 0.12, Math.min(size, v.w * factor));
+        return { x: v.x + fx * (v.w - w), y: v.y + fy * (v.h - w), w, h: w };
+      });
+    },
+    [size],
+  );
+  const onPointerDown = (e: React.PointerEvent<SVGSVGElement>) => {
+    drag.current = { px: e.clientX, py: e.clientY, vx: view.x, vy: view.y };
+    (e.target as Element).setPointerCapture?.(e.pointerId);
+  };
+  const onPointerMove = (e: React.PointerEvent<SVGSVGElement>) => {
+    // Read the ref into a local value BEFORE the updater — releasing the pointer mid-update
+    // must not pull the anchor out from under it (the gridmap null-crash).
+    const anchor = drag.current;
+    const rect = svgRef.current?.getBoundingClientRect();
+    if (!anchor || !rect) return;
+    const dx = (e.clientX - anchor.px) / rect.width;
+    const dy = (e.clientY - anchor.py) / rect.height;
+    setView((v) => ({ ...v, x: anchor.vx - dx * v.w, y: anchor.vy - dy * v.h }));
+  };
+  const onPointerUp = () => {
+    drag.current = null;
+  };
+
   const dots = useMemo(() => {
     if (!data) return [];
     return data.points.map((p, i) => {
@@ -72,10 +112,11 @@ export default function MapPage() {
       const r = radiusFor(p.km, size);
       return {
         key: `${p.callsign}-${p.at}-${i}`,
+        callsign: p.callsign,
         x: centre + r * Math.cos(rad),
         y: centre + r * Math.sin(rad),
         colour: colourFor(p.band),
-        title: `${p.callsign} · ${p.band} ${p.mode} · ${p.km.toLocaleString()} km at ${p.bearing}°`,
+        title: `${p.callsign} · ${p.band} ${p.mode} · ${p.km.toLocaleString()} km at ${p.bearing}° — click for this station's log`,
       };
     });
   }, [data, centre]);
@@ -143,11 +184,18 @@ export default function MapPage() {
           <Card title="Bearing and distance" className="lg:col-span-2">
             <div className="flex justify-center">
               <svg
+                ref={svgRef}
                 width="100%"
-                viewBox={`0 0 ${size} ${size}`}
-                className="max-w-[560px]"
+                viewBox={`${view.x} ${view.y} ${view.w} ${view.h}`}
+                className="max-w-[560px] touch-none cursor-grab active:cursor-grabbing"
                 role="img"
-                aria-label="Contacts by bearing and distance"
+                aria-label="Contacts by bearing and distance — scroll to zoom, drag to pan, double-click to reset"
+                onWheel={onWheel}
+                onPointerDown={onPointerDown}
+                onPointerMove={onPointerMove}
+                onPointerUp={onPointerUp}
+                onPointerCancel={onPointerUp}
+                onDoubleClick={() => setView({ x: 0, y: 0, w: size, h: size })}
               >
                 {/* Distance rings, labelled on the north axis. */}
                 {RINGS.map((km) => (
@@ -212,7 +260,16 @@ export default function MapPage() {
                 })}
 
                 {dots.map((d) => (
-                  <circle key={d.key} cx={d.x} cy={d.y} r="2.5" fill={d.colour} opacity="0.75">
+                  <circle
+                    key={d.key}
+                    cx={d.x}
+                    cy={d.y}
+                    r="2.5"
+                    fill={d.colour}
+                    opacity="0.75"
+                    className="cursor-pointer"
+                    onClick={() => void router.push(`/qsos?q=${encodeURIComponent(d.callsign)}`)}
+                  >
                     <title>{d.title}</title>
                   </circle>
                 ))}
