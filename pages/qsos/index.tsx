@@ -18,8 +18,10 @@ import {
 import { withPageAuth } from "@/lib/auth/guard";
 import { useApi } from "@/lib/client/api";
 import { useCan } from "@/lib/client/session";
+import { useDistanceUnit } from "@/lib/client/use-distance-unit";
 import { BAND_NAMES, formatFreqMHz } from "@/lib/ham/bands";
 import { LOGGABLE_MODES } from "@/lib/ham/modes";
+import { formatDistance, gridDistanceKm } from "@/lib/propagation";
 import { formatUtc } from "@/lib/time";
 import type { ListResponse, Qso } from "@/lib/types";
 
@@ -42,6 +44,7 @@ export default function QsoLogPage() {
   const [sort, setSort] = useState<SortField>("startTime");
   const [dir, setDir] = useState<"asc" | "desc">("desc");
   const [page, setPage] = useState(0);
+  const [unit, setUnit] = useDistanceUnit();
 
   // Seed the search from the URL, so `/qsos?q=W1ABC` opens the log filtered to them.
   //
@@ -208,6 +211,26 @@ export default function QsoLogPage() {
             </Button>
           )}
 
+          {/* Distance units — a per-device display choice (miles for US, km for metric).
+              The decode list and the maps read the same preference. */}
+          <div className="ml-auto flex items-center gap-1 text-xs text-fg-muted">
+            <span className="text-fg-subtle">Distance</span>
+            {(["mi", "km"] as const).map((u) => (
+              <button
+                key={u}
+                type="button"
+                onClick={() => setUnit(u)}
+                className={
+                  unit === u
+                    ? "rounded-sm bg-accent/20 text-accent-bright px-1.5 py-0.5"
+                    : "rounded-sm px-1.5 py-0.5 hover:text-accent-bright"
+                }
+              >
+                {u}
+              </button>
+            ))}
+          </div>
+
           {/* Export what is on screen, not the whole log.
 
               The ADIF page already accepts these same parameters, so a filtered view
@@ -222,7 +245,7 @@ export default function QsoLogPage() {
               ...(to ? { to: `${to}T23:59:59.999Z` } : {}),
               ...(confirmed !== "any" ? { confirmed } : {}),
             }).toString()}`}
-            className="text-xs text-fg-muted hover:text-accent-bright underline underline-offset-2 ml-auto"
+            className="text-xs text-fg-muted hover:text-accent-bright underline underline-offset-2 ml-3"
           >
             Export this view as ADIF
           </a>
@@ -277,6 +300,7 @@ export default function QsoLogPage() {
                 </Th>
                 <Th>RST</Th>
                 <Th>Grid</Th>
+                <Th>Distance</Th>
                 <Th>Station / Op</Th>
                 <Th>QSL</Th>
               </tr>
@@ -299,6 +323,19 @@ export default function QsoLogPage() {
                     >
                       {qso.callsign}
                     </Link>
+                    {/* Straight to the worked station's QRZ page. A separate anchor, not the
+                        row link, and it stops propagation so it opens QRZ rather than the
+                        contact detail or the row's own navigation. */}
+                    <a
+                      href={`https://www.qrz.com/db/${encodeURIComponent(qso.callsign)}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      onClick={(e) => e.stopPropagation()}
+                      title={`${qso.callsign} on QRZ.com`}
+                      className="ml-1.5 text-[10px] uppercase tracking-wide text-fg-subtle hover:text-accent-bright"
+                    >
+                      QRZ↗
+                    </a>
                     {/* Shown beside the callsign rather than in a column of its own:
                         the table is already at its width, and a park is a property of
                         the station worked.
@@ -344,6 +381,12 @@ export default function QsoLogPage() {
                     {qso.rstSent ?? "—"} / {qso.rstRcvd ?? "—"}
                   </Td>
                   <Td className="tnum text-fg-muted">{qso.gridSquare ?? "—"}</Td>
+                  <Td className="tnum text-fg-muted whitespace-nowrap">
+                    {(() => {
+                      const km = gridDistanceKm(qso.station.grid, qso.gridSquare);
+                      return km === null ? "—" : formatDistance(km, unit);
+                    })()}
+                  </Td>
                   <Td className="text-fg-muted whitespace-nowrap">
                     {qso.station.callsign}
                     {qso.operator && (
