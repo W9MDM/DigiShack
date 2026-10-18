@@ -1053,10 +1053,10 @@ export function QsoForm({
               type="datetime-local"
               value={values.startTime}
               onChange={(e) => set("startTime", e.target.value)}
-              className="tnum"
+              className="tnum min-w-0 flex-1"
               aria-invalid={Boolean(fieldErrors("startTime"))}
             />
-            <Button onClick={() => set("startTime", utcNowInputValue())}>
+            <Button className="shrink-0" onClick={() => set("startTime", utcNowInputValue())}>
               Now
             </Button>
           </div>
