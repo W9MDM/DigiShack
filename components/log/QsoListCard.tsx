@@ -32,21 +32,44 @@ export function sigSummary(qso: Qso): { text: string; extra: number; title: stri
 }
 
 /**
+ * The card's frequency: MHz to the kHz, "14.075". The full-precision value, which on a
+ * digital contact is dial plus audio offset ("14.075208"), is ragged from row to row and
+ * long enough to push the details line onto a second row at phone width. The kHz is what
+ * a reader scans a list for; the contact page and the hover title carry every Hz.
+ */
+function cardFreq(hz: number): string {
+  return Number.isFinite(hz) && hz > 0 ? (hz / 1_000_000).toFixed(3) : "—";
+}
+
+/**
  * One contact as a card, for widths where the table would scroll sideways. The callsign
  * link is stretched over the whole card; QRZ and re-send sit above it with `z-10`.
  *
- * Two lines where it fits, not three. The QSL badges used to have a line of their own,
- * which on most contacts held nothing else, so a phone showed about five contacts a
- * screen. They now ride at the end of the details line with `ml-auto`: right-aligned
- * beside the report when there is room, and dropping to their own line, still
- * right-aligned, when a grid and distance have filled it.
+ * Two lines, not three. The QSL badges and re-send ride in the top row, before the time,
+ * so the details line under the call carries only radio data and fits a phone's width.
+ * At the end of the details line they dropped to a third row on most contacts that had a
+ * grid. If a long call and several badges do not fit, the right-hand group wraps under
+ * the call, still right-aligned, rather than truncating the call.
+ *
+ * `dateless`: the list shows a date heading where the day changes, so the card shows the
+ * time alone. Only when the list is in time order; sorted by call or band, every card
+ * keeps its full date because neighbouring cards can be years apart.
  */
-export function QsoListCard({ qso, unit }: { qso: Qso; unit: DistanceUnit }) {
+export function QsoListCard({
+  qso,
+  unit,
+  dateless = false,
+}: {
+  qso: Qso;
+  unit: DistanceUnit;
+  dateless?: boolean;
+}) {
   const distance = qsoDistance(qso, unit);
   const sig = sigSummary(qso);
+  const stamp = formatUtc(qso.startTime);
   return (
     <article className="relative rounded-md border border-line bg-surface px-3 py-2 shadow-panel transition-colors hover:bg-surface-2">
-      <div className="flex items-baseline justify-between gap-3">
+      <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
         <div className="flex min-w-0 items-baseline gap-2">
           <Link
             href={`/qsos/${qso.id}`}
@@ -66,15 +89,23 @@ export function QsoListCard({ qso, unit }: { qso: Qso; unit: DistanceUnit }) {
             <span className="sr-only">, {qso.callsign} on QRZ.com (opens in a new tab)</span>
           </a>
         </div>
-        <time dateTime={qso.startTime} className="shrink-0 tnum text-xs text-fg-muted">
-          {formatUtc(qso.startTime)}
-        </time>
+        <div className="ml-auto flex shrink-0 items-center gap-1.5">
+          <QslBadges qso={qso} />
+          <span className="relative z-10">
+            <ResendQslButton qsoId={qso.id} callsign={qso.callsign} />
+          </span>
+          <time dateTime={qso.startTime} title={stamp} className="tnum text-xs text-fg-muted">
+            {dateless && stamp.length > 11 ? stamp.slice(11) : stamp}
+          </time>
+        </div>
       </div>
 
       <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-fg-muted">
         <Badge size="sm">{qso.band}</Badge>
         <Badge size="sm">{qso.mode}</Badge>
-        <span className="tnum">{formatFreqMHz(qso.freqHz)}</span>
+        <span className="tnum" title={`${formatFreqMHz(qso.freqHz)} MHz`}>
+          {cardFreq(qso.freqHz)}
+        </span>
         {(qso.rstSent || qso.rstRcvd) && (
           <span className="tnum">
             {qso.rstSent ?? "—"}/{qso.rstRcvd ?? "—"}
@@ -92,12 +123,6 @@ export function QsoListCard({ qso, unit }: { qso: Qso; unit: DistanceUnit }) {
             {sig.extra > 0 && ` +${sig.extra}`}
           </span>
         )}
-        <span className="ml-auto inline-flex items-center gap-1.5">
-          <QslBadges qso={qso} />
-          <span className="relative z-10">
-            <ResendQslButton qsoId={qso.id} callsign={qso.callsign} />
-          </span>
-        </span>
       </div>
     </article>
   );

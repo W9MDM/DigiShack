@@ -96,8 +96,10 @@ export function Nudge({
 }
 
 /**
- * The Select primitive with the platform's own dropdown arrow. The primitive draws none
- * (`appearance-none`), and a select with no arrow reads as a text box.
+ * The Select primitive in the Digital page's two sizes. It used to add `appearance-auto`
+ * for the platform's arrow, from when the primitive drew none; the primitive now draws its
+ * own chevron, so that put two arrows on every one of these. The right padding leaves room
+ * for the drawn chevron (`pr-7` on the small one; the default `pr-8` on `md`).
  */
 export function NativeSelect({
   size = "sm",
@@ -106,11 +108,7 @@ export function NativeSelect({
 }: Omit<SelectHTMLAttributes<HTMLSelectElement>, "size"> & { size?: "sm" | "md" }) {
   return (
     <Select
-      className={cn(
-        "appearance-auto",
-        size === "sm" ? "w-auto py-1 pl-2 pr-1 text-xs" : "pr-2",
-        className,
-      )}
+      className={cn(size === "sm" && "w-auto py-1 pl-2 pr-7 text-xs", className)}
       {...props}
     />
   );

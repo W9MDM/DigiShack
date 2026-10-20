@@ -202,14 +202,27 @@ export default function CallsignPage() {
                 }
               >
                 <BandModeGrid slices={data.slices} />
+                {/* On a phone, only the keys the grid uses: a sample chip for a state no
+                    cell is in read as if this station had a contact in it. From sm up the
+                    legend is unchanged, both keys always. */}
                 <p className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-fg-subtle">
-                  <span className="inline-flex items-center gap-1.5">
+                  <span
+                    className={cn(
+                      "inline-flex items-center gap-1.5",
+                      !data.slices.some((s) => s.confirmed) && "max-sm:hidden",
+                    )}
+                  >
                     <Badge size="sm" tone="ok">
                       ✓ 2
                     </Badge>
                     confirmed
                   </span>
-                  <span className="inline-flex items-center gap-1.5">
+                  <span
+                    className={cn(
+                      "inline-flex items-center gap-1.5",
+                      !data.slices.some((s) => !s.confirmed) && "max-sm:hidden",
+                    )}
+                  >
                     <Badge size="sm">2</Badge>
                     worked, not confirmed
                   </span>

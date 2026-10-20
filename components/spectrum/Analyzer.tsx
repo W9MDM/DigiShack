@@ -11,7 +11,7 @@ import { useRef, useState } from "react";
 
 import { drawAxis, newestSpan, rgba, useFeedCanvas } from "@/components/spectrum/ClassicViews";
 import { useNightMode } from "@/lib/client/use-theme";
-import { formatReadoutFrequency } from "@/lib/spectrum/axis";
+import { ANALYZER_Y_AXIS_PX, analyzerLayout, formatReadoutFrequency } from "@/lib/spectrum/axis";
 import { colormapChrome, colormapRgb, type ColormapId } from "@/lib/spectrum/colormaps";
 import type { SpectrumFeed } from "@/lib/spectrum/feed";
 import { displayWindow, normaliseDb, type Contrast } from "@/lib/spectrum/levels";
@@ -19,7 +19,7 @@ import { cn } from "@/lib/utils";
 
 const AVERAGING = [1, 3, 5, 10] as const;
 const MAX_MARKERS = 4;
-const Y_AXIS_PX = 44;
+const Y_AXIS_PX = ANALYZER_Y_AXIS_PX;
 const X_AXIS_PX = 18;
 
 interface Marker {
@@ -81,9 +81,11 @@ export function Analyzer({
     const hist = feed.history;
     if (!span || hist.size < 1) return;
 
+    // A phone-width canvas gets more trace and a shorter waterfall strip (see analyzerLayout).
+    const layout = analyzerLayout(w / dpr);
     const plotX = Y_AXIS_PX * dpr;
     const plotW = Math.max(16, w - plotX - 4 * dpr);
-    const specH = Math.round(h * 0.55);
+    const specH = Math.round(h * layout.traceShare);
     const specPlotH = specH - X_AXIS_PX * dpr;
     const wfTop = specH + 2 * dpr;
     const wfH = Math.max(8, h - wfTop - X_AXIS_PX * dpr);
@@ -168,16 +170,21 @@ export function Analyzer({
     g.font = `${11 * dpr}px ui-sans-serif, system-ui, sans-serif`;
     g.textBaseline = "middle";
     const stepDb = niceDbStep(hi - lo);
+    // Narrow: the labels sit against the plot, right-aligned, leaving the gutter's left edge
+    // to the rotated unit title. Left-aligned at 4px they ran under it ("dB-55").
+    g.textAlign = layout.tickAlign;
     for (let d = Math.ceil(lo / stepDb) * stepDb; d <= hi; d += stepDb) {
       const y = Math.round(yOf(d)) + 0.5;
       g.beginPath();
       g.moveTo(plotX, y);
       g.lineTo(plotX + plotW, y);
       g.stroke();
-      g.fillText(`${Math.round(d)}`, 4 * dpr, y);
+      g.fillText(`${Math.round(d)}`, layout.tickX * dpr, y);
     }
+    // drawAxis and the marker labels measure from the left edge.
+    g.textAlign = "left";
     g.save();
-    g.translate(10 * dpr, specPlotH / 2);
+    g.translate(layout.titleX * dpr, specPlotH / 2);
     g.rotate(-Math.PI / 2);
     g.textAlign = "center";
     g.fillText(feed.kind === "rf" && feed.info.calibrated ? "dBm" : "dB", 0, -2 * dpr);
@@ -288,9 +295,13 @@ export function Analyzer({
   };
 
   const box = "inline-flex items-center gap-1.5 cursor-pointer select-none";
+  // Below sm the two buttons can't join the Autoscale / Averaging row (it is too narrow for
+  // all four), so they take a row of their own, full width and split evenly, instead of
+  // wrapping alone against the right edge.
+  const action = "rounded-sm border border-line px-2 py-0.5 hover:bg-surface-2 hover:text-fg max-sm:min-h-9 max-sm:flex-1 max-sm:px-3";
   return (
     <div className={cn("flex flex-col", className)} style={{ height }}>
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-line px-2 py-1 text-xs text-fg-muted">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-line px-2 py-1 text-xs text-fg-muted max-sm:gap-y-2">
         <label className={box}>
           <input type="checkbox" checked={showMax} onChange={(e) => setShowMax(e.target.checked)} className="accent-accent" />
           <span className="text-danger">Max trace</span>
@@ -312,7 +323,7 @@ export function Analyzer({
           <select
             value={avgN}
             onChange={(e) => setAvgN(Number(e.target.value) as (typeof AVERAGING)[number])}
-            className="rounded-sm border border-line bg-surface px-1 py-0.5 text-xs text-fg"
+            className="rounded-sm border border-line bg-surface px-1 py-0.5 text-xs text-fg max-sm:min-h-9 max-sm:px-2"
           >
             {AVERAGING.map((a) => (
               <option key={a} value={a}>
@@ -321,15 +332,15 @@ export function Analyzer({
             ))}
           </select>
         </label>
-        <span className="ml-auto flex items-center gap-2">
-          <button type="button" onClick={resetMax} className="rounded-sm border border-line px-2 py-0.5 hover:bg-surface-2 hover:text-fg">
+        <span className="ml-auto flex items-center gap-2 max-sm:ml-0 max-sm:w-full">
+          <button type="button" onClick={resetMax} className={action}>
             Reset max
           </button>
           <button
             type="button"
             onClick={() => setMarkers([])}
             disabled={markers.length === 0}
-            className="rounded-sm border border-line px-2 py-0.5 hover:bg-surface-2 hover:text-fg disabled:opacity-40"
+            className={cn(action, "disabled:opacity-40")}
           >
             Clear markers
           </button>

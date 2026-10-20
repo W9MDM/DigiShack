@@ -5,6 +5,7 @@ import type { ViewWindow } from "@/lib/geo/viewport";
 import type { DistanceUnit } from "@/lib/maps/geodesy";
 import { mapColourFor } from "@/lib/maps/palette";
 import { PLOT_SIZE, radiusFor, ringsFor, wedgePath } from "@/lib/maps/polar";
+import { cn } from "@/lib/utils";
 
 import { ZoomControls } from "./ZoomControls";
 import { useMapGestures } from "./useMapGestures";
@@ -222,7 +223,12 @@ export function CoveragePlot({
           ref={svgRef}
           width="100%"
           viewBox={`${view.x} ${view.y} ${view.w} ${view.h}`}
-          className="max-w-[560px] aspect-square touch-none select-none cursor-grab"
+          // Unzoomed, a drag has nothing to move, so a vertical swipe is the page's and the
+          // operator can scroll past the plot; zoomed in, every drag pans it. As on the map.
+          className={cn(
+            "max-w-[560px] aspect-square select-none cursor-grab",
+            view.h >= SIZE - 0.5 ? "touch-pan-y" : "touch-none",
+          )}
           role="img"
           tabIndex={0}
           aria-label="Contacts by bearing and distance. Arrow keys pan, plus and minus zoom, 0 resets."

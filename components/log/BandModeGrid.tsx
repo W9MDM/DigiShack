@@ -1,6 +1,7 @@
 import { Badge, Td, Th } from "@/components/ui/primitives";
 import { BAND_NAMES } from "@/lib/ham/bands";
 import { formatUtc } from "@/lib/time";
+import { cn } from "@/lib/utils";
 
 export interface BandModeSlice {
   band: string;
@@ -38,12 +39,16 @@ export function pivotSlices(slices: BandModeSlice[]): {
  */
 export function BandModeGrid({ slices }: { slices: BandModeSlice[] }) {
   const { bands, modes, cell } = pivotSlices(slices);
+  // A phone card with one to three modes left the grid in its left third. There it spans
+  // the card, the band column held at 4rem and the modes sharing the rest. More modes
+  // than that fill the width anyway; from sm up it stays its natural width.
+  const stretch = modes.length <= 3;
   return (
     <div className="overflow-x-auto">
-      <table className="border-collapse text-sm">
+      <table className={cn("border-collapse text-sm", stretch && "max-sm:w-full")}>
         <thead>
           <tr className="text-left">
-            <Th size="sm">
+            <Th size="sm" className={stretch ? "max-sm:w-16" : undefined}>
               <span className="sr-only">Band</span>
             </Th>
             {modes.map((m) => (

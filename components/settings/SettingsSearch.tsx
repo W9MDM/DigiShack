@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useSyncExternalStore } from "react";
 
 import { displayItems } from "@/components/settings/display";
 import { Highlight } from "@/components/settings/HelpText";
@@ -13,6 +13,20 @@ export const SEARCH_INPUT_ID = "settings-search";
 function isTyping(el: EventTarget | null): boolean {
   if (!(el instanceof HTMLElement)) return false;
   return el.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(el.tagName);
+}
+
+// Tailwind's sm. Below it the full placeholder was cut at "help tex", so a phone gets a
+// shorter one; the server renders the full one, as before.
+const WIDE = "(min-width: 40rem)";
+
+function subscribeWide(onChange: () => void): () => void {
+  const mq = window.matchMedia(WIDE);
+  mq.addEventListener("change", onChange);
+  return () => mq.removeEventListener("change", onChange);
+}
+
+function isWide(): boolean {
+  return window.matchMedia(WIDE).matches;
 }
 
 /** The search field. "/" focuses it from anywhere on the page that is not a text field. */
@@ -35,6 +49,7 @@ export function SettingsSearchBox({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
+  const wide = useSyncExternalStore(subscribeWide, isWide, () => true);
 
   return (
     <div className="mb-4 flex flex-col gap-2 sm:mb-6 sm:flex-row sm:items-center sm:gap-4">
@@ -64,7 +79,7 @@ export function SettingsSearchBox({
               onChange("");
             }
           }}
-          placeholder="Search settings — name, key or help text"
+          placeholder={wide ? "Search settings — name, key or help text" : "Search name, key or help text"}
           aria-label="Search settings"
           aria-keyshortcuts="/"
           enterKeyHint="search"
@@ -95,7 +110,7 @@ export function SettingsSearchBox({
           </kbd>
         )}
       </div>
-      {summary && <p className="shrink-0 text-sm text-fg-subtle tnum">{summary}</p>}
+      {summary && <p className="shrink-0 text-xs text-fg-subtle tnum sm:text-sm">{summary}</p>}
     </div>
   );
 }

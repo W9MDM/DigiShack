@@ -86,7 +86,7 @@ export function OnAirStrip({
 
       {/* Where we are in the cycle: FT8 transmits for 12.6 s of every 15, so this says
           whether decodes are about to land. */}
-      {slotted && (
+      {slotted ? (
         <div className="flex items-center gap-2 px-3 pb-2">
           <div className="h-1 flex-1 bg-surface-2 rounded-sm overflow-hidden" aria-hidden="true">
             <div
@@ -97,8 +97,41 @@ export function OnAirStrip({
           <span className="shrink-0 text-xs text-fg-subtle tnum">
             {decodingAs} · {(periodMs / 1000).toFixed(1)} s
           </span>
+          <WaterfallJump />
+        </div>
+      ) : (
+        <div className="flex justify-end px-3 pb-2 lg:hidden">
+          <WaterfallJump />
         </div>
       )}
     </div>
+  );
+}
+
+/** The waterfall's wrapper on the Digital page, the target of the jump below. */
+export const WATERFALL_ID = "digital-waterfall";
+
+/**
+ * Below `lg` the waterfall is the last thing on the page, several screens under the decode
+ * list, so picking a signal in it meant a long scroll. This takes you there; from `lg` up
+ * the waterfall is back at the top of the page and the jump is not drawn. A button, not a
+ * `#hash` link, so the URL does not keep the jump and a reload opens at the top.
+ */
+function WaterfallJump() {
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        // No glide for an operator who has asked the system for less motion.
+        const still = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+        document
+          .getElementById(WATERFALL_ID)
+          ?.scrollIntoView({ behavior: still ? "auto" : "smooth", block: "start" });
+      }}
+      title="Jump down to the waterfall"
+      className="shrink-0 text-xs text-accent-bright hover:underline lg:hidden"
+    >
+      Waterfall<span aria-hidden="true"> ↓</span>
+    </button>
   );
 }

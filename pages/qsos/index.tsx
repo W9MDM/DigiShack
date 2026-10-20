@@ -41,7 +41,7 @@ import { useCan } from "@/lib/client/session";
 import { useDistanceUnit } from "@/lib/client/use-distance-unit";
 import { BAND_NAMES, formatFreqMHz } from "@/lib/ham/bands";
 import { LOGGABLE_MODES } from "@/lib/ham/modes";
-import { formatUtc } from "@/lib/time";
+import { formatUtc, formatUtcDate } from "@/lib/time";
 import type { ListResponse, Qso } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -341,7 +341,10 @@ export default function QsoLogPage() {
             Clear filters
           </Button>
         )}
-        <div className="ml-auto flex flex-wrap items-center gap-x-4 gap-y-2">
+        {/* Below sm, a full-width line of its own with the unit toggle at the left edge
+            under the count and Export at the right, where `ml-auto` left both pushed right
+            and wrapping ragged. The top pager is sm-up only. */}
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 max-sm:w-full max-sm:justify-between sm:ml-auto">
           <div role="group" aria-label="Distance unit" className="flex items-center gap-1">
             <span className="text-xs text-fg-subtle">Distance</span>
             {(["mi", "km"] as const).map((u) => (
@@ -416,13 +419,36 @@ export default function QsoLogPage() {
           aria-busy={refreshing || undefined}
           className={cn("transition-opacity", refreshing && "opacity-60")}
         >
-          <ul className="flex flex-col gap-2 md:hidden">
-            {rows.map((qso) => (
-              <li key={qso.id}>
-                <QsoListCard qso={qso} unit={unit} />
-              </li>
-            ))}
-          </ul>
+          {/* In time order the cards are grouped by UTC day under a heading that sticks
+              below the app bar, and each card shows its time alone: the full date on every
+              card was most of what pushed its badges onto a third row. Any other order
+              mixes days card to card, so it stays one list with the date on each card. */}
+          {query.sort === "startTime" ? (
+            <ul className="flex flex-col gap-2 md:hidden">
+              {groupByDay(rows).map(([day, qsos]) => (
+                <li key={day}>
+                  <h2 className="sticky top-[calc(3rem+env(safe-area-inset-top))] z-15 -mx-4 bg-bg px-4 py-1.5 text-xs text-fg-subtle tnum">
+                    {day}
+                  </h2>
+                  <ul className="flex flex-col gap-2">
+                    {qsos.map((qso) => (
+                      <li key={qso.id}>
+                        <QsoListCard qso={qso} unit={unit} dateless />
+                      </li>
+                    ))}
+                  </ul>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <ul className="flex flex-col gap-2 md:hidden">
+              {rows.map((qso) => (
+                <li key={qso.id}>
+                  <QsoListCard qso={qso} unit={unit} />
+                </li>
+              ))}
+            </ul>
+          )}
 
           {/* overflow-clip, not hidden: hidden makes a scroll container and the sticky
               header would stick to it instead of the viewport. */}
@@ -546,6 +572,18 @@ export default function QsoLogPage() {
       )}
     </>
   );
+}
+
+/** Consecutive rows that share a UTC day, in the order given. */
+function groupByDay(rows: Qso[]): [string, Qso[]][] {
+  const out: [string, Qso[]][] = [];
+  for (const qso of rows) {
+    const day = formatUtcDate(qso.startTime);
+    const last = out[out.length - 1];
+    if (last && last[0] === day) last[1].push(qso);
+    else out.push([day, [qso]]);
+  }
+  return out;
 }
 
 function LogSkeleton() {

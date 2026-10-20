@@ -5,6 +5,7 @@ import type {
   GetServerSidePropsResult,
 } from "next";
 import type { NextApiRequest, NextApiResponse } from "next";
+import type { ServerResponse } from "node:http";
 
 import { sendError } from "@/lib/api/respond";
 import { getBooleanSetting } from "@/lib/settings";
@@ -66,7 +67,16 @@ export function authedRoute(
     }
 
     try {
-      let auth = await getAuth(req);
+      let auth: AuthContext | null;
+      try {
+        auth = await getAuth(req);
+      } catch (err) {
+        // The database not answering says nothing about whether this visitor is signed
+        // in, so it must not come back as a 401. Refused all the same, and told to retry.
+        console.error("[api-auth] session lookup failed:", err);
+        sendSessionUnavailable(res);
+        return;
+      }
 
       // Fall back to an API key where the route allows one. Session first, so a
       // browser request is never charged to a key that happens to be present.
@@ -126,6 +136,18 @@ export function authedRoute(
       handleError(res, err);
     }
   };
+}
+
+/** Seconds a client is told to wait before asking again after a failed session lookup. */
+export const SESSION_RETRY_AFTER_S = 5;
+
+/** The API answer when a session could not be checked: refused, and not "signed out". */
+function sendSessionUnavailable(res: NextApiResponse): void {
+  res.setHeader("Retry-After", String(SESSION_RETRY_AFTER_S));
+  res.setHeader("Cache-Control", "no-store");
+  sendError(res, 503, "Could not check your session just now. Try again in a few seconds.", {
+    retryable: true,
+  });
 }
 
 // Same translation table as lib/api/respond's route(). Kept here rather than
@@ -199,9 +221,9 @@ export interface UiFlags {
 /**
  * Read the UI flags. Defaults are the safe answer to "what should a fresh install show".
  *
- * A failure to read them must not blank the page: an unreachable database already redirects
- * to /login with an explanation, and anything subtler than that should degrade to the
- * defaults rather than throw inside a layout.
+ * A failure to read them must not blank the page: an unreachable database is already answered
+ * by the retry page below, and anything subtler than that should degrade to the defaults
+ * rather than throw inside a layout.
  */
 async function readUiFlags(): Promise<UiFlags> {
   try {
@@ -210,6 +232,43 @@ async function readUiFlags(): Promise<UiFlags> {
     return { rig: false };
   }
 }
+
+/**
+ * The page a guarded route serves when the session could not be checked.
+ *
+ * Self-contained HTML rather than a React page, because the thing that failed is the database
+ * every page's props come from. It refreshes itself, so a blip clears without the operator
+ * doing anything, and it sets no cookie. A client-side navigation's /_next/data request gets
+ * the same 503; Next's router answers that with a full load of the URL, which lands here.
+ */
+function sendSessionUnavailablePage(res: ServerResponse): void {
+  if (res.headersSent) return;
+  res.statusCode = 503;
+  res.setHeader("Retry-After", String(SESSION_RETRY_AFTER_S));
+  // Not only for caches: Next's pages handler sets its own Cache-Control after props come
+  // back unless one is already there, and setting a header on a finished response throws.
+  res.setHeader("Cache-Control", "no-store");
+  res.setHeader("Content-Type", "text/html; charset=utf-8");
+  res.end(SESSION_UNAVAILABLE_HTML);
+}
+
+const SESSION_UNAVAILABLE_HTML = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="refresh" content="${SESSION_RETRY_AFTER_S}">
+<title>Retrying · DigiShack</title>
+<style>
+body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;
+font:16px/1.5 system-ui,sans-serif;background:#0b0b0d;color:#e8e8ea;padding:16px;box-sizing:border-box}
+main{max-width:28rem}h1{font-size:1.25rem;margin:0 0 .5rem}p{margin:0 0 1rem;color:#a8a8b0}
+a{color:#ff6a4d}
+</style></head><body><main>
+<h1>Could not check your sign-in</h1>
+<p>DigiShack did not get an answer from its database. You have not been signed out; this page
+tries again in ${SESSION_RETRY_AFTER_S} seconds.</p>
+<p><a href="">Try again now</a></p>
+</main></body></html>
+`;
 
 /**
  * getServerSideProps guard. Redirects an unauthenticated visitor to /login (or
@@ -232,11 +291,15 @@ export function withPageAuth<P extends Record<string, unknown>>(
     try {
       auth = await getAuth(ctx.req);
     } catch (err) {
-      // The DB being down must not render a blank page with no explanation.
+      // This used to redirect to /login?error=database, which is a sign-out as far as the
+      // operator can tell: one slow query and they are looking at the sign-in form with
+      // their session still perfectly valid. Answer in place instead, with a 503 that
+      // retries the same URL — still refused (nothing of the page is rendered), and the
+      // cookie is left alone.
       console.error("[page-auth] session lookup failed:", err);
-      return {
-        redirect: { destination: "/login?error=database", permanent: false },
-      };
+      sendSessionUnavailablePage(ctx.res);
+      // Next sends nothing more for a response that is already finished.
+      return { props: {} as P & AuthPageProps };
     }
 
     if (!auth) {

@@ -80,9 +80,10 @@ export function useInlineView(storageKey: string): [InlineView, (v: InlineView) 
  * scrolled back to.
  *
  * Below sm: it takes the full width and the buttons grow to fill each wrapped row, so the two
- * rows are even instead of one short ragged one, and each button is 44px tall (the app's touch
- * size) rather than a 20px strip of text. From sm: up it is the compact right-aligned strip it
- * always was.
+ * rows are even instead of one short ragged one, and each button is 36px tall rather than a
+ * 20px strip of text (a touch screen raises it to 44px through globals.css, as it does every
+ * button), so the two rows do not push the band picture down. From sm: up it is the compact
+ * right-aligned strip it always was.
  */
 export function ViewSwitch({
   value,
@@ -109,7 +110,7 @@ export function ViewSwitch({
             aria-checked={on}
             onClick={() => onChange(v.id)}
             className={cn(
-              "rounded-[2px] px-2 py-0.5 text-xs transition-colors max-sm:min-h-11 max-sm:grow",
+              "rounded-[2px] px-2 py-0.5 text-xs transition-colors max-sm:min-h-9 max-sm:grow",
               on ? "bg-accent/20 text-accent-bright" : "text-fg-muted hover:bg-surface-2 hover:text-fg",
             )}
           >

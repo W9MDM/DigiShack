@@ -109,15 +109,17 @@ export function CategoryView({
       </div>
       {/* Below md the sidebar, and with it every group link, is gone: the Section picker
           names categories only, so reaching Bridge under Radio meant scrolling past four
-          screens of FlexRadio and Icom. One row of the same groups, scrolling sideways in
-          its own strip rather than wrapping into three. md:hidden — the sidebar is back. */}
+          screens of FlexRadio and Icom. The same groups as small buttons that wrap, so
+          every one is in view: a sideways strip cut the last one mid-word and hid the rest.
+          md:hidden — the sidebar is back. */}
       {onJumpGroup && sections.length > 1 && (
-        <nav aria-label={`Groups in ${tab.label}`} className="mb-4 flex gap-2 overflow-x-auto pb-1 md:hidden">
+        <nav aria-label={`Groups in ${tab.label}`} className="mb-4 flex flex-wrap gap-2 md:hidden">
           {sections.map(({ group }) => (
             <Button
               key={group.id}
               variant="secondary"
-              className="shrink-0 whitespace-nowrap"
+              size="sm"
+              className="whitespace-nowrap"
               onClick={() => onJumpGroup(group.id)}
             >
               {group.title}
@@ -126,7 +128,12 @@ export function CategoryView({
         </nav>
       )}
       <div className="flex flex-col gap-4 sm:gap-6">
-        {categoryExtra?.(ctx)}
+        {/* Below md these panels go after the groups. On System they are read-only
+            reference (.env and the eleven scheduled jobs), three phone screens of it ahead
+            of the first editable group the jump buttons name. From md up they lead again. */}
+        {categoryExtra && (
+          <div className="order-last flex flex-col gap-4 sm:gap-6 md:order-none">{categoryExtra(ctx)}</div>
+        )}
         {sections.map(({ group, items, extra }) => (
           <Fragment key={group.id}>
             <SettingGroupCard

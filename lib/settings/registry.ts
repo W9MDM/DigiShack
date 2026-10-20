@@ -1,6 +1,17 @@
 import { tokenHelp } from "@/lib/qsl/template";
 // The list only — lib/qsl/fonts.ts imports node:fs and this module reaches the browser.
 import { BUNDLED_FONTS, DEFAULT_CARD_FONT } from "@/lib/qsl/font-list";
+// Dependency-free: the class list the SSTV check parses, so the picker cannot offer a value
+// that check would refuse.
+import { LICENCE_CLASSES, type LicenceClass } from "@/lib/radio/sstv-licence";
+
+const LICENCE_LABELS: Record<LicenceClass, string> = {
+  "us-technician": "Technician (US)",
+  "us-general": "General (US)",
+  "us-advanced": "Advanced (US)",
+  "us-extra": "Extra (US)",
+  other: "Licensed outside the US",
+};
 
 /** Token list, shown in the QSL template hints. */
 const TOKEN_HELP = tokenHelp();
@@ -430,9 +441,15 @@ export const SETTINGS: SettingDef[] = [
   {
     key: "station.licenceClass",
     label: "Licence class",
-    type: "string",
+    // A list, not a text box: a typo here ("us-General ", "general") silently left SSTV
+    // refusing. Same stored strings as before; empty is "not set".
+    type: "select",
+    options: [
+      { value: "", label: "Not set" },
+      ...LICENCE_CLASSES.map((c) => ({ value: c, label: LICENCE_LABELS[c] })),
+    ],
     group: "general",
-    help: "us-technician | us-general | us-advanced | us-extra | other. Decides where an image mode (SSTV) may be sent: in the US images share the phone sub-bands, which differ by class - 14.230 needs General or above, 7.171 Advanced or Extra. other is a licence outside the US, whose own rules apply. Unset, SSTV sending refuses.",
+    help: "Decides where an image mode (SSTV) may be sent: in the US images share the phone sub-bands, which differ by class - 14.230 needs General or above, 7.171 Advanced or Extra. Licensed outside the US means that licence's own rules apply. Unset, SSTV sending refuses. Stored as us-technician, us-general, us-advanced, us-extra or other.",
     default: "",
   },
   {
@@ -1170,9 +1187,14 @@ export const SETTINGS: SettingDef[] = [
   {
     key: "js8.autoreply",
     label: "JS8 automatic replies",
-    type: "string",
+    type: "select",
+    options: [
+      { value: "off", label: "Off" },
+      { value: "hb", label: "Heartbeats (hb)" },
+      { value: "all", label: "Heartbeats and queries (all)" },
+    ],
     group: "js8",
-    help: "off | hb | all. hb acknowledges every heartbeat heard with the signal report, as JS8Call stations do; all also answers SNR?, GRID? and INFO? sent to this station. Off by default because it transmits on its own; the transmit gate still applies.",
+    help: "Heartbeats (hb): every heartbeat heard is acknowledged with the signal report, as JS8Call stations do. Heartbeats and queries (all): SNR?, GRID? and INFO? sent to this station are answered too. Off by default because it transmits on its own; the transmit gate still applies.",
     default: "off",
   },
   {
@@ -1281,9 +1303,16 @@ export const SETTINGS: SettingDef[] = [
   {
     key: "digital.source",
     label: "Decode source",
-    type: "string",
+    type: "select",
+    // "omega" is not offered but still loads: the field shows a stored value that is not
+    // one of the choices as itself, and the bridge still reads it as "wsjtx".
+    options: [
+      { value: "wsjtx", label: "External decoder (wsjtx)" },
+      { value: "flex", label: "FlexRadio, direct (flex)" },
+      { value: "icom", label: "Networked Icom, direct (icom)" },
+    ],
     group: "digital",
-    help: 'One of "wsjtx" (an external decoder over the WSJT-X UDP protocol), "flex" (direct to a FlexRadio) or "icom" (direct to a networked Icom over RS-BA1). The bridge reads this at startup. "omega" is still accepted and means "wsjtx" — that was a reference to one particular fork of WSJT-X, never to anything DigiShack does.',
+    help: 'An external decoder over the WSJT-X UDP protocol ("wsjtx"), direct to a FlexRadio ("flex"), or direct to a networked Icom over RS-BA1 ("icom"). The bridge reads this at startup. "omega" is still accepted and means "wsjtx" — that was a reference to one particular fork of WSJT-X, never to anything DigiShack does.',
     default: "wsjtx",
   },
 

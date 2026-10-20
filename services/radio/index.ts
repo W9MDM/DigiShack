@@ -140,7 +140,7 @@ import {
 } from "@/lib/ham/digital-freqs";
 import { clearAlert, raiseAlert } from "@/lib/alerts";
 import { guardFaultsCleared, watchGuardFaults } from "./guard-alerts";
-import { TxPowerTracker, dbmToWatts } from "@/lib/radio/power";
+import { NO_POWER_TAG, NoPowerWatch, TxPowerTracker, UNMETERED_TAG, applyNoPowerVerdict } from "@/lib/radio/power";
 import { NoiseFloor } from "@/lib/radio/noise";
 import { UNREAD_RECEIVER, type ReceiverControls } from "@/lib/radio/receiver-controls";
 import { getEqslCredentials, syncEqslInbox } from "@/lib/integrations/eqsl";
@@ -623,9 +623,10 @@ let followScheduleWithStream: (mode: string) => Promise<void> = async () => {};
  * own forward-power meter, read while we are actually on the air.
  *
  * Module scope because the two radios' meter handlers and the transmit handler are built
- * in different places and all three feed the same judgement.
+ * in different places and all three feed the same judgement, and the Tune and ATU paths
+ * mark it so a carrier that makes nothing is not blamed on DAX. See NoPowerWatch.
  */
-let sawRfThisTx = false;
+const noPower = new NoPowerWatch();
 /**
  * The receive noise floor, per running session.
  *
@@ -2038,11 +2039,9 @@ async function startFlexSource(): Promise<() => Promise<void>> {
     // "what power was this contact made with". `fwdDbm` is null on receive, so
     // nothing but real transmissions reaches the tracker.
     activeTxPower?.sample(m.fwdDbm);
-    // Same floor the tracker uses: a transmitter that is OFF reads a very low dBm rather
-    // than nothing, so "any reading at all" would be satisfied by silence.
-    if (status.transmitting && m.fwdDbm !== null && dbmToWatts(m.fwdDbm) > 0.05) {
-      sawRfThisTx = true;
-    }
+    // Counted only between the radio's own key and unkey; the watch applies the same floor
+    // the tracker uses, because a transmitter that is OFF reads 0 dBm rather than nothing.
+    noPower.sample(m.fwdDbm);
     // Receive only: a level taken while transmitting measures our own signal.
     if (!status.transmitting) noiseFloor.sample(m.dbm);
   });
@@ -2436,6 +2435,7 @@ async function startFlexSource(): Promise<() => Promise<void>> {
         // ATU follows the band when the operator has asked it to. `atu start`
         // runs the radio's own low-power tune cycle.
         if (await getBooleanSetting("flex.atuOnBandChange", false)) {
+          noPower.carrier(Date.now());
           await shared.client.command("atu start").catch(() => {});
         }
         // A noise floor belongs to the band it was measured on.
@@ -2465,6 +2465,7 @@ async function startFlexSource(): Promise<() => Promise<void>> {
           (await getBooleanSetting("flex.atuOnBandChange", false))
         ) {
           console.log(`[radio] band ${wasBand ?? "?"} -> ${nowBand ?? "?"} — running the ATU`);
+          noPower.carrier(Date.now());
           await shared.client.command("atu start").catch(() => {});
         }
         if (nowBand !== wasBand) noiseFloor.reset();
@@ -2635,36 +2636,58 @@ async function startFlexSource(): Promise<() => Promise<void>> {
     // they cover a front-panel key or an ATU tune as well as our own transmissions.
     if (tx) {
       txSpanStart = Date.now();
-      sawRfThisTx = false;
+      noPower.keyed(txSpanStart);
     } else if (txSpanStart !== null) {
-      const heldMs = Date.now() - txSpanStart;
       txSpans.push([txSpanStart, Date.now()]);
       if (txSpans.length > 40) txSpans.shift();
       txSpanStart = null;
 
-      // KEYED, AND NOTHING CAME OUT. Only for a transmission long enough to have been
-      // metered: an ATU tune or a keying blip lasts tens of milliseconds and would raise
-      // a false alarm every time.
-      if (heldMs > 2_000 && !sawRfThisTx) {
-        const sliceMode = (status.mode ?? "").toUpperCase();
-        const modeWrong = sliceMode !== "" && !sliceMode.startsWith("DIG");
+      // KEYED, AND NOTHING CAME OUT. Judged by NoPowerWatch: a blip too short to meter says
+      // nothing either way, a span the meter never reported on gets a quieter note rather
+      // than the alarm, and a span that made power clears both, where the alarm otherwise
+      // stayed up until the bridge restarted.
+      const verdict = noPower.unkeyed(Date.now());
+      const held = verdict ? `${(verdict.heldMs / 1000).toFixed(1)}s` : "";
+      const sliceMode = (status.mode ?? "").toUpperCase();
+      const modeWrong = sliceMode !== "" && !sliceMode.startsWith("DIG");
+      if (verdict?.kind === "no-power") {
         console.error(
-          `[radio] TRANSMITTED WITH NO POWER OUT - keyed ${(heldMs / 1000).toFixed(1)}s and the radio ` +
+          `[radio] TRANSMITTED WITH NO POWER OUT - keyed ${held} and the radio ` +
             `reported no forward power. ` +
-            (modeWrong
-              ? `The TX slice is in ${sliceMode}, not DIGU/DIGL: in a voice mode the radio takes audio ` +
-                `from the microphone and ignores the DAX stream DigiShack is feeding it. Set the slice ` +
-                `to DIGU on the Rig page or in SmartSDR.`
-              : `The slice mode looks right (${sliceMode || "unknown"}), so check the DAX TX channel, ` +
-                `the transmit antenna, and whether another client holds the transmitter.`),
+            (verdict.carrier
+              ? `This was a Tune carrier or ATU cycle, which carries no DAX audio, so check the ` +
+                `tune power, the ATU and the transmit antenna.`
+              : modeWrong
+                ? `The TX slice is in ${sliceMode}, not DIGU/DIGL: in a voice mode the radio takes audio ` +
+                  `from the microphone and ignores the DAX stream DigiShack is feeding it. Set the slice ` +
+                  `to DIGU on the Rig page or in SmartSDR.`
+                : `The slice mode looks right (${sliceMode || "unknown"}), so check the DAX TX channel, ` +
+                  `the transmit antenna, and whether another client holds the transmitter.`),
         );
-        // Where the operator is, not only in a log nobody opens.
-        status.txWarnings = [
-          `Keyed ${(heldMs / 1000).toFixed(1)}s with NO POWER OUT` +
-            (modeWrong ? ` - the TX slice is ${sliceMode}, not DIGU/DIGL` : ""),
-          ...status.txWarnings.filter((w) => !w.includes("NO POWER OUT")),
-        ];
-        broadcast({ kind: "status", status });
+      } else if (verdict?.kind === "unmetered") {
+        console.warn(
+          `[radio] keyed ${held} and the forward-power meter never reported - power out cannot be ` +
+            `judged for this transmission (no FWDPWR meter, or the meter stream stopped)`,
+        );
+      }
+      // Where the operator is, not only in a log nobody opens.
+      const warnings = applyNoPowerVerdict(
+        status.txWarnings,
+        verdict,
+        verdict?.kind === "unmetered"
+          ? `Keyed ${held} and the forward-power meter never reported - ${UNMETERED_TAG}`
+          : `Keyed ${held} with ${NO_POWER_TAG}` +
+              (verdict?.carrier
+                ? " - on a Tune/ATU carrier"
+                : modeWrong
+                  ? ` - the TX slice is ${sliceMode}, not DIGU/DIGL`
+                  : ""),
+      );
+      if (warnings !== status.txWarnings) {
+        if (verdict?.kind === "powered") {
+          console.log(`[radio] forward power is back (keyed ${held}) - the power-out warning is cleared`);
+        }
+        status.txWarnings = warnings;
       }
     }
     // Duty tracking follows the RADIO, not our intent. An ATU tune, a manual key from
@@ -3082,9 +3105,7 @@ async function startIcomBridge(): Promise<() => Promise<void>> {
       broadcast({ kind: "smeter", dbm: m.dbm, fwdDbm: m.fwdDbm, at: m.at });
       // Same path as the FlexRadio: whatever forward power this radio reports.
       activeTxPower?.sample(m.fwdDbm);
-      if (status.transmitting && m.fwdDbm !== null && dbmToWatts(m.fwdDbm) > 0.05) {
-        sawRfThisTx = true;
-      }
+      noPower.sample(m.fwdDbm);
       if (!status.transmitting) noiseFloor.sample(m.dbm);
     },
     armWatchdog: (periodMs, label) => {
@@ -5634,6 +5655,8 @@ async function main(): Promise<void> {
           sendJson(res, 400, { error: "Nothing to change" });
           return;
         }
+        // Before the command, because the radio reports the key before it answers it.
+        if (body.tune === true) noPower.carrier(Date.now());
         const results: { cmd: string; status: number }[] = [];
         for (const cmd of cmds) {
           const r = await rig.command(cmd);
@@ -5739,6 +5762,7 @@ async function main(): Promise<void> {
           sendJson(res, 503, { error: "No radio connection" });
           return;
         }
+        noPower.carrier(Date.now());
         const reply = await atuClient.command("atu start");
         sendJson(res, reply.status === 0 ? 200 : 502, {
           ok: reply.status === 0,

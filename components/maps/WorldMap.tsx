@@ -4,6 +4,7 @@ import { fitView, resizeView, type ViewBounds, type ViewWindow } from "@/lib/geo
 import { useActiveTheme } from "@/lib/client/use-theme";
 import { MapPainter, hitTest, type MapScene, type Marker, type Viewport } from "@/lib/maps/draw";
 import { WORLD_H, WORLD_W, project } from "@/lib/maps/projection";
+import { cn } from "@/lib/utils";
 
 import { ZoomControls } from "./ZoomControls";
 import { useMapGestures } from "./useMapGestures";
@@ -41,6 +42,9 @@ export function WorldMap({
   const frame = useRef<number | null>(null);
   const hoverKey = useRef<string | null>(null);
   const [zoomed, setZoomed] = useState(false);
+  // Whether the view already shows the map's whole height, so a vertical drag could not
+  // move it: the browser may then have vertical swipes for the page (see the canvas).
+  const [fullHeight, setFullHeight] = useState(true);
   // The night theme draws the map in its own reds; read at paint time, like the scene.
   const theme = useActiveTheme();
   const themeRef = useRef(theme);
@@ -63,6 +67,7 @@ export function WorldMap({
       const vp = vpRef.current;
       vpRef.current = { ...vp, view };
       setZoomed(view.w < fitView(BOUNDS, vp.cssW / Math.max(1, vp.cssH)).w - 0.5);
+      setFullHeight(view.h >= WORLD_H - 0.5);
       requestPaint();
     },
     [requestPaint],
@@ -180,12 +185,21 @@ export function WorldMap({
         ref={boxRef}
         className="relative w-full aspect-[2/1] min-h-[min(340px,60vh)] sm:min-h-[260px] max-h-[75vh] overflow-hidden"
       >
+        {/* THE MAP THAT ATE THE PAGE. `touch-none` gave every swipe that started on the map
+            to the map, and edge to edge on a phone that was nearly every swipe: what sits
+            below it could not be reached. While the whole height is in view a vertical drag
+            has nothing to move, so it goes to the page (`touch-pan-y`); a sideways drag
+            still pans, and a pinch is still the map's. Once zoomed in, every drag is the
+            map's again — the operator is working the map on purpose. */}
         <canvas
           ref={canvasRef}
           tabIndex={0}
           role="img"
           aria-label={`${label}. Arrow keys pan, plus and minus zoom, 0 resets.`}
-          className="absolute inset-0 h-full w-full touch-none select-none cursor-grab focus-visible:outline-offset-[-2px]"
+          className={cn(
+            "absolute inset-0 h-full w-full select-none cursor-grab focus-visible:outline-offset-[-2px]",
+            fullHeight ? "touch-pan-y" : "touch-none",
+          )}
           {...g.handlers}
           onPointerUp={(e) => {
             g.handlers.onPointerUp(e);

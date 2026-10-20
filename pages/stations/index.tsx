@@ -176,7 +176,8 @@ function StationCard({
         </div>
       }
       actions={
-        <div className="flex shrink-0 items-center gap-2">
+        // Wider apart below sm, where Edit and Delete are thumb-sized and side by side.
+        <div className="flex shrink-0 items-center gap-5 sm:gap-2">
           {canEdit && !editing && (
             <Button onClick={() => setEditing(true)}>Edit</Button>
           )}
@@ -350,7 +351,7 @@ function NewStationCard({
             id="new-station-call"
             value={callsign}
             onChange={(e) => setCallsign(e.target.value.toUpperCase())}
-            placeholder="K9XYZ"
+            placeholder="e.g. K1ABC"
             spellCheck={false}
             className="font-display tracking-wide"
           />
@@ -365,7 +366,7 @@ function NewStationCard({
             id="new-station-grid"
             value={grid}
             onChange={(e) => setGrid(e.target.value.toUpperCase())}
-            placeholder="EN61"
+            placeholder="e.g. FN42"
             spellCheck={false}
             className="tnum"
           />

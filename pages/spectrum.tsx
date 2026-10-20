@@ -376,7 +376,8 @@ export default function SpectrumPage({ wsUrl }: Props) {
             {source === "rf"
               ? `${formatFreqDial(info.lowHz)}–${formatFreqDial(info.highHz)} MHz`
               : `${Math.round(info.lowHz)}–${Math.round(info.highHz)} Hz`}
-            {` · ${info.bins} bins`}
+            {/* Not below sm: it pushed the radio model onto a line of its own. */}
+            <span className="max-sm:hidden">{` · ${info.bins} bins`}</span>
           </span>
         )}
         {status?.band && <span>{status.band}</span>}

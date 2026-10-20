@@ -84,7 +84,9 @@ function PowerControl({
         aria-valuetext={shown === null ? "not reported" : `${shown} percent`}
         className="min-w-0 flex-1 accent-accent disabled:opacity-50"
       />
-      <span className="w-20 shrink-0 text-right text-sm tnum">
+      {/* A fixed 5rem from `sm` up. On a phone that column was a third of the row, the
+          slider was short and "90%" sat far off by itself; there it is as wide as "100%". */}
+      <span className="min-w-11 shrink-0 text-right text-sm tnum sm:w-20">
         {shown === null ? (
           <span className="text-fg-subtle">not reported</span>
         ) : (
@@ -238,7 +240,9 @@ export function TransmitterCard({
           }
         >
           {readouts.length > 0 ? (
-            <div className="flex flex-wrap gap-x-4 gap-y-1">
+            // Two fixed columns on a phone, so SWR/Supply and PA/Fan line up rather than
+            // wrapping wherever their widths fall; one wrapping row from `sm` up.
+            <div className="grid grid-cols-2 gap-x-3 gap-y-1 sm:flex sm:flex-wrap sm:gap-x-4">
               {readouts.map((r) => (
                 <Readout key={r.label} label={r.label} value={r.value} tone={r.tone} />
               ))}
