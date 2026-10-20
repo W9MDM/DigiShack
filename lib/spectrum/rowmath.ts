@@ -28,11 +28,13 @@ export const DELTA_SPREAD_FACTOR = 3.5;
 export const DELTA_DEADBAND_MAX_DB = 12;
 /**
  * Rows this close to an on-air row are drawn flat. Both pages take TX from the bridge's status
- * message on the socket, sent on every change, which can land a frame or two either side of
- * the audio actually going quiet. A caller whose TX flag can lag further must pass a longer
- * `guardMs`, at least its own latency, or the rows before the flag show the whole band dropping.
+ * message on the socket, sent on every change, but on the air (K9XYZ's Flex, 1.256.0) the key-up
+ * row still landed more than a second before the flag and drew as a full-width rise, so the
+ * guard is 2.5 s, not the "frame or two" first assumed. A caller whose TX flag can lag further
+ * must pass a longer `guardMs`, at least its own latency, or the rows before the flag show the
+ * whole band changing.
  */
-export const TX_GUARD_MS = 1_000;
+export const TX_GUARD_MS = 2_500;
 
 /**
  * Delta draws a rise from this colour-map entry up, never dimmer, so a weak rise does not share

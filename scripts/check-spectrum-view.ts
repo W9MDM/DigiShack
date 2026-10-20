@@ -511,16 +511,16 @@ console.log("\ndelta: what changed against the last few rows");
   // Our own transmission: four rows of near-silence in the middle of a busy band.
   const t = mk();
   let at = 1000;
-  for (let k = 0; k < 10; k++, at += 250) t.push(row(at, N, 60)); // rows 0-9
-  for (let k = 0; k < 4; k++, at += 250) t.push(row(at, N, 0), true); // rows 10-13 on the air
-  for (let k = 0; k < 10; k++, at += 250) t.push(row(at, N, 60)); // rows 14-23
-  ok(!rowDelta(t, 9, out, refs) && !rowDelta(t, 5, out, refs), "rows within a second before the transmission are drawn flat (status can lag the audio)");
-  ok(rowDelta(t, 3, out, refs) && out.every((v) => v === 0), "rows well before it are compared as usual");
-  ok([10, 11, 12, 13].every((k) => !rowDelta(t, k, out, refs)), "rows taken on the air are drawn flat, not as the whole band dropping out");
-  ok([14, 15, 16, 17, 18].every((k) => !rowDelta(t, k, out, refs)), "rows within a second after it are drawn flat, not as the whole band keying up");
-  ok(rowDelta(t, 19, out, refs) && out.every((v) => v === 0), "once clear of the guard, a row compares with rows after the transmission");
-  ok(deltaReferences(t, 15, DELTA_DEPTH, refs) === 1, "references never reach back across an on-air row");
-  ok(nearTransmit(t, 12) && nearTransmit(t, 18) && !nearTransmit(t, 19) && !nearTransmit(t, 3), "the guard is a second either side of the on-air rows");
+  for (let k = 0; k < 20; k++, at += 250) t.push(row(at, N, 60)); // rows 0-19
+  for (let k = 0; k < 4; k++, at += 250) t.push(row(at, N, 0), true); // rows 20-23 on the air
+  for (let k = 0; k < 20; k++, at += 250) t.push(row(at, N, 60)); // rows 24-43
+  ok(!rowDelta(t, 19, out, refs) && !rowDelta(t, 9, out, refs), "rows within the guard before the transmission are drawn flat (status can lag the audio)");
+  ok(rowDelta(t, 7, out, refs) && out.every((v) => v === 0), "rows well before it are compared as usual");
+  ok([20, 21, 22, 23].every((k) => !rowDelta(t, k, out, refs)), "rows taken on the air are drawn flat, not as the whole band dropping out");
+  ok([24, 26, 30, 34].every((k) => !rowDelta(t, k, out, refs)), "rows within the guard after it are drawn flat, not as the whole band keying up");
+  ok(rowDelta(t, 35, out, refs) && out.every((v) => v === 0), "once clear of the guard, a row compares with rows after the transmission");
+  ok(deltaReferences(t, 25, DELTA_DEPTH, refs) === 1, "references never reach back across an on-air row");
+  ok(nearTransmit(t, 22) && nearTransmit(t, 34) && nearTransmit(t, 9) && !nearTransmit(t, 35) && !nearTransmit(t, 8), "the guard is 2.5 s either side of the on-air rows");
 
   // A TX flag that arrives 2 s after the audio went quiet (a 2 s status poll): eight quiet rows
   // stored as received, then the on-air rows.
@@ -530,7 +530,8 @@ console.log("\ndelta: what changed against the last few rows");
   for (let k = 0; k < 8; k++, at += 250) lag.push(row(at, N, 0)); // rows 10-17 quiet, flag not yet up
   for (let k = 0; k < 4; k++, at += 250) lag.push(row(at, N, 0), true); // rows 18-21 flagged
   for (let k = 0; k < 8; k++, at += 250) lag.push(row(at, N, 200)); // rows 22-29
-  ok(rowDelta(lag, 10, out, refs) && out.every((v) => v < 0) && rowDelta(lag, 11, out, refs) && out.every((v) => v < 0), "a flag 2 s late is past the default guard: the quiet rows read as the whole band dropping");
+  ok(rowDelta(lag, 10, out, refs, { guardMs: 1_000 }) && out.every((v) => v < 0) && rowDelta(lag, 11, out, refs, { guardMs: 1_000 }) && out.every((v) => v < 0), "a flag 2 s late is past a 1 s guard: the quiet rows read as the whole band dropping");
+  ok([10, 11, 12, 13, 14, 15, 16, 17].every((k) => !rowDelta(lag, k, out, refs)), "the default guard covers a flag 2 s late, as seen on the air");
   ok(
     [10, 11, 12, 13, 14, 15, 16, 17].every((k) => !rowDelta(lag, k, out, refs, { guardMs: 3_000 })),
     "a guard longer than the flag's latency draws every quiet row before it flat",
