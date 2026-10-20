@@ -1,4 +1,5 @@
 import { adifRecord, type AdifQsoInput } from "@/lib/adif/write";
+import { unescapeHtml } from "@/lib/html";
 import { getSetting } from "@/lib/settings";
 
 // QRZ.com Logbook API.
@@ -17,18 +18,6 @@ const USER_AGENT = "DigiShack/0.9 (amateur radio logbook)";
 
 export type QrzResult = Record<string, string>;
 
-/** `&lt;` etc. — QRZ HTML-escapes the ADIF payload. */
-function decodeHtmlEntities(s: string): string {
-  return s
-    .replace(/&lt;/gi, "<")
-    .replace(/&gt;/gi, ">")
-    .replace(/&quot;/gi, '"')
-    .replace(/&#0?39;/g, "'")
-    .replace(/&apos;/gi, "'")
-    // Last, so an escaped ampersand can't be re-interpreted as another entity.
-    .replace(/&amp;/gi, "&");
-}
-
 /**
  * Parse QRZ's `&`-separated KEY=VALUE response.
  *
@@ -45,7 +34,8 @@ export function parseQrzResponse(body: string): QrzResult {
   const head = adifMatch ? body.slice(0, adifMatch.index) : body;
 
   if (adifMatch) {
-    out.ADIF = decodeHtmlEntities(
+    // `&lt;` etc. — QRZ HTML-escapes the ADIF payload.
+    out.ADIF = unescapeHtml(
       body.slice(adifMatch.index + adifMatch[0].length),
     );
   }

@@ -1,6 +1,4 @@
 import dgram from "node:dgram";
-import { ft2DecodeAudio } from "@/lib/digital/ft2demod";
-import { HashCallBook as Ft2HashCallBook } from "@/lib/digital/pack77";
 import {
   DecodePipeline,
   STREAM_HEARTBEAT_MS,
@@ -9,15 +7,12 @@ import {
   type StreamOptions,
 } from "@/lib/radio/decode-pipeline";
 import {
-  SPECTRUM_INTERVAL_MS,
   type SpectrumProfile,
   spectrumIntervalFor,
   SpectrumAnalyser,
   type SpectrumRow,
 } from "@/lib/radio/spectrum";
 import { EventEmitter } from "node:events";
-
-import { decodeFT4, decodeFT8, HashCallBook } from "@e04/ft8ts";
 
 import { WSPR_PERIOD_MS } from "@/lib/digital/wspr";
 import { PERIOD_MS } from "@/lib/radio/timing";

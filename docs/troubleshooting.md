@@ -30,8 +30,11 @@ Then, in order:
 
 ## It hears but will not transmit
 
-- **`flex.allowTransmit`** is off. It is the master gate and it is re-read before every
-  transmission.
+- **Transmit is not armed** for the radio in use — the header's TX control reads
+  **TX OFF**. An admin arms it there (or Settings → Radio → Allow transmit:
+  `flex.allowTransmit` / `icom.allowTransmit`, one per radio). It is re-read before every
+  transmission. Disarming from the header also pauses the automatic mode; arming from the
+  header resumes it.
 - **FT-0 is engaged.** Releasing it brings the radio back but deliberately does *not*
   re-enable transmit.
 - **A guard has paused it.** The Digital page shows the reason. A `fault` pause — SWR,
@@ -105,9 +108,25 @@ function, not scoped inside the connect call.
 
 ## ClubLog uploads return 403
 
-Unresolved. The endpoint expects something the current request is missing. Everything
-else about the integration works — the duplicate detection found 3,174 of them — so this
-is the upload URL or a field name, not the credentials.
+The Club Log API key is missing. Without the `api` field both write endpoints answer a
+bare 403 from Club Log's nginx, which was misread for a month as Club Log refusing this
+installation. Request a key from Club Log's helpdesk and set it under Settings → Logbook
+sync → Club Log; with it, uploads answer 200 (1.156.0).
+
+## The live panels stay at "Connecting", or a script on the box gets 401
+
+The bridge's WebSockets need a sign-in since 1.222.0
+([`lib/bridge/ws-auth.ts`](../lib/bridge/ws-auth.ts)). The bridge log says why it refused
+an upgrade, in a line starting `[ws-auth]`.
+
+- **In a browser, behind your own proxy**: route both `/ws/decodes` and `/ws/audio` to
+  the bridge, pass `Host`, and serve them on the same host as the pages so the session
+  cookie goes with them. `deploy/nginx/digishack.conf` does all of that; compare against
+  it. An `Origin` that does not match the host is a 403.
+- **A local script** (recorder, probe) that opens `ws://127.0.0.1:3101/...` with no
+  credential gets 401. Switch it to `localBridgeSocket("/ws/audio")` from
+  `lib/bridge/ws-auth.ts`, or send the `bridge.token` value as an `X-Bridge-Token` header.
+  The token is honoured only on a direct loopback connection — not through nginx.
 
 ## The Icom decodes for a minute, then stops
 

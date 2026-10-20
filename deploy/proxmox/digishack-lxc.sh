@@ -244,7 +244,8 @@ export DEBIAN_FRONTEND=noninteractive
 
 echo "==> apt update and base packages"
 apt-get update -qq
-apt-get install -y -qq curl ca-certificates git build-essential mariadb-server openssl >/dev/null
+# cron for scripts/healthcheck.sh, which install.sh schedules; a minimal template may lack it.
+apt-get install -y -qq curl ca-certificates git build-essential mariadb-server openssl cron >/dev/null
 
 echo "==> Node 20 (NodeSource)"
 if ! command -v node >/dev/null 2>&1; then

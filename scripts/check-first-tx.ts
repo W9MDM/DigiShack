@@ -41,7 +41,7 @@
 
 import { EventEmitter } from "node:events";
 
-import { DEFAULT_GUARDS, type QsoLogData } from "@/lib/digital/qso";
+import type { QsoLogData } from "@/lib/digital/qso";
 import { emptyWorkedIndex, type WorkedIndex } from "@/lib/digital/worth";
 import { DAX_SAMPLE_RATE } from "@/lib/flex/dax";
 import type { DigitalMode } from "@/lib/ham/digital-freqs";

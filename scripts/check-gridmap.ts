@@ -7,7 +7,17 @@
 import { readFileSync } from "node:fs";
 
 import { LAND_RINGS } from "@/lib/geo/land";
-import { TOKENS, TOKEN_VARS } from "@/lib/maps/palette";
+import {
+  MAP_COLOURS,
+  NIGHT_MAP_COLOURS,
+  NIGHT_TOKENS,
+  TOKENS,
+  TOKEN_VARS,
+  mapColourFor,
+  mapColoursFor,
+  nightSafe,
+} from "@/lib/maps/palette";
+import { BAND_COLOUR } from "@/lib/ham/band-colours";
 import {
   dragDelta,
   fitView,
@@ -299,6 +309,51 @@ console.log("\nthe canvas palette mirrors the design tokens");
     const m = new RegExp(`${cssVar}:\\s*(#[0-9a-fA-F]{6})\\s*;`).exec(css);
     eq(m?.[1]?.toLowerCase(), TOKENS[name as keyof typeof TOKENS], `${name} matches ${cssVar}`);
   }
+}
+
+console.log("\nthe night map mirrors the night theme, and has no blue in it");
+{
+  // The same drift check against the night block: a map left on its dark colours at night
+  // is a bright blue-grey rectangle on a red-on-black page.
+  const css = readFileSync("styles/globals.css", "utf8");
+  const start = css.indexOf(':root[data-theme="night"] {');
+  const night = start < 0 ? "" : css.slice(start, css.indexOf("}", start));
+  eq(start >= 0, true, "globals.css has the night block");
+  for (const [name, cssVar] of Object.entries(TOKEN_VARS)) {
+    const m = new RegExp(`${cssVar}:\\s*(#[0-9a-fA-F]{6})\\s*;`).exec(night);
+    eq(m?.[1]?.toLowerCase(), NIGHT_TOKENS[name as keyof typeof NIGHT_TOKENS], `night ${name} matches ${cssVar}`);
+  }
+
+  // Every layer colour, solid or with alpha, on the red-to-amber side: R >= G >= B with blue
+  // near zero — the rule check:contrast holds the night tokens to.
+  const channels = (c: string): [number, number, number] | null => {
+    const h = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(c);
+    if (h) return [parseInt(h[1]!, 16), parseInt(h[2]!, 16), parseInt(h[3]!, 16)];
+    const f = /^rgba?\((\d+),(\d+),(\d+)/.exec(c.replace(/\s/g, ""));
+    return f ? [Number(f[1]), Number(f[2]), Number(f[3])] : null;
+  };
+  const warm = (c: string) => {
+    const v = channels(c);
+    return v !== null && v[0] >= v[1] && v[1] >= v[2] && v[2] <= 0x20;
+  };
+  const bad = Object.entries(NIGHT_MAP_COLOURS).filter(([, c]) => !warm(c));
+  eq(bad.map(([k, c]) => `${k} ${c}`).join(", "), "", "every night map layer is red-to-amber with blue near zero");
+  eq(mapColoursFor("dark"), MAP_COLOURS, "the dark theme draws the map exactly as before");
+  eq(mapColoursFor("night"), NIGHT_MAP_COLOURS, "the night theme draws the night set");
+
+  // The legend and the canvas share mapColourFor, so a swatch is the colour of its layer.
+  const unmapped = (Object.keys(MAP_COLOURS) as (keyof typeof MAP_COLOURS)[]).filter(
+    (k) => mapColourFor(MAP_COLOURS[k], "night") !== NIGHT_MAP_COLOURS[k],
+  );
+  eq(unmapped.join(", "), "", "each layer's legend colour maps to that layer's night colour");
+  eq(mapColourFor(MAP_COLOURS.cq, "dark"), MAP_COLOURS.cq, "and is left alone by day");
+
+  // Band colours arrive from lib/ham/band-colours.ts as a rainbow; at night they must lose
+  // their blue and still be told apart from one another.
+  const bands = Object.values(BAND_COLOUR).map((c) => mapColourFor(c, "night"));
+  eq(bands.filter((c) => !/^#[0-9a-f]{4}00$/i.test(c) || !warm(c)).join(", "), "", "every band colour at night is red-to-amber with zero blue");
+  eq(new Set(bands).size, bands.length, `all ${bands.length} bands keep distinct night colours`);
+  eq(nightSafe("rgba(1,2,3,0.5)"), "rgba(1,2,3,0.5)", "nightSafe leaves what it cannot parse");
 }
 
 console.log(failed === 0 ? "\nall grid map assertions passed" : `\n${failed} FAILED`);

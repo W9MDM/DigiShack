@@ -523,6 +523,12 @@ ${args.cardUrl}`
       rendered,
     };
   } finally {
-    transport.close();
+    // Guarded: by here SMTP may have accepted the message, and a throw from close() would
+    // reach the queue as "not sent" — which releases the claim on a message that went.
+    try {
+      transport.close();
+    } catch {
+      /* the pool is torn down either way */
+    }
   }
 }

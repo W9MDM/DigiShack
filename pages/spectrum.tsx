@@ -10,6 +10,7 @@ import { withPageAuth } from "@/lib/auth/guard";
 import { bridgeWsUrl } from "@/lib/bridge/ws-url";
 import { linkLabel } from "@/lib/client/socket-retry";
 import { useBridgeSocket } from "@/lib/client/use-bridge-socket";
+import { useNightMode } from "@/lib/client/use-theme";
 import { useVisibleInterval } from "@/lib/client/use-visible-interval";
 import { formatFreqDial } from "@/lib/ham/bands";
 import { colormapRgb, COLORMAPS, isColormapId } from "@/lib/spectrum/colormaps";
@@ -23,6 +24,7 @@ import {
 } from "@/lib/spectrum/levels";
 import {
   DEFAULT_PREFS,
+  effectiveColormap,
   HISTORY_CHOICES_SEC,
   isFeedKind,
   isView,
@@ -148,13 +150,17 @@ export default function SpectrumPage({ wsUrl }: Props) {
   const rfStale = seen.rf && stats.rf.ageMs !== null && stats.rf.ageMs > 15_000;
   const mode = status?.subMode || status?.mode || info.mode;
 
+  // Night red in the night theme unless a map was picked from the menu.
+  const night = useNightMode();
+  const colormap = effectiveColormap(prefs, night);
+
   const legendRef = useRef<HTMLCanvasElement>(null);
   useEffect(() => {
     const c = legendRef.current;
     const ctx = c?.getContext("2d");
     if (!c || !ctx) return;
     const img = ctx.createImageData(256, 1);
-    const lut = colormapRgb(prefs.colormap);
+    const lut = colormapRgb(colormap);
     for (let i = 0; i < 256; i++) {
       img.data[i * 4] = lut[i * 3]!;
       img.data[i * 4 + 1] = lut[i * 3 + 1]!;
@@ -162,7 +168,7 @@ export default function SpectrumPage({ wsUrl }: Props) {
       img.data[i * 4 + 3] = 255;
     }
     ctx.putImageData(img, 0, 0);
-  }, [prefs.colormap]);
+  }, [colormap]);
 
   const empty = !feed.hasData;
   const unit = source === "rf" ? "dBm" : info.calibrated ? "dBFS" : "dB";
@@ -171,7 +177,7 @@ export default function SpectrumPage({ wsUrl }: Props) {
     <Spectrogram
       feed={feed}
       contrast={contrast}
-      colormap={prefs.colormap}
+      colormap={colormap}
       historySec={prefs.historySec}
       paused={paused}
       timeLabels={prefs.timeLabels}
@@ -184,7 +190,7 @@ export default function SpectrumPage({ wsUrl }: Props) {
     <Waterfall3D
       feed={feed}
       contrast={contrast}
-      colormap={prefs.colormap}
+      colormap={colormap}
       depthSec={prefs.depthSec}
       historySec={prefs.historySec}
       heightScale={prefs.heightScale}
@@ -242,9 +248,9 @@ export default function SpectrumPage({ wsUrl }: Props) {
         <label className="flex flex-col gap-1 text-xs text-fg-muted">
           Colours
           <Select
-            value={prefs.colormap}
+            value={colormap}
             onChange={(e) => {
-              if (isColormapId(e.target.value)) update({ colormap: e.target.value });
+              if (isColormapId(e.target.value)) update({ colormap: e.target.value, colormapChosen: true });
             }}
             className="w-auto py-1 text-xs"
           >

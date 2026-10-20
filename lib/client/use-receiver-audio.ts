@@ -80,9 +80,6 @@ export function audioSocketUrl(wsUrl: string): string {
   return wsUrl.replace(/\/ws\/decodes$/, "/ws/audio");
 }
 
-/** WebSocket.CONNECTING, without reaching for a global the check may not have. */
-const CONNECTING = 0;
-
 /** One Listen, and everything it owns. */
 interface Session {
   readonly generation: number;

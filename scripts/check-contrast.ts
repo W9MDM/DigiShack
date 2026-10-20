@@ -426,5 +426,101 @@ console.log("\nno text uses the brand accent");
   ok(hits.length === 0, "no bare `text-accent` class remains", hits.slice(0, 5).join(" | "));
 }
 
+// ---------------------------------------------------------------------------
+// Night coverage: what the stylesheet cannot re-colour
+// ---------------------------------------------------------------------------
+//
+// The night block re-points every token, which covers every element that USES one. Two
+// things escape it, and both used to: a Tailwind colour that is not a token (`border-white/10`
+// on the spectrogram cursor stayed white at night), and a canvas, which paints numbers
+// chosen in JavaScript. Both are found by scanning, and each detector is proven on a probe.
+
+/** A palette utility outside the tokens: white, or a named Tailwind hue. `bg-black/NN` dims
+ *  behind a dialog, and black is black in both themes, so it is allowed. */
+const LITERAL_COLOUR =
+  /(?<![\w-])(?:text|bg|border(?:-[trblxy])?|ring|fill|stroke|from|via|to|outline|divide|decoration|caret|accent|shadow)-(?:white|(?:slate|gray|zinc|neutral|stone|red|orange|amber|yellow|lime|green|emerald|teal|cyan|sky|blue|indigo|violet|purple|fuchsia|pink|rose)-\d{2,3})(?![\w-])/;
+
+function literalColourHits(text: string, file: string): string[] {
+  const hits: string[] = [];
+  text.split("\n").forEach((line, i) => {
+    if (LITERAL_COLOUR.test(line)) hits.push(`${file}:${i + 1}`);
+  });
+  return hits;
+}
+
+/** Draws on a canvas itself. */
+const PAINTS = /getContext\(|\.fillStyle\s*=|\.strokeStyle\s*=/;
+/** ...and follows the theme: reads it, takes a palette that does, or is handed a colour map
+ *  by a page that picks one per theme (components/spectrum, via pages/spectrum.tsx). */
+const FOLLOWS_THEME = /lib\/client\/use-theme|useWaterfallPalette|colormap(?:Rgb|Rgba|Chrome)\(|\bColormapId\b/;
+
+/** Canvases that are deliberately NOT themed, and why. Each must still exist and still paint. */
+const CANVAS_EXEMPT: Record<string, string> = {
+  // The outbound SSTV picture: a picture, like the received ones, and outside this pass.
+  "components/digital/SstvSend.tsx": "outgoing picture preview",
+  // WebGL plumbing: buffers and textures, no colour of its own.
+  "components/spectrum/gl.ts": "no colours",
+};
+
+function sourceFiles(dir: string, out: string[] = []): string[] {
+  for (const e of readdirSync(dir)) {
+    if (e === "node_modules" || e.startsWith(".")) continue;
+    const full = path.join(dir, e);
+    if (statSync(full).isDirectory()) sourceFiles(full, out);
+    else if (/\.(tsx|ts)$/.test(e)) out.push(full);
+  }
+  return out;
+}
+
+console.log("\n=== night coverage: what the night block cannot reach ===");
+{
+  const probe = literalColourHits(
+    '<i className="border-white/10" />\n<i className="bg-sky-500" />\n<i className="bg-black/60 text-fg border-fg/10" />',
+    "probe",
+  );
+  ok(
+    probe.join() === "probe:1,probe:2",
+    "the detector catches white and named hues, and passes tokens and the black scrim",
+    JSON.stringify(probe),
+  );
+  const paintProbe = (src: string) => PAINTS.test(src) && !FOLLOWS_THEME.test(src);
+  ok(
+    paintProbe('const g = c.getContext("2d"); g.fillStyle = "#fff";') &&
+      !paintProbe('import { useNightMode } from "@/lib/client/use-theme";\nconst g = c.getContext("2d");'),
+    "the canvas detector flags an unthemed canvas and passes a themed one",
+  );
+
+  const literal: string[] = [];
+  const unthemed: string[] = [];
+  const exemptSeen = new Set<string>();
+  let scanned = 0;
+  let scanError = "";
+  for (const root of ["components", "pages"]) {
+    try {
+      const files = sourceFiles(path.join(process.cwd(), root));
+      if (files.length === 0) throw new Error(`${root}/ contains no source files`);
+      for (const f of files) {
+        scanned++;
+        const rel = path.relative(process.cwd(), f).replace(/\\/g, "/");
+        const text = readFileSync(f, "utf8");
+        if (rel.endsWith(".tsx")) literal.push(...literalColourHits(text, rel));
+        if (rel.startsWith("pages/api/") || !PAINTS.test(text)) continue;
+        if (rel in CANVAS_EXEMPT) {
+          exemptSeen.add(rel);
+          continue;
+        }
+        if (!FOLLOWS_THEME.test(text)) unthemed.push(rel);
+      }
+    } catch (err) {
+      scanError += `${root}: ${err instanceof Error ? err.message : String(err)}; `;
+    }
+  }
+  ok(scanError === "", `scanned ${scanned} source files in components/ and pages/`, `the scan could not run — ${scanError}`);
+  ok(literal.length === 0, "no Tailwind colour outside the tokens (white, named hues)", literal.slice(0, 6).join(" | "));
+  ok(unthemed.length === 0, "every canvas that paints its own colours follows the theme", unthemed.join(", "));
+  const stale = Object.keys(CANVAS_EXEMPT).filter((f) => !exemptSeen.has(f));
+  ok(stale.length === 0, "every canvas exemption still names a canvas", stale.join(", "));
+}
+
 console.log(`\n${pass} passed, ${fail} failed\n`);
 if (fail > 0) process.exit(1);

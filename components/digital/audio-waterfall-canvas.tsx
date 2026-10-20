@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 
 import { WaterfallHistory, waterfallSlots, waterfallWidth, writeWaterfallRow } from "@/lib/radio/waterfall-history";
-import { PALETTE } from "./spectrum-canvas";
+import { useWaterfallPalette } from "./spectrum-canvas";
 
 /** Audio history is timed; RF history and its axis remapping remain in SpectrumCanvas. */
 export function AudioWaterfallCanvas({
@@ -21,6 +21,9 @@ export function AudioWaterfallCanvas({
   const historyRef = useRef(new WaterfallHistory());
   const frameRef = useRef<ImageData | null>(null);
   const [width, setWidth] = useState(1024);
+  // Night red in the night theme. History is kept as bins, so a theme change simply
+  // redraws every row in the new palette.
+  const palette = useWaterfallPalette();
 
   useEffect(() => {
     const container = containerRef.current;
@@ -53,10 +56,10 @@ export function AudioWaterfallCanvas({
     // On a gain/size change every historical row is recoloured from its bins, instead
     // of stretching a previously clipped bitmap. The full image buffer is reused.
     for (let y = 0; y < height; y++) {
-      writeWaterfallRow(slots[y]?.bins ?? empty, frame.data.subarray(y * width * 4, (y + 1) * width * 4), width, gain, PALETTE);
+      writeWaterfallRow(slots[y]?.bins ?? empty, frame.data.subarray(y * width * 4, (y + 1) * width * 4), width, gain, palette);
     }
     ctx.putImageData(frame, 0, 0);
-  }, [row, viewAt, width, height, gain, resetKey, stepMs]);
+  }, [row, viewAt, width, height, gain, resetKey, stepMs, palette]);
 
   return (
     <div ref={containerRef} className="relative overflow-hidden bg-bg">

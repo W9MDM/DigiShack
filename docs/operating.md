@@ -15,8 +15,8 @@ genuinely be several parks at once. See [POTA](pota.md#n-fers).
 
 ## Which radio
 
-The Radio box on the Digital page picks it: **FlexRadio**, **Icom** or **external
-decoder**. Changing it releases the current radio and opens the other one in place, with
+The Radio card on the Digital page (and the picker in the Rig page's header) picks it:
+**FlexRadio**, **Icom** or **external decoder**. Changing it releases the current radio and opens the other one in place, with
 no restart, and **stops any automatic mode on the way through** — carrying "hunt" onto a
 radio whose antenna, power and tuner state nobody has looked at is not a favour.
 
@@ -27,6 +27,26 @@ for moving the dial.
 **Transmit is armed per radio** — `flex.allowTransmit` and `icom.allowTransmit`, each off
 by default, inheriting nothing from the other. Arming a FlexRadio on a real antenna says
 nothing about an IC-7300 that might be on a dummy load or half way through being set up.
+
+## The TX control in the header
+
+On every page, beside FT-0, for the radio in use:
+
+| It reads | Means | A click |
+|---|---|---|
+| **TX OFF** | Not armed | Admin only: confirm "Arm transmit on …?", which shows the RF power |
+| **TX ARMED** | Armed, not transmitting | Any operator: disarm at once |
+| **ON AIR** | RF is up | Any operator: disarm, stopping this transmission |
+| **TX · VOICE** | Voice mode holds the gate | — |
+| **TX —** | The radio service is not running | — |
+
+It writes the same setting as Settings → Radio → Allow transmit, but through the bridge
+(`POST /transmit-gate`), so it takes effect immediately rather than when the bridge's
+settings cache next expires. **Disarming** is a stop without releasing the radio: the
+contact in flight is halted, the automatic mode is paused, and a transmission still
+waiting for its window is cancelled. **Arming from the header again resumes the automatic
+mode that a header disarm paused**, and nothing else. While FT-0 is engaged it cannot be armed: resume the radio first. Arming from
+Settings does not resume anything.
 
 ## The automatic modes
 

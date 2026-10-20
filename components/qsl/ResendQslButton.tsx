@@ -23,10 +23,16 @@ export function ResendQslButton({
   callsign,
   /** `icon` for the log table's dense QSL column, `button` for a page with room. */
   variant = "icon",
+  label = "Re-send card",
+  onQueued,
 }: {
   qsoId: string;
   callsign: string;
   variant?: "icon" | "button";
+  /** The `button` variant's text. */
+  label?: string;
+  /** After a successful queue, so a list showing the old row can reload. */
+  onQueued?: () => void;
 }) {
   const isAdmin = useCan("ADMIN");
   const [state, setState] = useState<"idle" | "busy" | "done" | "failed">("idle");
@@ -53,6 +59,7 @@ export function ResendQslButton({
       if (r?.status === "queued") {
         setState("done");
         setDetail("Queued");
+        onQueued?.();
         return;
       }
       // Everything else is a REASON rather than a failure of the button: opted out, no
@@ -81,7 +88,7 @@ export function ResendQslButton({
     return (
       <div className="flex flex-wrap items-center gap-2">
         <Button size="sm" loading={state === "busy"} onClick={() => void resend()}>
-          Re-send card
+          {label}
         </Button>
         {note}
       </div>

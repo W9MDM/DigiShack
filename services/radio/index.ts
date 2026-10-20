@@ -31,7 +31,7 @@ import { loadEnvConfig } from "@next/env";
 loadEnvConfig(process.cwd());
 
 import { WebSocketServer, type WebSocket } from "ws";
-import { createWsGate, type UpgradeHandler } from "@/lib/bridge/ws-auth";
+import { createWsGate, tokensEqual, type UpgradeHandler } from "@/lib/bridge/ws-auth";
 
 import { prisma } from "@/lib/db/prisma";
 import { pruneDecodes } from "@/lib/db/retention";
@@ -79,7 +79,6 @@ import {
 import { youtubeConnected, renderTitle, renderTemplate } from "@/lib/integrations/youtube-api";
 import {
   setBroadcastDetails,
-  goLive,
   liveChatIdForStream,
   fetchChatPage,
 } from "@/lib/integrations/youtube-broadcast";
@@ -94,8 +93,6 @@ import {
   FRAME_H,
   FONT_SIZE,
   LINE_H,
-  SIDE_X,
-  SIDE_Y,
   SIDE_CHARS,
   TOP_MARGIN,
   LEFT_MARGIN,
@@ -120,7 +117,7 @@ import {
   type VoiceState,
 } from "@/lib/radio/voice";
 import { DecodeCsvLog } from "@/lib/radio/decode-log";
-import { applyMeasurement, clearCorrection, clockState, describe } from "@/lib/time/clock";
+import { applyMeasurement, clearCorrection, clockState } from "@/lib/time/clock";
 import { querySntp } from "@/lib/time/sntp";
 import {
   PaDutyTracker,
@@ -3493,6 +3490,8 @@ async function switchSource(
   // The external decoder path has no per-radio gate of its own; it keeps reading the
   // FlexRadio's, which is what it has always done.
   activeRadio = kind === "icom" ? "icom" : "flex";
+  // A paused auto mode belongs to the radio it was paused on.
+  disarmRestoreAuto = "off";
   // The old source is torn down and the new one not yet started: the one moment no audio is
   // flowing, so every listener hears the new rate before the new radio's first sample.
   announceAudioFormat();
@@ -4300,7 +4299,7 @@ async function main(): Promise<void> {
           sendJson(res, 503, { error: "Control API disabled: bridge.token is not configured" });
           return;
         }
-        if (((req.headers["x-bridge-token"] as string | undefined) ?? "") !== token) {
+        if (!tokensEqual((req.headers["x-bridge-token"] as string | undefined) ?? "", token)) {
           sendJson(res, 401, { error: "Bad or missing X-Bridge-Token" });
           return;
         }
@@ -4321,7 +4320,8 @@ async function main(): Promise<void> {
         return;
       }
       const provided = (req.headers["x-bridge-token"] as string | undefined) ?? "";
-      if (provided !== token) {
+      // Constant time: a plain !== returns sooner the earlier the first wrong character.
+      if (!tokensEqual(provided, token)) {
         sendJson(res, 401, { error: "Bad or missing X-Bridge-Token" });
         return;
       }
@@ -4506,6 +4506,7 @@ async function main(): Promise<void> {
           activeAuto()?.setMode("off");
           // Nothing may resume it after this — clear the held resume mode too.
           autoResumeMode = null;
+          disarmRestoreAuto = "off";
           if (user) {
             await writeSettings(
               [{ key: transmitGateKey(activeRadio), value: "false" }],
@@ -4643,9 +4644,10 @@ async function main(): Promise<void> {
 
         let resumedAuto: AutoMode | null = null;
         if (armed) {
-          const restore = disarmRestoreAuto;
-          disarmRestoreAuto = "off";
-          if (on && restore !== "off" && activeAuto()) {
+          // Consumed only when the gate really came up armed: an arm held by voice mode keeps it.
+          const restore = on ? disarmRestoreAuto : "off";
+          if (on) disarmRestoreAuto = "off";
+          if (restore !== "off" && activeAuto()) {
             activeAuto()!.setMode(restore);
             resumedAuto = restore;
           }
@@ -5166,6 +5168,7 @@ async function main(): Promise<void> {
           // Stop the digital operator BEFORE the mode changes, so it cannot start a
           // transmission into a radio that is halfway between two modes.
           activeAuto()?.setMode("off");
+          disarmRestoreAuto = "off";
           // Close the gate the TRANSMITTERS read, not just the one the endpoints read.
           // Without this a QSO already in flight kept keying and sending FT8 while the
           // operator was switching to voice — see isTransmitArmed.
@@ -5259,6 +5262,8 @@ async function main(): Promise<void> {
         }
         const body = await readJson(req);
         const mode = String(body.mode ?? "off") as AutoMode;
+        // The operator has chosen auto directly; an older header-disarm note no longer speaks for them.
+        disarmRestoreAuto = "off";
         // WSPR IS RECEIVE-ONLY. Every automatic mode keys the radio, and the decoder is
         // listening to beacons no FT8 sequence can answer.
         if (mode !== "off" && status.subMode && NO_SEQUENCER_MODES.has(status.subMode)) {
@@ -6445,6 +6450,9 @@ async function main(): Promise<void> {
       const on = await transmitArmed();
       const why = on ? null : transmitRefusal();
       if (on !== status.allowTransmit || why !== status.transmitOffReason) {
+        // Armed by some other route (Settings, FT-0 release): that is a fresh decision, not the
+        // header resume a pending note was waiting for.
+        if (on && !status.allowTransmit) disarmRestoreAuto = "off";
         status.allowTransmit = on;
         status.transmitOffReason = why;
         console.log(

@@ -256,9 +256,12 @@
  * they are where the light budget goes. Text cannot go lower than it is: 4.5:1 on
  * surface-3 is a luminance floor of ~0.21, and pure red tops out at 0.2126.
  *
- * NOT COVERED: canvases (waterfalls, spectrum, SSTV) draw with their own palettes, and the
- * grid map and panadapter overlays hardcode hex and white. Those stay as they are in this
- * theme until each grows a night palette of its own. */
+ * CANVASES cannot read these variables, so each one that paints colour itself follows the
+ * theme through lib/client/use-theme.ts and carries a night palette of its own, held to the
+ * same red-and-green rule: the waterfalls and /spectrum (Night red, lib/spectrum/colormaps.ts),
+ * the panadapter trace (components/digital/SpectrumTrace.tsx), the maps (lib/maps/palette.ts,
+ * which mirrors this block — check:gridmap) and the Hell page. Received SSTV pictures are
+ * dimmed, not recoloured: they are pictures. */
 :root[data-theme="night"] {
   --color-accent: #7a1000;
   --color-accent-bright: #ff2c10;
@@ -452,6 +455,22 @@
     .tap-inline {
       min-height: 0;
       min-width: 0;
+    }
+
+    /* iOS Safari zooms the page into any text field whose font is under 16px when it takes
+     * focus, and does not zoom back out — the whole layout is left panned and magnified
+     * until the operator pinches it back. The controls here are text-sm (14px) and smaller,
+     * so on a phone EVERY field did it. 16px on coarse pointers stops it everywhere at once;
+     * the auth pages used to do it field by field (pointer-coarse:text-base).
+     *
+     * !important because the controls carry their size as a utility class (text-sm,
+     * text-xs), and a class outranks an element selector whatever the order. Nothing in the
+     * tree sets a control LARGER than 16px, so this only ever raises. Checkboxes, radios,
+     * ranges and colour wells have no text to zoom into. */
+    input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]):not([type="hidden"]),
+    select,
+    textarea {
+      font-size: 16px !important;
     }
   }
 }

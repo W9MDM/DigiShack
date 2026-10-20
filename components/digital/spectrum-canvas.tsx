@@ -1,7 +1,9 @@
 import { useEffect, useRef } from "react";
 
+import { useActiveTheme, type Theme } from "@/lib/client/use-theme";
 import { remapAxis } from "@/lib/radio/panadapter";
 import { writeWaterfallRow } from "@/lib/radio/waterfall-history";
+import { colormapRgb, NIGHT_COLORMAP } from "@/lib/spectrum/colormaps";
 
 // The RF scrolling canvas. The timed audio view uses AudioWaterfallCanvas and shares
 // this palette and the peak-per-pixel writer, so narrow carriers survive in both views.
@@ -59,6 +61,58 @@ export const PALETTE = (() => {
   return table;
 })();
 
+/**
+ * The ramp a waterfall draws with in each theme: PALETTE in the dark theme — byte for byte,
+ * check:spectrum-view asserts it — and Night red (lib/spectrum/colormaps.ts) in the night
+ * theme. Only the colours change; the peak-per-pixel reduction is the same writer either way.
+ */
+export function waterfallPalette(theme: Theme): Uint8Array {
+  return theme === "night" ? colormapRgb(NIGHT_COLORMAP) : PALETTE;
+}
+
+/** waterfallPalette for the active theme, following it as it changes. */
+export function useWaterfallPalette(): Uint8Array {
+  return waterfallPalette(useActiveTheme());
+}
+
+/** A palette's bottom entry as a fill style: the empty-waterfall colour, so a blank edge is not a black bar. */
+export function paletteFloor(palette: Uint8Array): string {
+  return `rgb(${palette[0]}, ${palette[1]}, ${palette[2]})`;
+}
+
+/**
+ * Re-colour a waterfall bitmap from one palette to another, in place.
+ *
+ * The RF canvas keeps no history but its pixels, so a theme change cannot redraw it from
+ * data. It does not need to: every pixel on it was written as an exact palette entry (rows
+ * by putImageData, scrolls and remaps by unsmoothed drawImage), so each one maps back to
+ * its index and forward to the new palette's colour at that index. Minutes of history
+ * change colour with the page instead of scrolling off in the old one. A pixel that is not
+ * a palette entry is left alone.
+ */
+export function recolourWaterfall(
+  ctx: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+  from: Uint8Array,
+  to: Uint8Array,
+): void {
+  if (from === to || width <= 0 || height <= 0) return;
+  // Highest index first so the lowest wins where a ramp repeats a colour.
+  const index = new Map<number, number>();
+  for (let i = 255; i >= 0; i--) index.set((from[i * 3]! << 16) | (from[i * 3 + 1]! << 8) | from[i * 3 + 2]!, i);
+  const image = ctx.getImageData(0, 0, width, height);
+  const px = image.data;
+  for (let p = 0; p < px.length; p += 4) {
+    const i = index.get((px[p]! << 16) | (px[p + 1]! << 8) | px[p + 2]!);
+    if (i === undefined) continue;
+    px[p] = to[i * 3]!;
+    px[p + 1] = to[i * 3 + 1]!;
+    px[p + 2] = to[i * 3 + 2]!;
+  }
+  ctx.putImageData(image, 0, 0);
+}
+
 export interface SpectrumCanvasProps {
   /** Latest row, one byte per bin. Push a new object to advance the display. */
   row: { bins: Uint8Array; at: number } | null;
@@ -104,9 +158,6 @@ export interface SpectrumCanvasProps {
   frameless?: boolean;
 }
 
-/** The empty-waterfall colour: the bottom of PALETTE, so a blank edge is not a black bar. */
-const BACKGROUND = "rgb(0, 0, 6)";
-
 export function SpectrumCanvas({
   row,
   height,
@@ -123,13 +174,27 @@ export function SpectrumCanvas({
   const drawnAxisRef = useRef<{ lowHz: number; spanHz: number } | null>(null);
   /** Snapshot surface for the remap. Created once, resized never. */
   const scratchRef = useRef<HTMLCanvasElement | null>(null);
+  const palette = useWaterfallPalette();
+  /** The palette the pixels on screen were drawn in. */
+  const paletteRef = useRef(palette);
+
+  // A theme change: move what is already on screen into the new palette, before any new
+  // row is drawn in it.
+  useEffect(() => {
+    const was = paletteRef.current;
+    paletteRef.current = palette;
+    const canvas = canvasRef.current;
+    const ctx = canvas?.getContext("2d", { alpha: false });
+    if (!canvas || !ctx) return;
+    recolourWaterfall(ctx, canvas.width, canvas.height, was, palette);
+  }, [palette]);
 
   // Clear on a scale change. See resetKey — the fallback for axes `axis` cannot express.
   useEffect(() => {
     const canvas = canvasRef.current;
     const ctx = canvas?.getContext("2d", { alpha: false });
     if (!canvas || !ctx) return;
-    ctx.fillStyle = BACKGROUND;
+    ctx.fillStyle = paletteFloor(paletteRef.current);
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     drawnAxisRef.current = null;
   }, [resetKey]);
@@ -169,7 +234,7 @@ export function SpectrumCanvas({
     // Snapshot, blank, then put the overlap back in its new place. Blanking first is
     // what leaves the newly-exposed edge empty instead of holding stale pixels.
     sctx.drawImage(canvas, 0, 0);
-    ctx.fillStyle = BACKGROUND;
+    ctx.fillStyle = paletteFloor(paletteRef.current);
     ctx.fillRect(0, 0, w, h);
 
     // Null means the windows share no frequency — a band change rather than a nudge —
@@ -215,7 +280,7 @@ export function SpectrumCanvas({
     const px = line.data;
     const bins = row.bins;
 
-    writeWaterfallRow(bins, px, w, gain, PALETTE);
+    writeWaterfallRow(bins, px, w, gain, paletteRef.current);
 
     ctx.putImageData(line, 0, h - 1);
   }, [row, gain]);

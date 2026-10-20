@@ -1,6 +1,7 @@
-import { useCallback, useSyncExternalStore } from "react";
+import { useCallback } from "react";
 
 import { FOCUS_RING } from "@/components/ui/primitives";
+import { setTheme, useActiveTheme, type Theme } from "@/lib/client/use-theme";
 import { cn } from "@/lib/utils";
 
 // Dark ⇄ Night.
@@ -14,72 +15,16 @@ import { cn } from "@/lib/utils";
 // Per device, in localStorage, like the other display preferences: night mode is about the
 // room the screen is in, and the shack PC and the phone in the field want different answers.
 //
-// NOT COVERED by the theme: canvases (waterfall, spectrum, SSTV) draw with their own
-// palettes, and a few components hardcode hex or white. They stay as they are at night.
+// Canvases read the same theme through lib/client/use-theme.ts and switch palettes with it.
 
-export type Theme = "dark" | "night";
-
-/** The localStorage key. Read before first paint by THEME_INIT_SCRIPT, so keep them together. */
-export const THEME_STORAGE_KEY = "digishack:theme";
-
-const CHANGE_EVENT = "digishack:theme";
-
-/**
- * Runs in <head> before the body is parsed (pages/_document.tsx), so a night-mode operator
- * never gets a frame of the bright palette. Wrapped because localStorage throws in a
- * private window or with site data blocked — and an exception here would be the first
- * thing on the page.
- */
-export const THEME_INIT_SCRIPT =
-  `(function(){try{if(localStorage.getItem(${JSON.stringify(THEME_STORAGE_KEY)})==="night")` +
-  `document.documentElement.setAttribute("data-theme","night")}catch(e){}})();`;
-
-function readTheme(): Theme {
-  return document.documentElement.getAttribute("data-theme") === "night" ? "night" : "dark";
-}
-
-function applyAttribute(theme: Theme): void {
-  if (theme === "night") document.documentElement.setAttribute("data-theme", "night");
-  else document.documentElement.removeAttribute("data-theme");
-}
-
-/** Set the theme for this device, persist it, and tell every mounted toggle. */
-export function setTheme(theme: Theme): void {
-  applyAttribute(theme);
-  try {
-    if (theme === "night") localStorage.setItem(THEME_STORAGE_KEY, "night");
-    else localStorage.removeItem(THEME_STORAGE_KEY);
-  } catch {
-    /* in-memory for this page only */
-  }
-  window.dispatchEvent(new Event(CHANGE_EVENT));
-}
-
-function subscribe(notify: () => void): () => void {
-  // Another tab changed it: follow, so two windows on one desk do not disagree.
-  const onStorage = (e: StorageEvent) => {
-    if (e.key !== THEME_STORAGE_KEY && e.key !== null) return;
-    let stored: string | null = null;
-    try {
-      stored = localStorage.getItem(THEME_STORAGE_KEY);
-    } catch {
-      return;
-    }
-    applyAttribute(stored === "night" ? "night" : "dark");
-    notify();
-  };
-  window.addEventListener(CHANGE_EVENT, notify);
-  window.addEventListener("storage", onStorage);
-  return () => {
-    window.removeEventListener(CHANGE_EVENT, notify);
-    window.removeEventListener("storage", onStorage);
-  };
-}
+// The store lives in lib/client/use-theme.ts so canvases can read it without importing a
+// component; re-exported here for the existing callers (pages/_document.tsx).
+export { THEME_INIT_SCRIPT, THEME_STORAGE_KEY, setTheme, type Theme } from "@/lib/client/use-theme";
 
 /** The current theme and a setter. Server render and hydration see "dark"; the real value
  *  follows on the client without a hydration mismatch. */
 export function useTheme(): [Theme, (t: Theme) => void] {
-  const theme = useSyncExternalStore(subscribe, readTheme, () => "dark" as const);
+  const theme = useActiveTheme();
   return [theme, useCallback((t: Theme) => setTheme(t), [])];
 }
 
@@ -121,7 +66,8 @@ export function ThemeToggle({ className }: { className?: string }) {
       >
         <path d="M13.5 9.5A5.5 5.5 0 0 1 6.5 2.5a5.5 5.5 0 1 0 7 7Z" />
       </svg>
-      <span>
+      {/* Icon only on a phone: the header has no room for the word beside TX and FT-0. */}
+      <span className="sr-only sm:not-sr-only">
         Night<span className="sr-only"> mode</span>
       </span>
     </button>

@@ -26,7 +26,7 @@ import {
   ft2DecodeSymbols,
   ft2SamplesPerSymbol,
 } from "@/lib/digital/ft2";
-import { CRC13_POLY, ft2AddCrc13, ft2CheckCrc13, ft2Crc13, ft2Crc13Buffer } from "@/lib/digital/crc13";
+import { CRC13_POLY, ft2AddCrc13, ft2CheckCrc13, ft2Crc13Buffer } from "@/lib/digital/crc13";
 import {
   FT2_DEVIATION_HZ,
   FT2_DOWN_RATE,

@@ -12,7 +12,7 @@ import {
 import { hostname } from "node:os";
 import path from "node:path";
 
-import { getBooleanSetting, getSetting } from "@/lib/settings";
+import { getBooleanSetting } from "@/lib/settings";
 
 // Self-update: fetch the configured branch, install, migrate, build, reload.
 //

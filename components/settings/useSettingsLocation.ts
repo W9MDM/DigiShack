@@ -47,6 +47,20 @@ export function useSettingsLocation({ ready }: { ready: boolean }) {
     [isExpanded],
   );
 
+  // Going to a group, or to a setting in it, undoes an earlier "close" there: a jump from
+  // the save bar to an unsaved setting that lands on a folded group has not arrived.
+  const reveal = useCallback((group: string | undefined) => {
+    if (!group) return;
+    const reopen = (p: Record<string, boolean>) => {
+      if (p[group] !== false) return p;
+      const next = { ...p };
+      delete next[group];
+      return next;
+    };
+    setAdvanced(reopen);
+    setExpanded(reopen);
+  }, []);
+
   const [flashId, setFlashId] = useState<string | null>(null);
   const [activeGroup, setActiveGroup] = useState<string | null>(null);
   // Bumped when a link is followed, so following the same link twice still scrolls.
@@ -97,17 +111,24 @@ export function useSettingsLocation({ ready }: { ready: boolean }) {
   const goTo = useCallback(
     (target: { group?: string; setting?: string; tab?: string }) => {
       const group = target.group ?? (target.setting ? SETTINGS_LOOKUP.groupOfSetting(target.setting) : undefined);
+      reveal(group);
       setNonce((n) => n + 1);
       void router.replace(settingsHref({ tab: target.tab, group, setting: target.setting }), undefined, {
         shallow: true,
         scroll: false,
       });
     },
-    [router],
+    [router, reveal],
   );
 
   /** A sidebar link was followed; the URL change itself is the link's. */
-  const followed = useCallback(() => setNonce((n) => n + 1), []);
+  const followed = useCallback(
+    (group?: string) => {
+      reveal(group);
+      setNonce((n) => n + 1);
+    },
+    [reveal],
+  );
 
   return {
     location,

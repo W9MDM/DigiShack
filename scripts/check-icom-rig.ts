@@ -15,7 +15,6 @@ import { buildPacket, isPing, PacketType, parsePing } from "@/lib/icom/packets";
 import { parseCivAddress } from "@/lib/icom/from-settings";
 import { IcomSource } from "@/lib/icom/rig";
 import { float32ToS16le } from "@/lib/icom/audio-stream";
-import { buildWaveform } from "@/lib/radio/waveform";
 
 let pass = 0;
 let fail = 0;

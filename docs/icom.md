@@ -61,7 +61,7 @@ answering, with no other symptom.
 
 ## Setting up DigiShack
 
-Settings → **Icom (network)**:
+Settings → Radio → **Icom (network)**:
 
 | Setting | What to put |
 |---|---|

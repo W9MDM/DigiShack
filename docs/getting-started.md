@@ -53,8 +53,12 @@ Manual equivalent and production notes are in the [main README](../README.md#set
    default password — an installation without an account cannot be logged into, which
    is the correct failure.
 2. **Stations** — add your callsign and grid. Everything else keys off this.
-3. **Settings** — at minimum:
-   - `digital.source` — which radio, and there are three answers:
+3. **Settings** (top right, admins only) — one sidebar of categories: Station, Radio,
+   Modes, Automation, Logbook sync, Spotting & broadcast, QSL & email, System. The search
+   box at the top (press `/`) finds any setting by name, key or help text. Each group
+   shows its essential settings and folds the rest under **Advanced**; a save bar appears
+   once something is changed. At minimum:
+   - `digital.source` (Modes → Decode source) — which radio, and there are three answers:
      - `flex` — a FlexRadio over DAX. Set `flex.host`, or leave it blank to discover
        the radio on the network.
      - `icom` — a networked Icom over RS-BA1. Set `icom.host`, `icom.username` and
@@ -63,10 +67,12 @@ Manual equivalent and production notes are in the [main README](../README.md#set
        otherwise cost you an evening.
      - `wsjtx` — decodes from an external program (WSJT-X, JTDX, wsjtx-omega) over its
        UDP protocol.
-   - your QRZ/LoTW/eQSL credentials if you want them
+   - your QRZ/LoTW/eQSL credentials if you want them (Logbook sync)
+   - optionally, **System → DX cluster → Connect to a DX cluster** for the Cluster page;
+     it is off by default
 
-   You can change radios later from the Digital page without touching Settings or
-   restarting anything — the Radio box has a picker.
+   You can change radios later without touching Settings or restarting anything — the
+   Radio card on the Digital page has a picker, and so does the Rig page's header.
 4. Start the radio bridge. For anything other than development, run it supervised —
    it should come back after a crash, a reboot, or the terminal closing:
    ```bash
@@ -87,13 +93,26 @@ strip populates. If it stays empty, go to
 
 **Transmitting** is deliberately behind two doors:
 
-1. Set `flex.allowTransmit` = on in Settings. This is the master gate and it is
-   re-read before *every* transmission, so turning it off stops the station
-   immediately — no restart.
+1. Arm transmit with the **TX** control in the header (it reads **TX OFF**; an admin
+   clicks it and confirms). It is the same per-radio switch as Settings → Radio →
+   **Allow transmit** (`flex.allowTransmit` or `icom.allowTransmit` — arming one radio
+   arms nothing on the other), and it is re-read before *every* transmission. Clicking
+   **TX ARMED** again disarms at once: it halts a contact in progress, pauses any
+   automatic mode, and stops a transmission still waiting for its window.
 2. Click a decoded callsign on the Digital page to call them.
 
 The QSO runs itself from there: report, roger-report, RR73, logged. Watch it happen
 once before turning on any automatic mode.
+
+## Finding your way round
+
+The header groups the pages into **Operate** (Digital, Grid map, Spectrum, DX cluster,
+and Rig control once Settings → Station → *Show the experimental Rig page* is on),
+**Log** (Logbook, New QSO, QSL, POTA), **Analyze** (Statistics, Awards, Coverage) and
+**Tools** (the ham toolkit). **Ctrl+K** (⌘K on a Mac) jumps to any page by name. The
+**Night** button beside FT-0 switches this device to a red-on-black theme for a dark
+shack. **Help** answers the questions this software actually raises — why it skipped a
+station, why nothing transmits, why the waterfall is dark.
 
 ## Then
 

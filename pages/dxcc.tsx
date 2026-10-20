@@ -1,4 +1,3 @@
-import Link from "next/link";
 import { SettingsLayout } from "@/components/settings/SettingsLayout";
 import { useRef, useState } from "react";
 

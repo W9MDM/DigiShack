@@ -160,19 +160,21 @@ export async function importAdifDocument(
     return true;
   });
 
-  // Against the log: THIS station's contacts only. A matching call/band/mode/minute at
-  // another station is that station's contact, not this one's, and used to suppress the
-  // import (R09). Note the consequence for an operator with several Station rows under one
-  // callsign (portable grids): each is its own dedupe namespace now.
+  // Against the log: contacts made under THIS station's callsign. A matching call/band/
+  // mode/minute at a station with another callsign is that station's contact and used to
+  // suppress the import (R09). Several Station rows sharing one callsign (portable grids) are
+  // still one namespace: a QRZ sync into one of them must not re-import contacts filed under
+  // another, which a per-row namespace did.
+  const namespace = station.callsign.toUpperCase();
   let existingKeys = new Set<string>();
   if (opts.dedupe && unique.length > 0) {
-    existingKeys = await loadExistingKeys(station.id, [
+    existingKeys = await loadExistingKeys(station.callsign, [
       ...new Set(unique.map((q) => q.callsign)),
     ]);
   }
 
   const toInsert = opts.dedupe
-    ? unique.filter((q) => !existingKeys.has(stationDupeKey(station.id, q)))
+    ? unique.filter((q) => !existingKeys.has(stationDupeKey(namespace, q)))
     : unique;
 
   const alreadyInLog = unique.length - toInsert.length;
@@ -309,20 +311,27 @@ export async function importAdifDocument(
 }
 
 /**
- * Existing dupe keys, at `stationId` only, for the callsigns in this file. Fetched by
+ * Existing dupe keys across every Station row with this callsign, for the callsigns in this file. Fetched by
  * callsign rather than by exact tuple because MySQL has no efficient way to match a large
  * set of composite tuples, and callsign is indexed. The station is in the key as well as
  * the filter, so a row from another station could not match even if one came back.
  */
-async function loadExistingKeys(stationId: string, callsigns: string[]): Promise<Set<string>> {
+async function loadExistingKeys(stationCallsign: string, callsigns: string[]): Promise<Set<string>> {
   const keys = new Set<string>();
+  const namespace = stationCallsign.toUpperCase();
+  const siblings = await prisma.station.findMany({
+    where: { callsign: stationCallsign },
+    select: { id: true },
+  });
+  const stationIds = siblings.map((s) => s.id);
+  if (stationIds.length === 0) return keys;
 
   for (let i = 0; i < callsigns.length; i += CHUNK) {
     const rows = await prisma.qso.findMany({
-      where: { stationId, callsign: { in: callsigns.slice(i, i + CHUNK) } },
-      select: { stationId: true, callsign: true, band: true, mode: true, startTime: true },
+      where: { stationId: { in: stationIds }, callsign: { in: callsigns.slice(i, i + CHUNK) } },
+      select: { callsign: true, band: true, mode: true, startTime: true },
     });
-    for (const row of rows) keys.add(stationDupeKey(row.stationId, row));
+    for (const row of rows) keys.add(stationDupeKey(namespace, row));
   }
 
   return keys;

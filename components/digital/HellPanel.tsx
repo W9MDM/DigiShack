@@ -12,6 +12,8 @@ import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useSta
 
 import { Nudge } from "@/components/decodes/controls";
 import { Badge, Button, Input } from "@/components/ui/primitives";
+import { decodeBase64Bins } from "@/lib/spectrum/wire";
+import { useNightMode } from "@/lib/client/use-theme";
 
 export interface HellStats {
   mode: "HELL";
@@ -36,11 +38,28 @@ const COL_PX = 3;
 /** Paper between lines. */
 const GAP_PX = 4;
 
-function decodeBase64(b64: string): Uint8Array {
-  const raw = atob(b64);
-  const out = new Uint8Array(raw.length);
-  for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
-  return out;
+/**
+ * Ink colour for a column value (0 paper .. 255 ink). By day a warm white, as it always was;
+ * at night amber on black — red and green only — so the page does not light up the room.
+ * The red channel is the ink value in both, which is what lets recolourHell swap a painted
+ * page from one to the other without the column data.
+ */
+export function hellInk(v: number, night: boolean): [number, number, number] {
+  return night ? [v, Math.round(v * 0.45), 0] : [v, v, Math.round(v * 0.9)];
+}
+
+function recolourHell(c: HTMLCanvasElement, night: boolean): void {
+  const g = c.getContext("2d");
+  if (!g || c.width === 0 || c.height === 0) return;
+  const img = g.getImageData(0, 0, c.width, c.height);
+  const d = img.data;
+  for (let i = 0; i < d.length; i += 4) {
+    const [r, gg, b] = hellInk(d[i]!, night);
+    d[i] = r;
+    d[i + 1] = gg;
+    d[i + 2] = b;
+  }
+  g.putImageData(img, 0, 0);
 }
 
 export const HellPanel = forwardRef<
@@ -64,6 +83,14 @@ export const HellPanel = forwardRef<
   const cursor = useRef({ col: 0, line: 0, rows: 28 });
   const [draft, setDraft] = useState("");
   const [painted, setPainted] = useState(false);
+  const night = useNightMode();
+  const nightRef = useRef(night);
+  // A theme change re-inks what is already on the page.
+  useEffect(() => {
+    if (nightRef.current === night) return;
+    nightRef.current = night;
+    if (canvas.current) recolourHell(canvas.current, night);
+  }, [night]);
 
   const lineHeight = (rows: number) => rows * 2 + GAP_PX;
 
@@ -107,14 +134,14 @@ export const HellPanel = forwardRef<
         }
         // The column, bottom row at the bottom, twice over.
         for (let r = 0; r < rows; r++) {
-          const v = data[off + r]!;
+          const [ir, ig, ib] = hellInk(data[off + r]!, nightRef.current);
           for (const copy of [0, 1]) {
             const y = copy * rows + (rows - 1 - r);
             for (let x = 0; x < COL_PX; x++) {
               const i = (y * COL_PX + x) * 4;
-              img.data[i] = v;
-              img.data[i + 1] = v;
-              img.data[i + 2] = Math.round(v * 0.9);
+              img.data[i] = ir;
+              img.data[i + 1] = ig;
+              img.data[i + 2] = ib;
               img.data[i + 3] = 255;
             }
           }
@@ -132,7 +159,7 @@ export const HellPanel = forwardRef<
     () => ({
       receive: (msg: HellMessage) => {
         if (msg.kind === "hell-backlog") clear();
-        paint(msg.rows, decodeBase64(msg.data));
+        paint(msg.rows, decodeBase64Bins(msg.data));
       },
     }),
     [clear, paint],

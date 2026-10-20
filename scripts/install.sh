@@ -149,6 +149,44 @@ else
   warn "or run in the foreground with: npm start"
 fi
 
+# --- health check ---------------------------------------------------------
+# scripts/healthcheck.sh restarts a tier whose process is alive but no longer answers —
+# the case PM2 cannot see. It promises this installer puts it in cron; this is that.
+#
+# Only as root, because it keeps its state in /var/lib/digishack and restarts root's PM2
+# processes. Only when the absolute paths it calls exist: with no curl every check would
+# fail and it would restart a healthy station four times an hour. Idempotent: an existing
+# line for this checkout is left alone, and nothing else in the crontab is touched.
+step "Health check"
+
+HEALTH_SCRIPT="$ROOT/scripts/healthcheck.sh"
+# Quoted: cron hands the command to /bin/sh, so a checkout path with a space still works.
+HEALTH_LINE="* * * * * \"$HEALTH_SCRIPT\""
+HEALTH_MISSING=""
+for bin in /usr/bin/curl /usr/bin/pm2 /usr/bin/logger /usr/bin/flock; do
+  [ -x "$bin" ] || HEALTH_MISSING="$HEALTH_MISSING $bin"
+done
+
+if [ "$(id -u)" -ne 0 ]; then
+  warn "not root — add the health check to root's crontab yourself:"
+  warn "  $HEALTH_LINE"
+elif ! command -v crontab >/dev/null 2>&1; then
+  warn "no crontab command (install cron) — health check not scheduled:"
+  warn "  $HEALTH_LINE"
+elif [ -n "$HEALTH_MISSING" ]; then
+  warn "health check not scheduled — it needs:$HEALTH_MISSING"
+elif printf '%s' "$ROOT" | grep -qF '%'; then
+  warn "health check not scheduled — the checkout path contains %, which cron treats as a newline"
+else
+  CURRENT_CRON="$(crontab -l 2>/dev/null || true)"
+  if printf '%s\n' "$CURRENT_CRON" | grep -qF -- "$HEALTH_SCRIPT"; then
+    ok "health check already in root's crontab"
+  else
+    { [ -n "$CURRENT_CRON" ] && printf '%s\n' "$CURRENT_CRON"; printf '%s\n' "$HEALTH_LINE"; } | crontab -
+    ok "health check scheduled every minute ($HEALTH_SCRIPT)"
+  fi
+fi
+
 # --- done -----------------------------------------------------------------
 PORT_VALUE="$(grep -E '^\s*PORT\s*=' .env | tail -1 | cut -d= -f2 | tr -d '" ' || true)"
 PORT_VALUE="${PORT_VALUE:-3000}"

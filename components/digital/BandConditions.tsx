@@ -1,4 +1,3 @@
-import { useEffect } from "react";
 
 import { useApi } from "@/lib/client/api";
 import { formatMinutesAgo } from "@/lib/time";

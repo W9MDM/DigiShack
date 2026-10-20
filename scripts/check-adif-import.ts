@@ -46,6 +46,8 @@ const { ok, eq, section, finish } = makeReporter();
 const STATIONS = new Map([
   ["station-a", { id: "station-a", callsign: "K2AAA", operators: [] as { id: string; callsign: string }[] }],
   ["station-b", { id: "station-b", callsign: "K2BBB", operators: [] as { id: string; callsign: string }[] }],
+  // Station B's portable profile: another Station row, the same callsign.
+  ["station-p", { id: "station-p", callsign: "K2BBB", operators: [] as { id: string; callsign: string }[] }],
 ]);
 
 const store = { qsos: [] as QsoRow[], refs: [] as RefRow[] };
@@ -142,6 +144,11 @@ function delegates(pending: { qsos: QsoRow[]; refs: RefRow[] } | null) {
 
 const committed = delegates(null);
 fake.station.findUnique = async (args: { where: { id: string } }) => STATIONS.get(args.where.id) ?? null;
+// MySQL's default collation compares case-insensitively.
+fake.station.findMany = async (args: { where: { callsign: string } }) =>
+  [...STATIONS.values()]
+    .filter((s) => s.callsign.toUpperCase() === args.where.callsign.toUpperCase())
+    .map((s) => ({ id: s.id }));
 fake.qso.findMany = committed.qso.findMany;
 fake.qso.createMany = committed.qso.createMany;
 fake.qsoSigRef.createMany = committed.qsoSigRef.createMany;
@@ -200,8 +207,12 @@ async function main(): Promise<void> {
     const mine = store.qsos.filter((q) => q.stationId === "station-b");
     eq(mine.length, 1, "station B now holds it");
     ok(
-      calls.findManyWheres.length > 0 && calls.findManyWheres.every((w) => w.stationId === "station-b"),
-      "the dedupe lookup asks only for the target station's contacts",
+      calls.findManyWheres.length > 0 &&
+        calls.findManyWheres.every((w) => {
+          const ids = (w.stationId as { in?: string[] } | undefined)?.in ?? [];
+          return ids.includes("station-b") && !ids.includes("station-a");
+        }),
+      "the dedupe lookup asks only for contacts under the target station's callsign",
       JSON.stringify(calls.findManyWheres),
     );
 
@@ -211,6 +222,17 @@ async function main(): Promise<void> {
 
     const intoA = await importAdifDocument(file, { stationId: "station-a", dryRun: true, dedupe: true });
     ok(intoA.ok && intoA.report.alreadyInLog === 1, "importing into A finds A's own contact");
+  }
+
+  section("one callsign, several Station rows: still one log");
+  {
+    // A QRZ sync into the home profile must not re-import what was logged on the portable one.
+    reset();
+    seedExisting({ id: "existing-p-20m", stationId: "station-p", band: "20M" });
+    const file = adif([k1abc("20M")]);
+    const r = await importAdifDocument(file, { stationId: "station-b", dryRun: false, dedupe: true });
+    ok(r.ok && r.report.alreadyInLog === 1 && r.report.imported === 0, "a contact on a same-callsign profile counts as already in the log");
+    eq(store.qsos.length, 1, "and no duplicate row is written");
   }
 
   section("R03: references land on the row that was created");

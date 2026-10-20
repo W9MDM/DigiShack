@@ -6,6 +6,8 @@
 import { useCallback, useEffect, useImperativeHandle, useRef, useState, forwardRef } from "react";
 
 import { useApi } from "@/lib/client/api";
+import { decodeBase64Bins } from "@/lib/spectrum/wire";
+import { useNightMode } from "@/lib/client/use-theme";
 import { SstvSend, type SstvTxState } from "@/components/digital/SstvSend";
 
 export interface SstvStats {
@@ -34,14 +36,17 @@ interface Picture {
   at: string;
 }
 
-function decodeBase64(b64: string): Uint8Array {
-  const raw = atob(b64);
-  const out = new Uint8Array(raw.length);
-  for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
-  return out;
-}
-
 const time = (iso: string) => `${iso.slice(11, 16)}Z`;
+
+/**
+ * Pictures at night: DIMMED, not recoloured. A received SSTV picture is the picture — turning
+ * it red would be showing the operator something nobody sent — so the night theme leaves its
+ * colours alone and turns it down instead, the way a monitor's brightness would. On by default
+ * in the night theme, a per-device toggle for when the picture is the point; it never applies
+ * in the dark theme.
+ */
+const DIM_KEY = "digishack:sstv-dim";
+const DIM_FILTER = "brightness(0.35)";
 
 export const SstvPanel = forwardRef<
   SstvPanelHandle,
@@ -53,6 +58,26 @@ export const SstvPanel = forwardRef<
   /** The last header heard, so one that cannot be drawn still says what it was. */
   const [lastVis, setLastVis] = useState<{ name: string; decoded: boolean; at: number } | null>(null);
   const { data, reload } = useApi<{ pictures: Picture[]; total: number }>("/api/sstv?limit=48");
+  const night = useNightMode();
+  const [dimPref, setDimPref] = useState(true);
+  useEffect(() => {
+    try {
+      setDimPref(localStorage.getItem(DIM_KEY) !== "off");
+    } catch {
+      /* default: dimmed */
+    }
+  }, []);
+  const toggleDim = () => {
+    const next = !dimPref;
+    setDimPref(next);
+    try {
+      if (next) localStorage.removeItem(DIM_KEY);
+      else localStorage.setItem(DIM_KEY, "off");
+    } catch {
+      /* this page only */
+    }
+  };
+  const dimStyle = night && dimPref ? { filter: DIM_FILTER } : undefined;
 
   const receive = useCallback(
     (msg: SstvMessage) => {
@@ -79,7 +104,7 @@ export const SstvPanel = forwardRef<
         const c = canvas.current;
         const g = c?.getContext("2d");
         if (c && g && c.width === msg.width) {
-          const rgb = decodeBase64(msg.rgb);
+          const rgb = decodeBase64Bins(msg.rgb);
           const rows = msg.to - msg.from;
           const img = g.createImageData(msg.width, rows);
           for (let i = 0, j = 0; i < rgb.length; i += 3, j += 4) {
@@ -132,6 +157,17 @@ export const SstvPanel = forwardRef<
           </span>
         )}
         <span className="text-fg-subtle">Martin, Scottie, Robot 36 and PD modes, named by the header</span>
+        {night && (
+          <button
+            type="button"
+            aria-pressed={dimPref}
+            onClick={toggleDim}
+            title={dimPref ? "Pictures are dimmed for night vision — show them at full brightness" : "Dim pictures for night vision"}
+            className="ml-auto rounded-sm border border-line px-2 py-0.5 text-fg-muted hover:border-line-strong hover:text-fg focus-visible:outline-2 focus-visible:outline-accent-bright"
+          >
+            Dim pictures
+          </button>
+        )}
       </div>
 
       <div className="bg-bg border border-line rounded-sm overflow-hidden flex justify-center">
@@ -141,6 +177,7 @@ export const SstvPanel = forwardRef<
           width={320}
           height={256}
           className={live ? "block w-full max-w-[640px] [image-rendering:pixelated]" : "hidden"}
+          style={dimStyle}
           aria-label={live ? `${live.mode} picture being received` : undefined}
         />
         {!live && showing && (
@@ -149,6 +186,7 @@ export const SstvPanel = forwardRef<
             src={`/api/sstv/${showing.file}`}
             alt={`${showing.mode} picture received ${time(showing.at)}`}
             className="block w-full max-w-[640px]"
+            style={dimStyle}
           />
         )}
         {!live && !showing && (
@@ -178,7 +216,7 @@ export const SstvPanel = forwardRef<
                 title={`${p.mode}, ${time(p.at)}`}
               >
                 {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={`/api/sstv/${p.file}`} alt={`${p.mode} ${time(p.at)}`} className="block h-16 w-20 object-cover" loading="lazy" />
+                <img src={`/api/sstv/${p.file}`} alt={`${p.mode} ${time(p.at)}`} className="block h-16 w-20 object-cover" style={dimStyle} loading="lazy" />
               </button>
             ))}
           </div>

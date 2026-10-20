@@ -70,7 +70,10 @@ function subscribe(listener: () => void): () => void {
 }
 
 /** Re-read now — after arming, disarming or FT-0. */
-export function refreshStationGate(): Promise<void> {
+export async function refreshStationGate(): Promise<void> {
+  // A poll already in flight started BEFORE the action, so its answer is stale: wait it out,
+  // then ask again.
+  if (inFlight) await inFlight.catch(() => {});
   return fetchOnce().finally(schedule);
 }
 

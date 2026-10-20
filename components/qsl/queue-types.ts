@@ -17,6 +17,12 @@ export interface QslQueueEntry {
   createdAt: string;
   qso: { band: string; mode: string; startTime: string; gridSquare: string | null } | null;
   approvedBy: { name: string } | null;
+  /**
+   * SENT, but the sender stopped between claiming it and recording the outcome: the message
+   * may or may not have gone. Never retried automatically (at most once); a person checks the
+   * mail server's log and, if it did not go, re-sends from the log.
+   */
+  unconfirmed?: boolean;
 }
 
 export const QUEUE_STATUS: Record<

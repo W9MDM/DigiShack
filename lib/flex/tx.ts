@@ -5,7 +5,6 @@ import { FlexClient } from "@/lib/flex/client";
 import { resolveAntenna } from "@/lib/flex/antennas";
 import {
   lateTxToleranceMs,
-  nextWindowStart,
   PERIOD_MS,
   transmitStartAt,
 } from "@/lib/radio/timing";
@@ -274,6 +273,12 @@ export class FlexDaxTransmitter {
    * owns the transmitter and must not clear state the new owner is using.
    */
   private txGen = 0;
+  /**
+   * Bumped by every unkey(). A transmission records it when it starts and refuses to key if
+   * it has moved: a stop that lands while the gate is being read (any await before xmit 1)
+   * found no pending key to cancel and was otherwise lost.
+   */
+  private stopGen = 0;
   /**
    * The transmission that is WAITING for its window and has not keyed yet.
    *
@@ -817,6 +822,7 @@ export class FlexDaxTransmitter {
       mode: req.mode,
       offsetHz: req.offsetHz,
     };
+    const stopsAtStart = this.stopGen;
 
     // WSPR IS RECEIVE-ONLY, and this is the gate every path goes through: the automatic
     // modes, a manual call, free text. Refused before the transmit gate is even read, so
@@ -841,6 +847,7 @@ export class FlexDaxTransmitter {
 
     const refused = await this.gateRefusal(base);
     if (refused) return refused;
+    if (this.stopGen !== stopsAtStart) return { ...base, reason: "Cancelled before keying" };
 
     // Generate FIRST. If this throws we have not keyed, which is the whole point
     // of doing it before rather than during.
@@ -853,8 +860,6 @@ export class FlexDaxTransmitter {
         reason: err instanceof Error ? err.message : "Could not encode the message",
       };
     }
-
-    const durationMs = (wave.length / DAX_RATE) * 1000;
 
     // `startAt` is a period BOUNDARY. FT8 and FT4 do not start there — they start
     // 0.5 s in, and keying on the boundary put every transmission this station has
@@ -950,6 +955,7 @@ export class FlexDaxTransmitter {
       // Watchdog armed BEFORE keying, and deliberately not cleared by the send
       // loop's own success path alone — unkey() is idempotent, so a redundant
       // unkey is harmless while a missed one is not.
+      if (this.stopGen !== stopsAtStart) return { ...base, reason: "Cancelled before keying" };
       return await this.keyAndStream(wave, base, audioStartAt, linkLagMs);
     } catch (err) {
       // Any failure at all must leave the transmitter down.
@@ -1176,8 +1182,10 @@ export class FlexDaxTransmitter {
     } catch (err) {
       return { ...base, reason: err instanceof Error ? err.message : "Could not encode the text" };
     }
+    const stopsAtStart = this.stopGen;
     const refused = await this.gateRefusal(base);
     if (refused) return refused;
+    if (this.stopGen !== stopsAtStart) return { ...base, reason: "Cancelled before keying" };
     this.busy = true;
     this.busySince = nowMs();
     this.busyForWindow = null;
@@ -1216,8 +1224,10 @@ export class FlexDaxTransmitter {
     if (ms > maxMs) {
       return { ...base, reason: `${(ms / 1000).toFixed(0)} s on the air is over the ${(maxMs / 1000).toFixed(0)} s cap` };
     }
+    const stopsAtStart = this.stopGen;
     const refused = await this.gateRefusal(base);
     if (refused) return refused;
+    if (this.stopGen !== stopsAtStart) return { ...base, reason: "Cancelled before keying" };
     this.busy = true;
     this.busySince = nowMs();
     this.busyForWindow = null;
@@ -1255,8 +1265,10 @@ export class FlexDaxTransmitter {
         reason: `${text.length} characters is ${(ms / 1000).toFixed(0)} s of CW at ${wpm} wpm, over the ${FlexDaxTransmitter.MAX_TEXT_MS / 1000} s cap - send it in pieces`,
       };
     }
+    const stopsAtStart = this.stopGen;
     const refused = await this.gateRefusal(base);
     if (refused) return refused;
+    if (this.stopGen !== stopsAtStart) return { ...base, reason: "Cancelled before keying" };
     if (!this.client) return { ...base, reason: "Transmitter is not started" };
     this.busy = true;
     this.busySince = nowMs();
@@ -1267,6 +1279,7 @@ export class FlexDaxTransmitter {
       if (speed.status !== 0) {
         return { ...base, reason: `Radio refused cwx wpm (0x${speed.status.toString(16)})${speed.message ? `: ${speed.message}` : ""}` };
       }
+      if (this.stopGen !== stopsAtStart) return { ...base, reason: "Cancelled before keying" };
       const keyedAt = nowMs();
       const sent = await this.client.command(`cwx send "${text}"`);
       if (sent.status !== 0) {
@@ -1406,6 +1419,7 @@ export class FlexDaxTransmitter {
    * up to a period ahead go out after the operator had stopped everything.
    */
   async unkey(): Promise<void> {
+    this.stopGen++;
     this.clearWatchdog();
     if (this.pendingKey && !this.keyed) {
       this.pendingKey.abort("Cancelled before keying");
@@ -1423,6 +1437,7 @@ export class FlexDaxTransmitter {
 
   /** Fire-and-forget unkey for exit handlers, where awaiting is not possible. */
   private emergencyUnkey(): void {
+    this.stopGen++;
     this.clearWatchdog();
     this.keyed = false;
     void this.client?.command("xmit 0").catch(() => {});

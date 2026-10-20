@@ -11,6 +11,7 @@
 // edit. The list is expected to hold tens of entries, not thousands.
 
 import { prisma } from "@/lib/db/prisma";
+import { normaliseCall } from "@/lib/ham/callsign";
 
 /**
  * How much of a restriction an entry is.
@@ -35,9 +36,7 @@ const TTL_MS = 30_000;
 let cache: { at: number; byCall: Map<string, DoNotCallKind> } | null = null;
 
 /** Normalised form. One station, one entry — see the migration's note on case. */
-export function normaliseCall(call: string): string {
-  return call.trim().toUpperCase();
-}
+export { normaliseCall };
 
 /** Drop the cache. Call after any add or remove. */
 export function invalidateDoNotCall(): void {

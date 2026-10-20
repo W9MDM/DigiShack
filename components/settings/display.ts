@@ -1,5 +1,6 @@
 import { compositeFor, type CompositeField } from "@/components/settings/group-extras";
-import type { ClientSetting } from "@/components/settings/types";
+import type { ClientSetting, SettingsEditor } from "@/components/settings/types";
+import { staysInView, type RowFacts } from "@/components/settings/visibility";
 
 /** One row on the page: a setting, or several settings drawn as one control. */
 export type DisplayItem =
@@ -59,4 +60,15 @@ export function displayItems(
 /** The settings a row stands for. */
 export function itemSettings(item: DisplayItem): ClientSetting[] {
   return item.kind === "setting" ? [item.setting] : item.settings;
+}
+
+/** What `layoutGroup` needs to know about a row. `editor` is omitted for the stored state alone. */
+export function rowFacts(item: DisplayItem, editor?: Pick<SettingsEditor, "isDirty">): RowFacts {
+  const parts = itemSettings(item);
+  return {
+    id: item.id,
+    advanced: item.advanced,
+    kept: parts.some(staysInView),
+    dirty: editor ? parts.some((s) => editor.isDirty(s.key)) : false,
+  };
 }

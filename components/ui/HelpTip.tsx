@@ -61,13 +61,12 @@ export function HelpTip({
   useEffect(() => {
     if (!open) return;
     const inside = (t: EventTarget | null) => t instanceof Node && Boolean(wrapRef.current?.contains(t));
-    // Capture phase, and the event is consumed: the innermost thing open is what Escape
-    // closes. A HelpTip inside a dialog must not take the dialog down with it, and
-    // preventDefault is what stops a native <dialog> treating it as its close request.
+    // NOT stopped from propagating: on /decodes Escape is HALT TX, and an open tip beside the
+    // HALT button used to swallow the first press. preventDefault still marks it handled, so a
+    // native <dialog> (and our Dialog, which checks defaultPrevented) won't also close on it.
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
       e.preventDefault();
-      e.stopPropagation();
       // Focus goes back to the marker only if it was in the tip — Escape pressed while
       // typing elsewhere should not yank the caret out of the field.
       close(inside(document.activeElement));
@@ -80,11 +79,11 @@ export function HelpTip({
     const onFocus = (e: FocusEvent) => {
       if (!inside(e.target)) close(false);
     };
-    document.addEventListener("keydown", onKey, true);
+    window.addEventListener("keydown", onKey, true);
     document.addEventListener("pointerdown", onDown);
     document.addEventListener("focusin", onFocus);
     return () => {
-      document.removeEventListener("keydown", onKey, true);
+      window.removeEventListener("keydown", onKey, true);
       document.removeEventListener("pointerdown", onDown);
       document.removeEventListener("focusin", onFocus);
     };

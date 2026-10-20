@@ -1,9 +1,10 @@
-import { useEffect, useMemo } from "react";
+import { Fragment, useEffect, useMemo } from "react";
 
-import { displayItems, groupIdFor } from "@/components/settings/display";
+import { displayItems, groupIdFor, rowFacts } from "@/components/settings/display";
 import { CATEGORY_EXTRAS, GROUP_EXTRAS, type ExtraContext } from "@/components/settings/group-extras";
 import { SettingGroupCard } from "@/components/settings/SettingGroupCard";
 import type { ClientSetting, SettingGroup } from "@/components/settings/types";
+import { isQuietGroup } from "@/components/settings/visibility";
 import { groupsInTab, SETTINGS_TABS } from "@/lib/settings/tabs";
 
 export const CATEGORY_HEADING_ID = "settings-category";
@@ -45,21 +46,27 @@ export function CategoryView({
   const tab = SETTINGS_TABS.find((t) => t.id === tabId) ?? SETTINGS_TABS[0]!;
   const ids = useMemo(() => groupsInTab(tab.id, groups.map((g) => g.id)), [tab.id, groups]);
 
-  const sections = useMemo(
-    () =>
-      ids
-        .map((id) => {
-          const group = groups.find((g) => g.id === id);
-          const items = displayItems(
-            settings.filter((s) => s.group === id),
-            byKey,
-          );
-          return group ? { group, items, extra: GROUP_EXTRAS[id] } : null;
-        })
-        .filter((x) => x !== null)
-        .filter((x) => x.items.length > 0 || x.extra),
-    [ids, groups, settings, byKey],
-  );
+  // Groups with something to show first; then, under "More", the ones that are advanced
+  // only and entirely at their defaults — the same split the sidebar makes, so the two list
+  // the groups in the same order. Decided from what is stored, so nothing moves while typing.
+  const { sections, quietFrom } = useMemo(() => {
+    const all = ids
+      .map((id) => {
+        const group = groups.find((g) => g.id === id);
+        const items = displayItems(
+          settings.filter((s) => s.group === id),
+          byKey,
+        );
+        const extra = GROUP_EXTRAS[id];
+        if (!group) return null;
+        return { group, items, extra, quiet: isQuietGroup(items.map((it) => rowFacts(it)), Boolean(extra)) };
+      })
+      .filter((x) => x !== null)
+      .filter((x) => x.items.length > 0 || x.extra);
+    const main = all.filter((x) => !x.quiet);
+    const quiet = all.filter((x) => x.quiet);
+    return { sections: [...main, ...quiet], quietFrom: main.length };
+  }, [ids, groups, settings, byKey]);
 
   // Which group is under the header, for the sidebar's highlight. A band across the top of
   // the viewport rather than "most visible": a tall group that fills the screen is the one
@@ -101,19 +108,28 @@ export function CategoryView({
       </div>
       <div className="flex flex-col gap-6">
         {categoryExtra?.(ctx)}
-        {sections.map(({ group, items, extra }) => (
-          <SettingGroupCard
-            key={group.id}
-            group={group}
-            items={items}
-            editor={ctx.editor}
-            extra={extra?.(ctx)}
-            advancedOpen={isAdvancedOpen(group.id)}
-            onToggleAdvanced={() => toggleAdvanced(group.id)}
-            expanded={isExpanded(group.id)}
-            onToggleExpanded={() => toggleExpanded(group.id)}
-            flashId={flashId}
-          />
+        {sections.map(({ group, items, extra }, i) => (
+          <Fragment key={group.id}>
+            {i === quietFrom && (
+              <div className="-mb-3 mt-2">
+                <h3 className="text-sm font-semibold text-fg-muted">More in {tab.label}</h3>
+                <p className="text-sm text-fg-subtle">
+                  Advanced only, and every setting in these is at its default. Show one to see or change it.
+                </p>
+              </div>
+            )}
+            <SettingGroupCard
+              group={group}
+              items={items}
+              editor={ctx.editor}
+              extra={extra?.(ctx)}
+              advancedOpen={isAdvancedOpen(group.id)}
+              onToggleAdvanced={() => toggleAdvanced(group.id)}
+              expanded={isExpanded(group.id)}
+              onToggleExpanded={() => toggleExpanded(group.id)}
+              flashId={flashId}
+            />
+          </Fragment>
         ))}
       </div>
     </section>

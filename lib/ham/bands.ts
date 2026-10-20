@@ -100,7 +100,6 @@ export function freqInBand(hz: number, bandName: string): boolean {
   return hz >= b.lowHz && hz <= b.highHz;
 }
 
-/** Hz → MHz string for display, trimming trailing zeros past 3 decimals. */
 /**
  * A dial frequency the way a radio's own display shows it: `14.300.000`.
  *
@@ -124,6 +123,13 @@ export function formatFreqDial(hz: number | bigint): string {
   return `${mhz}.${String(khz).padStart(3, "0")}.${String(rest).padStart(3, "0")}`;
 }
 
+/**
+ * Hz → MHz to the Hz, trailing zeros trimmed: `14.074`, `14`, `10.1`. "—" for zero or less.
+ *
+ * NOT ONLY FOR DISPLAY. LoTW's `mhz()` in lib/integrations/lotw-tq8.ts is this function,
+ * and its output goes into the bytes each contact is signed over. Changing the format here
+ * changes the signature; check:lotw-upload pins it.
+ */
 export function formatFreqMHz(hz: number | bigint): string {
   const n = typeof hz === "bigint" ? Number(hz) : hz;
   if (!Number.isFinite(n) || n <= 0) return "—";

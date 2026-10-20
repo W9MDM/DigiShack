@@ -6,6 +6,8 @@
 
 import { Worker } from "node:worker_threads";
 
+import { WorkerSupervisor, type SupervisedWorker } from "@/lib/radio/worker-supervisor";
+
 /** One decode result, in the shape the pipeline already expects from the library. */
 export interface ThreadDecode {
   freq: number;
@@ -47,15 +49,7 @@ export interface DecodeWorkerReply {
  * dies with "Unknown file extension". The recovery check substitutes workers that hang, exit
  * cleanly or crash on cue, since the real decoder cannot be made to do any of those on demand.
  */
-export interface DecodeWorker {
-  on(event: "message", listener: (reply: DecodeWorkerReply) => void): unknown;
-  on(event: "error", listener: (err: Error) => void): unknown;
-  on(event: "exit", listener: (code: number) => void): unknown;
-  postMessage(value: unknown, transferList?: readonly ArrayBuffer[]): void;
-  ref(): void;
-  unref(): void;
-  terminate(): Promise<number>;
-}
+export type DecodeWorker = SupervisedWorker<DecodeWorkerReply>;
 
 export interface DecodeThreadOptions {
   /** How long one window may take before its worker is presumed wedged. */
@@ -93,156 +87,39 @@ const spawnDecodeWorker = (): DecodeWorker => new Worker(new URL("./decode-worke
  * failed at once, it is terminated, and the next window builds a fresh one. Anything a
  * retired worker says afterwards is ignored, so a late answer cannot be taken for a newer
  * window's. The cost is the hash book, which starts empty again - the same cost as a crash.
+ * That supervision lives in worker-supervisor.ts, shared with the WSPR and JS8 threads.
  */
 export class DecodeThread {
-  /** The worker in service and the generation it belongs to; null until the next job needs one. */
-  private live: { worker: DecodeWorker; generation: number } | null = null;
-  private generation = 0;
-  private seq = 0;
-  /** Jobs owed by the live worker. Retiring a worker empties this, so it never holds another generation's. */
-  private readonly pending = new Map<
-    number,
-    { resolve: (r: DecodeResult) => void; timer: NodeJS.Timeout }
-  >();
-  private closed = false;
-  /** Restarts, so a thread dying in a loop is visible rather than silent. */
-  private restarts = 0;
-  private readonly timeoutMs: number;
-  private readonly spawn: () => DecodeWorker;
+  private readonly supervisor: WorkerSupervisor<ThreadDecode>;
 
-  constructor(
-    private readonly onLog?: (line: string) => void,
-    opts: DecodeThreadOptions = {},
-  ) {
-    this.timeoutMs = opts.timeoutMs ?? JOB_TIMEOUT_MS;
-    this.spawn = opts.spawn ?? spawnDecodeWorker;
-  }
-
-  private ensure(): { worker: DecodeWorker; generation: number } {
-    if (this.live) return this.live;
-
-    const generation = ++this.generation;
-    const worker = this.spawn();
-
-    worker.on("message", (m) => {
-      // A retired worker's answer belongs to a window that has already been given up on.
-      if (this.live?.generation !== generation) return;
-      const job = this.pending.get(m.id);
-      if (!job) return;
-      clearTimeout(job.timer);
-      this.pending.delete(m.id);
-      if (this.pending.size === 0) worker.unref();
-      job.resolve({ decodes: m.decodes, ms: m.ms, error: m.error });
+  constructor(onLog?: (line: string) => void, opts: DecodeThreadOptions = {}) {
+    this.supervisor = new WorkerSupervisor<ThreadDecode>({
+      spawn: opts.spawn ?? spawnDecodeWorker,
+      timeoutMs: opts.timeoutMs ?? JOB_TIMEOUT_MS,
+      onLog,
+      timedOutLine: (ms) => `[decode] window timed out after ${ms}ms — treating as empty`,
+      // check-decode-worker counts "restarting" to prove a healthy thread is never replaced.
+      restartingLine: (why, n) => `[decode] worker ${why} — restarting (restart ${n})`,
     });
-
-    // A DEAD THREAD IS A DEAF STATION, so it is rebuilt rather than mourned. ANY exit of the
-    // live worker is unexpected - including code 0, which used to be ignored and left a
-    // worker that no longer existed installed, with every later window posted into nothing
-    // until it timed out. Our own terminate() is not counted: retire() has already moved
-    // the generation on by the time its exit arrives.
-    worker.on("error", (err) => this.retire(generation, `failed: ${err.message}`));
-    worker.on("exit", (code) => this.retire(generation, `exited with code ${code}`));
-
-    // REF'D WHILE WORKING, UNREF'D WHILE IDLE — and both halves were learned the hard way.
-    //
-    // Always unref'd was the first attempt: the process then does not wait for a decode in
-    // flight, so a window is abandoned the instant nothing else has work pending. A window
-    // silently not decoded is the exact fault this change exists to remove.
-    //
-    // Never unref'd was the second: an idle thread then holds the process open for ever, so
-    // anything that creates a pipeline without stopping it can never exit. That wedged the
-    // check suite, which builds a pipeline per case.
-    //
-    // So the thread holds the process open exactly while it owes an answer. `ref` and
-    // `unref` are counted by the pending map in `decode()` and the message handler.
-    worker.unref();
-    this.live = { worker, generation };
-    return this.live;
   }
 
   /**
-   * Take one generation's worker out of service, once.
+   * Decode one window.
    *
-   * Everything it still owed is failed first: those windows' audio went to it and is gone,
-   * and leaving their promises pending would wedge the pipeline behind a thread that is no
-   * longer there. Then it is terminated — a no-op for one that already exited, and the only
-   * way out for one stuck inside a decode.
+   * TRANSFERRED, NOT COPIED. The audio is ~330 kB a window and the caller has no use for it
+   * afterwards, so the buffer is handed over rather than cloned. The caller must not touch
+   * `job.audio` after this — every caller in the pipeline builds it fresh for exactly one
+   * decode. Cast because a Float32Array MAY be backed by a SharedArrayBuffer, which is not
+   * transferable — but every caller here builds a plain one. Narrowed rather than silenced:
+   * a shared buffer would throw at runtime, and that is the correct outcome for a caller that
+   * has quietly changed how it allocates audio.
    */
-  private retire(generation: number, why: string): void {
-    const live = this.live;
-    if (!live || live.generation !== generation) return;
-    this.live = null;
-    for (const [id, job] of this.pending) {
-      clearTimeout(job.timer);
-      this.pending.delete(id);
-      job.resolve({ decodes: [], ms: 0, error: why });
-    }
-    live.worker.terminate().catch(() => {
-      /* already gone */
-    });
-    if (this.closed) return;
-    this.restarts++;
-    // "restarting" is literal enough: the replacement is built by the next window, and
-    // check-decode-worker counts this word to prove a healthy thread is never replaced.
-    this.onLog?.(`[decode] worker ${why} — restarting (restart ${this.restarts})`);
-  }
-
-  async decode(job: DecodeJob): Promise<DecodeResult> {
-    if (this.closed) return { decodes: [], ms: 0, error: "decoder closed" };
-    let live: { worker: DecodeWorker; generation: number };
-    try {
-      live = this.ensure();
-    } catch (err) {
-      return { decodes: [], ms: 0, error: `could not start the decoder: ${err instanceof Error ? err.message : String(err)}` };
-    }
-    const { worker: w, generation } = live;
-    const id = ++this.seq;
-
-    return new Promise<DecodeResult>((resolve) => {
-      const timer = setTimeout(() => {
-        if (!this.pending.delete(id)) return;
-        this.onLog?.(`[decode] window timed out after ${this.timeoutMs}ms — treating as empty`);
-        resolve({ decodes: [], ms: this.timeoutMs, error: "timeout" });
-        // The worker that swallowed it is presumed wedged, and is replaced rather than fed
-        // the next window too. See the class comment.
-        this.retire(generation, `timed out after ${this.timeoutMs}ms`);
-      }, this.timeoutMs);
-      timer.unref?.();
-      // Holds the process open for as long as this window is owed an answer.
-      if (this.pending.size === 0) w.ref();
-      this.pending.set(id, { resolve, timer });
-
-      // TRANSFERRED, NOT COPIED. The audio is ~330 kB a window and the caller has no use
-      // for it afterwards, so the buffer is handed over rather than cloned. The caller must
-      // not touch `job.audio` after this — every caller in the pipeline builds it fresh for
-      // exactly one decode.
-      // Cast because a Float32Array MAY be backed by a SharedArrayBuffer, which is not
-      // transferable — but every caller here builds a plain one. Narrowed rather than
-      // silenced: a shared buffer would throw at runtime, and that is the correct outcome
-      // for a caller that has quietly changed how it allocates audio.
-      try {
-        w.postMessage({ id, ...job }, [job.audio.buffer as ArrayBuffer]);
-      } catch (err) {
-        // The job never reached the worker, so the worker is not at fault and must not be
-        // retired by this job's timer: undo the bookkeeping and reject, as it always did.
-        clearTimeout(timer);
-        this.pending.delete(id);
-        if (this.pending.size === 0) w.unref();
-        throw err;
-      }
-    });
+  decode(job: DecodeJob): Promise<DecodeResult> {
+    return this.supervisor.run(job, [job.audio.buffer as ArrayBuffer]);
   }
 
   /** Stop accepting work and tear the thread down. */
-  async close(): Promise<void> {
-    this.closed = true;
-    const live = this.live;
-    this.live = null;
-    for (const [id, job] of this.pending) {
-      clearTimeout(job.timer);
-      this.pending.delete(id);
-      job.resolve({ decodes: [], ms: 0, error: "decoder closed" });
-    }
-    if (live) await live.worker.terminate().catch(() => 0);
+  close(): Promise<void> {
+    return this.supervisor.close();
   }
 }

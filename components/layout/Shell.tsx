@@ -143,7 +143,7 @@ export function Shell({
             onOpenDrawer={() => setMenuOpen(true)}
           />
 
-          <div className="ml-auto flex items-center gap-2 md:gap-3">
+          <div className="ml-auto flex items-center gap-1.5 sm:gap-2 md:gap-3">
             <UtcClock />
             <TxArmButton />
             <Ft0Button />
@@ -167,9 +167,12 @@ export function Shell({
                   )}
                 </Link>
                 {user.role !== "OPERATOR" && (
-                  <Badge tone={user.role === "ADMIN" ? "accent" : "neutral"}>
-                    {user.role}
-                  </Badge>
+                  // Not on a phone: at 375px it pushed the header 42px wider than the screen.
+                  <span className="hidden sm:inline-flex">
+                    <Badge tone={user.role === "ADMIN" ? "accent" : "neutral"}>
+                      {user.role}
+                    </Badge>
+                  </span>
                 )}
                 {/* Sign out lives in the drawer on a phone. Kept here on desktop,
                     where there is room and where it has always been. */}

@@ -68,7 +68,12 @@ if [ "$DO_PULL" -eq 1 ]; then
   # They are build inputs owned by the repository. Nobody hand-edits them on a deployed
   # install and the incoming version is authoritative. Everything else still blocks: a
   # modified source file is a real edit and is what this guard was written to protect.
-  DIRTY="$(git status --porcelain | grep -vE '[ /](package|package-lock)\.json$' || true)"
+  #
+  # Untracked files ("??") do not count either, exactly as in lib/update/runner.ts: a LoTW
+  # certificate or a received SSTV picture in data/ is not an edit, and git itself refuses
+  # the merge if an incoming commit would overwrite an untracked file.
+  TRACKED_STATUS="$(git status --porcelain | grep -v '^??' || true)"
+  DIRTY="$(printf '%s\n' "$TRACKED_STATUS" | grep -vE '[ /](package|package-lock)\.json$' | grep -v '^$' || true)"
   if [ -n "$DIRTY" ]; then
     printf '%s\n' "$DIRTY"
     die "working tree has uncommitted changes — commit, stash, or use --no-pull"
@@ -81,7 +86,7 @@ if [ "$DO_PULL" -eq 1 ]; then
   # Reclaiming exactly what the filter above forgave, taken from git rather than assumed:
   # a hardcoded `package.json package-lock.json` would forgive a nested one and then fail
   # to restore it, which is the same broken merge with an even stranger explanation.
-  NPM_DIRTY="$(git status --porcelain | grep -E '[ /](package|package-lock)\.json$' | cut -c4- || true)"
+  NPM_DIRTY="$(printf '%s\n' "$TRACKED_STATUS" | grep -E '[ /](package|package-lock)\.json$' | cut -c4- || true)"
   if [ -n "$NPM_DIRTY" ]; then
     printf '%s\n' "$NPM_DIRTY" | while IFS= read -r f; do
       [ -n "$f" ] && git checkout -- "$f"

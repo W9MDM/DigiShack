@@ -2,6 +2,7 @@ import { createSign } from "node:crypto";
 import { gzipSync } from "node:zlib";
 
 import { toAdifMode } from "@/lib/adif/fields";
+import { formatFreqMHz } from "@/lib/ham/bands";
 import type { LotwCert } from "@/lib/integrations/lotw-cert";
 
 // Building the .tq8 file that LoTW accepts, and signing every contact in it.
@@ -50,10 +51,15 @@ function fPlusNewline(name: string, value: string, typeSuffix = ""): string {
  * FREQ field and the signed data, so it has to be stable rather than usually right. Fixed
  * decimals then trimmed gives the same answer PHP's default precision does for every
  * frequency an amateur logs.
+ *
+ * That is exactly `formatFreqMHz` for any frequency above zero, so this is it, under the
+ * name the signing code reads. It is still its own export because the output is SIGNED:
+ * scripts/check-lotw-upload.ts pins it against the original fixed-then-trim formula, so a
+ * display tweak to `formatFreqMHz` fails the check instead of LoTW's signature. Callers
+ * only pass a frequency that is present, so the "—" it gives for zero never reaches here.
  */
 export function mhz(hz: number): string {
-  const s = (hz / 1_000_000).toFixed(6);
-  return s.replace(/\.?0+$/, "");
+  return formatFreqMHz(hz);
 }
 
 /**

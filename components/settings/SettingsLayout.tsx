@@ -12,6 +12,7 @@ import {
   isToolActive,
   SETTINGS_TABS,
   settingsHref,
+  splitQuietGroups,
   toolsFor,
   type ToolTab,
 } from "@/lib/settings/tabs";
@@ -35,16 +36,27 @@ export interface SettingsNav {
   activeGroup: string | null;
   groups: NavGroup[];
   dirtyGroups: ReadonlySet<string>;
+  /** Groups holding a setting with a problem — a stored value that will not decrypt. */
+  problemGroups: ReadonlySet<string>;
+  /**
+   * Groups listed under "More": advanced only, every setting at its default. Worked out
+   * from the stored settings; without it (the tool pages) the registry's advanced-only flag
+   * stands in.
+   */
+  quietGroups?: ReadonlySet<string>;
   /** A category or group link was used — the page scrolls even if the URL did not change. */
   onNavigate: (target: { tab: string; group?: string }) => void;
   /** "42 settings · 84 advanced hidden". */
   summary?: string;
 }
 
-function Dot({ label }: { label: string }) {
+function Dot({ label, tone = "info" }: { label: string; tone?: "info" | "warn" }) {
   return (
     <>
-      <span aria-hidden="true" className="size-1.5 shrink-0 rounded-full bg-info" />
+      <span
+        aria-hidden="true"
+        className={cn("size-1.5 shrink-0 rounded-full", tone === "warn" ? "bg-warn" : "bg-info")}
+      />
       <span className="sr-only">{label}</span>
     </>
   );
@@ -94,9 +106,15 @@ function Sidebar({
     if (activeTab) setExpanded(new Set([activeTab]));
   }, [activeTab]);
 
+  // Which categories have their "More" open, when someone has chosen; otherwise it opens by
+  // itself when the group being read, or one with unsaved changes, is in it.
+  const [moreChoice, setMoreChoice] = useState<Readonly<Record<string, boolean>>>({});
+
   const groups = useLazyGroups(nav?.groups, expanded.size > 0);
   const groupIds = groups?.map((g) => g.id) ?? [];
   const title = (id: string) => groups?.find((g) => g.id === id)?.title ?? id;
+  const isQuiet = (id: string) =>
+    nav?.quietGroups ? nav.quietGroups.has(id) : groups?.find((g) => g.id === id)?.advancedOnly === true;
   const onSettings = nav !== undefined;
 
   const toggle = (id: string) =>
@@ -106,6 +124,31 @@ function Sidebar({
       else next.add(id);
       return next;
     });
+
+  const groupLink = (tabId: string, g: string, active: boolean) => {
+    const on = active && nav?.activeGroup === g;
+    const quiet = isQuiet(g);
+    return (
+      <li key={g}>
+        <Link
+          href={settingsHref({ group: g })}
+          replace={onSettings}
+          shallow={onSettings}
+          scroll={!onSettings}
+          aria-current={on ? "location" : undefined}
+          onClick={() => nav?.onNavigate({ tab: tabId, group: g })}
+          className={cn(
+            "nav-target flex items-center gap-2 rounded-sm px-2 py-1 text-sm transition-colors",
+            on ? "bg-surface-2 text-fg" : "text-fg-muted hover:bg-surface-2 hover:text-fg",
+          )}
+        >
+          <span className={cn("min-w-0 flex-1 truncate", quiet && !on && "text-fg-subtle")}>{title(g)}</span>
+          {nav?.problemGroups.has(g) && <Dot tone="warn" label="has a setting that needs attention" />}
+          {nav?.dirtyGroups.has(g) && <Dot label="has unsaved changes" />}
+        </Link>
+      </li>
+    );
+  };
 
   const guard = (href: string) => (e: MouseEvent<HTMLAnchorElement>) => {
     if (!confirmLeave(href)) e.preventDefault();
@@ -125,6 +168,12 @@ function Sidebar({
               const open = expanded.has(tab.id);
               const ids = groups ? groupsInTab(tab.id, groupIds) : [];
               const dirty = ids.some((g) => nav?.dirtyGroups.has(g));
+              const problem = ids.some((g) => nav?.problemGroups.has(g));
+              const { main, more } = splitQuietGroups(ids, isQuiet);
+              const moreId = `settings-nav-${tab.id}-more`;
+              const moreOpen =
+                moreChoice[tab.id] ??
+                more.some((g) => (active && nav?.activeGroup === g) || nav?.dirtyGroups.has(g));
               const href = settingsHref({ tab: tab.id });
               const listId = `settings-nav-${tab.id}`;
               return (
@@ -140,6 +189,7 @@ function Sidebar({
                       className={cn(ITEM, active ? ITEM_ON : ITEM_OFF)}
                     >
                       <span className="truncate">{tab.label}</span>
+                      {problem && <Dot tone="warn" label="has a setting that needs attention" />}
                       {dirty && <Dot label="has unsaved changes" />}
                     </Link>
                     <button
@@ -156,32 +206,32 @@ function Sidebar({
                   {open && (
                     <ul id={listId} className="my-1 ml-3 flex flex-col gap-px border-l border-line pl-2">
                       {!groups && <li className="px-2 py-1 text-xs text-fg-subtle">Loading…</li>}
-                      {ids.map((g) => {
-                        const on = active && nav?.activeGroup === g;
-                        const info = groups?.find((x) => x.id === g);
-                        return (
-                          <li key={g}>
-                            <Link
-                              href={settingsHref({ group: g })}
-                              replace={onSettings}
-                              shallow={onSettings}
-                              scroll={!onSettings}
-                              aria-current={on ? "location" : undefined}
-                              onClick={() => nav?.onNavigate({ tab: tab.id, group: g })}
-                              className={cn(
-                                "nav-target flex items-center gap-2 rounded-sm px-2 py-1 text-sm transition-colors",
-                                on ? "bg-surface-2 text-fg" : "text-fg-muted hover:bg-surface-2 hover:text-fg",
-                              )}
+                      {main.map((g) => groupLink(tab.id, g, active))}
+                      {more.length > 0 && (
+                        <li>
+                          <button
+                            type="button"
+                            aria-expanded={moreOpen}
+                            aria-controls={moreId}
+                            onClick={() => setMoreChoice((p) => ({ ...p, [tab.id]: !moreOpen }))}
+                            className="tap-inline flex w-full items-center gap-2 rounded-sm px-2 py-1 text-left text-sm text-fg-subtle hover:bg-surface-2 hover:text-fg"
+                          >
+                            <Chevron open={moreOpen} />
+                            <span className="min-w-0 flex-1 truncate">More</span>
+                            {!moreOpen && more.some((g) => nav?.dirtyGroups.has(g)) && <Dot label="has unsaved changes" />}
+                            <span className="tnum shrink-0 text-xs">{more.length}</span>
+                          </button>
+                          {moreOpen && (
+                            <ul
+                              id={moreId}
+                              aria-label={`Advanced-only groups in ${tab.label}, all at their defaults`}
+                              className="ml-3 flex flex-col gap-px border-l border-line pl-2"
                             >
-                              <span className={cn("min-w-0 flex-1 truncate", info?.advancedOnly && !on && "text-fg-subtle")}>
-                                {title(g)}
-                              </span>
-                              {nav?.dirtyGroups.has(g) && <Dot label="has unsaved changes" />}
-                              {info?.advancedOnly && <span className="shrink-0 text-xs text-fg-subtle">adv.</span>}
-                            </Link>
-                          </li>
-                        );
-                      })}
+                              {more.map((g) => groupLink(tab.id, g, active))}
+                            </ul>
+                          )}
+                        </li>
+                      )}
                     </ul>
                   )}
                 </li>
@@ -216,6 +266,16 @@ function Sidebar({
       )}
     </nav>
   );
+}
+
+/** What a category's entry in the phone picker adds after its name. */
+function pickerNote(tabId: string, nav: SettingsNav | undefined): string {
+  if (!nav) return "";
+  const ids = groupsInTab(tabId, nav.groups.map((x) => x.id));
+  const notes: string[] = [];
+  if (ids.some((g) => nav.problemGroups.has(g))) notes.push("needs attention");
+  if (ids.some((g) => nav.dirtyGroups.has(g))) notes.push("unsaved changes");
+  return notes.length ? ` — ${notes.join(", ")}` : "";
 }
 
 /** Below md: one native picker. The OS draws a proper list, and it takes one row. */
@@ -262,9 +322,7 @@ function SectionPicker({
               {SETTINGS_TABS.map((t) => (
                 <option key={t.id} value={`tab:${t.id}`}>
                   {t.label}
-                  {nav && [...nav.dirtyGroups].some((g) => groupsInTab(t.id, nav.groups.map((x) => x.id)).includes(g))
-                    ? " — unsaved changes"
-                    : ""}
+                  {pickerNote(t.id, nav)}
                 </option>
               ))}
             </optgroup>

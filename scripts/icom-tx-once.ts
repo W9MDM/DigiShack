@@ -21,7 +21,6 @@ import { createIcomSource } from "@/lib/icom/from-settings";
 import { IcomTransmitter } from "@/lib/icom/transmitter";
 import { prisma } from "@/lib/db/prisma";
 import { nextWindowStart } from "@/lib/radio/timing";
-import { getBooleanSetting } from "@/lib/settings";
 import { isTransmitArmed, transmitGate } from "@/lib/radio/transmit-gate";
 
 async function main(): Promise<void> {

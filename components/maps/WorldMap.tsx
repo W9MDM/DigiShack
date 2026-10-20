@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { fitView, resizeView, type ViewBounds, type ViewWindow } from "@/lib/geo/viewport";
+import { useActiveTheme } from "@/lib/client/use-theme";
 import { MapPainter, hitTest, type MapScene, type Marker, type Viewport } from "@/lib/maps/draw";
 import { WORLD_H, WORLD_W, project } from "@/lib/maps/projection";
 
@@ -40,6 +41,9 @@ export function WorldMap({
   const frame = useRef<number | null>(null);
   const hoverKey = useRef<string | null>(null);
   const [zoomed, setZoomed] = useState(false);
+  // The night theme draws the map in its own reds; read at paint time, like the scene.
+  const theme = useActiveTheme();
+  const themeRef = useRef(theme);
 
   const paint = useCallback(() => {
     frame.current = null;
@@ -47,7 +51,7 @@ export function WorldMap({
     const vp = vpRef.current;
     if (!ctx || vp.cssW <= 0 || vp.cssH <= 0) return;
     painter.current ??= new MapPainter();
-    painter.current.draw(ctx, sceneRef.current, vp);
+    painter.current.draw(ctx, sceneRef.current, vp, themeRef.current);
   }, []);
 
   const requestPaint = useCallback(() => {
@@ -79,6 +83,11 @@ export function WorldMap({
     sceneRef.current = scene;
     requestPaint();
   }, [scene, requestPaint]);
+
+  useEffect(() => {
+    themeRef.current = theme;
+    requestPaint();
+  }, [theme, requestPaint]);
 
   // Centre on the station once its grid arrives, unless the operator has already moved.
   useEffect(() => {

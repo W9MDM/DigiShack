@@ -1,5 +1,7 @@
 import type { ReactNode } from "react";
 
+import { useActiveTheme } from "@/lib/client/use-theme";
+import { mapColourFor } from "@/lib/maps/palette";
 import { cn } from "@/lib/utils";
 
 export type SwatchShape = "dot" | "ring" | "square" | "terminator" | "bands";
@@ -8,7 +10,20 @@ export type SwatchShape = "dot" | "ring" | "square" | "terminator" | "bands";
  * The glyph a layer is drawn with, so the legend shows the shape as well as the colour —
  * a hollow ring and a filled dot of similar hue must still be told apart.
  */
-export function Swatch({ shape, colour, colours }: { shape: SwatchShape; colour?: string; colours?: readonly string[] }) {
+export function Swatch({
+  shape,
+  colour: given,
+  colours: givenList,
+}: {
+  shape: SwatchShape;
+  colour?: string;
+  colours?: readonly string[];
+}) {
+  // Callers pass the dark-theme colour; the swatch shows what the map draws in the active
+  // theme, through the same mapping the canvas uses.
+  const theme = useActiveTheme();
+  const colour = given === undefined ? undefined : mapColourFor(given, theme);
+  const colours = givenList?.map((c) => mapColourFor(c, theme));
   if (shape === "bands") {
     return (
       <span aria-hidden className="inline-flex -space-x-1">

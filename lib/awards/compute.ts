@@ -223,10 +223,6 @@ export async function computeAwards(
    */
   const isConfirmed = (r: Row) => r.qslRcvd === "CONFIRMED" || r.lotwRcvd;
 
-  /** Confirmed by anything at all, including eQSL — for display, not for awards. */
-  const isConfirmedAnywhere = (r: Row) =>
-    r.qslRcvd === "CONFIRMED" || r.lotwRcvd || r.eqslRcvd;
-
   const confirmedQsoCount = rows.filter(isConfirmed).length;
 
   const awards: AwardProgress[] = dimensions.map((dim) => {

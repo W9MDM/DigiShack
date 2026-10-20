@@ -115,7 +115,7 @@ key, not a block (1.156.0). See the [roadmap](roadmap.md).
 The one target here that is not a web service: a Windows program on your own desk with a
 TCP listener. Switch it on in ACLog under **Settings → Application Program Interface (API)
 → "TCP API Enabled (Server)"**, then set `uploads.n3fjp`, `n3fjp.host` and `n3fjp.port`
-under Settings → Uploads and Settings → N3FJP Amateur Contact Log.
+under Settings → Logbook sync → Automatic uploading and → N3FJP Amateur Contact Log.
 
 **`n3fjp.host` is the trap.** `127.0.0.1` is correct only when DigiShack runs on the same
 machine as ACLog. A container or a separate server needs the desktop PC's own LAN address,

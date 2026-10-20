@@ -7,11 +7,9 @@
 // drawn as the "no data" hatch, never as the bottom of the colour map.
 
 import {
+  colormapChrome,
   colormapRgb,
   colormapRgba,
-  CYCLE_LINE_RGBA,
-  GAP_RGB_A,
-  GAP_RGB_B,
   type ColormapId,
 } from "@/lib/spectrum/colormaps";
 import type { SpectrumHistory } from "@/lib/spectrum/history";
@@ -148,11 +146,14 @@ export class SpectrogramGL implements SpectrogramRenderer {
     gl.uniform2f(u("uView"), f.viewLowHz - this.textures.refHz, f.viewHighHz - f.viewLowHz);
     gl.uniform2f(u("uSize"), w, h);
     gl.uniform2f(u("uLevel"), f.loDb, 1 / Math.max(1e-3, f.rangeDb));
-    gl.uniform3f(u("uGapA"), GAP_RGB_A[0] / 255, GAP_RGB_A[1] / 255, GAP_RGB_A[2] / 255);
-    gl.uniform3f(u("uGapB"), GAP_RGB_B[0] / 255, GAP_RGB_B[1] / 255, GAP_RGB_B[2] / 255);
+    // The hatch and the rule come with the map, so Night red takes them red too.
+    const chrome = colormapChrome(f.colormap);
+    const [gapA, gapB] = [chrome.gapA, chrome.gapB];
+    gl.uniform3f(u("uGapA"), gapA[0] / 255, gapA[1] / 255, gapA[2] / 255);
+    gl.uniform3f(u("uGapB"), gapB[0] / 255, gapB[1] / 255, gapB[2] / 255);
     const cycle = cycleRule(f.endAt, f.spanMs, h, f.periodMs);
     gl.uniform3f(u("uCycle"), cycle?.firstPx ?? 0, cycle?.periodPx ?? 1, cycle ? 1 : 0);
-    const [cr, cg, cb, ca] = CYCLE_LINE_RGBA;
+    const [cr, cg, cb, ca] = chrome.cycleLine;
     gl.uniform4f(u("uCycleColor"), cr / 255, cg / 255, cb / 255, ca);
     gl.bindVertexArray(this.vao);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
@@ -207,7 +208,9 @@ export class Spectrogram2D implements SpectrogramRenderer {
     const hzPerPx = (f.viewHighHz - f.viewLowHz) / w;
     const inv = 1 / Math.max(1e-3, f.rangeDb);
     const cycle = cycleRule(f.endAt, f.spanMs, h, f.periodMs);
-    const [cr, cg, cb, ca] = CYCLE_LINE_RGBA;
+    const chrome = colormapChrome(f.colormap);
+    const [cr, cg, cb, ca] = chrome.cycleLine;
+    const { gapA, gapB } = chrome;
 
     for (let y = 0; y < h; y++) {
       // Canvas rows run top-down; slot 0 (newest) is the bottom row.
@@ -239,7 +242,7 @@ export class Spectrogram2D implements SpectrogramRenderer {
         let g: number;
         let b: number;
         if (peak === Number.NEGATIVE_INFINITY) {
-          const gap = (x + slot) % 8 < 4 ? GAP_RGB_A : GAP_RGB_B;
+          const gap = (x + slot) % 8 < 4 ? gapA : gapB;
           r = gap[0];
           g = gap[1];
           b = gap[2];

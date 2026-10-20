@@ -542,7 +542,7 @@ export function Spectrogram({
           />
           <div className="pointer-events-none absolute inset-0">
             {ticks.values.map((hz) => (
-              <div key={hz} className="absolute inset-y-0 border-l border-white/10" style={{ left: `${pct(hz)}%` }} />
+              <div key={hz} className="absolute inset-y-0 border-l border-fg/10" style={{ left: `${pct(hz)}%` }} />
             ))}
             {rf && dialHz !== null && dialHz > axis.lo && dialHz < axis.hi && (
               <div className="absolute inset-y-0 border-l-2 border-accent" style={{ left: `${pct(dialHz)}%` }}>
@@ -552,7 +552,7 @@ export function Spectrogram({
               </div>
             )}
             <div ref={bandRef} className="absolute inset-y-0 border-x border-info bg-info/15" style={{ display: "none" }} />
-            <div ref={crossRef} className="absolute inset-y-0 left-0 border-l border-white/50" style={{ display: "none" }} />
+            <div ref={crossRef} className="absolute inset-y-0 left-0 border-l border-fg/50" style={{ display: "none" }} />
             <div
               ref={readoutRef}
               className="absolute top-2 whitespace-pre rounded-sm border border-line bg-bg/85 px-2 py-1 text-[11px] leading-snug text-fg tnum"

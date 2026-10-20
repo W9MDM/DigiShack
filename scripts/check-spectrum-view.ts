@@ -7,7 +7,8 @@
 // stale row, history that re-scales differently from the rows arriving now, or an axis
 // label that disagrees with where the pixels are. Each has an assertion below.
 
-import { PALETTE } from "@/components/digital/spectrum-canvas";
+import { PALETTE, recolourWaterfall, waterfallPalette } from "@/components/digital/spectrum-canvas";
+import { traceColours } from "@/components/digital/SpectrumTrace";
 import { panadapterMessage } from "@/lib/radio/panadapter";
 import { spectrumMessage } from "@/lib/radio/spectrum";
 import {
@@ -38,16 +39,22 @@ import {
   type OrbitCamera,
 } from "@/lib/spectrum/camera";
 import {
+  BACKGROUND_RGB,
+  colormapChrome,
   colormapRgb,
   colormapRgba,
   COLORMAPS,
+  CYCLE_LINE_RGBA,
+  GAP_RGB_A,
+  GAP_RGB_B,
   lutLuminance,
+  NIGHT_COLORMAP,
   turboRgb,
 } from "@/lib/spectrum/colormaps";
 import { BridgeClock, RateMeter, SpectrumFeed } from "@/lib/spectrum/feed";
 import { SpectrumHistory } from "@/lib/spectrum/history";
 import { bytesToDb, displayWindow, LevelTracker, normaliseDb } from "@/lib/spectrum/levels";
-import { DEFAULT_PREFS, loadPrefs, PREFS_KEY, sanitizePrefs } from "@/lib/spectrum/prefs";
+import { DEFAULT_PREFS, effectiveColormap, loadPrefs, PREFS_KEY, sanitizePrefs } from "@/lib/spectrum/prefs";
 import { decodeBase64Bins, FrameDecoder } from "@/lib/spectrum/wire";
 
 let pass = 0;
@@ -266,6 +273,87 @@ console.log("\ncolour maps");
     const rgba = colormapRgba(c.id);
     ok(rgba.length === 1024 && rgba[3] === 255 && rgba[1023] === 255, `${c.label} has an opaque 256-entry texture table`);
   }
+}
+
+// ---------------------------------------------------------------------------------------
+console.log("\nnight theme");
+{
+  // The dark theme must be exactly what it was: the night palette is an addition, and the
+  // waterfalls an operator already reads by day may not shift by one level.
+  const dark = waterfallPalette("dark");
+  ok(dark === PALETTE, "the dark theme's waterfall palette IS PALETTE");
+  const ds = colormapRgb("digishack");
+  ok(dark.every((v, i) => v === ds[i]), "and still byte-identical to the DigiShack map");
+  const dc = colormapChrome("digishack");
+  ok(
+    dc.background === BACKGROUND_RGB && dc.gapA === GAP_RGB_A && dc.gapB === GAP_RGB_B && dc.cycleLine === CYCLE_LINE_RGBA,
+    "every dark-theme map keeps its clear colour, gap hatch and cycle rule",
+  );
+  ok(COLORMAPS.every((c) => c.id === "night" || colormapChrome(c.id) === dc), "only Night red brings different chrome");
+
+  const nr = colormapRgb(NIGHT_COLORMAP);
+  ok(waterfallPalette("night") === nr, "the night theme's waterfalls draw in Night red");
+  ok(COLORMAPS.some((c) => c.id === NIGHT_COLORMAP && c.label === "Night red"), "Night red is on the /spectrum menu");
+  ok(hex(nr, 0) === "000000", "Night red starts at black", hex(nr, 0));
+  ok(hex(nr, 255) === "ffa000", "and ends at amber", hex(nr, 255));
+  let blue = 0;
+  let order = 0;
+  let mono = true;
+  let noiseDark = true;
+  for (let i = 0; i < 256; i++) {
+    const [r, g, b] = [nr[i * 3]!, nr[i * 3 + 1]!, nr[i * 3 + 2]!];
+    if (b !== 0) blue++;
+    if (g > r) order++;
+    // EVERY step, not every 16th: a single dip is a stronger signal reading weaker.
+    if (i > 0 && lutLuminance(nr, i) < lutLuminance(nr, i - 1)) mono = false;
+    if (i < 128 && lutLuminance(nr, i) > 0.05) noiseDark = false;
+  }
+  ok(blue === 0, "Night red has no blue in any of its 256 entries", `${blue} with blue`);
+  ok(order === 0, "and R >= G throughout — red to amber, never green", `${order} entries greener than red`);
+  ok(mono, "Night red brightens monotonically, entry by entry");
+  ok(noiseDark, "its bottom half stays dark (luminance <= 0.05), so noise is a dark field");
+  const nc = colormapChrome("night");
+  const chromeBad = [nc.background, nc.gapA, nc.gapB, nc.cycleLine, nc.gridLine].filter((c) => c[2] !== 0 || c[1] > c[0]);
+  ok(chromeBad.length === 0, "Night red's hatch, rules and clear colour are red-to-amber with no blue");
+  ok(
+    nc.gapA.join() !== nc.gapB.join() && nc.gapA.join() !== Array.from(nr.slice(0, 3)).join(),
+    "the night hatch is still two tones, and not the floor colour",
+  );
+
+  // The trace over the RF waterfall: every colour it strokes or fills, at night.
+  const t = traceColours("night");
+  const rgbaOf = (s: string) => (/rgba?\(\s*(\d+),\s*(\d+),\s*(\d+)/.exec(s) ?? []).slice(1).map(Number);
+  const traceAll = [...t.fill.map(([, c]) => c), t.grid, t.feather, t.core, t.hold];
+  const badTrace = traceAll.filter((c) => {
+    const [r, g, b] = rgbaOf(c);
+    return r === undefined || g === undefined || b !== 0 || g > r;
+  });
+  ok(badTrace.length === 0, `all ${traceAll.length} night trace colours are red-to-amber with no blue`, badTrace.join(" "));
+  ok(t.core !== t.hold, "the peak hold is still a different colour from the live trace");
+  ok(traceColours("dark").core === "rgba(190, 240, 255, 0.92)", "the dark trace is unchanged");
+
+  // A theme change re-inks the RF waterfall's bitmap from its own pixels.
+  const idxs = [0, 100, 200, 255];
+  const img = { data: new Uint8ClampedArray(idxs.length * 4) };
+  idxs.forEach((idx, x) => {
+    img.data.set([PALETTE[idx * 3]!, PALETTE[idx * 3 + 1]!, PALETTE[idx * 3 + 2]!, 255], x * 4);
+  });
+  const fake = { getImageData: () => img, putImageData: () => {} } as unknown as CanvasRenderingContext2D;
+  const same = (lut: Uint8Array) =>
+    idxs.every((idx, x) => [0, 1, 2].every((c) => img.data[x * 4 + c] === lut[idx * 3 + c]));
+  recolourWaterfall(fake, idxs.length, 1, PALETTE, nr);
+  ok(same(nr), "recolouring maps each pixel to the same index in the new palette");
+  recolourWaterfall(fake, idxs.length, 1, nr, PALETTE);
+  ok(same(PALETTE), "and back again, losslessly");
+
+  // /spectrum: Night red by default at night, but never over an explicit pick.
+  ok(effectiveColormap(DEFAULT_PREFS, false) === "digishack", "default prefs draw DigiShack in the dark theme");
+  ok(effectiveColormap(DEFAULT_PREFS, true) === "night", "and Night red in the night theme");
+  ok(effectiveColormap({ colormap: "grayscale", colormapChosen: true }, true) === "grayscale", "a map picked from the menu is kept at night");
+  ok(effectiveColormap({ colormap: "night", colormapChosen: true }, false) === "night", "and Night red picked by day is kept by day");
+  ok(sanitizePrefs({ colormap: "viridis" }).colormapChosen, "a non-default map stored before the flag existed counts as chosen");
+  ok(!sanitizePrefs({ colormap: "digishack" }).colormapChosen, "the default stored before the flag does not");
+  ok(!sanitizePrefs({ colormap: "viridis", colormapChosen: false }).colormapChosen, "an explicit flag wins");
 }
 
 // ---------------------------------------------------------------------------------------

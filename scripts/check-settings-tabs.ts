@@ -11,6 +11,16 @@
 
 import { existsSync, readFileSync } from "node:fs";
 
+import {
+  blurbLine,
+  isQuietGroup,
+  layoutGroup,
+  staysInView,
+  UNREADABLE_PLACEHOLDER,
+  unreadableNotice,
+  type RowFacts,
+} from "@/components/settings/visibility";
+
 import { navGroups, partitionAdvanced, safetyKind, SETTINGS_LOOKUP } from "@/lib/settings/presentation";
 import { SETTING_GROUPS, SETTINGS } from "@/lib/settings/registry";
 import {
@@ -26,6 +36,7 @@ import {
   SETTINGS_TABS,
   settingsHref,
   settingsTabFor,
+  splitQuietGroups,
   TOOL_TABS,
 } from "@/lib/settings/tabs";
 
@@ -259,6 +270,112 @@ console.log("\nsafety and advanced");
   for (const g of nav.filter((n) => n.advancedOnly)) {
     ok(SETTINGS.filter((s) => s.group === g.id).every((s) => s.advanced), `${g.id} is advanced-only because all of it is`);
   }
+}
+
+console.log("\nthe sidebar reaches every group, the quiet ones under More");
+{
+  const ids = SETTING_GROUPS.map((g) => g.id);
+  const nav = navGroups();
+  const quiet = (id: string) => nav.find((n) => n.id === id)?.advancedOnly === true;
+  const listed: string[] = [];
+  for (const t of SETTINGS_TABS) {
+    const inTab = groupsInTab(t.id, ids);
+    const { main, more } = splitQuietGroups(inTab, quiet);
+    eq([...main, ...more].sort(), [...inTab].sort(), `${t.label}: main + More is every group in the category`);
+    ok(more.every(quiet) && !main.some(quiet), `${t.label}: More holds exactly the quiet groups`);
+    listed.push(...main, ...more);
+  }
+  eq([...listed].sort(), [...ids].sort(), "no group is unreachable from the sidebar, and none is listed twice");
+
+  const advancedOnly = nav.filter((n) => n.advancedOnly);
+  console.log(`        (advanced-only, so under More until one is changed: ${advancedOnly.map((n) => n.id).join(", ") || "none"})`);
+  for (const n of advancedOnly) {
+    const tab = settingsTabFor(n.id);
+    const { more } = splitQuietGroups(groupsInTab(tab.id, ids), quiet);
+    ok(more.includes(n.id), `${n.id} is listed under More in ${tab.label}`);
+    const blurb = SETTING_GROUPS.find((g) => g.id === n.id)?.blurb;
+    const line = blurbLine(blurb);
+    ok(line.length > 0 && line.length <= 141, `${n.id}: its folded row says what it controls in one line`, JSON.stringify(line));
+  }
+  // A changed setting takes its group out of More, in the sidebar and on the page.
+  ok(!isQuietGroup([{ advanced: true, kept: true }, { advanced: true, kept: false }], false), "a group with a changed advanced setting is not quiet");
+  ok(isQuietGroup([{ advanced: true, kept: false }], false), "an all-default advanced-only group is quiet");
+  ok(!isQuietGroup([{ advanced: true, kept: false }], true), "a group with a panel of its own is never quiet");
+  ok(!isQuietGroup([], false), "an empty group is not quiet (it is not drawn at all)");
+  eq(
+    blurbLine("Restarts the bridge when it stalls. PM2 only checks the process exists."),
+    "Restarts the bridge when it stalls.",
+    "blurbLine takes the first sentence",
+  );
+  eq(blurbLine("Runs `npm run bridge` for you."), "Runs npm run bridge for you.", "and drops code ticks");
+}
+
+console.log("\nnothing non-default or unsaved is folded away");
+{
+  const row = (id: string, advanced: boolean, kept = false, dirty = false): RowFacts => ({ id, advanced, kept, dirty });
+  const none = new Set<string>();
+  const closed = { open: false, held: none, hasExtra: false };
+
+  let l = layoutGroup([row("a", false), row("b", true), row("c", true, true)], closed);
+  eq(l.visible, ["a", "c"], "closed: everyday rows and the CHANGED advanced row are shown");
+  eq(l.folded, ["b"], "closed: only the at-default advanced row is folded");
+
+  l = layoutGroup([row("a", false), row("b", true, false, true)], closed);
+  eq(l.visible, ["a", "b"], "closed: an unsaved advanced row is shown");
+  eq(l.held, ["b"], "and remembered");
+  l = layoutGroup([row("a", false), row("b", true)], { ...closed, held: new Set(["b"]) });
+  eq(l.visible, ["a", "b"], "an edit undone while outside stays put until the disclosure is opened");
+  l = layoutGroup([row("a", false), row("b", true, false, true)], { ...closed, open: true, held: new Set(["b"]) });
+  eq([l.visible, l.folded, l.held], [["a"], ["b"], []], "open: it is back in the panel, which is showing");
+
+  eq(layoutGroup([row("x", true), row("y", true)], closed).quiet, true, "all advanced and at default: quiet");
+  eq(layoutGroup([row("x", true), row("y", true, false, true)], closed).quiet, false, "an unsaved edit makes it a card");
+  eq(layoutGroup([row("x", true, true)], closed).visible, ["x"], "a changed setting in an advanced-only group is shown");
+
+  ok(staysInView({ customised: true, unreadable: false, problem: null }), "customised stays in view");
+  ok(staysInView({ customised: false, unreadable: true, problem: null }), "unreadable stays in view");
+  ok(staysInView({ customised: false, unreadable: false, problem: "x" }), "a problem stays in view");
+  ok(!staysInView({ customised: false, unreadable: false, problem: null }), "a default does not");
+
+  // Against the real registry: with every setting changed, no group folds anything.
+  let foldedAnyway = 0;
+  for (const g of SETTING_GROUPS) {
+    const rows = SETTINGS.filter((d) => d.group === g.id).map((d) => row(d.key, d.advanced === true, true));
+    foldedAnyway += layoutGroup(rows, closed).folded.length;
+  }
+  eq(foldedAnyway, 0, "every registered setting, once changed, is outside its disclosure");
+}
+
+console.log("\nunreadable stored values are shown, not papered over");
+{
+  eq(unreadableNotice({ unreadable: false, problem: null }), null, "a readable setting has no notice");
+  const said = "The stored value can't be decrypted — re-enter it. X.";
+  eq(unreadableNotice({ unreadable: true, problem: said }), said, "the server's explanation is shown");
+  ok(
+    unreadableNotice({ unreadable: true, problem: null })?.startsWith(UNREADABLE_PLACEHOLDER) === true,
+    "with none sent, the field still says so",
+  );
+
+  const ctx = { groupTitle: (id: string) => id };
+  const fake = [
+    { key: "a.secret", label: "Secret", group: "qrz", problem: "The stored value can't be decrypted — re-enter it." },
+    { key: "b.fine", label: "Fine", group: "qrz", problem: null },
+  ];
+  eq(searchSettings(fake, "problem", ctx).map((s) => s.key), ["a.secret"], 'searching "problem" finds the unreadable setting');
+  eq(searchSettings(fake, "decrypted", ctx).map((s) => s.key), ["a.secret"], "so does the problem's own wording");
+
+  const field = readFileSync("components/settings/SettingField.tsx", "utf8");
+  ok(field.includes("UNREADABLE_PLACEHOLDER") && field.includes("unreadableNotice("), "SettingField draws the unreadable placeholder and warning");
+  ok(field.includes("<UnreadableBadge />"), "and badges the row");
+  const page = readFileSync("pages/settings.tsx", "utf8");
+  ok(page.includes("<UnreadableBanner"), "the page lists unreadable values in a banner");
+  ok(page.includes("st.keyProblem &&"), "the missing-SETTINGS_KEY banner is still there");
+  ok(page.includes("problemGroups") && page.includes("quietGroups"), "the page tells the sidebar about both");
+  const layout = readFileSync("components/settings/SettingsLayout.tsx", "utf8");
+  ok(layout.includes("problemGroups.has(") && layout.includes('tone="warn"'), "the sidebar dots groups and categories with a problem");
+  ok(layout.includes("splitQuietGroups("), "the sidebar puts quiet groups under More");
+  const card = readFileSync("components/settings/SettingGroupCard.tsx", "utf8");
+  ok(card.includes("layoutGroup(") && card.includes("blurbLine("), "group cards use the folding rule and the one-line blurb");
 }
 
 console.log("\none navigation for the admin area");
