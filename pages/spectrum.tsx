@@ -3,6 +3,7 @@ import { useRouter } from "next/router";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { Analyzer } from "@/components/spectrum/Analyzer";
+import { Delta, Threshold } from "@/components/spectrum/ChangeViews";
 import { Persistence, Ridgeline } from "@/components/spectrum/ClassicViews";
 import { Spectrogram } from "@/components/spectrum/Spectrogram";
 import { Waterfall3D } from "@/components/spectrum/Waterfall3D";
@@ -379,6 +380,8 @@ export default function SpectrumPage({ wsUrl }: Props) {
         {prefs.view === "spectrum" && <Analyzer feed={feed} contrast={contrast} colormap={colormap} height="100%" />}
         {prefs.view === "ridgeline" && <Ridgeline feed={feed} contrast={contrast} colormap={colormap} height="100%" />}
         {prefs.view === "persistence" && <Persistence feed={feed} contrast={contrast} colormap={colormap} height="100%" />}
+        {prefs.view === "delta" && <Delta feed={feed} contrast={contrast} colormap={colormap} height="100%" />}
+        {prefs.view === "threshold" && <Threshold feed={feed} contrast={contrast} colormap={colormap} height="100%" />}
         {prefs.view === "split" && (
           <>
             <div className="min-h-0">{spectrogram}</div>
@@ -419,7 +422,8 @@ function Segmented<T extends string>({
   return (
     <div className="flex flex-col gap-1 text-xs text-fg-muted">
       <span id={`seg-${label}`}>{label}</span>
-      <div role="group" aria-labelledby={`seg-${label}`} className="inline-flex rounded-sm border border-line-strong">
+      {/* Wraps on a phone: the View group alone is wider than the controls card there. */}
+      <div role="group" aria-labelledby={`seg-${label}`} className="inline-flex max-w-full flex-wrap rounded-sm border border-line-strong">
         {options.map((o) => {
           const active = o.value === value;
           return (

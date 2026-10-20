@@ -9,6 +9,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { Analyzer } from "@/components/spectrum/Analyzer";
+import { Delta, Threshold } from "@/components/spectrum/ChangeViews";
 import { Persistence, Ridgeline } from "@/components/spectrum/ClassicViews";
 import { Spectrogram } from "@/components/spectrum/Spectrogram";
 import { Waterfall3D } from "@/components/spectrum/Waterfall3D";
@@ -73,7 +74,11 @@ export function useInlineView(storageKey: string): [InlineView, (v: InlineView) 
   return [view, choose];
 }
 
-/** The four-way switch. */
+/**
+ * The view switch. It wraps rather than running off the screen: in its callers' right-aligned
+ * row, a phone is narrower than all nine buttons, and an overflow off the left edge can't be
+ * scrolled back to.
+ */
 export function ViewSwitch({
   value,
   onChange,
@@ -84,7 +89,7 @@ export function ViewSwitch({
   className?: string;
 }) {
   return (
-    <div role="radiogroup" aria-label="Display" className={cn("inline-flex rounded-sm border border-line p-0.5", className)}>
+    <div role="radiogroup" aria-label="Display" className={cn("inline-flex max-w-full flex-wrap rounded-sm border border-line p-0.5", className)}>
       {INLINE_VIEWS.map((v) => {
         const on = v.id === value;
         return (
@@ -177,6 +182,8 @@ export function InlineSpectrum({
       {view === "spectrum" && <Analyzer feed={feed} contrast={contrast} colormap={colormap} height="100%" />}
       {view === "ridgeline" && <Ridgeline feed={feed} contrast={contrast} colormap={colormap} height={height} />}
       {view === "persistence" && <Persistence feed={feed} contrast={contrast} colormap={colormap} height={height} />}
+      {view === "delta" && <Delta feed={feed} contrast={contrast} colormap={colormap} height={height} />}
+      {view === "threshold" && <Threshold feed={feed} contrast={contrast} colormap={colormap} height={height} />}
       {view === "spectrogram" && spectrogram}
       {view === "3d" && surface}
       {view === "split" && (

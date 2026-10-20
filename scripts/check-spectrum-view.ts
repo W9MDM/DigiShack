@@ -54,7 +54,34 @@ import {
 import { BridgeClock, RateMeter, SpectrumFeed } from "@/lib/spectrum/feed";
 import { SpectrumHistory } from "@/lib/spectrum/history";
 import { bytesToDb, displayWindow, LevelTracker, normaliseDb } from "@/lib/spectrum/levels";
-import { DEFAULT_PREFS, effectiveColormap, loadPrefs, PREFS_KEY, sanitizePrefs } from "@/lib/spectrum/prefs";
+import { DEFAULT_PREFS, effectiveColormap, loadPrefs, PREFS_KEY, sanitizePrefs, VIEWS } from "@/lib/spectrum/prefs";
+import {
+  columnsMax,
+  columnsSigned,
+  countRuns,
+  countSignals,
+  DEFAULT_THRESHOLD_DB,
+  DELTA_DEADBAND_DB,
+  DELTA_DEPTH,
+  DELTA_DROP_MAX,
+  DELTA_DROP_MIN,
+  DELTA_DROP_TINT,
+  DELTA_RISE_MIN_INDEX,
+  deltaReferences,
+  FLOOR_BUCKETS,
+  FLOOR_FRACTION,
+  loadThresholdDb,
+  MAX_THRESHOLD_DB,
+  MIN_THRESHOLD_DB,
+  nearTransmit,
+  noiseFloorDb,
+  recentMean,
+  rowDelta,
+  saveThresholdDb,
+  sanitizeThresholdDb,
+  SIGNAL_ROWS,
+  THRESHOLD_KEY,
+} from "@/lib/spectrum/rowmath";
 import { decodeBase64Bins, FrameDecoder } from "@/lib/spectrum/wire";
 
 let pass = 0;
@@ -404,6 +431,249 @@ console.log("\ncamera");
   const c2: OrbitCamera = { ...DEFAULT_CAMERA };
   panBy(c2, 100, 0, 500);
   ok(c2.tx < 0 && near(c2.ty, DEFAULT_CAMERA.ty), "dragging right moves the target left, so the scene follows the cursor");
+}
+
+// ---------------------------------------------------------------------------------------
+console.log("\non-air rows: history marks what was received while transmitting");
+{
+  const h = new SpectrumHistory({ maxRows: 64, defaultIntervalMs: 250 });
+  h.setHistoryMs(1_000); // no merging
+  h.push(row(1000, 20));
+  h.push(row(1250, 20), true);
+  h.push(row(1500, 20));
+  ok(h.tx[h.physical(0)] === 0 && h.tx[h.physical(1)] === 1 && h.tx[h.physical(2)] === 0, "each row records whether it was taken on the air");
+
+  const m = new SpectrumHistory({ maxRows: 16, defaultIntervalMs: 100 });
+  m.setHistoryMs(16_000); // would merge these frames into one row
+  m.push(row(1000, 20));
+  m.push(row(1100, 20), true);
+  m.push(row(1200, 20), true);
+  ok(m.size === 2 && m.tx[m.physical(0)] === 0 && m.tx[m.physical(1)] === 1, "a frame on the other side of a TX change never merges into the row before it");
+
+  const feed = new SpectrumFeed("audio");
+  const dec = new FrameDecoder();
+  const frameAt = (at: number) =>
+    dec.decode(
+      JSON.parse(
+        JSON.stringify(spectrumMessage({ bins: new Uint8Array(64), binHz: 5.86, maxHz: 3000, floorDb: -110, ceilingDb: -70, at }, "FT8", 15_000)),
+      ) as Record<string, unknown>,
+    )!;
+  feed.ingest(frameAt(1000), 0);
+  feed.transmitting = true;
+  feed.ingest(frameAt(1250), 250);
+  const fh = feed.history;
+  ok(fh.tx[fh.physical(0)] === 0 && fh.tx[fh.physical(1)] === 1, "the feed marks rows stored while it is told the station is transmitting");
+}
+
+console.log("\ndelta: what changed against the last few rows");
+{
+  const N = 64;
+  const STEP = 40 / 255; // dB per wire byte in row()
+  const mk = () => {
+    const h = new SpectrumHistory({ maxRows: 64, defaultIntervalMs: 250 });
+    h.setHistoryMs(1_000);
+    return h;
+  };
+  const out = new Float32Array(N);
+  const refs = new Int32Array(DELTA_DEPTH);
+
+  const h = mk();
+  // A steady carrier at bin 10 and a noise floor that holds still.
+  for (let k = 0; k < 5; k++) h.push(row(1000 + k * 250, N, 30, { 10: 200 }));
+  ok(rowDelta(h, 4, out, refs) && out.every((v) => v === 0), "a steady carrier and a steady floor show no change at all");
+  ok(deltaReferences(h, 4, DELTA_DEPTH, refs) === 3 && refs[0] === h.physical(3) && refs[2] === h.physical(1), "a row is compared with the three rows before it, newest first");
+  ok(!rowDelta(h, 0, out, refs), "the first row has nothing to be compared with, so it is drawn flat");
+
+  // Bin 20 keys up 20 dB, bin 30 flickers 3 dB, and the carrier at bin 10 drops off.
+  h.push(row(2250, N, 30, { 20: 30 + 128, 30: 30 + 19 }));
+  ok(rowDelta(h, 5, out, refs), "a row after three steady ones is compared");
+  ok(near(out[20]!, 128 * STEP - DELTA_DEADBAND_DB, 1e-3), "a signal keying up lights by its rise beyond the dead-band", String(out[20]));
+  ok(out[30] === 0, "a 3 dB flicker stays inside the dead-band and dark");
+  ok(near(out[10]!, -(170 * STEP - DELTA_DEADBAND_DB), 1e-3), "a carrier dropping off shows as a negative change", String(out[10]));
+  ok(out.filter((v) => v !== 0).length === 2, "and nothing else in the row lights");
+  ok(rowDelta(h, 5, out, refs, { gateDb: -40 }) && out.every((v) => v === 0), "a contrast floor above both levels gates the change out as noise");
+  // The keyed signal holds: its second row compares against a mean that already holds part of it.
+  h.push(row(2500, N, 30, { 20: 30 + 128 }));
+  ok(rowDelta(h, 6, out, refs) && out[20]! > 0 && out[20]! < 128 * STEP - DELTA_DEADBAND_DB, "a signal that holds fades out of Delta as it becomes the past");
+
+  // A retune: same bins, new frequencies.
+  const d = mk();
+  d.push(row(1000, N, 30));
+  d.push(row(1250, N, 30));
+  d.push(row(1500, N, 200, {}, 5_000));
+  ok(!rowDelta(d, 2, out, refs), "the first row on a new span is never compared with the old one (no full-width flash)");
+  d.push(row(1750, N, 200, {}, 5_000));
+  ok(rowDelta(d, 3, out, refs) && deltaReferences(d, 3, DELTA_DEPTH, refs) === 1, "the row after it compares only with rows on its own span");
+  // An outage.
+  d.push(row(4000, N, 30, {}, 5_000));
+  ok(!rowDelta(d, 4, out, refs), "a row after an outage is not compared across the gap");
+
+  // Our own transmission: four rows of near-silence in the middle of a busy band.
+  const t = mk();
+  let at = 1000;
+  for (let k = 0; k < 10; k++, at += 250) t.push(row(at, N, 60)); // rows 0-9
+  for (let k = 0; k < 4; k++, at += 250) t.push(row(at, N, 0), true); // rows 10-13 on the air
+  for (let k = 0; k < 10; k++, at += 250) t.push(row(at, N, 60)); // rows 14-23
+  ok(!rowDelta(t, 9, out, refs) && !rowDelta(t, 5, out, refs), "rows within a second before the transmission are drawn flat (status can lag the audio)");
+  ok(rowDelta(t, 3, out, refs) && out.every((v) => v === 0), "rows well before it are compared as usual");
+  ok([10, 11, 12, 13].every((k) => !rowDelta(t, k, out, refs)), "rows taken on the air are drawn flat, not as the whole band dropping out");
+  ok([14, 15, 16, 17, 18].every((k) => !rowDelta(t, k, out, refs)), "rows within a second after it are drawn flat, not as the whole band keying up");
+  ok(rowDelta(t, 19, out, refs) && out.every((v) => v === 0), "once clear of the guard, a row compares with rows after the transmission");
+  ok(deltaReferences(t, 15, DELTA_DEPTH, refs) === 1, "references never reach back across an on-air row");
+  ok(nearTransmit(t, 12) && nearTransmit(t, 18) && !nearTransmit(t, 19) && !nearTransmit(t, 3), "the guard is a second either side of the on-air rows");
+
+  // A TX flag that arrives 2 s after the audio went quiet (a 2 s status poll): eight quiet rows
+  // stored as received, then the on-air rows.
+  const lag = mk();
+  at = 1000;
+  for (let k = 0; k < 10; k++, at += 250) lag.push(row(at, N, 200)); // rows 0-9 receiving, 31 dB over the silence
+  for (let k = 0; k < 8; k++, at += 250) lag.push(row(at, N, 0)); // rows 10-17 quiet, flag not yet up
+  for (let k = 0; k < 4; k++, at += 250) lag.push(row(at, N, 0), true); // rows 18-21 flagged
+  for (let k = 0; k < 8; k++, at += 250) lag.push(row(at, N, 200)); // rows 22-29
+  ok(rowDelta(lag, 10, out, refs) && out.every((v) => v < 0) && rowDelta(lag, 11, out, refs) && out.every((v) => v < 0), "a flag 2 s late is past the default guard: the quiet rows read as the whole band dropping");
+  ok(
+    [10, 11, 12, 13, 14, 15, 16, 17].every((k) => !rowDelta(lag, k, out, refs, { guardMs: 3_000 })),
+    "a guard longer than the flag's latency draws every quiet row before it flat",
+  );
+
+  // Pure noise, as the audio feed carries it: one unaveraged FFT per row (exponential power),
+  // a wire floor at the row's 25th percentile + 2 dB, one byte per bin. Fixed seed.
+  let seed = 12345;
+  const rnd = () => {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    return (seed + 0.5) / 2147483648;
+  };
+  const NB = 512;
+  const noisy = new SpectrumHistory({ maxRows: 64, defaultIntervalMs: 85 });
+  noisy.setHistoryMs(1_000);
+  let tracked: number | null = null;
+  const noiseRow = (atMs: number, keyed: boolean) => {
+    const db = new Float64Array(NB);
+    for (let b = 0; b < NB; b++) {
+      const p = -Math.log(rnd()) + (keyed && b >= 100 && b < 110 ? 10 ** 1.2 : 0); // +12 dB over the noise
+      db[b] = 10 * Math.log10(p) - 100;
+    }
+    const sorted = Float64Array.from(db).sort();
+    const ff = sorted[Math.floor(NB * 0.25)]!;
+    tracked = tracked === null ? ff : tracked * 0.9 + ff * 0.1;
+    const floorDb = tracked + 2;
+    const bytes = new Uint8Array(NB);
+    for (let b = 0; b < NB; b++) bytes[b] = Math.max(0, Math.min(255, Math.round(((db[b]! - floorDb) / 40) * 255)));
+    noisy.push({ bytes, count: NB, floorDb, ceilingDb: floorDb + 40, lowHz: 0, binHz: 5.86, at: atMs });
+    return floorDb;
+  };
+  const nOut = new Float32Array(NB);
+  let litAdaptive = 0;
+  let litFixed = 0;
+  let total = 0;
+  at = 1000;
+  for (let k = 0; k < 40; k++, at += 85) {
+    const gate = noiseRow(at, false);
+    if (k < 4) continue;
+    if (rowDelta(noisy, noisy.size - 1, nOut, refs, { gateDb: gate })) litAdaptive += nOut.filter((v) => v !== 0).length;
+    if (rowDelta(noisy, noisy.size - 1, nOut, refs, { gateDb: gate, deadbandDb: DELTA_DEADBAND_DB })) litFixed += nOut.filter((v) => v !== 0).length;
+    total += NB;
+  }
+  ok(litAdaptive / total < 0.03, "unaveraged noise stays dark: under 3% of its bins light", `${((100 * litAdaptive) / total).toFixed(1)}%`);
+  ok(litFixed / total > 0.1, "(a fixed 4 dB dead-band would light over a tenth of them)", `${((100 * litFixed) / total).toFixed(1)}%`);
+  const keyGate = noiseRow(at, true);
+  ok(
+    rowDelta(noisy, noisy.size - 1, nOut, refs, { gateDb: keyGate }) && nOut.subarray(100, 110).filter((v) => v > 0).length >= 9,
+    "a signal keying up 12 dB out of that noise still lights",
+    Array.from(nOut.subarray(100, 110), (v) => v.toFixed(1)).join(),
+  );
+
+  // Reducing to columns.
+  const col = new Float32Array(4);
+  columnsSigned(new Float32Array([-9, 2, -3, -7, 0, 0, 0, 0]), 8, 0, 10, 0, 80, 4, col);
+  ok(col[0] === 2 && col[1] === -7 && col[2] === 0 && col[3] === 0, "in a column a rise beats a drop, and the deepest drop shows otherwise", Array.from(col).join());
+  const cm = new Float32Array(2);
+  columnsMax(new Float32Array([1, 9, 2, 3, 3, 3]), 0, 6, 0, 10, 0, 60, 2, cm);
+  ok(cm[0] === 9 && cm[1] === 3, "the column reduction keeps a one-bin carrier at full strength");
+
+  // By day a drop must never be mistaken for a rise: every drop colour against every colour a
+  // rise can take, on every map.
+  for (const { id } of COLORMAPS) {
+    const lut = colormapRgb(id);
+    const bg = colormapChrome(id).background;
+    const tint = DELTA_DROP_TINT[id];
+    let closest = Number.POSITIVE_INFINITY;
+    for (let s = 0; s <= 10; s++) {
+      const m = DELTA_DROP_MIN + ((DELTA_DROP_MAX - DELTA_DROP_MIN) * s) / 10;
+      const c = [0, 1, 2].map((i) => bg[i]! + (tint[i]! - bg[i]!) * m);
+      for (let i = DELTA_RISE_MIN_INDEX; i < 256; i++) {
+        closest = Math.min(closest, Math.hypot(c[0]! - lut[i * 3]!, c[1]! - lut[i * 3 + 1]!, c[2]! - lut[i * 3 + 2]!));
+      }
+    }
+    ok(closest >= 45, `a drop on ${id} is a colour no rise is drawn in`, `closest ${closest.toFixed(0)}`);
+  }
+}
+
+console.log("\nthreshold: noise floor, signal count and the stored slider");
+{
+  const buckets = new Int32Array(FLOOR_BUCKETS);
+  const v = new Float32Array(100);
+  bytesToDb(new Uint8Array(100).fill(10).fill(200, 70), 100, -100, -60, v);
+  const at10 = -100 + (10 * 40) / 255;
+  ok(near(noiseFloorDb(v, 0, 100, buckets), at10, 1e-4), "the floor of a row 30% signals is the noise level exactly");
+  ok(near(noiseFloorDb(v, 0, 100, buckets, 0), at10, 1e-4) && near(noiseFloorDb(v, 0, 100, buckets, 0.9), -100 + (200 * 40) / 255, 1e-4), "other percentiles land on the right level");
+  ok(noiseFloorDb(new Float32Array([-90, -90, -90]), 0, 3, buckets) === -90 && Number.isNaN(noiseFloorDb(v, 0, 0, buckets)), "a flat row is its own floor; an empty one has none");
+  bytesToDb(new Uint8Array(100).fill(200).fill(10, 0, 40), 100, -100, -60, v);
+  ok(
+    FLOOR_FRACTION <= 0.25 && near(noiseFloorDb(v, 0, 100, buckets), at10, 1e-4),
+    "a busy band 60% signal still has its floor on the noise (a median would sit on the signals)",
+  );
+  ok(noiseFloorDb(v, 0, 100, buckets, 0.5) > at10, "(the median of that row is a signal level)");
+  // Threshold on that busy row: the 60 signal bins sit 29 dB up and all stay above the line.
+  ok(countRuns(v, 0, 100, noiseFloorDb(v, 0, 100, buckets) + DEFAULT_THRESHOLD_DB) === 1, "so a busy band's signals stay above the line instead of becoming background");
+
+  const r = new Float32Array(40).fill(-100);
+  r[5] = -80; // a speck
+  r.fill(-80, 10, 13); // a three-bin signal
+  r.fill(-80, 20, 25);
+  r[22] = -100; // one signal with a one-bin dip in it
+  r.fill(-80, 30, 32);
+  r.fill(-80, 34, 36); // two signals two bins apart
+  ok(countRuns(r, 0, 40, -90) === 4, "runs: a speck ignored, a one-bin dip bridged, a two-bin gap splits", String(countRuns(r, 0, 40, -90)));
+  ok(countRuns(r, 0, 40, -70) === 0 && countRuns(r, 0, 40, -90, 1) === 5, "nothing above a higher line; with no speck rule the speck counts");
+
+  const h = new SpectrumHistory({ maxRows: 64, defaultIntervalMs: 250 });
+  h.setHistoryMs(1_000);
+  for (let k = 0; k < 4; k++) h.push(row(1000 + k * 250, 64, 0, { 10: 128, 11: 128, 12: 128, 40: 128, 41: 128, 50: k === 3 ? 128 : 0 }));
+  const mean = new Float32Array(h.width);
+  ok(countSignals(h, 8, mean, buckets) === 2, "two signals 20 dB up count as two; a one-row, one-bin speck does not");
+  ok(countSignals(h, 25, mean, buckets) === 0, "a threshold above them counts none");
+  h.push(row(2000, 64, 255), true);
+  ok(countSignals(h, 8, mean, buckets) === 2, "a row taken on the air is left out of the count");
+  ok(recentMean(h, SIGNAL_ROWS, mean) === 64 && near(mean[10]!, -100 + (128 * 40) / 255, 1e-4), "the count averages the newest received rows in dB");
+  ok(countSignals(new SpectrumHistory(), 8, mean, buckets) === null, "no rows, no count");
+
+  ok(sanitizeThresholdDb(null) === DEFAULT_THRESHOLD_DB && DEFAULT_THRESHOLD_DB === 12, "the threshold defaults to 12 dB over the 25th percentile");
+  ok(sanitizeThresholdDb("15") === 15 && sanitizeThresholdDb(99) === MAX_THRESHOLD_DB && sanitizeThresholdDb(-4) === MIN_THRESHOLD_DB && sanitizeThresholdDb("x") === DEFAULT_THRESHOLD_DB, "stored values are read, clamped to 3..30, junk replaced");
+  const blocked = {
+    getItem: () => {
+      throw new Error("blocked");
+    },
+    setItem: () => {
+      throw new Error("blocked");
+    },
+  };
+  ok(loadThresholdDb(blocked) === DEFAULT_THRESHOLD_DB && loadThresholdDb(null) === DEFAULT_THRESHOLD_DB, "blocked or missing storage gives the default");
+  let threw = false;
+  try {
+    saveThresholdDb(blocked, 12);
+  } catch {
+    threw = true;
+  }
+  ok(!threw, "saving to blocked storage does not throw");
+  const store = new Map<string, string>();
+  const mem = { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, s: string) => void store.set(k, s) };
+  saveThresholdDb(mem, 50);
+  ok(loadThresholdDb(mem) === 30 && THRESHOLD_KEY.startsWith("digishack."), "a saved threshold reads back, clamped, under the app's namespace");
+
+  const ids = VIEWS.map((x) => x.id);
+  ok(ids.indexOf("delta") === ids.indexOf("persistence") + 1 && ids.indexOf("threshold") === ids.indexOf("delta") + 1, "Delta and Threshold follow Persistence on the switch");
+  ok(sanitizePrefs({ view: "delta" }).view === "delta" && sanitizePrefs({ view: "ridgeline" }).view === "ridgeline", "every view on the switch is remembered, not just the first three");
 }
 
 // ---------------------------------------------------------------------------------------

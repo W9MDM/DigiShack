@@ -97,7 +97,7 @@ export class SpectrumFeed {
    * While the station transmits, its receive audio goes quiet and the bridge reports a far
    * lower floor for those rows. Tracking it snapped the colour scale down and recoloured every
    * received row solid red for the length of each over. Rows are still stored (they are what
-   * was received: nothing); the levels just hold.
+   * was received: nothing), marked as on-air rows (history.tx); the levels just hold.
    */
   transmitting = false;
   /** performance.now() of the last stored frame. */
@@ -132,7 +132,7 @@ export class SpectrumFeed {
   /** Store a decoded frame and wake subscribers. False when the history ignored it. */
   ingest(frame: WireFrame, receivedPerf: number): boolean {
     const epoch = this.history.epoch;
-    const stored = this.history.push(frame);
+    const stored = this.history.push(frame, this.transmitting);
     // A new timeline (bridge restart) invalidates the clock offset learned from the old one.
     if (this.history.epoch !== epoch) {
       this.clock.reset();
