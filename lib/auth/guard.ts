@@ -69,7 +69,8 @@ export function authedRoute(
     try {
       let auth: AuthContext | null;
       try {
-        auth = await getAuth(req);
+        // With `res`, so a session in use is extended and its cookie re-issued (see getAuth).
+        auth = await getAuth(req, res);
       } catch (err) {
         // The database not answering says nothing about whether this visitor is signed
         // in, so it must not come back as a 401. Refused all the same, and told to retry.
@@ -289,7 +290,10 @@ export function withPageAuth<P extends Record<string, unknown>>(
   return async (ctx) => {
     let auth: AuthContext | null;
     try {
-      auth = await getAuth(ctx.req);
+      // A Set-Cookie put on ctx.res here survives into the page, the redirect, or the
+      // /_next/data answer alike. The 503 page below sets none: it is reached only when the
+      // lookup itself threw, and getAuth writes the cookie last, after everything that can.
+      auth = await getAuth(ctx.req, ctx.res);
     } catch (err) {
       // This used to redirect to /login?error=database, which is a sign-out as far as the
       // operator can tell: one slow query and they are looking at the sign-in form with

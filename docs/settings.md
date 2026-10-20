@@ -41,7 +41,7 @@ alongside the ones every station sets.
 - [External decoder (WSJT-X)](#external-decoder-wsjt-x) — 3 settings, 2 advanced
 - [FlexRadio (direct)](#flexradio-direct) — 14 settings, 11 advanced
 - [Operating schedule](#operating-schedule) — 5 settings
-- [Bridge watchdog](#bridge-watchdog) — 2 settings, 2 advanced
+- [Bridge watchdog](#bridge-watchdog) — 5 settings, 5 advanced
 - [Icom (network)](#icom-network) — 13 settings, 7 advanced
 - [YouTube Live](#youtube-live) — 10 settings, 5 advanced
 - [Issue alerts](#issue-alerts) — 4 settings, 3 advanced
@@ -61,7 +61,7 @@ Instance-wide behaviour.
 |---|---|---|---|---|
 | Licence class | `station.licenceClass` | select | — | Decides where an image mode (SSTV) may be sent: in the US images share the phone sub-bands, which differ by class - 14.230 needs General or above, 7.171 Advanced or Extra. Licensed outside the US means that licence's own rules apply. Unset, SSTV sending refuses. Stored as us-technician, us-general, us-advanced, us-extra or other. |
 | Public base URL | `app.baseUrl` | text | from `APP_BASE_URL` | Used for absolute links in outgoing email. |
-| Session lifetime (days) *(advanced)* | `app.sessionTtlDays` | number | `30` | How long a login stays valid. Lowering it does not revoke existing sessions — do that from the Users page. |
+| Session lifetime (days) *(advanced)* | `app.sessionTtlDays` | number | `30` | Days of inactivity before a login expires. Each use of a session extends it, so a browser used within this many days stays signed in. Lowering it does not revoke existing sessions — do that from the Users page. |
 | Show the experimental Rig page | `ui.experimental.rig` | on/off | `false` | Off by default, and honestly labelled: the Rig page is the least finished part of DigiShack. The panadapter's dB window is not calibrated, the FlexRadio accepts display settings it never reflects in status, and several controls are reasoned from documentation rather than measured against hardware. It is genuinely useful and it is genuinely a work in progress, which is why a new install does not meet it first. Turning this on adds Rig to the menu; the page itself says the same thing at the top so nobody arrives without the warning. |
 
 ## QRZ.com
@@ -326,6 +326,9 @@ Restarts the radio bridge when it stops working while still appearing to run. PM
 |---|---|---|---|---|
 | Restart the bridge if it stops decoding *(advanced)* | `bridge.watchdog.enabled` | on/off | `true` | Exits the bridge when no decode window has arrived for a while, so PM2 restarts it. A hung event loop or a socket that stopped delivering cannot be repaired from inside the process that is hung — a fresh one is the only reliable cure. Off means a hang goes unnoticed until you look. |
 | Quiet periods before restarting *(advanced)* | `bridge.watchdog.periods` | number | `8` | How many T/R periods of no decode window count as dead. 8 is two minutes on FT8, and never fires on a working radio — a single late window is not a fault, so this must not be set to 1 or 2. There is a 60-second floor for the faster modes, and a mode with a longer period (WSPR: two minutes) gets three of its own periods instead, so the count means FT8-length periods. |
+| Recover when transmissions make no power *(advanced)* | `bridge.watchdog.noPower.enabled` | on/off | `true` | When the FlexRadio keys several times in a row and puts out no power, the bridge unkeys and restarts itself, which gives it a fresh connection to the radio - the usual cure when traffic to the radio has stalled. If that already happened in the last little while (the window below) it does not restart again: it turns the automatic mode off and leaves the NO POWER OUT warning up, so the station stops transmitting blind. Tune and ATU carriers do not count. The restart also needs "Restart the bridge if it stops decoding" on; with that off, the run turns the automatic mode off instead. FlexRadio only for now. |
+| No-power transmissions before recovering *(advanced)* | `bridge.watchdog.noPower.after` | number | `3` | How many transmissions in a row with no power out before the bridge acts. A transmission that does make power starts the count again; one the power meter never reported on, or one too short to judge, leaves it where it is. 2 to 10. |
+| No second restart within (minutes) *(advanced)* | `bridge.watchdog.noPower.windowMinutes` | number | `30` | If the bridge restarted itself for no power out this recently, a restart has been tried and did not help, so the next run turns the automatic mode off instead of restarting again. 5 to 1440. |
 
 ## Icom (network)
 

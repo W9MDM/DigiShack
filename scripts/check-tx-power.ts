@@ -11,6 +11,8 @@ import {
   dbmToWatts,
   NO_POWER_TAG,
   NoPowerWatch,
+  noPowerRecovery,
+  noPowerRecoveryConfig,
   roundWatts,
   TxPowerTracker,
   UNMETERED_TAG,
@@ -252,6 +254,69 @@ console.log("\nkeyed blind");
     alarm("x"),
   );
   ok(list.length === 1 && list[0] === power, "and a transmission that makes power clears the note", JSON.stringify(list));
+}
+
+// "auto reset if it transmits with no power": 2026-10-20, the FLEX-6400 keyed with no forward
+// power for up to 17 minutes at a stretch while the hunt kept transmitting.
+console.log("\nrecovering from a run of no-power transmissions");
+{
+  const cfg = noPowerRecoveryConfig({ enabled: true, after: 3, windowMinutes: 30, restartAllowed: true });
+  const dead: NoPowerVerdict = { kind: "no-power", heldMs: 12_640, carrier: false, readings: 40 };
+  const good: NoPowerVerdict = { kind: "powered", heldMs: 12_640, carrier: false };
+  const tune: NoPowerVerdict = { kind: "no-power", heldMs: 8_000, carrier: true, readings: 25 };
+  const blind: NoPowerVerdict = { kind: "unmetered", heldMs: 12_640, carrier: false };
+  const blip: NoPowerVerdict = { kind: "short", heldMs: 900, carrier: false };
+  // Feeds verdicts one after another, as the bridge does, and returns every action taken.
+  const run = (vs: NoPowerVerdict[], last: number | null, now = T, c = cfg) => {
+    let n = 0;
+    return vs.map((v) => {
+      const s = noPowerRecovery(n, v, c, last, now);
+      n = s.run;
+      return s.action;
+    });
+  };
+  const str = (a: string[]) => a.join(",");
+
+  ok(str(run([dead, dead, dead], null)) === "none,none,restart", "three in a row restarts the bridge", str(run([dead, dead, dead], null)));
+  ok(
+    str(run([dead, dead, good, dead, dead], null)) === "none,none,none,none,none",
+    "two, then one that made power, starts the count again",
+  );
+  ok(
+    str(run([dead, tune, dead, tune, tune, dead], null)) === "none,none,none,none,none,restart",
+    "a Tune or ATU carrier neither counts nor resets the run",
+  );
+  ok(
+    str(run([dead, blind, dead, blip, dead], null)) === "none,none,none,none,restart",
+    "an unmetered or too-short transmission neither counts nor resets the run",
+  );
+  ok(str(run([blind, blind, blind, blind], null)) === "none,none,none,none", "  and a run of unmetered ones is not a fault");
+  ok(noPowerRecovery(2, null, cfg, null, T).run === 2, "no verdict leaves the run alone");
+
+  const ago = (min: number) => T - min * 60_000;
+  ok(str(run([dead, dead, dead], ago(10))) === "none,none,auto-off", "a second run 10 min after a no-power restart turns auto off instead");
+  ok(str(run([dead, dead, dead], ago(29.9))) === "none,none,auto-off", "  29.9 min is still inside the 30-minute window");
+  ok(str(run([dead, dead, dead], ago(31))) === "none,none,restart", "31 min after, the window has passed and it restarts again");
+  ok(str(run([dead, dead, dead], T + 3_600_000)) === "none,none,auto-off", "a restart time in the future (clock stepped back) counts as recent");
+  ok(
+    str(run([dead, dead, dead, dead, dead, dead], null)) === "none,none,restart,none,none,restart",
+    "the count starts again after it acts",
+  );
+
+  const off = noPowerRecoveryConfig({ enabled: false, after: 3, windowMinutes: 30, restartAllowed: true });
+  ok(str(run([dead, dead, dead, dead, dead], null, T, off)) === "none,none,none,none,none", "switched off, it does nothing");
+  ok(noPowerRecovery(2, dead, off, null, T).run === 0, "  and keeps no count to fire on when it is switched back on");
+
+  const noRestart = noPowerRecoveryConfig({ enabled: true, after: 3, windowMinutes: 30, restartAllowed: false });
+  ok(str(run([dead, dead, dead], null, T, noRestart)) === "none,none,auto-off", "with the bridge watchdog off it turns auto off rather than exiting");
+
+  const n = (after: number, windowMinutes: number) =>
+    noPowerRecoveryConfig({ enabled: true, after, windowMinutes, restartAllowed: true });
+  ok(n(1, 30).after === 2, "a run of 1 is raised to 2: one bad transmission is not a pattern");
+  ok(n(50, 30).after === 10, "and more than 10 is held at 10");
+  ok(n(Number.NaN, Number.NaN).after === 3 && n(Number.NaN, Number.NaN).windowMs === 30 * 60_000, "an unreadable setting falls back to 3 and 30 min");
+  ok(n(3, 1).windowMs === 5 * 60_000 && n(3, 99_999).windowMs === 1_440 * 60_000, "the window is held between 5 min and a day");
+  ok(str(run([dead, dead], null, T, n(2, 30))) === "none,restart", "and a run of 2 acts on the second");
 }
 
 console.log(`\n${pass} passed, ${fail} failed\n`);

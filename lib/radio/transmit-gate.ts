@@ -46,8 +46,24 @@ export async function isTransmitArmed(kind: RadioKind): Promise<boolean> {
   // voice mode exists to prevent. Reported from the operating position, not found by a test.
   //
   // Here, it covers both radios, both transmitters and every caller by construction.
-  if (digitalTransmitHeld()) return false;
+  if (exitLatched || digitalTransmitHeld()) return false;
   return getBooleanSetting(transmitGateKey(kind), false);
+}
+
+/**
+ * Closed for good: this process is about to exit.
+ *
+ * Set by the bridge when it restarts itself - a liveness watchdog, or a run of transmissions
+ * with no power out. The seconds between deciding and exiting are spent unkeying and sending
+ * the alert email, and
+ * nothing may key the radio in them - not a hunt's next window, not a Call button pressed at
+ * the wrong moment. One way on purpose, unlike the hold below, which voice mode releases: the
+ * only thing that reopens it is the fresh process PM2 starts.
+ */
+let exitLatched = false;
+
+export function closeTransmitGateForExit(): void {
+  exitLatched = true;
 }
 
 /**

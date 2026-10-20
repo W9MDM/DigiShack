@@ -201,3 +201,88 @@ export function applyNoPowerVerdict(
   if (verdict.kind === "powered" && warnings.some(ours)) return others();
   return warnings;
 }
+
+/** How the no-power recovery is set up. See `noPowerRecoveryConfig` for the bounds. */
+export interface NoPowerRecoveryConfig {
+  enabled: boolean;
+  /** No-power transmissions in a row before acting. */
+  after: number;
+  /** A second no-power restart this soon after the last one turns auto off instead. */
+  windowMs: number;
+  /**
+   * May the bridge exit for PM2 to restart it? False when the liveness watchdog is switched
+   * off, which is the operator saying this process is not to restart itself - typically one
+   * run by hand, where an exit is the end of it rather than a fresh start.
+   */
+  restartAllowed: boolean;
+}
+
+export const NO_POWER_RECOVERY_DEFAULTS = { after: 3, windowMinutes: 30 } as const;
+
+/**
+ * The settings as stored, clamped to something that cannot do harm.
+ *
+ * One bad transmission is not a pattern - a single dropped meter burst can make one - so a
+ * run of 1 would restart the bridge on noise; 2 is the least that means anything. Past 10 the
+ * station has keyed blind for two and a half minutes of FT8 and counting further only adds to
+ * it. The window is at least 5 minutes, or a restart loop would barely be slowed, and at most
+ * a day.
+ */
+export function noPowerRecoveryConfig(raw: {
+  enabled: boolean;
+  after: number;
+  windowMinutes: number;
+  restartAllowed: boolean;
+}): NoPowerRecoveryConfig {
+  const clamp = (n: number, lo: number, hi: number, dflt: number) =>
+    Number.isFinite(n) ? Math.min(hi, Math.max(lo, Math.round(n))) : dflt;
+  return {
+    enabled: raw.enabled,
+    after: clamp(raw.after, 2, 10, NO_POWER_RECOVERY_DEFAULTS.after),
+    windowMs: clamp(raw.windowMinutes, 5, 1_440, NO_POWER_RECOVERY_DEFAULTS.windowMinutes) * 60_000,
+    restartAllowed: raw.restartAllowed,
+  };
+}
+
+export type NoPowerRecoveryAction = "none" | "restart" | "auto-off";
+
+/**
+ * Keyed with no power out, again: is it time to do something about it?
+ *
+ * Asked for as "auto reset if it transmits with no power". On 2026-10-20 the FLEX-6400 keyed
+ * with no forward power for stretches of up to 17 minutes while the hunt kept transmitting,
+ * most likely because traffic between the box and the radio had stalled and the DAX audio
+ * and the `xmit 0`s were being lost. A fresh connection is the cure, and a fresh process is
+ * the surest way to one - the watchdog has restarted the bridge that way since August.
+ *
+ * What counts: a real transmission judged `no-power`. A Tune carrier or ATU cycle neither
+ * counts nor resets the run - a tune that makes nothing is a tuner or antenna question that a
+ * new connection does not answer, and one that makes power says nothing about the DAX path.
+ * `unmetered` and `short` prove nothing either way, so they leave the run alone too. Only a
+ * transmission that made power resets it.
+ *
+ * What it does at the end of a run: restart, unless a no-power restart already happened
+ * inside the window. Then a restart has been tried and did not cure it, a second would only
+ * start a loop of keying blind and restarting, and the answer is to stop transmitting -
+ * auto off, and the bridge left running so the operator can see why. A restart time in the
+ * future (the clock was stepped back) counts as recent, for the same reason. The run starts
+ * again from zero after either action.
+ *
+ * Pure: the caller keeps `run` and the last restart time, and supplies `now`.
+ */
+export function noPowerRecovery(
+  run: number,
+  verdict: NoPowerVerdict | null,
+  cfg: NoPowerRecoveryConfig,
+  lastRestartAt: number | null,
+  now: number,
+): { run: number; action: NoPowerRecoveryAction } {
+  if (!cfg.enabled) return { run: 0, action: "none" };
+  if (!verdict || verdict.carrier) return { run, action: "none" };
+  if (verdict.kind === "powered") return { run: 0, action: "none" };
+  if (verdict.kind !== "no-power") return { run, action: "none" };
+  const next = run + 1;
+  if (next < cfg.after) return { run: next, action: "none" };
+  const recent = lastRestartAt !== null && now - lastRestartAt < cfg.windowMs;
+  return { run: 0, action: cfg.restartAllowed && !recent ? "restart" : "auto-off" };
+}
