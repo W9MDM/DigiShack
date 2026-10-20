@@ -1,17 +1,13 @@
-// Operating: the automatic modes on top, the contact being worked below, in one box.
-//
-// They were two stacked panels, and each had its own HALT, its own Re-arm and its own
-// copy of the pause reason and the call-back queue. The QSO controller and the auto
-// operator share one set of guards, so those were the same fact shown twice; now there is
-// one HALT TX (the only solid red on the page) and one Re-arm, in the top row, wherever a
-// contact or an automatic mode is running.
+// Operating: the automatic mode (a dropdown in the on-air bar, with its status, Re-arm and
+// the one HALT TX on the page) and the contact being worked (a compact panel under the
+// waterfall). The QSO controller and the auto operator share one set of guards, so there is
+// one HALT TX (the only solid red on the page) and one Re-arm, in the bar.
 
 import { useState } from "react";
 
-import { ToggleButton } from "@/components/decodes/controls";
 import type { AutoState, DecodeEvent, QsoState, RigStatus } from "@/components/decodes/types";
 import { HelpTip } from "@/components/ui/HelpTip";
-import { Badge, Button, Input } from "@/components/ui/primitives";
+import { Badge, Button, Input, Select } from "@/components/ui/primitives";
 import { ApiError, apiPost } from "@/lib/client/api";
 import type { ClearSlot } from "@/lib/digital/slot";
 import { gridFromMessage } from "@/lib/ham/grid-message";
@@ -19,11 +15,33 @@ import { cn } from "@/lib/utils";
 
 type Schedule = NonNullable<RigStatus["schedule"]>;
 
-export function OperatePanel({
+/** The automatic mode, what it is doing, Re-arm and HALT TX — for the on-air bar. */
+export function AutoControls({
   sequencer,
   auto,
   qso,
   schedule,
+}: {
+  /** The mode has an FT8-style sequencer. On the others the bridge refuses calls and auto. */
+  sequencer: boolean;
+  auto: AutoState | null;
+  qso: QsoState | null;
+  schedule: Schedule | null;
+}) {
+  const active = qso?.active ?? false;
+  const running = (auto?.mode ?? "off") !== "off";
+  const pausedReason = auto?.pausedReason ?? qso?.pausedReason ?? null;
+  // Outside the sequencer modes there is nothing to pick, so it only appears when something
+  // is still running or paused and needs a hand on it.
+  if (!(sequencer || running || active || pausedReason !== null || schedule !== null)) return null;
+  return <AutoBar auto={auto} qso={qso} schedule={schedule} pausedReason={pausedReason} />;
+}
+
+/** The contact being worked, or the station picked — compact, for under the waterfall. */
+export function WorkPanel({
+  sequencer,
+  auto,
+  qso,
   target,
   suggestSlot,
   lastTx,
@@ -31,11 +49,9 @@ export function OperatePanel({
   myGrid,
   onClose,
 }: {
-  /** The mode has an FT8-style sequencer. On the others the bridge refuses calls and auto. */
   sequencer: boolean;
   auto: AutoState | null;
   qso: QsoState | null;
-  schedule: Schedule | null;
   target: DecodeEvent | null;
   suggestSlot: () => ClearSlot;
   lastTx: string | null;
@@ -44,37 +60,24 @@ export function OperatePanel({
   onClose: () => void;
 }) {
   const active = qso?.active ?? false;
-  const running = (auto?.mode ?? "off") !== "off";
-  const pausedReason = auto?.pausedReason ?? qso?.pausedReason ?? null;
-
-  // Outside the sequencer modes there is nothing to call and no auto to pick, so the box
-  // only appears when something is still running or paused and needs a hand on it.
-  const showAuto = sequencer || running || active || pausedReason !== null || schedule !== null;
-  const showWork = sequencer || active;
-  if (!showAuto && !showWork) return null;
-
+  if (!(sequencer || active)) return null;
   return (
     <section
       className={cn(
-        "mb-4 rounded-md border bg-surface shadow-panel",
+        "rounded-md border bg-surface shadow-panel",
         active ? "border-accent/40" : "border-line",
       )}
     >
-      {showAuto && <AutoBar auto={auto} qso={qso} schedule={schedule} pausedReason={pausedReason} />}
-      {showWork && (
-        <div className={cn(showAuto && "border-t border-line")}>
-          <WorkStation
-            target={target}
-            qso={qso}
-            auto={auto}
-            suggestSlot={suggestSlot}
-            lastTx={lastTx}
-            myCall={myCall}
-            myGrid={myGrid}
-            onClose={onClose}
-          />
-        </div>
-      )}
+      <WorkStation
+        target={target}
+        qso={qso}
+        auto={auto}
+        suggestSlot={suggestSlot}
+        lastTx={lastTx}
+        myCall={myCall}
+        myGrid={myGrid}
+        onClose={onClose}
+      />
     </section>
   );
 }
@@ -91,6 +94,8 @@ const MODES: { id: AutoState["mode"]; label: string; short: string; hint: string
     hint: "Retune to spotted POTA activators and work them (uses the POTA spot feed)",
   },
 ];
+
+const running = (mode: string): boolean => mode !== "off";
 
 /** The automatic modes, what they are doing, and the stop. */
 function AutoBar({
@@ -126,26 +131,22 @@ function AutoBar({
     (auto && auto.warmup > 0 ? ` (listening, ${auto.warmup} more cycle${auto.warmup === 1 ? "" : "s"})` : "");
 
   return (
-    <div className="flex flex-wrap items-center gap-x-3 gap-y-2 px-3 py-2">
-      <div className="flex items-center gap-2">
-        <span className="text-xs font-medium text-fg-muted">Auto</span>
-        <div className="flex flex-wrap gap-1" role="group" aria-label="Automatic operating mode">
+    <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5">
+      <div className="flex items-center gap-1.5">
+        <Select
+          aria-label="Automatic operating mode"
+          title={MODES.find((m) => m.id === mode)?.hint}
+          className={cn("w-32 py-1 text-sm", running(mode) && "border-accent text-accent-bright")}
+          value={mode}
+          disabled={busy}
+          onChange={(e) => void act({ action: "auto", autoMode: e.target.value })}
+        >
           {MODES.map((m) => (
-            <ToggleButton
-              key={m.id}
-              pressed={mode === m.id}
-              tone={m.id === "off" ? "neutral" : "accent"}
-              disabled={busy || mode === m.id}
-              onClick={() => void act({ action: "auto", autoMode: m.id })}
-              title={m.hint}
-              aria-label={m.label}
-            >
-              {/* Short names on a phone so the five fit on one line beside the label. */}
-              <span className="sm:hidden">{m.short}</span>
-              <span className="hidden sm:inline">{m.label}</span>
-            </ToggleButton>
+            <option key={m.id} value={m.id}>
+              {m.id === "off" ? "Auto: off" : m.label}
+            </option>
           ))}
-        </div>
+        </Select>
         <HelpTip label="About the automatic modes">
           {MODES.map((m) => (
             <span key={m.id} className="block">
@@ -155,7 +156,7 @@ function AutoBar({
         </HelpTip>
       </div>
 
-      <span className="text-xs text-fg-subtle flex-1 min-w-40">
+      <span className="text-xs text-fg-subtle min-w-0 max-w-[22rem] truncate">
         {error ? (
           <span className="text-danger">{error}</span>
         ) : pausedReason ? (
@@ -328,12 +329,15 @@ function WorkStation({
   }
 
   return (
-    <div className="px-3 py-2.5 flex flex-col gap-1.5 text-sm">
+    <div className="px-3 py-2 flex flex-col gap-1 text-sm">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
+        <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
           <h2 className="font-display text-base text-fg">{active ? "Working" : "Selected"}</h2>
           {call && <Badge tone={active ? "ok" : "accent"}>{call}</Badge>}
           {active && <Badge tone="danger">ON AIR</Badge>}
+          {qso?.state && (
+            <span className="text-xs text-fg-muted">{STATE_LABEL[qso.state] ?? qso.state}</span>
+          )}
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {!active && target?.callsign && (
@@ -416,20 +420,14 @@ function WorkStation({
           )}
         </>
       )}
-      {qso?.state && (
-        <div>
-          <span className="text-xs text-fg-muted mr-2">State</span>
-          {STATE_LABEL[qso.state] ?? qso.state}
-        </div>
-      )}
       {/* The whole exchange, both directions, left to right like a conversation. */}
       {(qso?.transcript?.length ?? 0) > 0 ? (
-        <div className="flex flex-wrap items-stretch gap-1.5">
+        <div className="flex flex-wrap items-stretch gap-1">
           {qso!.transcript!.map((t, i) => (
             <div
               key={`${t.at}-${i}-${t.message}`}
               className={cn(
-                "rounded-sm border px-2 py-1 font-mono text-xs leading-tight",
+                "rounded-sm border px-1.5 py-0.5 font-mono text-xs leading-tight",
                 t.refused
                   ? "border-danger/50 bg-danger/10 text-danger"
                   : t.dir === "tx"
