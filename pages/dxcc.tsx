@@ -63,6 +63,9 @@ interface BackfillReport {
   unresolvedCallsigns: string[];
 }
 
+/** A Card at 12px a side instead of 16 below sm; only where nothing in its body bleeds with -mx-4. As on Statistics. */
+const PHONE_TIGHT = "max-sm:[&>header]:px-3 max-sm:[&>div]:px-3";
+
 export default function DxccPage() {
   const { data: status, error, reload } = useApi<DxccStatus>("/api/dxcc");
 
@@ -168,6 +171,7 @@ export default function DxccPage() {
       <div className="grid grid-cols-1 gap-4 sm:gap-6 lg:grid-cols-2">
         <Card
           title="Status"
+          className={PHONE_TIGHT}
           actions={
             status?.loaded ? (
               <Badge tone="ok">Loaded</Badge>
@@ -213,7 +217,7 @@ export default function DxccPage() {
           )}
         </Card>
 
-        <Card title="Load data">
+        <Card title="Load data" className={PHONE_TIGHT}>
           <div className="flex flex-col gap-4">
             <p className="text-sm text-fg-muted">
               The country file maps callsigns to DXCC entities. It is maintained
@@ -331,7 +335,7 @@ export default function DxccPage() {
 
         <LookupCard disabled={!status?.loaded} />
 
-        <Card title="Backfill existing QSOs">
+        <Card title="Backfill existing QSOs" className={PHONE_TIGHT}>
           <div className="flex flex-col gap-3">
             <p className="text-sm text-fg-muted">
               Fills DXCC on contacts that lack it, resolving each against the
@@ -437,7 +441,7 @@ function LookupCard({ disabled }: { disabled: boolean }) {
   }
 
   return (
-    <Card title="Test a callsign">
+    <Card title="Test a callsign" className={PHONE_TIGHT}>
       <form
         className="flex flex-col gap-3"
         onSubmit={(e) => {

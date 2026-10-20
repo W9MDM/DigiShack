@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 
 import { CUSTOM_CONTROLS, FIELD_ACCESSORIES } from "@/components/settings/group-extras";
 import { HelpText, Highlight } from "@/components/settings/HelpText";
+import { selectChoices } from "@/components/settings/select-choices";
 import { LimitField, Toggle } from "@/components/settings/SettingControls";
 import type { DisplayItem } from "@/components/settings/display";
 import type { ClientSetting, SettingsEditor } from "@/components/settings/types";
@@ -286,12 +287,9 @@ export function SettingField({
       >
         {/* A saved value that is not one of the choices is kept and shown rather than
             silently snapped to the first option: a card configured before the picker
-            existed may legitimately name a font installed on the server. */}
-        {value !== "" && !(s.options ?? []).some((o) => o.value === value) && (
-          <option value={value}>{value} (saved, not one of the choices)</option>
-        )}
-        {(s.options ?? []).map((o) => (
-          <option key={o.value} value={o.value}>
+            existed may legitimately name a font installed on the server. See selectChoices. */}
+        {selectChoices(s.options, value).map((o) => (
+          <option key={o.value} value={o.value} disabled={o.disabled}>
             {o.label}
           </option>
         ))}
@@ -364,7 +362,18 @@ export function SettingField({
       }
       control={
         <div className="flex flex-wrap items-start gap-1.5">
-          <div className={cn("min-w-0", grows && "min-w-40 flex-1")}>{control}</div>
+          {/* A long stored value (the band-hop list, a URL) gets the whole row below sm,
+              with Clear under it, rather than about 160px of it and the rest cut off.
+              Keyed on the stored value, not the draft, so the row does not jump mid-typing. */}
+          <div
+            className={cn(
+              "min-w-0",
+              grows && "min-w-40 flex-1",
+              grows && s.type === "string" && (s.value ?? "").length > 16 && "max-sm:basis-full",
+            )}
+          >
+            {control}
+          </div>
           {s.configured && !ownsClear && (
             <ClearControl setting={s} cleared={cleared} onToggle={() => editor.toggleClear(s.key)} />
           )}

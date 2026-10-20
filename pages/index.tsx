@@ -143,7 +143,16 @@ function LogOverview({ data, canLog }: { data: StatsSummary; canLog: boolean }) 
 
   return (
     <>
-      <Section title="Today" description="The UTC day since 00:00Z — the day the log runs on.">
+      {/* The clause is desktop-only: at phone width it wrapped and left "on." alone on a
+          second line, a whole line spent on one word. */}
+      <Section
+        title="Today"
+        description={
+          <>
+            The UTC day since 00:00Z<span className="max-sm:hidden"> — the day the log runs on</span>.
+          </>
+        }
+      >
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 xl:grid-cols-8">
           <Stat
             label="QSOs today"

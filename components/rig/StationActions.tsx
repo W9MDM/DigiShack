@@ -24,8 +24,12 @@ export function StationActions({
   const [streamBusy, setStreamBusy] = useState(false);
   const [restarting, setRestarting] = useState(false);
 
+  // On a phone the header's actions drop under the title, right-aligned on two rows with
+  // the left half empty. There they are one left-aligned row: the radio picker (filling
+  // what is left, first), then Go live and Restart service. `sm:contents` hands the three
+  // straight back to the header's own action row, exactly as before, from `sm` up.
   return (
-    <>
+    <div className="flex w-full flex-wrap items-center gap-2 sm:contents">
       {/* YOUTUBE LIVE: the waterfall and the receiver audio, pushed to the operator's
           channel. Confirmed on the way ON only — going live is the irreversible half, and
           stopping a stream is always safe. The bridge holds the key; this says start or
@@ -97,6 +101,6 @@ export function StationActions({
       </Button>
 
       <SourcePicker source={source} variant="inline" />
-    </>
+    </div>
   );
 }

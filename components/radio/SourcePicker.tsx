@@ -9,6 +9,7 @@ import { useState } from "react";
 import { Select } from "@/components/ui/primitives";
 import { ApiError, apiPost } from "@/lib/client/api";
 import { useCan } from "@/lib/client/session";
+import { cn } from "@/lib/utils";
 
 /**
  * Which radio to drive.
@@ -77,15 +78,20 @@ export function SourcePicker({
 
   if (variant === "inline") {
     // The confirm dialog already says what switching does, so the hint is a tooltip here.
+    // On a phone (the Rig header's one action row) it goes first and takes the room the
+    // two buttons leave; the "Radio" caption is for screen readers there, the select's
+    // value already says it is the radio. "Switching…" still shows.
     return (
-      <span className="inline-flex flex-col items-end gap-1">
-        <label className="inline-flex items-center gap-2 text-sm">
-          <span className="text-fg-subtle">{busy ? "Switching…" : "Radio"}</span>
+      <span className="inline-flex flex-col items-end gap-1 max-sm:order-first max-sm:min-w-32 max-sm:flex-1 max-sm:items-stretch">
+        <label className="inline-flex items-center gap-2 text-sm max-sm:flex">
+          <span className={cn("text-fg-subtle", !busy && "max-sm:sr-only")}>
+            {busy ? "Switching…" : "Radio"}
+          </span>
           <Select
             value={source}
             disabled={busy}
             onChange={(e) => void pick(e.target.value)}
-            className="w-auto py-1"
+            className="w-auto py-1 max-sm:min-w-0 max-sm:flex-1"
             title="Which radio DigiShack drives. Switching stops any automatic mode; the radio takes a few seconds to come up."
           >
             {options}

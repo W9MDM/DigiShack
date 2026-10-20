@@ -14,6 +14,8 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 
+import { selectChoices } from "@/components/settings/select-choices";
+import { LICENCE_CLASSES, parseLicenceClass } from "@/lib/radio/sstv-licence";
 import { SETTINGS, SETTING_GROUPS } from "@/lib/settings/registry";
 
 let pass = 0;
@@ -115,6 +117,61 @@ function main(): void {
       strayDefault.map((s) => `${s.key}=${s.default}`).join(", "),
     );
     ok(selects.length > 0, `${selects.length} setting(s) offer a list rather than free text`);
+
+    const dupes = selects.filter((s) => new Set((s.options ?? []).map((o) => o.value)).size !== (s.options ?? []).length);
+    ok(dupes.length === 0, "no select offers the same value twice", dupes.map((s) => s.key).join(", "));
+  }
+
+  console.log("\na picker offers only what its reader accepts");
+  {
+    // The licence class, decode source and JS8 replies were text boxes. Each choice must be
+    // a string the code that reads the setting acts on, or picking it would be the typo the
+    // list was added to prevent.
+    const values = (key: string) => (SETTINGS.find((s) => s.key === key)?.options ?? []).map((o) => o.value);
+    const licence = values("station.licenceClass");
+    ok(
+      LICENCE_CLASSES.every((c) => licence.includes(c)),
+      "every licence class the SSTV check knows is offered",
+    );
+    ok(
+      licence.every((v) => v === "" || parseLicenceClass(v) === v),
+      "every licence choice parses as itself (or is 'not set')",
+      licence.join(", "),
+    );
+    ok(
+      values("js8.autoreply").every((v) => ["off", "hb", "all"].includes(v)) && values("js8.autoreply").includes("off"),
+      "JS8 automatic replies offers off, hb and all only",
+      values("js8.autoreply").join(", "),
+    );
+    ok(
+      values("digital.source").every((v) => ["wsjtx", "flex", "icom"].includes(v)),
+      "decode source offers wsjtx, flex and icom only",
+      values("digital.source").join(", "),
+    );
+  }
+
+  console.log("\nan unexpected stored value still shows, and can still be changed");
+  {
+    const opts = [
+      { value: "wsjtx", label: "External" },
+      { value: "flex", label: "Flex" },
+    ];
+    const odd = selectChoices(opts, "omega");
+    ok(odd[0]?.value === "omega" && !odd[0]?.disabled, "a stored value not among the choices is listed, selectable, first");
+    ok(opts.every((o) => odd.some((c) => c.value === o.value && !c.disabled)), "and every real choice is still there to pick");
+    const known = selectChoices(opts, "flex");
+    ok(known.length === opts.length, "a stored value among the choices adds nothing");
+    const blank = selectChoices(opts, "");
+    ok(blank[0]?.value === "" && blank[0]?.disabled === true, "nothing stored and no 'not set' choice: a disabled placeholder");
+    const own = selectChoices([{ value: "", label: "Not set" }, ...opts], "");
+    ok(own.length === 3 && !own.some((c) => c.disabled), "a list with its own 'not set' gets no second one");
+    // Every real select, at every value it can hold today, lists that value exactly once.
+    const bad = SETTINGS.filter((s) => s.type === "select").filter((s) =>
+      [s.default ?? "", "unexpected-value", ""].some(
+        (v) => selectChoices(s.options, v).filter((c) => c.value === v).length !== 1,
+      ),
+    );
+    ok(bad.length === 0, "every select lists its current value exactly once", bad.map((s) => s.key).join(", "));
   }
 
   console.log("\nprotections are never tucked away");

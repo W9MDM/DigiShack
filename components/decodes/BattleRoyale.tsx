@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 
 import { CallChip } from "@/components/decodes/controls";
 import type { DecodeEvent } from "@/components/decodes/types";
-import { ErrorBanner } from "@/components/ui/primitives";
+import { Button, ErrorBanner } from "@/components/ui/primitives";
 import type { Score } from "@/lib/contest/ft8battle";
 import type { Ft8brFeedResponse } from "@/lib/contest/ft8battle-feed";
 import { formatUtcTime } from "@/lib/time";
@@ -69,6 +69,8 @@ export function BattleRoyaleFeed({
   scores: Map<string, Score>;
   onCall: (d: DecodeEvent) => void;
 }) {
+  const [phoneShown, setPhoneShown] = useState(PHONE_FIRST);
+  const total = feed?.activity.length ?? 0;
   return (
     <section className="border border-line rounded-md bg-surface shadow-panel overflow-hidden">
       <div className="flex flex-wrap items-baseline justify-between gap-x-3 px-3 py-1.5 bg-surface-2 text-xs">
@@ -81,13 +83,13 @@ export function BattleRoyaleFeed({
             : "loading…"}
         </span>
       </div>
-      <div className="max-h-44 overflow-y-auto divide-y divide-line text-xs font-mono">
+      <div className="sm:max-h-44 sm:overflow-y-auto divide-y divide-line text-xs font-mono">
         {feed && feed.activity.length === 0 && (
           <p className="px-3 py-2 text-fg-muted font-sans">
             Nothing tracked yet. The bridge polls ft8battle.com every 20 s while BR mode is on.
           </p>
         )}
-        {feed?.activity.map((e) => {
+        {feed?.activity.map((e, i) => {
           const heard = heardNow.get(e.contact);
           const sc = scores.get(e.contact);
           const worth = !sc ? "" : sc.min === sc.max ? ` ${sc.min}` : ` ${sc.min}–${sc.max}`;
@@ -97,9 +99,13 @@ export function BattleRoyaleFeed({
               className={cn(
                 "px-3 py-0.5 flex flex-wrap items-center gap-x-2",
                 e.type === "steal" ? "text-warn" : e.type === "penalty" ? "text-danger" : "",
+                i >= phoneShown && "max-sm:hidden",
               )}
             >
-              <span className="text-fg-subtle tnum">{formatUtcTime(e.at)}</span>
+              <span className="text-fg-subtle tnum">
+                <span className="sm:hidden">{shortTime(e.at)}</span>
+                <span className="max-sm:hidden">{formatUtcTime(e.at)}</span>
+              </span>
               <span>
                 {e.station === myCall ? <strong>{e.station}</strong> : e.station}
                 {e.type === "steal" ? " STOLE " : " → "}
@@ -111,6 +117,7 @@ export function BattleRoyaleFeed({
                   </>
                 )}
               </span>
+              <span aria-hidden="true" className="h-0 basis-full sm:hidden" />
               <span className="text-fg-subtle">
                 {e.band} {e.mode}
               </span>
@@ -144,6 +151,40 @@ export function BattleRoyaleFeed({
           );
         })}
       </div>
+      {total > PHONE_FIRST && (
+        <div
+          className={cn(
+            "flex items-center gap-2 px-3 py-1.5 text-xs sm:hidden",
+            phoneShown >= total && "border-t border-line",
+          )}
+        >
+          {phoneShown < total && (
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => setPhoneShown((n) => n + PHONE_STEP)}
+            >
+              {`Show ${Math.min(PHONE_STEP, total - phoneShown)} more`}
+            </Button>
+          )}
+          {phoneShown > PHONE_FIRST && (
+            <Button size="sm" variant="ghost" onClick={() => setPhoneShown(PHONE_FIRST)}>
+              Show fewer
+            </Button>
+          )}
+          <span className="ml-auto text-fg-subtle tnum">
+            {Math.min(phoneShown, total)} of {total}
+          </span>
+        </div>
+      )}
     </section>
   );
+}
+
+const PHONE_FIRST = 5;
+const PHONE_STEP = 20;
+
+function shortTime(at: Parameters<typeof formatUtcTime>[0]): string {
+  const full = formatUtcTime(at);
+  return full.length >= 5 ? `${full.slice(0, 5)}Z` : full;
 }

@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { useState } from "react";
+import { Fragment, useState } from "react";
 
 import { BarList } from "@/components/dashboard/BarList";
 import { CardTable } from "@/components/dashboard/CardTable";
@@ -73,6 +73,14 @@ interface History {
 
 const TOP_OPTIONS = ["10", "25", "50", "100"] as const;
 
+/**
+ * A Card's header and body at 12px a side instead of 16 below sm. Inside the page gutter
+ * the 16px left the bars on a phone about 90px long, the label and number columns being
+ * fixed. Only on Cards whose body has nothing bled out with -mx-4 (a CardTable): that
+ * bleed is measured against 16px and would overhang the border.
+ */
+const PHONE_TIGHT = "max-sm:[&>header]:px-3 max-sm:[&>div]:px-3";
+
 const toBars = (rows: CountRow[]) =>
   rows.map((r) => ({ key: r.label, label: r.label, value: r.qsos }));
 
@@ -128,17 +136,17 @@ export default function StatsPage() {
           <ByYear years={data.years} />
 
           <div className="grid gap-4 lg:grid-cols-3">
-            <Card title="By mode">
+            <Card title="By mode" className={PHONE_TIGHT}>
               <p className="mb-3 text-sm text-fg-subtle">Every contact ever logged, by mode.</p>
               <BarList rows={toBars(data.modes)} />
             </Card>
-            <Card title="By band">
+            <Card title="By band" className={PHONE_TIGHT}>
               <p className="mb-3 text-sm text-fg-subtle">
                 Bars are scaled to the busiest band, not to the total.
               </p>
               <BarList rows={toBars(data.bands)} />
             </Card>
-            <Card title="By continent">
+            <Card title="By continent" className={PHONE_TIGHT}>
               <p className="mb-3 text-sm text-fg-subtle">
                 A dash is a contact whose entity was never resolved — shown rather than hidden.
               </p>
@@ -252,6 +260,19 @@ function Highlights({ data }: { data: History }) {
   );
 }
 
+/**
+ * The run of two or more silent years that index `i` falls in, as indexes into `years`
+ * (newest first, so `start` is the run's latest year); null outside such a run.
+ */
+function silentRunAt(years: readonly YearRow[], i: number): { start: number; end: number } | null {
+  if (years[i]?.qsos !== 0) return null;
+  let start = i;
+  let end = i;
+  while (years[start - 1]?.qsos === 0) start--;
+  while (years[end + 1]?.qsos === 0) end++;
+  return end > start ? { start, end } : null;
+}
+
 function ByYear({ years }: { years: YearRow[] }) {
   const peak = years.reduce((m, y) => Math.max(m, y.qsos), 0);
   const thisYear = new Date().getUTCFullYear();
@@ -270,52 +291,65 @@ function ByYear({ years }: { years: YearRow[] }) {
           </tr>
         </thead>
         <tbody className="divide-y divide-line">
-          {years.map((y) => {
+          {years.map((y, i) => {
             // A silent year stays in the table: the gap is part of the history, and a
             // table that leaves it out reads as continuous activity.
             const silent = y.qsos === 0;
+            // On a phone a run of two or more silent years is one row instead — seven
+            // rows of dashes were most of a screen of nothing. Still shown, so the gap
+            // still reads as a gap; from sm up every year keeps its own row.
+            const run = silentRunAt(years, i);
             return (
-              <tr key={y.year} className={cn(silent && "text-fg-subtle")}>
-                <Td className="whitespace-nowrap tnum font-medium">
-                  {y.year}
-                  {y.year === thisYear && (
-                    <span className="block text-xs font-normal text-fg-subtle sm:ml-1.5 sm:inline">
-                      so far
-                    </span>
-                  )}
-                </Td>
-                <Td className="w-full min-w-28">
-                  <div className="flex items-center gap-3">
-                    <span className="w-14 shrink-0 text-right tnum">
-                      {silent ? "—" : y.qsos.toLocaleString()}
-                    </span>
-                    {/* Scaled to the busiest year, so a quiet one reads as quiet rather
-                        than as almost nothing. */}
-                    <span aria-hidden="true" className="h-2 flex-1 rounded-sm bg-surface-2">
-                      <span
-                        className="block h-full rounded-r-sm bg-fg-subtle"
-                        style={{ width: `${peak > 0 ? (y.qsos / peak) * 100 : 0}%` }}
-                      />
-                    </span>
-                  </div>
-                </Td>
-                <Td className="whitespace-nowrap text-right tnum text-fg-muted pr-4 sm:pr-3">
-                  {silent ? (
-                    "—"
-                  ) : (
-                    <>
-                      {y.confirmed.toLocaleString()}
-                      <span className="text-fg-subtle"> · {pct(y.confirmed, y.qsos)}</span>
-                    </>
-                  )}
-                </Td>
-                <Td className="hidden text-right tnum text-fg-muted sm:table-cell">
-                  {silent ? "—" : y.callsigns.toLocaleString()}
-                </Td>
-                <Td className="hidden text-right tnum text-fg-muted sm:table-cell">
-                  {silent ? "—" : y.entities.toLocaleString()}
-                </Td>
-              </tr>
+              <Fragment key={y.year}>
+                {run && run.start === i && (
+                  <tr className="text-fg-subtle sm:hidden">
+                    <Td colSpan={3} className="tnum">
+                      {years[run.end]?.year}–{y.year} · no contacts
+                    </Td>
+                  </tr>
+                )}
+                <tr className={cn(silent && "text-fg-subtle", run && "max-sm:hidden")}>
+                  <Td className="whitespace-nowrap tnum font-medium">
+                    {y.year}
+                    {y.year === thisYear && (
+                      <span className="block text-xs font-normal text-fg-subtle sm:ml-1.5 sm:inline">
+                        so far
+                      </span>
+                    )}
+                  </Td>
+                  <Td className="w-full min-w-28">
+                    <div className="flex items-center gap-3">
+                      <span className="w-14 shrink-0 text-right tnum">
+                        {silent ? "—" : y.qsos.toLocaleString()}
+                      </span>
+                      {/* Scaled to the busiest year, so a quiet one reads as quiet rather
+                          than as almost nothing. */}
+                      <span aria-hidden="true" className="h-2 flex-1 rounded-sm bg-surface-2">
+                        <span
+                          className="block h-full rounded-r-sm bg-fg-subtle"
+                          style={{ width: `${peak > 0 ? (y.qsos / peak) * 100 : 0}%` }}
+                        />
+                      </span>
+                    </div>
+                  </Td>
+                  <Td className="whitespace-nowrap text-right tnum text-fg-muted pr-4 sm:pr-3">
+                    {silent ? (
+                      "—"
+                    ) : (
+                      <>
+                        {y.confirmed.toLocaleString()}
+                        <span className="text-fg-subtle"> · {pct(y.confirmed, y.qsos)}</span>
+                      </>
+                    )}
+                  </Td>
+                  <Td className="hidden text-right tnum text-fg-muted sm:table-cell">
+                    {silent ? "—" : y.callsigns.toLocaleString()}
+                  </Td>
+                  <Td className="hidden text-right tnum text-fg-muted sm:table-cell">
+                    {silent ? "—" : y.entities.toLocaleString()}
+                  </Td>
+                </tr>
+              </Fragment>
             );
           })}
         </tbody>

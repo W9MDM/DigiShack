@@ -12,6 +12,9 @@ import { traceColours } from "@/components/digital/SpectrumTrace";
 import { panadapterMessage } from "@/lib/radio/panadapter";
 import { spectrumMessage } from "@/lib/radio/spectrum";
 import {
+  ANALYZER_NARROW_PX,
+  ANALYZER_Y_AXIS_PX,
+  analyzerLayout,
   cycleStart,
   fillTimeTicks,
   formatAgo,
@@ -708,6 +711,25 @@ console.log("\npreferences");
     "blocked storage yields the defaults",
   );
   ok(PREFS_KEY.startsWith("digishack."), "stored under the app's namespace");
+}
+
+// ---------------------------------------------------------------------------------------
+console.log("\nanalyzer layout");
+{
+  const wide = analyzerLayout(1200);
+  ok(
+    !wide.narrow && wide.traceShare === 0.55 && wide.tickX === 4 && wide.tickAlign === "left" && wide.titleX === 10,
+    "from sm up the analyzer keeps its original split and dB scale",
+  );
+  ok(analyzerLayout(ANALYZER_NARROW_PX).narrow === false && analyzerLayout(ANALYZER_NARROW_PX - 1).narrow, "the phone layout starts below sm");
+  const phone = analyzerLayout(371);
+  ok(phone.traceShare > wide.traceShare, "a phone gives the trace more of the box, so the waterfall strip is shorter");
+  ok(phone.tickAlign === "right" && phone.tickX < ANALYZER_Y_AXIS_PX, "phone tick labels end inside the gutter, against the plot");
+  // 11px text: the rotated title is about one line (11px) across, centred 2px left of titleX.
+  // The widest tick label, "-110", is under 4 chars at 0.62em. They must not touch.
+  const titleRight = phone.titleX - 2 + 11 / 2;
+  const labelLeft = phone.tickX - 4 * 0.62 * 11;
+  ok(titleRight < labelLeft, "the rotated dB title clears the widest tick label", `${titleRight} vs ${labelLeft}`);
 }
 
 console.log(`\n${pass} passed, ${fail} failed\n`);

@@ -14,7 +14,7 @@ import {
   type DecodeFilter,
 } from "@/components/decodes/DecodeToolbar";
 import { HeardBy } from "@/components/decodes/HeardBy";
-import { OnAirStrip } from "@/components/decodes/OnAirStrip";
+import { OnAirStrip, WATERFALL_ID } from "@/components/decodes/OnAirStrip";
 import { AutoControls, WorkPanel } from "@/components/decodes/OperatePanel";
 import { RadioCard } from "@/components/decodes/RadioCard";
 import type {
@@ -1143,7 +1143,7 @@ export default function DigitalPage({ wsUrl }: Props) {
       <div className="flex flex-col gap-4">
         {/* The waterfall goes last on a phone, after the decode list; `lg:order-none`
             restores source order on the desktop. */}
-        <div className="order-last lg:order-none">
+        <div id={WATERFALL_ID} className="order-last scroll-mt-16 lg:order-none">
           <div className="mb-1.5 flex items-center justify-end">
             <ViewSwitch value={wfView} onChange={setWfView} />
           </div>

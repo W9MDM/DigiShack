@@ -442,6 +442,7 @@ export default function NewQsoPage() {
           error={offline ? null : error}
           onSubmit={() => void submit(false)}
           submitLabel="Log QSO"
+          stickySubmit
           secondaryAction={
             <Button disabled={submitting} onClick={() => void submit(true)}>
               Log &amp; view log

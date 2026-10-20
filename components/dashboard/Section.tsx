@@ -33,7 +33,9 @@ export function Section({
           <h2 id={headingId} className="font-display text-lg text-fg">
             {title}
           </h2>
-          {description && <p className="text-sm text-fg-subtle">{description}</p>}
+          {/* `text-pretty` on a phone: a description that wraps does not end on one
+              orphaned word. Phone only, so the desktop wraps exactly as it did. */}
+          {description && <p className="text-sm text-fg-subtle max-sm:text-pretty">{description}</p>}
         </div>
         {actions && <div className="flex flex-wrap items-center gap-3 text-sm">{actions}</div>}
       </div>

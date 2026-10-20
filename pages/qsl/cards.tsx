@@ -391,8 +391,20 @@ export default function QslCardsPage() {
           className="-mx-4 -mt-1 px-2"
         />
 
-        <div role="tabpanel" id={tabPanelId(TAB_IDS)} aria-labelledby={tabId(TAB_IDS, which)} className="pt-3">
-          <div className="flex flex-wrap items-center gap-2 pb-3">
+        {/* Below sm the PAGE scrolls the list, not a box inside it: a scroll box under
+            the search and batch controls trapped every swipe on the rows, so the list
+            never got more than the bottom half of the screen. With the page scrolling,
+            the batch buttons would scroll away from the rows being ticked, so on a phone
+            they become a bar pinned to the bottom of the screen while a row is ticked: the toolbar is
+            `display: contents`, and `order` moves the buttons after the list, which is
+            where a bottom-sticky element has to be to stick. From sm up nothing changes. */}
+        <div
+          role="tabpanel"
+          id={tabPanelId(TAB_IDS)}
+          aria-labelledby={tabId(TAB_IDS, which)}
+          className="pt-3 max-sm:flex max-sm:flex-col max-sm:gap-3"
+        >
+          <div className="flex flex-wrap items-center gap-2 pb-3 max-sm:contents">
             <Input
               type="search"
               placeholder="Find a callsign"
@@ -404,7 +416,15 @@ export default function QslCardsPage() {
             {/* Two even columns on a phone — route and Mark sent, then Mark received and
                 Print labels — where a wrapping row left a ragged pair of different widths and
                 an empty half line. From sm up it is the original right-aligned row. */}
-            <div className="grid w-full grid-cols-2 gap-2 sm:ml-auto sm:flex sm:w-auto sm:flex-wrap sm:items-center">
+            {/* Pinned only while a row is ticked: with nothing ticked every button in it is
+                disabled, and a two-row bar of dead buttons would take a fifth of the screen
+                from the rows for the whole list. The first tick brings it up. */}
+            <div
+              className={cn(
+                "grid w-full grid-cols-2 gap-2 max-sm:order-1 max-sm:-mx-4 max-sm:w-auto max-sm:border-t max-sm:border-line max-sm:bg-surface max-sm:px-4 max-sm:pt-3 max-sm:pb-[calc(0.75rem+env(safe-area-inset-bottom))] sm:ml-auto sm:flex sm:w-auto sm:flex-wrap sm:items-center",
+                !nothingTicked && "max-sm:sticky max-sm:bottom-0 max-sm:z-15",
+              )}
+            >
               <Select
                 aria-label="Route"
                 value={route}
@@ -450,7 +470,7 @@ export default function QslCardsPage() {
               </Button>
             </div>
             {explainSelection && (
-              <span id={NEEDS_SELECTION} className="basis-full text-sm text-fg-subtle">
+              <span id={NEEDS_SELECTION} className="basis-full text-sm text-fg-subtle max-sm:basis-auto">
                 Tick contacts in the list below to mark them or print labels for them.
               </span>
             )}
@@ -476,13 +496,11 @@ export default function QslCardsPage() {
           ) : visible.length === 0 ? (
             <p className="py-6 text-sm text-fg-subtle">No callsign here matches “{filter.trim()}”.</p>
           ) : (
-            /* On a phone the list is as tall as the screen under the app bar, not 32rem.
-               The search and batch buttons above it take most of the first screen, so a
-               fixed 32rem left the list scrolling inside half a screen. Scroll the page
-               until the list meets the app bar and the whole screen is rows. */
-            <div className="-mx-4 max-h-[calc(100dvh-7rem)] overflow-auto sm:max-h-[32rem]">
+            /* No scroll box below sm (see the tab panel): the page scrolls and the header
+               sticks under the app bar. From sm up, the 32rem box as before. */
+            <div className="-mx-4 sm:max-h-[32rem] sm:overflow-auto">
               <table className="w-full border-collapse text-sm">
-                <thead className="sticky top-0 z-10 bg-surface-2">
+                <thead className="sticky top-[calc(3rem+env(safe-area-inset-top))] z-10 bg-surface-2 sm:top-0">
                   <tr className="text-left">
                     <Th size="sm" className="w-8 px-3">
                       <TickBox
@@ -505,8 +523,16 @@ export default function QslCardsPage() {
                     <Th size="sm">UTC</Th>
                     <Th size="sm" className="hidden sm:table-cell">Band</Th>
                     <Th size="sm" className="hidden sm:table-cell">Mode</Th>
-                    <Th size="sm">Card sent</Th>
-                    <Th size="sm">Card rcvd</Th>
+                    {/* "Sent" / "Rcvd" on a phone, where "Card sent" wrapped to two lines.
+                        Kept on the Owed tab: a card owed can be Requested or Queued. */}
+                    <Th size="sm">
+                      <span aria-hidden="true" className="sm:hidden">Sent</span>
+                      <span className="max-sm:sr-only">Card sent</span>
+                    </Th>
+                    <Th size="sm">
+                      <span aria-hidden="true" className="sm:hidden">Rcvd</span>
+                      <span className="max-sm:sr-only">Card rcvd</span>
+                    </Th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-line font-mono text-xs">
@@ -561,11 +587,11 @@ export default function QslCardsPage() {
           )}
 
           {qsos.length >= LIMIT && (
-            <p className="mt-3 text-xs text-fg-subtle">
+            <p className="mt-3 text-xs text-fg-subtle max-sm:order-2 max-sm:mt-0">
               Showing the oldest {LIMIT}. Mark a batch and the next ones appear.
             </p>
           )}
-          <p className="mt-3 text-xs text-fg-subtle">
+          <p className="mt-3 text-xs text-fg-subtle max-sm:order-2 max-sm:mt-0">
             The route (bureau, direct, manager) is stored as ADIF QSL_SENT_VIA and
             QSL_RCVD_VIA, so it survives export. An inbound card is recorded as
             CONFIRMED — that is what the awards page counts.

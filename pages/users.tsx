@@ -111,6 +111,7 @@ export default function UsersPage() {
                     <Td size="lg">
                       <Select
                         value={u.role}
+                        aria-label={`Role for ${u.email}`}
                         title={ROLE_HELP[u.role]}
                         onChange={(e) => void patch(u.id, { role: e.target.value })}
                         className="w-32"

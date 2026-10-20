@@ -49,6 +49,9 @@ import { useVisibleInterval } from "@/lib/client/use-visible-interval";
 // knows nothing before the reference column was added, so its park totals start small
 // and grow. Both are shown, labelled, and never added together.
 
+/** A Card at 12px a side instead of 16 below sm; only where nothing in its body bleeds with -mx-4. As on Statistics. */
+const PHONE_TIGHT = "max-sm:[&>header]:px-3 max-sm:[&>div]:px-3";
+
 /** Refresh often enough to be a spot list, rarely enough to be polite. */
 const REFRESH_MS = 60_000;
 
@@ -129,6 +132,7 @@ function ActivationInProgress() {
   return (
     <Card
       title="Activation in progress"
+      className={PHONE_TIGHT}
       actions={<Source>from your log</Source>}
     >
       <div className="flex flex-wrap items-center gap-3">
@@ -245,6 +249,7 @@ function ImportPanel({ onDone }: { onDone: () => void }) {
   return (
     <Card
       title="Import your POTA hunter log"
+      className={PHONE_TIGHT}
       actions={
         <div className="flex flex-wrap items-center gap-2">
           <Button onClick={() => void run(true)} loading={busy}>
@@ -479,9 +484,12 @@ export default function PotaPage() {
             title="Your POTA record"
             description="From pota.app — every park you have ever worked, including before this log existed."
           >
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
-              <Stat label="Parks hunted" value={p.hunter.parks} tone="accent" />
-              <Stat label="Hunter QSOs" value={p.hunter.qsos} />
+            {/* A phone puts the two hunter figures on one row and the three activator ones
+                on the next. Two to a row left "Activator QSOs" alone on a third row with an
+                empty slot beside it, and pushed the live spots below the first screen. */}
+            <div className="grid grid-cols-6 gap-2 sm:grid-cols-3 sm:gap-3 lg:grid-cols-5">
+              <Stat label="Parks hunted" value={p.hunter.parks} tone="accent" className="col-span-3 sm:col-span-1" />
+              <Stat label="Hunter QSOs" value={p.hunter.qsos} className="col-span-3 sm:col-span-1" />
               <Stat
                 label="Activations"
                 value={p.activator.activations}
@@ -491,9 +499,10 @@ export default function PotaPage() {
                     ? `of ${plural(p.attempts.activations, "attempt")}`
                     : undefined
                 }
+                className="col-span-2 max-sm:px-2.5 sm:col-span-1"
               />
-              <Stat label="Parks activated" value={p.activator.parks} />
-              <Stat label="Activator QSOs" value={p.activator.qsos} />
+              <Stat label="Parks activated" value={p.activator.parks} className="col-span-2 max-sm:px-2.5 sm:col-span-1" />
+              <Stat label="Activator QSOs" value={p.activator.qsos} className="col-span-2 max-sm:px-2.5 sm:col-span-1" />
             </div>
             {/* The local figure is separate and smaller on purpose. It is not a
                 correction of POTA's number — it is a different, narrower fact. */}
@@ -561,7 +570,9 @@ export default function PotaPage() {
               >
                 {spots.map((s) => (
                   <li key={s.spotId} className="flex flex-col gap-0.5 px-4 py-2">
-                    <div className="flex items-baseline gap-2">
+                    {/* Wraps rather than overflowing: a long portable call plus the mode,
+                        band and frequency can be wider than the screen. */}
+                    <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
                       <Link
                         href={`/qsos?q=${encodeURIComponent(s.activator)}`}
                         className="font-display text-base tracking-wide hover:text-accent-bright"
@@ -569,8 +580,13 @@ export default function PotaPage() {
                         {s.activator}
                       </Link>
                       <span className="text-xs tnum text-fg-subtle">{ago(s.spottedAt)}</span>
-                      <span className="ml-auto whitespace-nowrap tnum">
-                        {(s.freqHz / 1e6).toFixed(3)}
+                      {/* Mode and band ride with the frequency they describe, so the park
+                          line below has the width: sharing it, the park name was cut to
+                          eight or ten characters. */}
+                      <span className="ml-auto flex shrink-0 items-baseline gap-1.5">
+                        <Badge size="sm">{s.mode}</Badge>
+                        {s.band && <span className="text-xs text-fg-subtle">{s.band}</span>}
+                        <span className="whitespace-nowrap tnum">{(s.freqHz / 1e6).toFixed(3)}</span>
                       </span>
                     </div>
                     <div className="flex items-center gap-2">
@@ -580,9 +596,7 @@ export default function PotaPage() {
                           <span className="text-xs text-fg-subtle"> · {s.parkName}</span>
                         )}
                       </span>
-                      <span className="ml-auto flex shrink-0 items-center gap-1">
-                        <Badge size="sm">{s.mode}</Badge>
-                        {s.band && <span className="text-xs text-fg-subtle">{s.band}</span>}
+                      <span className="ml-auto shrink-0">
                         <InTheLog s={s} />
                       </span>
                     </div>
@@ -648,6 +662,7 @@ export default function PotaPage() {
         {p && p.awards.length > 0 && (
           <Card
             title={`POTA awards (${p.awardCount})`}
+            className={PHONE_TIGHT}
             actions={<Source>{plural(p.endorsementCount, "endorsement")}</Source>}
           >
             {/* Endorsements are most of what a POTA award says. "Bronze Hunter" alone is

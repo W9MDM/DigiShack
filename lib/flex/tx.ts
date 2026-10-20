@@ -1426,8 +1426,23 @@ export class FlexDaxTransmitter {
     }
     // Sent unconditionally, not only when `keyed` is true: if our own state ever
     // disagrees with the radio, the safe direction is to insist on unkeyed.
-    await this.client.command("xmit 0").catch(() => {});
+    const wasKeyed = this.keyed;
+    const sentAt = nowMs();
+    const reply = await this.client.command("xmit 0").catch(() => null);
     this.keyed = false;
+    // NO ANSWER TO THE UNKEY. This used to be swallowed, and the transmission was logged as
+    // sent with the radio still keyed. On 2026-10-20 every "sent" line in the NO POWER OUT
+    // stretches came exactly 10 s after the audio ended - the command timeout - and the radio
+    // stayed TRANSMITTING until the next key, up to 18 s after the unkey went out, with
+    // nothing in the log to say so. Asked again once, without waiting: it is queued behind
+    // the first on the same connection, so it can never land after a later `xmit 1`.
+    if (wasKeyed && (reply === null || reply.status === -1)) {
+      console.error(
+        `[tx] xmit 0 got no answer from the radio after ${Math.round(nowMs() - sentAt)}ms` +
+          `${reply ? ` (${reply.message})` : ""} - it may still be keyed; asking again`,
+      );
+      void this.client?.command("xmit 0").catch(() => {});
+    }
   }
 
   /** Fire-and-forget unkey for exit handlers, where awaiting is not possible. */

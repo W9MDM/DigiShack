@@ -6,6 +6,36 @@
 // :30 and :45, the same origin the decode page's cycle indicator uses — and are taken from
 // the mode's own period where one is known, so FT4 gets 7.5 s and WSPR 2 min.
 
+/** CSS px: the analyzer's dB gutter, left of the plot. */
+export const ANALYZER_Y_AXIS_PX = 44;
+/** CSS px: a canvas narrower than this (Tailwind's sm) gets the analyzer's phone layout. */
+export const ANALYZER_NARROW_PX = 640;
+
+/** Where the analyzer puts its trace/waterfall split and its dB scale, in CSS px. */
+export interface AnalyzerLayout {
+  narrow: boolean;
+  /** Share of the canvas height the trace takes; the waterfall strip has the rest. */
+  traceShare: number;
+  /** Where each dB tick label is anchored, and which end of the text sits there. */
+  tickX: number;
+  tickAlign: "left" | "right";
+  /** Where the rotated unit title is translated to (its text is drawn 2px left of that). */
+  titleX: number;
+}
+
+/**
+ * The analyzer's layout for a canvas `cssWidth` wide. From sm up it is the original one. Below
+ * it the trace takes more of the box, so the waterfall strip is shorter and fills sooner, and
+ * the tick labels right-align against the plot: left-aligned at 4px they ran under the rotated
+ * "dB" title in a phone's narrow gutter and read "dB-55".
+ */
+export function analyzerLayout(cssWidth: number): AnalyzerLayout {
+  const narrow = cssWidth < ANALYZER_NARROW_PX;
+  return narrow
+    ? { narrow, traceShare: 0.65, tickX: ANALYZER_Y_AXIS_PX - 4, tickAlign: "right", titleX: 8 }
+    : { narrow, traceShare: 0.55, tickX: 4, tickAlign: "left", titleX: 10 };
+}
+
 /** Smallest "nice" step at least `rough`: 1, 2, 2.5 or 5 times a power of ten. */
 export function niceStep(rough: number): number {
   if (!(rough > 0) || !Number.isFinite(rough)) return 1;

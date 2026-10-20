@@ -55,36 +55,103 @@ export function useMapGestures<E extends Element>(o: GestureOptions<E>) {
     return { x: e.clientX - (r?.left ?? 0), y: e.clientY - (r?.top ?? 0) };
   };
 
-  const zoomAt = useCallback((factor: number, px?: number, py?: number) => {
+  /** Zoom about a point; false when the view was already at that limit and nothing moved. */
+  const zoomAt = useCallback((factor: number, px?: number, py?: number): boolean => {
     const { ref, getView, setView, bounds, minW } = opts.current;
     const r = ref.current?.getBoundingClientRect();
     const v = getView();
-    if (!r || !(r.width > 0) || !(r.height > 0)) return;
+    if (!r || !(r.width > 0) || !(r.height > 0)) return false;
     const at = {
       x: v.x + ((px ?? r.width / 2) / r.width) * v.w,
       y: v.y + ((py ?? r.height / 2) / r.height) * v.h,
     };
-    setView(zoomView(v, at, factor, bounds, minW));
+    const next = zoomView(v, at, factor, bounds, minW);
+    const moved =
+      Math.abs(next.w - v.w) > 1e-6 || Math.abs(next.x - v.x) > 1e-6 || Math.abs(next.y - v.y) > 1e-6;
+    if (moved) setView(next);
+    return moved;
+  }, []);
+
+  /** When the wheel last zoomed the map, so the tail of that same stream does not scroll the page. */
+  const lastWheelZoom = useRef(0);
+  /** When anything on the page last scrolled, so a scroll already under way is not hijacked. */
+  const lastPageScroll = useRef(0);
+
+  // Scroll does not bubble, so this listens in the capture phase: it hears the window and
+  // any scrolling container the app shell uses.
+  useEffect(() => {
+    const onScroll = () => {
+      lastPageScroll.current = performance.now();
+    };
+    document.addEventListener("scroll", onScroll, { capture: true, passive: true });
+    return () => document.removeEventListener("scroll", onScroll, { capture: true });
   }, []);
 
   // A non-passive listener: React registers onWheel as passive, so preventDefault() there
   // is ignored and the page scrolls while the map zooms — which both maps used to do.
+  //
+  // THE WHEEL THAT WENT NOWHERE. Taking every wheel event made the map a dead zone: at full
+  // extent a wheel-down asks for more zoom-out than there is, nothing moves, and the page
+  // under it does not scroll either. With the map edge to edge on a phone that was most of
+  // the screen. Two rules now:
+  //  - A page scroll already under way carries on over the map: scrolling down a page and
+  //    passing the map under a still cursor is not a request to zoom. Rest the cursor on
+  //    the map for a moment and the wheel zooms, as before.
+  //  - A wheel that cannot move the map falls through to the page, unless it is the tail of
+  //    a stream that was zooming a moment ago (a trackpad's momentum would otherwise zoom
+  //    out and then lurch the page) or it is a pinch (ctrl+wheel), which must never become
+  //    the browser's own page zoom.
   useEffect(() => {
     const el = o.ref.current;
     if (!el) return;
     const onWheel = (e: Event) => {
       const w = e as WheelEvent;
-      w.preventDefault();
+      const now = performance.now();
+      const zoomedLately = now - lastWheelZoom.current < 300;
+      if (!w.ctrlKey && !zoomedLately && now - lastPageScroll.current < 300) return;
       const unit = w.deltaMode === 1 ? 16 : w.deltaMode === 2 ? 400 : 1;
       // Proportional, so a trackpad's stream of small deltas zooms smoothly instead of a
       // full step per event.
       const factor = Math.exp(Math.max(-1, Math.min(1, w.deltaY * unit * 0.0015)));
       const p = local(w);
-      zoomAt(factor, p.x, p.y);
+      if (zoomAt(factor, p.x, p.y)) {
+        lastWheelZoom.current = now;
+        w.preventDefault();
+      } else if (w.ctrlKey || zoomedLately) {
+        w.preventDefault();
+      }
     };
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);
   }, [o.ref, zoomAt]);
+
+  // A second finger is always the map's. With `touch-pan-y` on an unzoomed map (the
+  // canvas and the plot set it while the whole height is in view), the browser is otherwise
+  // free to treat a two-finger pinch that drifts vertically as a page scroll and cancel it;
+  // claiming multi-touch moves keeps pinch-zoom. The claim lasts until every finger is up,
+  // so lifting one finger mid-pinch carries on panning the map rather than scrolling the
+  // page out from under it.
+  useEffect(() => {
+    const el = o.ref.current;
+    if (!el) return;
+    let multi = false;
+    const onTouchMove = (e: Event) => {
+      const t = e as TouchEvent;
+      if (t.touches.length > 1) multi = true;
+      if (multi && t.cancelable) t.preventDefault();
+    };
+    const onTouchEnd = (e: Event) => {
+      if ((e as TouchEvent).touches.length === 0) multi = false;
+    };
+    el.addEventListener("touchmove", onTouchMove, { passive: false });
+    el.addEventListener("touchend", onTouchEnd, { passive: true });
+    el.addEventListener("touchcancel", onTouchEnd, { passive: true });
+    return () => {
+      el.removeEventListener("touchmove", onTouchMove);
+      el.removeEventListener("touchend", onTouchEnd);
+      el.removeEventListener("touchcancel", onTouchEnd);
+    };
+  }, [o.ref]);
 
   const startPan = (x: number, y: number, type: string, tap: boolean) => {
     const v = opts.current.getView();

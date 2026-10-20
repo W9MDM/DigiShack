@@ -44,7 +44,11 @@ interface FlexRig {
   packets: () => number;
 }
 
-function flexRig(isArmed: () => boolean, gate?: () => Promise<boolean>): FlexRig {
+function flexRig(
+  isArmed: () => boolean,
+  gate?: () => Promise<boolean>,
+  reply: (cmd: string, nth: number) => { status: number; message: string } = () => ({ status: 0, message: "" }),
+): FlexRig {
   const commands: string[] = [];
   let packets = 0;
   const tx = new FlexDaxTransmitter({
@@ -61,7 +65,7 @@ function flexRig(isArmed: () => boolean, gate?: () => Promise<boolean>): FlexRig
   inner.client = {
     command: async (cmd: string) => {
       commands.push(cmd);
-      return { status: 0, message: "" };
+      return reply(cmd, commands.filter((c) => c === cmd).length);
     },
   };
   inner.socket = {
@@ -185,6 +189,44 @@ async function flexChecks(): Promise<void> {
     ok(/stopped after \d+ of \d+ packets/i.test(r.reason ?? ""), "the reason gives how far it got", r.reason);
     const planned = Math.ceil(((transmitDurationMs("FT2") / 1000) * 24_000) / 128);
     ok((r.packetsSent ?? planned) < planned, "packetsSent is what went out, not what was planned", `${r.packetsSent} of ${planned}`);
+  }
+
+  // 2026-10-20: every "sent" line in the NO POWER OUT stretches came exactly 10 s after the
+  // audio ended, the command timeout, and the radio stayed keyed until the next key. The
+  // unanswered unkey was swallowed without a word.
+  console.log("\nFlexRadio: an unkey the radio does not answer");
+  {
+    const rig = flexRig(
+      () => true,
+      undefined,
+      (cmd, nth) => (cmd === "xmit 0" && nth === 1 ? { status: -1, message: "Timed out" } : { status: 0, message: "" }),
+    );
+    const said: string[] = [];
+    const realError = console.error;
+    console.error = (...a: unknown[]) => void said.push(a.join(" "));
+    let r: Awaited<ReturnType<FlexDaxTransmitter["transmit"]>> | undefined;
+    try {
+      r = await rig.tx.transmit({ message: "CQ K9XYZ EN61", mode: "FT2", offsetHz: 1500, startAt: boundaryKeyingIn("FT2", 80) });
+    } finally {
+      console.error = realError;
+    }
+    const keyAt = rig.commands.indexOf("xmit 1");
+    const unkeys = rig.commands.slice(keyAt + 1).filter((c) => c === "xmit 0").length;
+    ok(keyAt >= 0 && unkeys === 2, "xmit 0 is sent again", rig.commands.join(","));
+    ok(said.some((s) => /xmit 0 got no answer/.test(s)), "and the log says the radio may still be keyed", said.join(" | "));
+    ok(r?.sent === true && !rig.tx.isKeyed, "the transmission itself still completes", r?.reason);
+  }
+  {
+    const rig = flexRig(() => true);
+    await rig.tx.transmit({ message: "CQ K9XYZ EN61", mode: "FT2", offsetHz: 1500, startAt: boundaryKeyingIn("FT2", 80) });
+    const keyAt = rig.commands.indexOf("xmit 1");
+    ok(rig.commands.slice(keyAt + 1).filter((c) => c === "xmit 0").length === 1, "an answered unkey is sent once", rig.commands.join(","));
+  }
+  {
+    // A stop with nothing on the air is not a stuck key, whatever the radio says to it.
+    const rig = flexRig(() => true, undefined, () => ({ status: -1, message: "Timed out" }));
+    await rig.tx.unkey();
+    ok(rig.commands.filter((c) => c === "xmit 0").length === 1, "an unanswered unkey while not keyed is not repeated", rig.commands.join(","));
   }
 }
 

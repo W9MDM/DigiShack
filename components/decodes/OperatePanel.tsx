@@ -423,14 +423,17 @@ function WorkStation({
           )}
         </>
       )}
-      {/* The whole exchange, both directions, left to right like a conversation. */}
+      {/* The whole exchange, both directions, left to right like a conversation. On a
+          phone the wrapped bubbles staggered and the order was lost, so there it is one
+          full-width line per message, top to bottom like a chat log: time, dB, message. */}
       {(qso?.transcript?.length ?? 0) > 0 ? (
-        <div className="flex flex-wrap items-stretch gap-1">
+        <div className="flex flex-col gap-1 sm:flex-row sm:flex-wrap sm:items-stretch">
           {qso!.transcript!.map((t, i) => (
             <div
               key={`${t.at}-${i}-${t.message}`}
               className={cn(
                 "rounded-sm border px-1.5 py-0.5 font-mono text-xs leading-tight",
+                "max-sm:flex max-sm:items-baseline max-sm:gap-2",
                 t.refused
                   ? "border-danger/50 bg-danger/10 text-danger"
                   : t.dir === "tx"
@@ -444,13 +447,13 @@ function WorkStation({
                 (t.offsetHz != null ? ` · ${t.offsetHz} Hz` : "")
               }
             >
-              <div className="flex items-center gap-1">
+              <div className="flex items-center gap-1 max-sm:min-w-0">
                 <span className={t.dir === "tx" ? "text-accent-bright" : "text-fg-subtle"}>
                   {t.dir === "tx" ? "▲" : "▼"}
                 </span>
-                <span>{t.message}</span>
+                <span className="max-sm:break-words max-sm:min-w-0">{t.message}</span>
               </div>
-              <div className="text-fg-subtle tnum">
+              <div className="text-fg-subtle tnum max-sm:order-first max-sm:min-w-[9ch] max-sm:shrink-0">
                 {new Date(t.at).toISOString().slice(14, 19)}
                 {t.snr != null && ` ${t.snr > 0 ? "+" : ""}${t.snr}`}
                 {t.refused && " refused"}

@@ -101,10 +101,14 @@ export default function SettingsPage() {
       {/* The save bar is taller on a phone, where its buttons wrap onto their own line, so
           the room left under the last setting is too. */}
       <div className={barVisible ? "max-w-5xl pb-40 sm:pb-28" : "max-w-5xl"}>
-        <PageHeader
-          title="Settings"
-          subtitle="How this station runs: radios, modes, automation, logbook services and email. Kept in the database, with passwords and keys encrypted."
-        />
+        {/* Below sm the generic subtitle goes: three lines repeated above every category,
+            each of which opens with its own description anyway. */}
+        <div className="max-sm:[&_h1+p]:hidden">
+          <PageHeader
+            title="Settings"
+            subtitle="How this station runs: radios, modes, automation, logbook services and email. Kept in the database, with passwords and keys encrypted."
+          />
+        </div>
 
         {st.loadError && <div className="mb-4"><ErrorBanner>{st.loadError.message}</ErrorBanner></div>}
         {st.keyProblem && (

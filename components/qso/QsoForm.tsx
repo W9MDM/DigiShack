@@ -812,16 +812,18 @@ function Group({
   id,
   title,
   className,
+  titleClassName,
   children,
 }: {
   id: string;
   title: string;
   className?: string;
+  titleClassName?: string;
   children: React.ReactNode;
 }) {
   return (
     <div role="group" aria-labelledby={id} className={cn("min-w-0", className)}>
-      <h3 id={id} className="mb-3 text-base text-fg-muted">
+      <h3 id={id} className={cn("mb-3 text-base text-fg-muted", titleClassName)}>
         {title}
       </h3>
       {children}
@@ -854,6 +856,12 @@ export interface QsoFormProps {
    */
   submitFooter?: React.ReactNode;
   /**
+   * Below sm, pin the submit row to the bottom of the screen, its buttons at equal width.
+   * For a form whose buttons and secondary action are all peers, as on /qsos/new; the edit
+   * page's row holds a status line and Delete, which do not belong in a pinned bar.
+   */
+  stickySubmit?: boolean;
+  /**
    * VIEWER role: show the QSO but allow no edits. Cosmetic only — the API
    * rejects the mutation regardless.
    */
@@ -885,6 +893,7 @@ export function QsoForm({
   emailedAt,
   secondaryAction,
   submitFooter,
+  stickySubmit = false,
   readOnly = false,
 }: QsoFormProps) {
   const [dupe, setDupe] = useState<DupeCheckResponse | null>(null);
@@ -1471,6 +1480,10 @@ export function QsoForm({
             id="qso-qsl"
             title={qsoId ? "QSL & notes" : "Notes"}
             className="@6xl:col-span-3"
+            // On a new contact the group holds one field, also labelled "Notes": on a phone
+            // the heading over it is a wasted line that reads as a stutter. Still there for
+            // a screen reader, which names the group by it.
+            titleClassName={qsoId ? undefined : "max-sm:sr-only"}
           >
             {/* QSL state is only meaningful once the contact exists. */}
             {qsoId && (
@@ -1578,7 +1591,17 @@ export function QsoForm({
             edit contacts.
           </p>
         ) : (
-          <div className="flex flex-col gap-3 border-t border-line pt-4 @6xl:col-span-3">
+          <div
+            className={cn(
+              "flex flex-col gap-3 border-t border-line pt-4 @6xl:col-span-3",
+              // A sticky grid item sticks for the height of the whole form, so on a phone the
+              // buttons sit at the bottom of the screen from the first field rather than
+              // three screens down under every optional one. -mx-4/px-4 meets the Card's
+              // edges; the bottom padding clears a home indicator.
+              stickySubmit &&
+                "max-sm:sticky max-sm:bottom-0 max-sm:z-15 max-sm:-mx-4 max-sm:bg-surface max-sm:px-4 max-sm:pb-[calc(0.75rem+env(safe-area-inset-bottom))]",
+            )}
+          >
             {/* Above the button rather than at the top of the form: the top is scrolled
                 out of sight on a phone by the time Log is tapped. */}
             {error && (
@@ -1619,7 +1642,12 @@ export function QsoForm({
               </ErrorBanner>
             )}
             {submitFooter}
-            <div className="flex flex-wrap items-center gap-2">
+            <div
+              className={cn(
+                "flex flex-wrap items-center gap-2",
+                stickySubmit && "max-sm:flex-nowrap max-sm:*:flex-1",
+              )}
+            >
               <Button type="submit" variant="primary" loading={submitting}>
                 {submitLabel}
               </Button>

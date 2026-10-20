@@ -20,12 +20,23 @@ export interface LicenceDefault {
   status: "set" | "unset" | "other";
 }
 
-const COLUMNS: readonly { e: Emission; label: string }[] = [
+/** `short` is the phone header, where the full five columns ran off the side. */
+const COLUMNS: readonly { e: Emission; label: string; short?: string }[] = [
   { e: "CW", label: "CW" },
   { e: "DATA", label: "Data" },
-  { e: "PHONE", label: "Phone" },
-  { e: "IMAGE", label: "Image" },
+  { e: "PHONE", label: "Phone", short: "Ph" },
+  { e: "IMAGE", label: "Image", short: "Img" },
 ];
+
+function PowerCell({ power }: { power: { label: string; cite: string } | null }) {
+  if (!power) return <>—</>;
+  return (
+    <>
+      {power.label}
+      <span className="block text-[0.8em] text-fg-subtle">{power.cite}</span>
+    </>
+  );
+}
 
 /** The panadapter's band-plan colours, so the two displays agree. */
 function fillFor(s: ChartSegment): string {
@@ -124,10 +135,21 @@ export function PrivilegesTool({ licence }: { licence: LicenceDefault }) {
                     <Th size="sm">Class</Th>
                     {COLUMNS.map((c) => (
                       <Th key={c.e} size="sm" className="text-center">
-                        {c.label}
+                        {c.short ? (
+                          <>
+                            <abbr title={c.label} className="no-underline sm:hidden">
+                              {c.short}
+                            </abbr>
+                            <span className="hidden sm:inline">{c.label}</span>
+                          </>
+                        ) : (
+                          c.label
+                        )}
                       </Th>
                     ))}
-                    <Th size="sm">Power</Th>
+                    {/* Below sm the power rides under the class name instead: as a sixth
+                        column it was the one cut off, and it is the one most wanted. */}
+                    <Th size="sm" className="hidden sm:table-cell">Power</Th>
                   </tr>
                 </thead>
                 <tbody>
@@ -139,21 +161,20 @@ export function PrivilegesTool({ licence }: { licence: LicenceDefault }) {
                       <Td size="sm" className="whitespace-nowrap">
                         {CLASS_NAMES[row.cls]}
                         {row.cls === cls && <span className="sr-only"> (selected)</span>}
+                        {row.power && (
+                          <span className="block tnum text-[0.85em] text-fg-muted sm:hidden">
+                            <span className="sr-only">Power: </span>
+                            <PowerCell power={row.power} />
+                          </span>
+                        )}
                       </Td>
                       {COLUMNS.map((c) => (
                         <Td key={c.e} size="sm" className="text-center">
                           <Yes on={row.emissions.includes(c.e)} note={c.e === "PHONE" ? row.phoneNote : null} />
                         </Td>
                       ))}
-                      <Td size="sm" className="tnum whitespace-nowrap text-fg-muted">
-                        {row.power ? (
-                          <>
-                            {row.power.label}
-                            <span className="block text-[0.8em] text-fg-subtle">{row.power.cite}</span>
-                          </>
-                        ) : (
-                          "—"
-                        )}
+                      <Td size="sm" className="hidden tnum whitespace-nowrap text-fg-muted sm:table-cell">
+                        <PowerCell power={row.power} />
                       </Td>
                     </tr>
                   ))}

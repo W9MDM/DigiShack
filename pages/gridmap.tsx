@@ -121,6 +121,25 @@ const DEFAULT_PREFS: Prefs = {
 
 const PREFS_KEY = "digishack.gridmap";
 
+/** The log-period and heard-by choices, as [value, label]: the selects and the phone's one-line summary of them. */
+const DAYS_OPTIONS = [
+  ["1", "Last 24 hours"],
+  ["7", "Last 7 days"],
+  ["30", "Last 30 days"],
+  ["365", "Last year"],
+  ["0", "Whole log"],
+] as const;
+const HEARD_OPTIONS = [
+  ["15", "Last 15 minutes"],
+  ["60", "Last hour"],
+  ["360", "Last 6 hours"],
+  ["1440", "Last 24 hours"],
+] as const;
+
+function labelOf(options: readonly (readonly [string, string])[], value: string): string {
+  return options.find(([v]) => v === value)?.[1] ?? value;
+}
+
 /** What a marker on the map stands for, for the card and the path readout. */
 type Picked =
   | { kind: "live"; key: string; callsign: string; grid: string; at: LatLon; station: LiveStation }
@@ -141,6 +160,8 @@ export default function GridMapPage({ wsUrl }: Props) {
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [hoverKey, setHoverKey] = useState<string | null>(null);
   const [prefs, setPrefs] = useState<Prefs>(DEFAULT_PREFS);
+  /** Phone only: whether the folded Band / Log period / Heard-by selects are showing. */
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const [unit] = useDistanceUnit();
 
   // Display choices are per device, like the distance unit. Read after mount so the
@@ -432,9 +453,35 @@ export default function GridMapPage({ wsUrl }: Props) {
 
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_300px]">
         <div className="flex flex-col gap-3 min-w-0">
+          {/* On a phone the three selects folded behind one line that says what they are
+              set to: labelled and stacked they were three rows, about 130px, between the
+              title and the map. From sm up they are always shown, as before. */}
+          <button
+            type="button"
+            onClick={() => setFiltersOpen((o) => !o)}
+            aria-expanded={filtersOpen}
+            aria-controls="gm-filters"
+            className="flex w-full items-center gap-2 rounded-sm border border-line px-3 py-2 text-left text-sm sm:hidden"
+          >
+            <span className="font-medium text-fg">Filters</span>
+            <span className="min-w-0 flex-1 truncate text-fg-muted">
+              {prefs.band || "All bands"} · {labelOf(DAYS_OPTIONS, prefs.days)} · heard{" "}
+              {labelOf(HEARD_OPTIONS, prefs.heardMinutes).toLowerCase()}
+            </span>
+            <svg
+              viewBox="0 0 12 12"
+              aria-hidden="true"
+              className={cn("size-3 shrink-0 text-fg-subtle transition-transform", filtersOpen && "rotate-180")}
+            >
+              <path d="M2 4l4 4 4-4" fill="none" stroke="currentColor" strokeWidth="1.5" />
+            </svg>
+          </button>
           {/* Two to a row on a phone, each filling its half, rather than fixed widths
               wrapping into a ragged 2 + 1. */}
-          <div className="grid grid-cols-2 gap-3 sm:flex sm:flex-wrap sm:items-end">
+          <div
+            id="gm-filters"
+            className={cn("grid grid-cols-2 gap-3 sm:flex sm:flex-wrap sm:items-end", !filtersOpen && "max-sm:hidden")}
+          >
             <Field label="Band" htmlFor="gm-band" className="sm:w-32">
               <Select id="gm-band" value={prefs.band} onChange={(e) => update({ band: e.target.value })}>
                 <option value="">All bands</option>
@@ -447,24 +494,33 @@ export default function GridMapPage({ wsUrl }: Props) {
             </Field>
             <Field label="Log period" htmlFor="gm-days" className="sm:w-36">
               <Select id="gm-days" value={prefs.days} onChange={(e) => update({ days: e.target.value })}>
-                <option value="1">Last 24 hours</option>
-                <option value="7">Last 7 days</option>
-                <option value="30">Last 30 days</option>
-                <option value="365">Last year</option>
-                <option value="0">Whole log</option>
+                {DAYS_OPTIONS.map(([v, l]) => (
+                  <option key={v} value={v}>
+                    {l}
+                  </option>
+                ))}
               </Select>
             </Field>
             <Field label="Heard-by window" htmlFor="gm-heard" className="sm:w-36">
               <Select id="gm-heard" value={prefs.heardMinutes} onChange={(e) => update({ heardMinutes: e.target.value })}>
-                <option value="15">Last 15 minutes</option>
-                <option value="60">Last hour</option>
-                <option value="360">Last 6 hours</option>
-                <option value="1440">Last 24 hours</option>
+                {HEARD_OPTIONS.map(([v, l]) => (
+                  <option key={v} value={v}>
+                    {l}
+                  </option>
+                ))}
               </Select>
             </Field>
           </div>
 
-          <div className="flex flex-wrap gap-2" role="group" aria-label="Map layers">
+          {/* One row on a phone that scrolls sideways, bled to the screen edge so the cut
+              chip shows there is more: wrapped, the five toggles were two ragged rows above
+              the map. The vertical padding keeps the focus ring inside the scroller. From sm
+              up they wrap, as before. */}
+          <div
+            className="flex flex-wrap gap-2 max-sm:-mx-4 max-sm:-my-1 max-sm:flex-nowrap max-sm:overflow-x-auto max-sm:px-4 max-sm:py-1 max-sm:[&>button]:shrink-0 max-sm:[&>button]:whitespace-nowrap"
+            role="group"
+            aria-label="Map layers"
+          >
             <LayerToggle
               on={prefs.live}
               onToggle={() => update({ live: !prefs.live })}
