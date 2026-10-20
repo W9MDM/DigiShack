@@ -105,7 +105,7 @@ export interface SpectrumCanvasProps {
 }
 
 /** The empty-waterfall colour: the bottom of PALETTE, so a blank edge is not a black bar. */
-const BACKGROUND = "#000006";
+const BACKGROUND = "rgb(0, 0, 6)";
 
 export function SpectrumCanvas({
   row,

@@ -31,6 +31,7 @@ import { loadEnvConfig } from "@next/env";
 loadEnvConfig(process.cwd());
 
 import { WebSocketServer, type WebSocket } from "ws";
+import { createWsGate, type UpgradeHandler } from "@/lib/bridge/ws-auth";
 
 import { prisma } from "@/lib/db/prisma";
 import { pruneDecodes } from "@/lib/db/retention";
@@ -130,6 +131,7 @@ import {
 import { startScheduleRunner } from "@/lib/radio/schedule-runner";
 import { FlexDaxSource, DAX_SAMPLE_RATE } from "@/lib/flex/dax";
 import { discoverRadios } from "@/lib/flex/discovery";
+import { startClusterService } from "@/lib/cluster/service";
 import { freqToBand } from "@/lib/ham/bands";
 import {
   DIGITAL_FREQUENCIES,
@@ -496,6 +498,17 @@ const gateSettingsTab = (): string => (activeRadio === "icom" ? "Icom (network)"
  * frame they receive, on both radios, so it must be cheap when nobody is listening.
  */
 let sendAudio: (samples: Float32Array) => void = () => {};
+
+/**
+ * Tell every connected audio listener the stream's format again. Set by main() beside
+ * sendAudio; called by switchSource().
+ *
+ * The hello at connect used to be the only time a listener was told, so a page that kept
+ * listening across a switch resampled the new radio at the old radio's rate — Flex 24 kHz,
+ * Icom 48 kHz, a factor of two either way (code review R08). A source with no audio of its
+ * own (WSJT-X) announces 0, which a listener takes as the end of its stream.
+ */
+let announceAudioFormat: () => void = () => {};
 
 /**
  * The sample rate the current source produces.
@@ -1829,13 +1842,14 @@ function onDecodedWindow(
   }
 
 async function startFlexSource(): Promise<() => Promise<void>> {
-  const configuredHost = await getSetting("flex.host");
-  const autoDiscover = await getBooleanSetting("flex.autoDiscover", true);
-
-  let host = configuredHost ?? "";
-  if (!host || autoDiscover) {
+  // A blank address means "find it"; an address means "use it". There was a separate
+  // `flex.autoDiscover` switch as well, but a configured address always won over whatever
+  // discovery found, so all it decided was whether to spend up to 8 s listening for a
+  // broadcast whose answer was then ignored.
+  let host = (await getSetting("flex.host")) ?? "";
+  if (!host) {
     const found = await discoverRadios({ timeoutMs: 8_000 });
-    host = configuredHost || found[0]?.ip || found[0]?.address || "";
+    host = found[0]?.ip || found[0]?.address || "";
     if (found[0]) {
       console.log(
         `[bridge] discovered ${found[0].model} (${found[0].callsign ?? "?"}) at ${host}`,
@@ -3479,6 +3493,9 @@ async function switchSource(
   // The external decoder path has no per-radio gate of its own; it keeps reading the
   // FlexRadio's, which is what it has always done.
   activeRadio = kind === "icom" ? "icom" : "flex";
+  // The old source is torn down and the new one not yet started: the one moment no audio is
+  // flowing, so every listener hears the new rate before the new radio's first sample.
+  announceAudioFormat();
 
   const user = await prisma.user.findFirst({ select: { id: true } });
   if (user) {
@@ -4226,6 +4243,10 @@ async function main(): Promise<void> {
     return true;
   };
 
+  // DX cluster. lib/cluster owns the telnet link, the parsing and the spot list and follows
+  // the cluster.* settings itself; this process only hands each new spot to the browsers.
+  const cluster = startClusterService({ onSpot: (spot) => broadcast({ kind: "spot", spot }) });
+
   const server = createServer((req, res) => {
     void (async () => {
       const url = new URL(req.url ?? "/", `http://localhost:${bridgePort}`);
@@ -4269,6 +4290,21 @@ async function main(): Promise<void> {
             };
           })(),
         });
+        return;
+      }
+
+      // Read-only, but behind the token like the control API: it carries the login callsign
+      // and what the log still needs, which /status has no business serving to anyone.
+      if (req.method === "GET" && url.pathname === "/cluster/spots") {
+        if (!token) {
+          sendJson(res, 503, { error: "Control API disabled: bridge.token is not configured" });
+          return;
+        }
+        if (((req.headers["x-bridge-token"] as string | undefined) ?? "") !== token) {
+          sendJson(res, 401, { error: "Bad or missing X-Bridge-Token" });
+          return;
+        }
+        sendJson(res, 200, await cluster.snapshot());
         return;
       }
 
@@ -5890,7 +5926,28 @@ async function main(): Promise<void> {
     }
   };
 
-  server.on("upgrade", (req, sock, head) => {
+  // The same hello a listener gets at connect, re-sent on a source switch. Ordered after any
+  // PCM already queued on each socket, so nothing from the old radio is read at the new rate.
+  announceAudioFormat = (): void => {
+    if (audioClients.size === 0) return;
+    const hello = JSON.stringify({
+      kind: "audio-hello",
+      sampleRate: audioSampleRate(),
+      format: "s16le",
+      channels: 1,
+      source: status.source,
+    });
+    for (const ws of audioClients) {
+      try {
+        ws.send(hello);
+      } catch {
+        audioClients.delete(ws);
+      }
+    }
+    console.log(`[audio] format re-announced to ${audioClients.size} listener(s): ${audioSampleRate()} Hz`);
+  };
+
+  const routeUpgrade: UpgradeHandler = (req, sock, head) => {
     const { pathname } = new URL(req.url ?? "/", `http://localhost:${bridgePort}`);
 
     if (pathname === "/ws/audio") {
@@ -5970,7 +6027,16 @@ async function main(): Promise<void> {
       ws.on("close", () => clients.delete(ws));
       ws.on("error", () => clients.delete(ws));
     });
-  });
+  };
+
+  // EVERY upgrade is authenticated before routeUpgrade sees it — unknown paths too, so a
+  // socket added above later cannot be born unauthenticated. A signed-in session cookie
+  // (what a browser sends on a same-origin handshake), or this bridge's own token from a
+  // process on this machine connecting straight to the port; a cross-site Origin is
+  // refused whatever it carries. Refusals are answered 401/403 here, before any WebSocket
+  // exists. The scheme, and why "anonymous from loopback" is not in it: lib/bridge/ws-auth.ts.
+  const wsGate = createWsGate({ bridgeToken: () => token });
+  server.on("upgrade", wsGate.guard(routeUpgrade));
 
   // Without this, a port clash raises an unhandled 'error' event and the process
   // dies *after* a DAX stream has been created — leaving the radio streaming
@@ -6001,14 +6067,15 @@ async function main(): Promise<void> {
   // with a route to the shack LAN this exposed radio status, and /power and slice
   // tune behind nothing but a bearer token.
   // Loopback by default. See the setting's help text for what opening it exposes — the
-  // control API has a shared secret and the WebSockets have nothing.
+  // control API has a shared secret, the WebSockets want a signed-in session
+  // (lib/bridge/ws-auth.ts), and GET /status still answers anyone who can reach it.
   const bindAddress = (await getSetting("bridge.bindAddress")) || "127.0.0.1";
   server.listen(bridgePort, bindAddress, () => {
     console.log(
       `[bridge] http+ws on http://${bindAddress}:${bridgePort} (ws /ws/decodes, /ws/audio)` +
         (bindAddress === "127.0.0.1"
           ? " — this machine only, so audio cannot be heard from another device"
-          : " — REACHABLE FROM YOUR NETWORK, and the WebSockets are unauthenticated"),
+          : " — REACHABLE FROM YOUR NETWORK: GET /status answers anyone; the WebSockets need a signed-in session"),
     );
   });
 
@@ -6446,6 +6513,8 @@ async function main(): Promise<void> {
 
   const shutdown = () => {
     console.log("[bridge] shutting down");
+    // BYE to the node, so it does not hold the call as still connected.
+    void cluster.stop();
     void flushDecodes()
       .then(() => (flexTeardown ?? stopFlex)?.())
       .finally(() => {

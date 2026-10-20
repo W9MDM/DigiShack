@@ -257,20 +257,29 @@ if (!existsSync(join(root, swPath))) {
 
 console.log("\nmobile navigation");
 
-const shell = read("components/layout/Shell.tsx");
+// The navigation moved out of the Shell into components/layout/Nav*.tsx; the drawer's
+// mechanics are asserted wherever they now live.
+const shell = [
+  "components/layout/Shell.tsx",
+  "components/layout/NavDrawer.tsx",
+  "components/layout/NavMenus.tsx",
+]
+  .map(read)
+  .join("\n");
+const desktopNav = read("components/layout/NavMenus.tsx");
 
 /*
  * The reported fault: "the menu isnt visible when mobile".
  *
- * The desktop nav row is allowed to keep `min-w-0` — it needs it, because it shares a
- * flex line and must be permitted to shrink and scroll. What it must NOT do is be the
- * only nav, because `min-w-0` means "may shrink to zero" and on a phone that is
- * exactly what it did.
+ * The desktop nav is allowed `min-w-0` — it shares a flex line and must be permitted to
+ * shrink. What it must NOT do is be the only nav, because `min-w-0` means "may shrink to
+ * zero" and on a phone that is exactly what it did. (It no longer scrolls: dropdowns
+ * cannot live in a scrolling row, which clips them. It changes shape instead.)
  */
 check(
   "the desktop nav is hidden on small screens",
-  /"hidden md:flex items-center gap-0\.5 overflow-x-auto/.test(shell),
-  "the dense horizontal nav is still rendered below md, where it collapses to zero width",
+  /"@container relative z-10 hidden md:flex/.test(desktopNav),
+  "the desktop nav is still rendered below md, where it collapses to zero width",
 );
 check(
   "a menu button exists below md",
@@ -299,7 +308,8 @@ check(
 );
 check(
   "the closed drawer is out of the tab order",
-  /tabIndex=\{menuOpen \? undefined : -1\}/.test(shell),
+  /tabIndex=\{(menuOpen|open) \? undefined : -1\}|tabIndex=\{tab\}/.test(shell) &&
+    /const tab = open \? undefined : -1/.test(shell),
   "an offscreen drawer would still be tabbable",
 );
 check(
@@ -384,6 +394,9 @@ for (const rel of tsxFiles) {
   const lines = src.split("\n");
   lines.forEach((line, i) => {
     if (!line.includes("<table")) return;
+    // An explicit opt-out for a table that is not shown below md and drops columns to fit,
+    // where a scroll container would break its sticky header (the log, 1.232.0).
+    if (line.includes("data-fits-viewport")) return;
     const before = lines.slice(Math.max(0, i - 6), i + 1).join("\n");
     if (!/overflow-x-auto|overflow-auto|overflow-x-scroll/.test(before)) {
       unwrapped.push(`${rel}:${i + 1}`);

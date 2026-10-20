@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 
+import { Checkbox } from "@/components/log/Checkbox";
 import { Badge, Button, Card, ErrorBanner } from "@/components/ui/primitives";
 import { ApiError, apiPost, useApi } from "@/lib/client/api";
 import { formatUtc } from "@/lib/time";
+import { cn } from "@/lib/utils";
 
 // Where a contact went, and a way to send it again.
 //
@@ -87,76 +89,108 @@ export function Destinations({ qsoId, canEdit }: { qsoId: string; canEdit: boole
 
   if (error) {
     return (
-      <Card title="Destinations">
+      <Card title="Uploads">
         <ErrorBanner>{error.message}</ErrorBanner>
       </Card>
     );
   }
 
+  const sentCount = rows.filter((d) => d.sent).length;
+  const labelOf = (service: string) => rows.find((d) => d.service === service)?.label ?? service;
+  const reprocessLabel =
+    chosen.length === 1
+      ? `Reprocess to ${chosen[0]!.label}`
+      : chosen.length > 1
+        ? `Reprocess to ${chosen.length} services`
+        : "Reprocess";
+
   return (
-    <Card title="Destinations">
-      <p className="text-sm text-fg-subtle mb-3">
-        Where this contact has been sent. Tick anywhere it needs to go again — a service
-        that already has it answers &ldquo;duplicate&rdquo;, which is harmless and is also
-        the answer that proves it is there.
-      </p>
-
-      <ul className="flex flex-col divide-y divide-line">
-        {rows.map((d) => (
-          <li key={d.service} className="flex items-center gap-2 py-1.5 text-sm">
-            <input
-              id={`dest-${d.service}`}
-              type="checkbox"
-              checked={picked[d.service] ?? false}
-              disabled={!canEdit || !d.configured || sending}
-              onChange={(e) =>
-                setPicked((p) => ({ ...p, [d.service]: e.target.checked }))
-              }
-              className="accent-accent size-3.5"
-            />
-            <label
-              htmlFor={`dest-${d.service}`}
-              className={d.configured ? "text-fg-muted" : "text-fg-subtle"}
-            >
-              {d.label}
-            </label>
-            <span className="ml-auto flex items-center gap-2">
-              {d.sentAt && (
-                <span className="tnum text-xs text-fg-subtle">{formatUtc(d.sentAt)}</span>
-              )}
-              {!d.configured ? (
-                <Badge tone="neutral">Not set up</Badge>
-              ) : d.sent ? (
-                <Badge tone="ok">Sent</Badge>
-              ) : (
-                <Badge tone="warn">Not sent</Badge>
-              )}
-            </span>
-          </li>
-        ))}
-      </ul>
-
-      {rows.some((d) => !d.configured) && (
-        <p className="text-xs text-fg-subtle mt-3">
-          A service marked <strong>Not set up</strong> has no credentials yet — LoTW needs a
-          callsign certificate, the rest need a key or a login. Settings &rarr; Uploads.
+    <Card
+      title="Uploads"
+      actions={
+        rows.length > 0 ? (
+          <Badge size="sm" tone={sentCount === rows.length ? "ok" : "neutral"}>
+            {sentCount} of {rows.length} sent
+          </Badge>
+        ) : undefined
+      }
+    >
+      {!data ? (
+        <p role="status" className="text-sm text-fg-subtle">
+          Checking where this contact has been sent…
         </p>
-      )}
+      ) : (
+        <>
+          {canEdit && (
+            <p className="mb-2 text-sm text-fg-subtle">
+              Tick anywhere it needs to go again. A service that already has it answers
+              &ldquo;duplicate&rdquo; — harmless, and proof that it is there.
+            </p>
+          )}
 
-      {canEdit && (
-        <div className="mt-4 flex items-center gap-3">
-          <Button
-            variant="primary"
-            disabled={chosen.length === 0 || sending}
-            onClick={() => void reprocess()}
-          >
-            {sending ? "Sending…" : `Reprocess to ${chosen.length || "…"}`}
-          </Button>
-          <span className="text-xs text-fg-subtle">
-            Sends now, without waiting for a sweep and whether or not automatic uploading is
-            on.
-          </span>
-        </div>
+          <ul className="flex flex-col divide-y divide-line">
+            {rows.map((d) => {
+              // The flag on the contact comes first: a contact QRZ already holds is
+              // "Sent" even if the QRZ key has since been removed.
+              const status = d.sent ? "Sent" : !d.configured ? "Not set up" : "Not sent";
+              const tone = d.sent ? "ok" : !d.configured ? "neutral" : "warn";
+              return (
+                <li key={d.service} className="flex items-center gap-3 py-2">
+                  <div className="min-w-0 flex-1">
+                    {canEdit ? (
+                      <Checkbox
+                        id={`dest-${d.service}`}
+                        label={
+                          <span className={d.configured ? "text-fg" : "text-fg-subtle"}>
+                            {d.label}
+                          </span>
+                        }
+                        checked={picked[d.service] ?? false}
+                        disabled={!d.configured || sending}
+                        onChange={(v) => setPicked((p) => ({ ...p, [d.service]: v }))}
+                      />
+                    ) : (
+                      <span className="text-sm text-fg">{d.label}</span>
+                    )}
+                    {d.sentAt && (
+                      <div className={cn("text-xs text-fg-subtle tnum", canEdit && "pl-6")}>
+                        {formatUtc(d.sentAt)}
+                      </div>
+                    )}
+                  </div>
+                  <Badge size="sm" tone={tone}>
+                    {status}
+                  </Badge>
+                </li>
+              );
+            })}
+          </ul>
+
+          {rows.some((d) => !d.configured) && (
+            <p className="mt-3 text-xs text-fg-subtle">
+              <strong>Not set up</strong> means no credentials yet — LoTW needs a callsign
+              certificate, the rest a key or a login. Settings &rarr; Uploads.
+            </p>
+          )}
+
+          {canEdit && (
+            <div className="mt-4 flex flex-col items-start gap-1.5">
+              <Button
+                variant="primary"
+                loading={sending}
+                disabled={chosen.length === 0}
+                disabledReason="Tick at least one service first."
+                onClick={() => void reprocess()}
+              >
+                {reprocessLabel}
+              </Button>
+              <span className="text-xs text-fg-subtle">
+                Sends now, without waiting for a sweep, whether or not automatic uploading
+                is on.
+              </span>
+            </div>
+          )}
+        </>
       )}
 
       {sendError && (
@@ -166,10 +200,10 @@ export function Destinations({ qsoId, canEdit }: { qsoId: string; canEdit: boole
       )}
 
       {result && (
-        <ul className="mt-3 flex flex-col gap-1 text-sm">
+        <ul role="status" className="mt-3 flex flex-col gap-1 text-sm">
           {result.services.map((s) => (
             <li key={s.service} className="flex items-start gap-2">
-              <span className="text-fg-muted w-28 shrink-0">{s.service}</span>
+              <span className="w-24 shrink-0 text-fg-muted">{labelOf(s.service)}</span>
               <span
                 className={
                   s.failed > 0 || s.skipped

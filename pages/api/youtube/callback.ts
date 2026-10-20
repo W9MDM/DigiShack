@@ -27,7 +27,7 @@ h1{font-size:1.3rem;margin:0 0 .75rem;color:${colour}}
 p{color:#babac5;margin:0 0 1rem}
 a{color:#58a6ff}
 </style></head><body><main><h1>${title}</h1><p>${body}</p>
-<p><a href="/settings">Back to settings</a></p></main></body></html>`;
+<p><a href="/settings?tab=spotting&group=youtube">Back to settings</a></p></main></body></html>`;
 }
 
 async function get(req: NextApiRequest, res: NextApiResponse, auth: AuthContext) {

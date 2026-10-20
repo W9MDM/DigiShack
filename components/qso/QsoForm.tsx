@@ -1,5 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 
+import { Checkbox } from "@/components/log/Checkbox";
+import { Notice } from "@/components/log/Notice";
 import { ResendQslButton } from "@/components/qsl/ResendQslButton";
 import {
   Badge,
@@ -23,6 +25,7 @@ import {
 import { LOGGABLE_MODES, defaultRst } from "@/lib/ham/modes";
 import { formatUtc, fromUtcInputValue, toUtcInputValue, utcNowInputValue } from "@/lib/time";
 import type { DupeCheckResponse, Qso, Station } from "@/lib/types";
+import { cn } from "@/lib/utils";
 
 export interface QsoFormValues {
   callsign: string;
@@ -744,6 +747,80 @@ export function draftFailureMessage(cause: string, kept: boolean): string {
 }
 
 const QSL_STATUSES = ["NONE", "REQUESTED", "SENT", "CONFIRMED"] as const;
+const QSL_STATUS_LABEL: Record<(typeof QSL_STATUSES)[number], string> = {
+  NONE: "None",
+  REQUESTED: "Requested",
+  SENT: "Sent",
+  CONFIRMED: "Confirmed",
+};
+
+/**
+ * Where each API field-error key lives on the form, so the summary beside the submit
+ * button can name the field and jump to it. A key missing here is still shown, as text:
+ * an error the form has no field for used to be dropped on the floor entirely.
+ */
+const FIELD_TARGETS: Record<string, { id: string; label: string }> = {
+  callsign: { id: "callsign", label: "Callsign" },
+  name: { id: "name", label: "Name" },
+  qth: { id: "qth", label: "QTH" },
+  rstSent: { id: "rstSent", label: "RST sent" },
+  rstRcvd: { id: "rstRcvd", label: "RST rcvd" },
+  startTime: { id: "startTime", label: "Start (UTC)" },
+  endTime: { id: "endTime", label: "End (UTC)" },
+  freqHz: { id: "freq", label: "Frequency" },
+  band: { id: "band", label: "Band" },
+  mode: { id: "mode", label: "Mode" },
+  sig: { id: "sig", label: "Their activity" },
+  sigInfo: { id: "sigInfo", label: "Their references" },
+  sigRefs: { id: "sigInfo", label: "Their references" },
+  gridSquare: { id: "grid", label: "Grid square" },
+  state: { id: "state", label: "State" },
+  dxcc: { id: "dxcc", label: "DXCC" },
+  cqZone: { id: "cqZone", label: "CQ zone" },
+  continent: { id: "continent", label: "Continent" },
+  iota: { id: "iota", label: "IOTA" },
+  mySig: { id: "mySig", label: "My activity" },
+  mySigInfo: { id: "mySigInfo", label: "My reference" },
+  myGridSquare: { id: "myGridSquare", label: "My grid" },
+  stationId: { id: "stationId", label: "My station" },
+  operatorId: { id: "operatorId", label: "Operator" },
+  qslSent: { id: "qslSent", label: "Paper card sent" },
+  qslRcvd: { id: "qslRcvd", label: "Paper card received" },
+  notes: { id: "notes", label: "Notes" },
+};
+
+function focusField(id: string): void {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.scrollIntoView({ block: "center" });
+  el.focus({ preventScroll: true });
+}
+
+// Field grids query the FORM's width, not the viewport's: the same form is full-width on
+// /qsos/new and two-thirds of the page on a contact. Two columns on a phone, four from a
+// 36rem form, and the time row goes to eight from 72rem.
+const GRID = "grid grid-cols-2 gap-x-3 gap-y-4 @xl:grid-cols-4 @xl:gap-x-4";
+
+function Group({
+  id,
+  title,
+  className,
+  children,
+}: {
+  id: string;
+  title: string;
+  className?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div role="group" aria-labelledby={id} className={cn("min-w-0", className)}>
+      <h3 id={id} className="mb-3 text-base text-fg-muted">
+        {title}
+      </h3>
+      {children}
+    </div>
+  );
+}
 
 export interface QsoFormProps {
   values: QsoFormValues;
@@ -756,24 +833,17 @@ export interface QsoFormProps {
   /** Editing an existing QSO — enables the QSL/confirmation panel. */
   qsoId?: string;
   /**
-   * Where the emailed card went, and when.
-   *
-   * Read-only, from the QslEmail row rather than the QSO: the flag says a card was
-   * emailed, this says to whom — which is the question actually asked when a reply
-   * or a bounce arrives.
+   * Where the emailed card went, and when. From the QslEmail row rather than the QSO: the
+   * flag says a card was emailed, this says to whom.
    */
   emailedTo?: string | null;
   emailedAt?: string | null;
+  /** Rendered in the submit row, after the submit button. */
   secondaryAction?: React.ReactNode;
   /**
-   * Rendered directly under the submit row.
-   *
-   * Exists for the network-failure notice and its Retry button. The banner this form
-   * already renders sits at the TOP of twenty-one fields, and on a phone the operator
-   * has scrolled well past it by the time they tap Log QSO — so the one place a failure
-   * is certain to be seen is beside the button that just failed. The wording lives in
-   * the page rather than here, because only the page knows whether the draft was
-   * actually written.
+   * Rendered directly above the submit row — the network-failure notice and its Retry.
+   * Beside the button that failed is the one place a phone user is certain to see it. The
+   * wording lives in the page, because only the page knows whether the draft was written.
    */
   submitFooter?: React.ReactNode;
   /**
@@ -916,653 +986,629 @@ export function QsoForm({
     await Promise.all([checkDupe(), lookupDxcc()]);
   }
 
+  const problems = error?.details
+    ? Object.entries(error.details).filter(([, msgs]) => msgs && msgs.length > 0)
+    : [];
+  const startErrors = fieldErrors("startTime");
+  const refErrors = [...(fieldErrors("sigInfo") ?? []), ...(fieldErrors("sigRefs") ?? [])];
+
   return (
     <form
       onSubmit={(e) => {
         e.preventDefault();
         onSubmit();
       }}
-      className="flex flex-col gap-5"
+      className="@container"
     >
-      {error && !error.details && <ErrorBanner>{error.message}</ErrorBanner>}
+      <div className="grid gap-x-6 gap-y-7 @6xl:grid-cols-3">
+        {/* `disabled` on a fieldset cascades to every control inside it, which is
+            why this wraps the whole form rather than each input. */}
+        <fieldset disabled={readOnly} className="contents">
+          <Group id="qso-contact" title="Contact" className="@6xl:col-span-2">
+            <div className={GRID}>
+              <Field
+                label="Callsign"
+                htmlFor="callsign"
+                required
+                errors={fieldErrors("callsign")}
+                className="col-span-2 @xl:col-span-1"
+              >
+                <Input
+                  id="callsign"
+                  value={values.callsign}
+                  onChange={(e) => set("callsign", e.target.value.toUpperCase())}
+                  onBlur={() => void onCallsignBlur()}
+                  placeholder="W1AW"
+                  autoComplete="off"
+                  autoCapitalize="characters"
+                  spellCheck={false}
+                  className="font-display text-lg tracking-wide"
+                />
+              </Field>
 
-      {/* `disabled` on a fieldset cascades to every control inside it, which is
-          why this wraps the whole form rather than each input. */}
-      <fieldset disabled={readOnly} className="contents">
+              <Field
+                label="Name"
+                htmlFor="name"
+                errors={fieldErrors("name")}
+                hint="Their name — what a QSL card opens with"
+                className="col-span-2 @xl:col-span-1"
+              >
+                <Input
+                  id="name"
+                  value={values.name}
+                  onChange={(e) => set("name", e.target.value)}
+                  placeholder="Matt"
+                  autoComplete="off"
+                />
+              </Field>
 
-      {/* ---- who / where ---- */}
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <Field
-          label="Callsign"
-          htmlFor="callsign"
-          required
-          errors={fieldErrors("callsign")}
-        >
-          <Input
-            id="callsign"
-            value={values.callsign}
-            onChange={(e) => set("callsign", e.target.value.toUpperCase())}
-            onBlur={() => void onCallsignBlur()}
-            placeholder="W1AW"
-            autoComplete="off"
-            autoCapitalize="characters"
-            spellCheck={false}
-            className="font-display text-lg tracking-wide"
-            aria-invalid={Boolean(fieldErrors("callsign"))}
-          />
-        </Field>
+              <Field
+                label="QTH"
+                htmlFor="qth"
+                errors={fieldErrors("qth")}
+                hint="Where they said they were, in their words"
+                className="col-span-2"
+              >
+                <Input
+                  id="qth"
+                  value={values.qth}
+                  onChange={(e) => set("qth", e.target.value)}
+                  placeholder="Porter County, Indiana"
+                  autoComplete="off"
+                />
+              </Field>
+            </div>
 
-        <Field
-          label="Frequency (MHz)"
-          htmlFor="freq"
-          required
-          errors={fieldErrors("freqHz")}
-          hint={derivedBand ? `→ ${derivedBand}` : "e.g. 14.074"}
-        >
-          <Input
-            id="freq"
-            value={values.freqMHz}
-            onChange={(e) => set("freqMHz", e.target.value)}
-            placeholder="14.074"
-            inputMode="decimal"
-            className="tnum"
-            aria-invalid={Boolean(fieldErrors("freqHz"))}
-          />
-        </Field>
+            {dupe?.duplicate && dupe.previous && (
+              <Notice tone="warn" role="status" className="mt-3">
+                <Badge tone="warn">Dupe</Badge>
+                {/* Two findings, worded differently on purpose: a repeat inside this
+                    activation does not count again; a contact from 2024 is only a note. */}
+                <span>
+                  {dupe.scope === "session"
+                    ? `Already worked at this activation on ${values.band} ${values.mode} at ${formatUtc(dupe.previous.startTime)} — it will not count again, but logging it is fine.`
+                    : `Already worked on ${values.band} ${values.mode} at ${formatUtc(dupe.previous.startTime)} — logging anyway is fine.`}
+                </span>
+              </Notice>
+            )}
+          </Group>
 
-        <Field label="Band" htmlFor="band" required errors={fieldErrors("band")}>
-          <Select
-            id="band"
-            value={values.band}
-            onChange={(e) => set("band", e.target.value)}
-            aria-invalid={Boolean(fieldErrors("band"))}
+          <Group id="qso-reports" title="Reports">
+            <div className={cn(GRID, "@6xl:grid-cols-2")}>
+              <Field label="RST sent" htmlFor="rstSent" errors={fieldErrors("rstSent")}>
+                <Input
+                  id="rstSent"
+                  value={values.rstSent}
+                  onChange={(e) => set("rstSent", e.target.value)}
+                  autoComplete="off"
+                  className="tnum"
+                />
+              </Field>
+              <Field label="RST rcvd" htmlFor="rstRcvd" errors={fieldErrors("rstRcvd")}>
+                <Input
+                  id="rstRcvd"
+                  value={values.rstRcvd}
+                  onChange={(e) => set("rstRcvd", e.target.value)}
+                  autoComplete="off"
+                  className="tnum"
+                />
+              </Field>
+            </div>
+          </Group>
+
+          <Group id="qso-time" title="Time & frequency" className="@6xl:col-span-3">
+            <div className={cn(GRID, "@6xl:grid-cols-8")}>
+              <Field
+                label="Start (UTC)"
+                htmlFor="startTime"
+                required
+                errors={startErrors}
+                className="col-span-2"
+              >
+                {/* Field describes its direct child, which here is the row, so the input
+                    is pointed at the error itself. `min-w-0 flex-1` / `shrink-0` keep the
+                    Now button whole at every width (1.219.0). */}
+                <div className="flex gap-1.5">
+                  <Input
+                    id="startTime"
+                    type="datetime-local"
+                    value={values.startTime}
+                    onChange={(e) => set("startTime", e.target.value)}
+                    className="tnum min-w-0 flex-1"
+                    aria-invalid={Boolean(startErrors)}
+                    aria-describedby={startErrors ? "startTime-error" : undefined}
+                  />
+                  <Button className="shrink-0" onClick={() => set("startTime", utcNowInputValue())}>
+                    Now
+                  </Button>
+                </div>
+              </Field>
+
+              <Field
+                label="End (UTC)"
+                htmlFor="endTime"
+                errors={fieldErrors("endTime")}
+                hint="Optional"
+                className="col-span-2"
+              >
+                <Input
+                  id="endTime"
+                  type="datetime-local"
+                  value={values.endTime}
+                  onChange={(e) => set("endTime", e.target.value)}
+                  className="tnum"
+                />
+              </Field>
+
+              <Field
+                label="Frequency (MHz)"
+                htmlFor="freq"
+                required
+                errors={fieldErrors("freqHz")}
+                hint={derivedBand ? `→ ${derivedBand}` : "e.g. 14.074"}
+                className="col-span-2"
+              >
+                <Input
+                  id="freq"
+                  value={values.freqMHz}
+                  onChange={(e) => set("freqMHz", e.target.value)}
+                  placeholder="14.074"
+                  inputMode="decimal"
+                  autoComplete="off"
+                  className="tnum"
+                />
+              </Field>
+
+              <Field label="Band" htmlFor="band" required errors={fieldErrors("band")}>
+                <Select id="band" value={values.band} onChange={(e) => set("band", e.target.value)}>
+                  <option value="">—</option>
+                  <optgroup label="Common">
+                    {COMMON_BANDS.map((b) => (
+                      <option key={b} value={b}>
+                        {b}
+                      </option>
+                    ))}
+                  </optgroup>
+                  <optgroup label="All bands">
+                    {BAND_NAMES.map((b) => (
+                      <option key={b} value={b}>
+                        {b}
+                      </option>
+                    ))}
+                  </optgroup>
+                </Select>
+              </Field>
+
+              <Field label="Mode" htmlFor="mode" required errors={fieldErrors("mode")}>
+                <Select
+                  id="mode"
+                  value={values.mode}
+                  onChange={(e) => {
+                    const mode = e.target.value;
+                    // Re-default the reports, but never overwrite something typed.
+                    const wasDefault =
+                      values.rstSent === defaultRst(values.mode) &&
+                      values.rstRcvd === defaultRst(values.mode);
+                    onChange({
+                      ...values,
+                      mode,
+                      ...(wasDefault && {
+                        rstSent: defaultRst(mode),
+                        rstRcvd: defaultRst(mode),
+                      }),
+                    });
+                  }}
+                >
+                  {LOGGABLE_MODES.map((m) => (
+                    <option key={m} value={m}>
+                      {m}
+                    </option>
+                  ))}
+                </Select>
+              </Field>
+            </div>
+          </Group>
+
+          {/* Their side and ours are stacked column for column — Their activity above My
+              activity, Their references above My reference, Grid above My grid — because
+              on a park-to-park contact all of them are set, and the pairs are most often
+              confused with each other. */}
+          <Group id="qso-location" title="Their location & awards" className="@6xl:col-span-3">
+            <div className={GRID}>
+              <Field
+                label="Their activity (SIG)"
+                htmlFor="sig"
+                errors={fieldErrors("sig")}
+                hint="POTA, SOTA, WWFF…"
+              >
+                <Input
+                  id="sig"
+                  value={values.sig}
+                  onChange={(e) => set("sig", e.target.value.toUpperCase())}
+                  placeholder="POTA"
+                  spellCheck={false}
+                />
+              </Field>
+
+              <Field
+                label="Their references (SIG_INFO)"
+                htmlFor="sigInfo"
+                errors={refErrors.length > 0 ? refErrors : undefined}
+                hint="Comma-separate several parks; the first is the one ADIF exports."
+              >
+                <Input
+                  id="sigInfo"
+                  value={values.sigInfo}
+                  onChange={(e) => set("sigInfo", e.target.value.toUpperCase())}
+                  placeholder="US-0765, US-2258"
+                  spellCheck={false}
+                  className="tnum"
+                />
+              </Field>
+
+              <Field
+                label="Grid square"
+                htmlFor="grid"
+                errors={fieldErrors("gridSquare")}
+                hint="Maidenhead, e.g. EN61"
+              >
+                <Input
+                  id="grid"
+                  value={values.gridSquare}
+                  onChange={(e) => set("gridSquare", e.target.value.toUpperCase())}
+                  className="tnum"
+                  spellCheck={false}
+                  autoComplete="off"
+                />
+              </Field>
+
+              <Field label="State" htmlFor="state" errors={fieldErrors("state")} hint="Needed for WAS">
+                <Input
+                  id="state"
+                  value={values.state}
+                  onChange={(e) => set("state", e.target.value.toUpperCase())}
+                  placeholder="IN"
+                  spellCheck={false}
+                  autoComplete="off"
+                />
+              </Field>
+
+              <Field
+                label="DXCC"
+                htmlFor="dxcc"
+                errors={fieldErrors("dxcc")}
+                hint={
+                  dxcc?.status === "found" && dxcc.match
+                    ? `${dxcc.match.name}${dxcc.match.continent ? ` · ${dxcc.match.continent}` : ""}${dxcc.match.deleted ? " · deleted entity" : ""}`
+                    : dxcc?.status === "no-data"
+                      ? "No DXCC data loaded — an admin can load cty.xml on the DXCC page"
+                      : dxcc?.status === "no-entity"
+                        ? "Maritime/aeronautical mobile — no entity applies"
+                        : dxcc?.status === "not-found"
+                          ? "No entity matches this callsign"
+                          : "Entity code, filled from the callsign"
+                }
+              >
+                <Input
+                  id="dxcc"
+                  value={values.dxcc}
+                  onChange={(e) => set("dxcc", e.target.value.replace(/[^\d]/g, ""))}
+                  inputMode="numeric"
+                  className="tnum"
+                />
+              </Field>
+
+              <Field label="CQ zone" htmlFor="cqZone" errors={fieldErrors("cqZone")} hint="Needed for WAZ">
+                <Input
+                  id="cqZone"
+                  value={values.cqZone}
+                  onChange={(e) => set("cqZone", e.target.value.replace(/[^\d]/g, ""))}
+                  inputMode="numeric"
+                  className="tnum"
+                />
+              </Field>
+
+              <Field
+                label="Continent"
+                htmlFor="continent"
+                errors={fieldErrors("continent")}
+                hint="Needed for WAC"
+              >
+                <Select
+                  id="continent"
+                  value={values.continent}
+                  onChange={(e) => set("continent", e.target.value)}
+                >
+                  <option value="">—</option>
+                  {["NA", "SA", "EU", "AF", "AS", "OC", "AN"].map((c) => (
+                    <option key={c} value={c}>
+                      {c}
+                    </option>
+                  ))}
+                </Select>
+              </Field>
+
+              <Field label="IOTA" htmlFor="iota" errors={fieldErrors("iota")} hint="e.g. NA-001">
+                <Input
+                  id="iota"
+                  value={values.iota}
+                  onChange={(e) => set("iota", e.target.value.toUpperCase())}
+                  placeholder="NA-001"
+                  spellCheck={false}
+                  className="tnum"
+                />
+              </Field>
+            </div>
+          </Group>
+
+          <Group id="qso-station" title="Your station" className="@6xl:col-span-3">
+            <div className={GRID}>
+              <Field
+                label="My activity (MY_SIG)"
+                htmlFor="mySig"
+                errors={fieldErrors("mySig")}
+                hint="The programme YOU are activating"
+              >
+                <Input
+                  id="mySig"
+                  value={values.mySig}
+                  onChange={(e) => set("mySig", e.target.value.toUpperCase())}
+                  placeholder="POTA"
+                  spellCheck={false}
+                />
+              </Field>
+
+              <Field
+                label="My reference (MY_SIG_INFO)"
+                htmlFor="mySigInfo"
+                errors={fieldErrors("mySigInfo")}
+                hint="The park YOU are in. Carries to the next contact — set it once."
+              >
+                <Input
+                  id="mySigInfo"
+                  value={values.mySigInfo}
+                  onChange={(e) => {
+                    const ref = e.target.value.toUpperCase();
+                    // The programme comes along free. A park number with MY_SIG empty is a
+                    // record POTA cannot read, and POTA is what a reference means here.
+                    onChange({
+                      ...values,
+                      mySigInfo: ref,
+                      mySig: values.mySig.trim() || (ref.trim() ? "POTA" : ""),
+                    });
+                  }}
+                  placeholder="US-4567"
+                  spellCheck={false}
+                  className="tnum"
+                />
+              </Field>
+
+              <Field
+                label="My grid"
+                htmlFor="myGridSquare"
+                errors={fieldErrors("myGridSquare")}
+                hint={
+                  station
+                    ? `Where YOU were. Blank exports the station's ${station.grid}.`
+                    : "Where YOU were. Blank exports the station's grid."
+                }
+              >
+                <Input
+                  id="myGridSquare"
+                  value={values.myGridSquare}
+                  onChange={(e) => set("myGridSquare", e.target.value.toUpperCase())}
+                  placeholder={station?.grid ?? "EN61"}
+                  spellCheck={false}
+                  className="tnum"
+                />
+              </Field>
+
+              <Field label="My station" htmlFor="stationId" required errors={fieldErrors("stationId")}>
+                <Select
+                  id="stationId"
+                  value={values.stationId}
+                  onChange={(e) =>
+                    // Changing station invalidates the selected operator.
+                    onChange({ ...values, stationId: e.target.value, operatorId: "" })
+                  }
+                >
+                  <option value="">—</option>
+                  {stations.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.callsign} ({s.grid})
+                    </option>
+                  ))}
+                </Select>
+              </Field>
+
+              <Field
+                label="Operator"
+                htmlFor="operatorId"
+                errors={fieldErrors("operatorId")}
+                hint={
+                  values.stationId && operators.length === 0
+                    ? "No operators on this station yet"
+                    : "Optional"
+                }
+              >
+                <Select
+                  id="operatorId"
+                  value={values.operatorId}
+                  onChange={(e) => set("operatorId", e.target.value)}
+                  disabled={!values.stationId || operators.length === 0}
+                >
+                  <option value="">—</option>
+                  {operators.map((o) => (
+                    <option key={o.id} value={o.id}>
+                      {o.callsign} — {o.name}
+                    </option>
+                  ))}
+                </Select>
+              </Field>
+            </div>
+          </Group>
+
+          <Group
+            id="qso-qsl"
+            title={qsoId ? "QSL & notes" : "Notes"}
+            className="@6xl:col-span-3"
           >
-            <option value="">—</option>
-            <optgroup label="Common">
-              {COMMON_BANDS.map((b) => (
-                <option key={b} value={b}>
-                  {b}
-                </option>
-              ))}
-            </optgroup>
-            <optgroup label="All bands">
-              {BAND_NAMES.map((b) => (
-                <option key={b} value={b}>
-                  {b}
-                </option>
-              ))}
-            </optgroup>
-          </Select>
-        </Field>
+            {/* QSL state is only meaningful once the contact exists. */}
+            {qsoId && (
+              <div className="mb-5 flex flex-col gap-4">
+                <div className={GRID}>
+                  <Field label="Paper card sent" htmlFor="qslSent" errors={fieldErrors("qslSent")}>
+                    <Select
+                      id="qslSent"
+                      value={values.qslSent}
+                      onChange={(e) => set("qslSent", e.target.value)}
+                    >
+                      {QSL_STATUSES.map((s) => (
+                        <option key={s} value={s}>
+                          {QSL_STATUS_LABEL[s]}
+                        </option>
+                      ))}
+                    </Select>
+                  </Field>
+                  <Field
+                    label="Paper card received"
+                    htmlFor="qslRcvd"
+                    errors={fieldErrors("qslRcvd")}
+                  >
+                    <Select
+                      id="qslRcvd"
+                      value={values.qslRcvd}
+                      onChange={(e) => set("qslRcvd", e.target.value)}
+                    >
+                      {QSL_STATUSES.map((s) => (
+                        <option key={s} value={s}>
+                          {QSL_STATUS_LABEL[s]}
+                        </option>
+                      ))}
+                    </Select>
+                  </Field>
+                </div>
 
-        <Field label="Mode" htmlFor="mode" required errors={fieldErrors("mode")}>
-          <Select
-            id="mode"
-            value={values.mode}
-            onChange={(e) => {
-              const mode = e.target.value;
-              // Re-default the reports, but never overwrite something typed.
-              const wasDefault =
-                values.rstSent === defaultRst(values.mode) &&
-                values.rstRcvd === defaultRst(values.mode);
-              onChange({
-                ...values,
-                mode,
-                ...(wasDefault && {
-                  rstSent: defaultRst(mode),
-                  rstRcvd: defaultRst(mode),
-                }),
-              });
-            }}
-          >
-            {LOGGABLE_MODES.map((m) => (
-              <option key={m} value={m}>
-                {m}
-              </option>
-            ))}
-          </Select>
-        </Field>
-      </div>
+                {/* One question — who has this contact and who confirmed it — as one grid.
+                    Each box is named in full ("LoTW received") for a screen reader; the
+                    column headings are for the eye. */}
+                <div className="grid w-fit grid-cols-[auto_auto_auto] items-center gap-x-6 gap-y-1">
+                  <span aria-hidden="true" />
+                  <span aria-hidden="true" className="text-xs text-fg-subtle">
+                    Sent
+                  </span>
+                  <span aria-hidden="true" className="text-xs text-fg-subtle">
+                    Received
+                  </span>
+                  {(
+                    [
+                      ["LoTW", "lotwSent", "lotwRcvd"],
+                      ["eQSL", "eqslSent", "eqslRcvd"],
+                      ["QRZ", "qrzSent", "qrzRcvd"],
+                    ] as const
+                  ).map(([label, sentKey, rcvdKey]) => (
+                    <Fragment key={label}>
+                      <span className="text-sm text-fg">{label}</span>
+                      <Checkbox
+                        id={sentKey}
+                        srLabel={`${label} sent`}
+                        checked={values[sentKey]}
+                        onChange={(v) => set(sentKey, v)}
+                      />
+                      <Checkbox
+                        id={rcvdKey}
+                        srLabel={`${label} received`}
+                        checked={values[rcvdKey]}
+                        onChange={(v) => set(rcvdKey, v)}
+                      />
+                    </Fragment>
+                  ))}
+                  {/* Its own row, not part of "paper card sent": someone who mails you a
+                      card and wants one back still needs a card. */}
+                  <span className="text-sm text-fg">Emailed card</span>
+                  <Checkbox
+                    id="emailQslSent"
+                    srLabel="Card image emailed"
+                    checked={values.emailQslSent}
+                    onChange={(v) => set("emailQslSent", v)}
+                  />
+                  <ResendQslButton qsoId={qsoId} callsign={values.callsign} variant="button" />
+                </div>
+                <p className="text-sm text-fg-subtle">
+                  {emailedTo
+                    ? `Card image sent to ${emailedTo}${emailedAt ? ` on ${emailedAt}` : ""}.`
+                    : "Emailed card is a card image sent by email, not a paper QSL."}
+                </p>
+              </div>
+            )}
 
-      {dupe?.duplicate && dupe.previous && (
-        <div className="flex items-center gap-2 text-sm border border-warn/40 bg-warn/10 text-warn px-3 py-2 rounded-sm">
-          <Badge tone="warn">Dupe</Badge>
-          {/* Two different findings, worded differently on purpose. A repeat inside this
-              activation is a caller who does not count again and is worth a second's
-              pause; a contact from 2024 is a note, and dressing it up in the same words
-              is how the badge became something to ignore. */}
-          <span>
-            {dupe.scope === "session"
-              ? `Already worked at this activation on ${values.band} ${values.mode} at ${formatUtc(dupe.previous.startTime)} — it will not count again, but logging it is fine.`
-              : `Already worked on ${values.band} ${values.mode} at ${formatUtc(dupe.previous.startTime)} — logging anyway is fine.`}
-          </span>
-        </div>
-      )}
+            <Field label="Notes" htmlFor="notes" errors={fieldErrors("notes")}>
+              <Textarea
+                id="notes"
+                value={values.notes}
+                onChange={(e) => set("notes", e.target.value)}
+                rows={3}
+              />
+            </Field>
+          </Group>
+        </fieldset>
 
-      {/* ---- when / reports ---- */}
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <Field
-          label="Start (UTC)"
-          htmlFor="startTime"
-          required
-          errors={fieldErrors("startTime")}
-        >
-          <div className="flex gap-1.5">
-            <Input
-              id="startTime"
-              type="datetime-local"
-              value={values.startTime}
-              onChange={(e) => set("startTime", e.target.value)}
-              className="tnum min-w-0 flex-1"
-              aria-invalid={Boolean(fieldErrors("startTime"))}
-            />
-            <Button className="shrink-0" onClick={() => set("startTime", utcNowInputValue())}>
-              Now
-            </Button>
+        {readOnly ? (
+          <p className="text-sm text-fg-subtle @6xl:col-span-3">
+            Your account is read-only. Ask an admin for the OPERATOR role to log or
+            edit contacts.
+          </p>
+        ) : (
+          <div className="flex flex-col gap-3 border-t border-line pt-4 @6xl:col-span-3">
+            {/* Above the button rather than at the top of the form: the top is scrolled
+                out of sight on a phone by the time Log is tapped. */}
+            {error && (
+              <ErrorBanner>
+                {problems.length > 0 ? (
+                  <>
+                    <span className="font-medium">
+                      Not saved —{" "}
+                      {problems.length === 1 ? "one field needs" : `${problems.length} fields need`}{" "}
+                      fixing:
+                    </span>
+                    <ul className="mt-1 flex flex-col gap-0.5">
+                      {problems.map(([key, msgs]) => {
+                        const target = FIELD_TARGETS[key];
+                        return (
+                          <li key={key}>
+                            {target ? (
+                              <Button
+                                variant="link"
+                                onClick={() => focusField(target.id)}
+                                className="tap-inline inline font-medium text-current underline"
+                              >
+                                {target.label}
+                              </Button>
+                            ) : (
+                              <span className="font-medium">{key}</span>
+                            )}
+                            {": "}
+                            {msgs.join(". ")}
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </>
+                ) : (
+                  error.message
+                )}
+              </ErrorBanner>
+            )}
+            {submitFooter}
+            <div className="flex flex-wrap items-center gap-2">
+              <Button type="submit" variant="primary" loading={submitting}>
+                {submitLabel}
+              </Button>
+              {secondaryAction}
+            </div>
           </div>
-        </Field>
-
-        <Field
-          label="End (UTC)"
-          htmlFor="endTime"
-          errors={fieldErrors("endTime")}
-          hint="Optional"
-        >
-          <Input
-            id="endTime"
-            type="datetime-local"
-            value={values.endTime}
-            onChange={(e) => set("endTime", e.target.value)}
-            className="tnum"
-            aria-invalid={Boolean(fieldErrors("endTime"))}
-          />
-        </Field>
-
-        <Field label="RST sent" htmlFor="rstSent" errors={fieldErrors("rstSent")}>
-          <Input
-            id="rstSent"
-            value={values.rstSent}
-            onChange={(e) => set("rstSent", e.target.value)}
-            className="tnum"
-          />
-        </Field>
-
-        <Field label="RST rcvd" htmlFor="rstRcvd" errors={fieldErrors("rstRcvd")}>
-          <Input
-            id="rstRcvd"
-            value={values.rstRcvd}
-            onChange={(e) => set("rstRcvd", e.target.value)}
-            className="tnum"
-          />
-        </Field>
+        )}
       </div>
-
-      {/* ---- location / attribution ---- */}
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <Field
-          label="Name"
-          htmlFor="name"
-          errors={fieldErrors("name")}
-          hint="Their name — what a QSL card opens with"
-        >
-          <Input
-            id="name"
-            value={values.name}
-            onChange={(e) => set("name", e.target.value)}
-            placeholder="Matt"
-            autoComplete="off"
-            aria-invalid={Boolean(fieldErrors("name"))}
-          />
-        </Field>
-
-        <Field
-          label="QTH"
-          htmlFor="qth"
-          errors={fieldErrors("qth")}
-          hint="Where they said they were, in their words"
-        >
-          <Input
-            id="qth"
-            value={values.qth}
-            onChange={(e) => set("qth", e.target.value)}
-            placeholder="Porter County, Indiana"
-            autoComplete="off"
-            aria-invalid={Boolean(fieldErrors("qth"))}
-          />
-        </Field>
-
-        <Field
-          label="Grid square"
-          htmlFor="grid"
-          errors={fieldErrors("gridSquare")}
-          hint="Maidenhead, e.g. EN61"
-        >
-          <Input
-            id="grid"
-            value={values.gridSquare}
-            onChange={(e) => set("gridSquare", e.target.value.toUpperCase())}
-            className="tnum"
-            spellCheck={false}
-            aria-invalid={Boolean(fieldErrors("gridSquare"))}
-          />
-        </Field>
-
-        <Field
-          label="DXCC"
-          htmlFor="dxcc"
-          errors={fieldErrors("dxcc")}
-          hint={
-            dxcc?.status === "found" && dxcc.match
-              ? `${dxcc.match.name}${dxcc.match.continent ? ` · ${dxcc.match.continent}` : ""}${dxcc.match.deleted ? " · deleted entity" : ""}`
-              : dxcc?.status === "no-data"
-                ? "No DXCC data loaded — an admin can load cty.xml on the DXCC page"
-                : dxcc?.status === "no-entity"
-                  ? "Maritime/aeronautical mobile — no entity applies"
-                  : dxcc?.status === "not-found"
-                    ? "No entity matches this callsign"
-                    : "Entity code — resolved from the callsign"
-          }
-        >
-          <Input
-            id="dxcc"
-            value={values.dxcc}
-            onChange={(e) => set("dxcc", e.target.value.replace(/[^\d]/g, ""))}
-            inputMode="numeric"
-            className="tnum"
-            aria-invalid={Boolean(fieldErrors("dxcc"))}
-          />
-        </Field>
-
-        <Field
-          label="State"
-          htmlFor="state"
-          errors={fieldErrors("state")}
-          hint="ADIF STATE — needed for WAS"
-        >
-          <Input
-            id="state"
-            value={values.state}
-            onChange={(e) => set("state", e.target.value.toUpperCase())}
-            placeholder="IN"
-            spellCheck={false}
-            className="tnum"
-            aria-invalid={Boolean(fieldErrors("state"))}
-          />
-        </Field>
-
-        <Field
-          label="CQ zone"
-          htmlFor="cqZone"
-          errors={fieldErrors("cqZone")}
-          hint="Needed for WAZ"
-        >
-          <Input
-            id="cqZone"
-            value={values.cqZone}
-            onChange={(e) => set("cqZone", e.target.value.replace(/[^\d]/g, ""))}
-            inputMode="numeric"
-            className="tnum"
-            aria-invalid={Boolean(fieldErrors("cqZone"))}
-          />
-        </Field>
-
-        <Field
-          label="Continent"
-          htmlFor="continent"
-          errors={fieldErrors("continent")}
-          hint="Needed for WAC"
-        >
-          <Select
-            id="continent"
-            value={values.continent}
-            onChange={(e) => set("continent", e.target.value)}
-          >
-            <option value="">—</option>
-            {["NA", "SA", "EU", "AF", "AS", "OC", "AN"].map((c) => (
-              <option key={c} value={c}>
-                {c}
-              </option>
-            ))}
-          </Select>
-        </Field>
-
-        <Field
-          label="IOTA"
-          htmlFor="iota"
-          errors={fieldErrors("iota")}
-          hint="e.g. NA-001"
-        >
-          <Input
-            id="iota"
-            value={values.iota}
-            onChange={(e) => set("iota", e.target.value.toUpperCase())}
-            placeholder="NA-001"
-            spellCheck={false}
-            className="tnum"
-            aria-invalid={Boolean(fieldErrors("iota"))}
-          />
-        </Field>
-
-        <Field
-          label="Activity (SIG)"
-          htmlFor="sig"
-          errors={fieldErrors("sig")}
-          hint="POTA, SOTA, WWFF…"
-        >
-          <Input
-            id="sig"
-            value={values.sig}
-            onChange={(e) => set("sig", e.target.value.toUpperCase())}
-            placeholder="POTA"
-            spellCheck={false}
-            aria-invalid={Boolean(fieldErrors("sig"))}
-          />
-        </Field>
-
-        <Field
-          label="References (SIG_INFO)"
-          htmlFor="sigInfo"
-          errors={fieldErrors("sigInfo")}
-          hint="Park, summit or reserve. Several are allowed — a contact can be two parks at once. Comma-separated; the first is the one ADIF exports."
-        >
-          <Input
-            id="sigInfo"
-            value={values.sigInfo}
-            onChange={(e) => set("sigInfo", e.target.value.toUpperCase())}
-            placeholder="US-0765, US-2258"
-            spellCheck={false}
-            className="tnum"
-            aria-invalid={Boolean(fieldErrors("sigInfo"))}
-          />
-        </Field>
-
-        {/* ---- OUR activation, the mirror of the two fields above ----
-
-            The two pairs sit next to each other because on a park-to-park contact all
-            four are set and true at once, and because the thing they are most often
-            confused for is each other. The labels say whose park each one is rather
-            than repeating the ADIF tag, which is what the hints are for. */}
-        <Field
-          label="My activity (MY_SIG)"
-          htmlFor="mySig"
-          errors={fieldErrors("mySig")}
-          hint="The programme YOU are activating"
-        >
-          <Input
-            id="mySig"
-            value={values.mySig}
-            onChange={(e) => set("mySig", e.target.value.toUpperCase())}
-            placeholder="POTA"
-            spellCheck={false}
-            aria-invalid={Boolean(fieldErrors("mySig"))}
-          />
-        </Field>
-
-        <Field
-          label="My reference (MY_SIG_INFO)"
-          htmlFor="mySigInfo"
-          errors={fieldErrors("mySigInfo")}
-          hint="The park YOU are in. Carries to the next contact — set it once for the activation."
-        >
-          <Input
-            id="mySigInfo"
-            value={values.mySigInfo}
-            onChange={(e) => {
-              const ref = e.target.value.toUpperCase();
-              // The programme comes along free. An operator who types a park number and
-              // leaves MY_SIG empty has produced a record POTA cannot read, and POTA is
-              // what every reference in this application means unless told otherwise.
-              onChange({
-                ...values,
-                mySigInfo: ref,
-                mySig: values.mySig.trim() || (ref.trim() ? "POTA" : ""),
-              });
-            }}
-            placeholder="US-4567"
-            spellCheck={false}
-            className="tnum"
-            aria-invalid={Boolean(fieldErrors("mySigInfo"))}
-          />
-        </Field>
-
-        <Field
-          label="My grid"
-          htmlFor="myGridSquare"
-          errors={fieldErrors("myGridSquare")}
-          hint={
-            station
-              ? `Where YOU were. Blank exports the station's ${station.grid}.`
-              : "Where YOU were. Blank exports the station's grid."
-          }
-        >
-          <Input
-            id="myGridSquare"
-            value={values.myGridSquare}
-            onChange={(e) => set("myGridSquare", e.target.value.toUpperCase())}
-            placeholder={station?.grid ?? "EN61"}
-            spellCheck={false}
-            className="tnum"
-            aria-invalid={Boolean(fieldErrors("myGridSquare"))}
-          />
-        </Field>
-
-        <Field
-          label="My station"
-          htmlFor="stationId"
-          required
-          errors={fieldErrors("stationId")}
-        >
-          <Select
-            id="stationId"
-            value={values.stationId}
-            onChange={(e) =>
-              // Changing station invalidates the selected operator.
-              onChange({ ...values, stationId: e.target.value, operatorId: "" })
-            }
-            aria-invalid={Boolean(fieldErrors("stationId"))}
-          >
-            <option value="">—</option>
-            {stations.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.callsign} ({s.grid})
-              </option>
-            ))}
-          </Select>
-        </Field>
-
-        <Field
-          label="Operator"
-          htmlFor="operatorId"
-          errors={fieldErrors("operatorId")}
-          hint={
-            values.stationId && operators.length === 0
-              ? "No operators on this station yet"
-              : "Optional"
-          }
-        >
-          <Select
-            id="operatorId"
-            value={values.operatorId}
-            onChange={(e) => set("operatorId", e.target.value)}
-            disabled={!values.stationId || operators.length === 0}
-          >
-            <option value="">—</option>
-            {operators.map((o) => (
-              <option key={o.id} value={o.id}>
-                {o.callsign} — {o.name}
-              </option>
-            ))}
-          </Select>
-        </Field>
-      </div>
-
-      {/* ---- QSL state: only meaningful once the QSO exists ---- */}
-      {qsoId && (
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4 border-t border-line pt-4">
-          <Field label="QSL sent" htmlFor="qslSent">
-            <Select
-              id="qslSent"
-              value={values.qslSent}
-              onChange={(e) => set("qslSent", e.target.value)}
-            >
-              {QSL_STATUSES.map((s) => (
-                <option key={s} value={s}>
-                  {s}
-                </option>
-              ))}
-            </Select>
-          </Field>
-
-          <Field label="QSL received" htmlFor="qslRcvd">
-            <Select
-              id="qslRcvd"
-              value={values.qslRcvd}
-              onChange={(e) => set("qslRcvd", e.target.value)}
-            >
-              {QSL_STATUSES.map((s) => (
-                <option key={s} value={s}>
-                  {s}
-                </option>
-              ))}
-            </Select>
-          </Field>
-
-          <Field label="LoTW" htmlFor="lotwSent">
-            <div className="flex items-center gap-4 h-[34px]">
-              <Checkbox
-                id="lotwSent"
-                label="Sent"
-                checked={values.lotwSent}
-                onChange={(v) => set("lotwSent", v)}
-              />
-              <Checkbox
-                id="lotwRcvd"
-                label="Rcvd"
-                checked={values.lotwRcvd}
-                onChange={(v) => set("lotwRcvd", v)}
-              />
-            </div>
-          </Field>
-
-          {/* QRZ sits with LoTW and eQSL because the operator thinks of them as one
-              question — who has this contact and who confirmed it. It was missing
-              entirely, so nothing in the log recorded that QRZ already had a contact and
-              every upload run offered the whole log again. */}
-          <Field label="QRZ" htmlFor="qrzSent">
-            <div className="flex items-center gap-4 h-[34px]">
-              <Checkbox
-                id="qrzSent"
-                label="Sent"
-                checked={values.qrzSent}
-                onChange={(v) => set("qrzSent", v)}
-              />
-              <Checkbox
-                id="qrzRcvd"
-                label="Rcvd"
-                checked={values.qrzRcvd}
-                onChange={(v) => set("qrzRcvd", v)}
-              />
-            </div>
-          </Field>
-
-          <Field label="eQSL" htmlFor="eqslSent">
-            <div className="flex items-center gap-4 h-[34px]">
-              <Checkbox
-                id="eqslSent"
-                label="Sent"
-                checked={values.eqslSent}
-                onChange={(v) => set("eqslSent", v)}
-              />
-              <Checkbox
-                id="eqslRcvd"
-                label="Rcvd"
-                checked={values.eqslRcvd}
-                onChange={(v) => set("eqslRcvd", v)}
-              />
-            </div>
-          </Field>
-
-          {/* Emailed card image — deliberately its own field, not part of "QSL
-              sent". Someone who mails you a card and wants one back still needs a
-              card, and folding the two together hides that. */}
-          <Field
-            label="Emailed card"
-            htmlFor="emailQslSent"
-            hint={
-              emailedTo
-                ? `Sent to ${emailedTo}${emailedAt ? ` on ${emailedAt}` : ""}`
-                : "A card image emailed to them. Not a paper QSL."
-            }
-          >
-            <div className="flex items-center gap-4 min-h-[34px] flex-wrap">
-              <Checkbox
-                id="emailQslSent"
-                label="Sent"
-                checked={values.emailQslSent}
-                onChange={(v) => set("emailQslSent", v)}
-              />
-              {/* Next to the checkbox that records the send, which is where somebody
-                  looking at "already emailed" and wanting it emailed again will look. */}
-              {qsoId ? (
-                <ResendQslButton qsoId={qsoId} callsign={values.callsign} variant="button" />
-              ) : null}
-            </div>
-          </Field>
-        </div>
-      )}
-
-      <Field label="Notes" htmlFor="notes" errors={fieldErrors("notes")}>
-        <Textarea
-          id="notes"
-          value={values.notes}
-          onChange={(e) => set("notes", e.target.value)}
-          rows={3}
-        />
-      </Field>
-
-      </fieldset>
-
-      {readOnly ? (
-        <p className="text-sm text-fg-subtle">
-          Your account is read-only. Ask an admin for the OPERATOR role to log or
-          edit contacts.
-        </p>
-      ) : (
-        <div className="flex flex-col gap-2">
-          <div className="flex items-center gap-2">
-            <Button type="submit" variant="primary" disabled={submitting}>
-              {submitting ? "Saving…" : submitLabel}
-            </Button>
-            {secondaryAction}
-          </div>
-          {submitFooter}
-        </div>
-      )}
     </form>
-  );
-}
-
-function Checkbox({
-  id,
-  label,
-  checked,
-  onChange,
-}: {
-  id: string;
-  label: string;
-  checked: boolean;
-  onChange: (v: boolean) => void;
-}) {
-  return (
-    <label htmlFor={id} className="flex items-center gap-1.5 text-sm text-fg-muted">
-      <input
-        id={id}
-        type="checkbox"
-        checked={checked}
-        onChange={(e) => onChange(e.target.checked)}
-        className="accent-accent size-3.5"
-      />
-      {label}
-    </label>
   );
 }

@@ -50,6 +50,10 @@ function build(): string {
     "Three keys can never be settings, because they are needed before the database can",
     "be read: `DATABASE_URL`, `SETTINGS_KEY` and `PORT`.",
     "",
+    "Settings marked *(advanced)* have a working default and are rarely changed. The page",
+    "keeps them under their group's **Advanced** disclosure rather than showing them",
+    "alongside the ones every station sets.",
+    "",
   ];
 
   // Groups in registry order; the page renders them the same way.
@@ -62,10 +66,14 @@ function build(): string {
 
   out.push("## Contents", "");
   for (const g of SETTING_GROUPS) {
-    const n = byGroup.get(g.id)?.length ?? 0;
+    const list = byGroup.get(g.id) ?? [];
+    const n = list.length;
     if (n === 0) continue;
+    const adv = list.filter((s) => s.advanced).length;
     const anchor = g.title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
-    out.push(`- [${g.title}](#${anchor}) — ${n} setting${n === 1 ? "" : "s"}`);
+    out.push(
+      `- [${g.title}](#${anchor}) — ${n} setting${n === 1 ? "" : "s"}${adv > 0 ? `, ${adv} advanced` : ""}`,
+    );
   }
   out.push("");
 
@@ -86,8 +94,9 @@ function build(): string {
             ? `from \`${s.envFallback}\``
             : "—";
       const help = s.help ? escapeCell(s.help) : "";
+      const label = `${escapeCell(s.label)}${s.advanced ? " *(advanced)*" : ""}`;
       out.push(
-        `| ${escapeCell(s.label)} | \`${s.key}\` | ${TYPE_LABEL[s.type] ?? s.type} | ${def} | ${help} |`,
+        `| ${label} | \`${s.key}\` | ${TYPE_LABEL[s.type] ?? s.type} | ${def} | ${help} |`,
       );
     }
     out.push("");

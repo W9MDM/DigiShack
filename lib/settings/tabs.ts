@@ -1,22 +1,27 @@
-// How the 126 settings are grouped into tabs.
+// How the settings are grouped into categories, and the tool pages that sit beside them.
 //
-// Twenty-one groups in one scrolling column was not navigable — finding the transmit
-// gate meant scrolling past every log-hosting service. Tabs fix that, but they
-// introduce a failure the flat list could not have: a group that belongs to no tab
-// simply disappears, and a setting nobody can find is worse than one buried at the
-// bottom of a long page.
+// A category is what the settings sidebar lists and what `?tab=` in a link names. The ids
+// are URLs — bookmarks, support answers and links in other pages carry them — so an id is
+// never renamed: when "Logbooks" was split, its id stayed with the half that kept the
+// logbook services and the other half got a new one.
 //
-// So the last tab is a catch-all, and `settingsTabFor` never returns undefined. Adding
-// a group to the registry without touching this file puts it under "Other" — visible,
-// slightly untidy, and impossible to lose. `scripts/check-settings-tabs.ts` asserts
-// every registered group lands somewhere.
+// Grouping introduces a failure a flat list could not have: a group that belongs to no
+// category simply disappears, and a setting nobody can find is worse than one buried at the
+// bottom of a long page. So the last category is a catch-all and `settingsTabFor` never
+// returns undefined. Adding a group to the registry without touching this file puts it
+// under "System" — visible, slightly untidy, and impossible to lose.
+// `scripts/check-settings-tabs.ts` asserts every registered group lands somewhere.
+//
+// Client-safe on purpose: the sidebar on every admin page imports this.
 
 export interface SettingsTab {
   id: string;
   label: string;
-  /** Setting group ids shown under this tab, in order. */
+  /** One line under the category heading, saying what lives here. */
+  description: string;
+  /** Setting group ids shown under this category, in order. */
   groups: string[];
-  /** Everything not claimed by another tab. Exactly one tab may set this. */
+  /** Everything not claimed by another category. Exactly one may set this. */
   catchAll?: boolean;
 }
 
@@ -24,49 +29,67 @@ export const SETTINGS_TABS: SettingsTab[] = [
   {
     id: "station",
     label: "Station",
+    description: "Your licence class, and how this installation behaves.",
     groups: ["general"],
   },
   {
     // How DigiShack reaches a radio: the hardware backends and the decode plumbing. This
     // is where someone sets up a new rig, so it holds the connection groups only — the
-    // per-mode decode settings moved to "Modes" below. Reported as "all the mode settings
+    // per-mode decode settings are under "Modes". Reported as "all the mode settings
     // should be in their own modes tab, not the radio setup tab".
     id: "radio",
     label: "Radio",
+    description:
+      "How DigiShack reaches the radio — FlexRadio, Icom or an external decoder — and the bridge service that owns it.",
     groups: ["flex", "icom", "wsjtx", "bridge"],
   },
   {
-    // The per-mode decode settings. "digital" carries FT8/FT4/FT2 (and the decode-source
-    // selector and clock settings that live in the same group); the rest are one group
-    // per mode.
+    // "digital" carries FT8/FT4/FT2 (and the decode-source selector and clock settings that
+    // live in the same group); the rest are one group per mode.
     id: "modes",
     label: "Modes",
+    description: "Decoding and sending, mode by mode: FT8 and the clock, RTTY, CW, PSK31, Olivia and JS8.",
     groups: ["digital", "rtty", "cw", "psk31", "olivia", "js8"],
   },
   {
     id: "automation",
     label: "Automation",
+    description: "The brakes on automatic operating, the schedule, the bridge watchdog and POTA chasing.",
     groups: ["auto", "schedule", "watchdog", "pota"],
   },
   {
+    // Twelve groups under one "Logbooks" tab mixed two different jobs: putting the log
+    // somewhere (credentials and uploads) and telling the world what the station hears or
+    // does (spots, broadcasts, a live stream). Split along that line. The id stays
+    // "logbooks" so every existing ?tab=logbooks link still lands on the logbook services.
     id: "logbooks",
-    label: "Logbooks",
-    groups: ["uploads", "qrz", "lotw", "eqsl", "clublog", "cloudlog", "hrdlog", "pskreporter", "wspr", "n3fjp", "ft8battle", "udplog"],
+    label: "Logbook sync",
+    description: "Credentials for the log-hosting services, and what is uploaded to them automatically.",
+    groups: ["uploads", "qrz", "lotw", "eqsl", "clublog", "cloudlog", "n3fjp"],
+  },
+  {
+    id: "spotting",
+    label: "Spotting & broadcast",
+    description:
+      "What the station reports and sends out: PSKReporter and WSPR spots, the Battle Royale and UDP broadcasts, YouTube Live.",
+    groups: ["pskreporter", "wspr", "ft8battle", "udplog", "youtube"],
   },
   {
     id: "qsl",
-    label: "QSL",
+    label: "QSL & email",
+    description: "QSL cards and emails, and the mail server everything is sent through.",
     groups: ["qsl", "smtp"],
   },
   {
     id: "system",
     label: "System",
-    groups: ["dxcc", "update"],
+    description: "Issue alerts, DXCC reference data, self-update, the scheduled jobs, and what stays in .env.",
+    groups: ["alerts", "dxcc", "update"],
     catchAll: true,
   },
 ];
 
-/** Which tab a setting group belongs to. Never undefined — see the note above. */
+/** Which category a setting group belongs to. Never undefined — see the note above. */
 export function settingsTabFor(groupId: string): SettingsTab {
   for (const t of SETTINGS_TABS) {
     if (t.groups.includes(groupId)) return t;
@@ -77,15 +100,83 @@ export function settingsTabFor(groupId: string): SettingsTab {
 }
 
 /**
+ * The groups a category shows, in display order: its own list first, then — for the
+ * catch-all — every registered group no category claims, in registry order.
+ *
+ * Takes the registered ids rather than importing the registry, so this module stays small
+ * enough for every admin page to load.
+ */
+export function groupsInTab(tabId: string, registeredGroupIds: readonly string[]): string[] {
+  const tab = SETTINGS_TABS.find((t) => t.id === tabId);
+  if (!tab) return [];
+  const known = new Set(registeredGroupIds);
+  const listed = tab.groups.filter((g) => known.has(g));
+  if (!tab.catchAll) return listed;
+  const unclaimed = registeredGroupIds.filter(
+    (g) => !SETTINGS_TABS.some((t) => t.groups.includes(g)),
+  );
+  return [...listed, ...unclaimed];
+}
+
+/** Where a settings URL points. `group` and `setting` are null when it names only a category. */
+export interface SettingsLocation {
+  tab: string;
+  group: string | null;
+  setting: string | null;
+}
+
+type QueryValue = string | string[] | undefined;
+
+function first(v: QueryValue): string | undefined {
+  return Array.isArray(v) ? v[0] : v;
+}
+
+export function resolveSettingsLocation(
+  query: { tab?: QueryValue; group?: QueryValue; setting?: QueryValue },
+  known: {
+    groupIds: readonly string[];
+    groupOfSetting: (key: string) => string | undefined;
+  },
+): SettingsLocation {
+  const setting = first(query.setting);
+  if (setting) {
+    const group = known.groupOfSetting(setting);
+    if (group) return { tab: settingsTabFor(group).id, group, setting };
+  }
+  const group = first(query.group);
+  if (group && known.groupIds.includes(group)) {
+    return { tab: settingsTabFor(group).id, group, setting: null };
+  }
+  const tab = first(query.tab);
+  const found = SETTINGS_TABS.find((t) => t.id === tab) ?? SETTINGS_TABS[0]!;
+  return { tab: found.id, group: null, setting: null };
+}
+
+/**
+ * A link into the settings page. The category is filled in from the group when it is not
+ * given, so the URL still reads sensibly and still works on a build that predates `group`.
+ */
+export function settingsHref(target: { tab?: string; group?: string; setting?: string }): string {
+  const tab = target.tab ?? (target.group ? settingsTabFor(target.group).id : undefined);
+  const p = new URLSearchParams();
+  if (tab) p.set("tab", tab);
+  if (target.group) p.set("group", target.group);
+  if (target.setting) p.set("setting", target.setting);
+  const qs = p.toString();
+  return qs ? `/settings?${qs}` : "/settings";
+}
+
+/**
  * The tools that used to be their own top-level nav entries.
  *
  * They keep their own routes — bookmarks and deep links still work, and each has its
  * own data loading and permissions that would be awkward to inline. What changes is
- * that they are reached from the settings tab bar rather than from a sixteen-item
+ * that they are reached from the settings sidebar rather than from a sixteen-item
  * navigation menu, which was itself the reason the phone layout was unusable.
  *
- * `minRole` mirrors each page's own guard. Listing a tab an operator cannot open would
- * be worse than not listing it.
+ * `minRole` mirrors each page's own guard — `scripts/check-settings-tabs.ts` reads the
+ * pages to make sure. Listing a tool an operator cannot open would be worse than not
+ * listing it: the guard sends them to the dashboard with no explanation.
  */
 export interface ToolTab {
   id: string;
@@ -96,11 +187,15 @@ export interface ToolTab {
 }
 
 export const TOOL_TABS: ToolTab[] = [
-  { id: "stations", label: "Stations", href: "/stations", hint: "Callsigns you operate as" },
+  {
+    id: "stations",
+    label: "Stations",
+    href: "/stations",
+    minRole: "OPERATOR",
+    hint: "Callsigns you operate as",
+  },
   // Users belongs here rather than in the main navigation — "users should live in
-  // settings". It was the last administrative page still taking a top-level slot, and it
-  // was also the only one with no tab bar of its own, so following a link out of it left
-  // you with no way back into the section.
+  // settings". It was the last administrative page still taking a top-level slot.
   { id: "users", label: "Users", href: "/users", minRole: "ADMIN", hint: "Login accounts and roles" },
   { id: "adif", label: "ADIF", href: "/adif", hint: "Import and export the log" },
   // Exchanges the sequencer gave up on, and the QRZ-request comparison that judges them.
@@ -115,7 +210,26 @@ export const TOOL_TABS: ToolTab[] = [
   },
   { id: "dxccdata", label: "DXCC data", href: "/dxcc", minRole: "ADMIN", hint: "Entity and prefix tables" },
   { id: "api", label: "API keys", href: "/api-keys", minRole: "ADMIN", hint: "Programmatic access" },
-  { id: "integrations", label: "Integrations", href: "/integrations", hint: "LoTW, QRZ, eQSL and Club Log" },
+  {
+    id: "integrations",
+    label: "Integrations",
+    href: "/integrations",
+    minRole: "OPERATOR",
+    hint: "LoTW, QRZ, eQSL and Club Log",
+  },
   { id: "backup", label: "Backup", href: "/backup", minRole: "ADMIN", hint: "Bundles and restore" },
   { id: "update", label: "Updates", href: "/update", minRole: "ADMIN", hint: "Deploy a new version" },
 ];
+
+const RANK = { VIEWER: 0, OPERATOR: 1, ADMIN: 2 } as const;
+
+/** The tools a role can open. */
+export function toolsFor(role: keyof typeof RANK | null | undefined): ToolTab[] {
+  if (!role) return [];
+  return TOOL_TABS.filter((t) => !t.minRole || RANK[role] >= RANK[t.minRole]);
+}
+
+/** Whether a path is a tool page, or a page beneath one (/stations has detail routes). */
+export function isToolActive(tool: ToolTab, pathname: string): boolean {
+  return pathname === tool.href || pathname.startsWith(`${tool.href}/`);
+}

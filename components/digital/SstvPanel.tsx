@@ -134,7 +134,7 @@ export const SstvPanel = forwardRef<
         <span className="text-fg-subtle">Martin, Scottie, Robot 36 and PD modes, named by the header</span>
       </div>
 
-      <div className="bg-black border border-line rounded-sm overflow-hidden flex justify-center">
+      <div className="bg-bg border border-line rounded-sm overflow-hidden flex justify-center">
         {/* The canvas is the picture coming in; a picture from the gallery replaces it until the next one starts. */}
         <canvas
           ref={canvas}
@@ -172,7 +172,7 @@ export const SstvPanel = forwardRef<
                 type="button"
                 onClick={() => setPicked(p)}
                 className={
-                  "shrink-0 border rounded-sm overflow-hidden focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent " +
+                  "shrink-0 border rounded-sm overflow-hidden focus-visible:outline-2 focus-visible:outline-accent-bright " +
                   (showing?.file === p.file ? "border-accent" : "border-line hover:border-fg-muted")
                 }
                 title={`${p.mode}, ${time(p.at)}`}

@@ -4,9 +4,12 @@
 
 - **Node 20+**
 - **MySQL 8+ or MariaDB 10.4+**
-- **Redis** — only for background queues; the logbook and the radio work without it
-- A **FlexRadio 6000/8000 series** on the same network, for the native digital modes.
-  Everything else works with no radio at all.
+- A **FlexRadio 6000/8000 series** or a **networked Icom** (see [icom.md](icom.md)) on
+  the same network, for the native digital modes. Everything else works with no radio at
+  all.
+
+Redis is not needed. BullMQ and Redis are still listed in `package.json`, but nothing
+imports them.
 
 Windows, Linux and macOS all work. Most of this was developed on Windows against a
 FLEX-6400.

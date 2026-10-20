@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 
-import { ToolTabs } from "@/components/settings/ToolTabs";
+import { SettingsLayout } from "@/components/settings/SettingsLayout";
 import { HelpTip } from "@/components/ui/HelpTip";
 import {
   Badge,
@@ -202,8 +202,7 @@ export default function IncompletePage() {
   }
 
   return (
-    <>
-      <ToolTabs />
+    <SettingsLayout>
       <PageHeader
         title="Incomplete exchanges"
         subtitle={
@@ -400,7 +399,7 @@ export default function IncompletePage() {
           )}
         </Card>
       </div>
-    </>
+    </SettingsLayout>
   );
 }
 

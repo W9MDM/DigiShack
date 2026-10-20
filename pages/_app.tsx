@@ -7,6 +7,7 @@ import { useRouter } from "next/router";
 import { useEffect } from "react";
 
 import { Shell } from "@/components/layout/Shell";
+import { Toaster } from "@/components/ui/Toast";
 import { registerServiceWorker } from "@/lib/client/service-worker";
 import { SessionProvider, type SessionUser } from "@/lib/client/session";
 import type { UiFlags } from "@/lib/auth/guard";
@@ -67,6 +68,9 @@ export default function App({ Component, pageProps }: AppProps) {
           </Shell>
         )}
       </SessionProvider>
+      {/* Once, outside the Shell, so `toast()` works on the bare routes (/login, /setup)
+          as well as inside the app. */}
+      <Toaster />
     </div>
   );
 }

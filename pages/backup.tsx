@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { ToolTabs } from "@/components/settings/ToolTabs";
+import { SettingsLayout } from "@/components/settings/SettingsLayout";
 
 import {
   Badge,
@@ -148,8 +148,7 @@ export default function BackupPage() {
   };
 
   return (
-    <>
-      <ToolTabs />
+    <SettingsLayout>
       <PageHeader
         title="Backup"
         subtitle="Move this installation, or keep a copy of everything"
@@ -368,7 +367,7 @@ export default function BackupPage() {
           </div>
         )}
       </Card>
-    </>
+    </SettingsLayout>
   );
 }
 

@@ -77,6 +77,13 @@ export async function optOut(
   // SKIPPED rather than deleted, because the queue is the record of what went to whom and
   // why; a row that vanishes cannot answer that later. Only live entries are touched —
   // anything already SENT is history and stays as it is.
+  //
+  // RECORDED ABOVE, CANCELLED HERE — and that order is load-bearing. A sender claims a row
+  // (APPROVED → SENT with its claim mark) and only THEN asks `hasOptedOut`, right before SMTP
+  // (sendApprovedQsls in lib/qsl/queue.ts). A row this cancels first can no longer be claimed;
+  // a row a sender claimed first is past this updateMany, but its sender's own check sees the
+  // list entry written above. Swapped, a sender could claim and check in the gap between the
+  // two writes and mail somebody who had already clicked.
   const cancelled = await prisma.qslEmail.updateMany({
     where: { callsign, status: { in: ["PENDING", "APPROVED"] } },
     data: { status: "SKIPPED" },

@@ -1,5 +1,7 @@
 import { useState } from "react";
 
+import { Button } from "@/components/ui/primitives";
+import { ApiError, apiPost } from "@/lib/client/api";
 import { useCan } from "@/lib/client/session";
 
 // Send one contact's QSL card again.
@@ -13,7 +15,7 @@ import { useCan } from "@/lib/client/session";
 // that re-mails a page of the log by accident is a spam complaint rather than a bug.
 //
 // It QUEUES rather than sends. The re-send passes through the same approval gate and the
-// same daily cap as a new QSL, so the confirmation says "queued"; saying "sent" would be a
+// same daily cap as a new QSL, so the confirmation says "queue"; saying "send" would be a
 // lie the moment `qsl.auto.approve` is off, which is its default.
 
 export function ResendQslButton({
@@ -33,27 +35,24 @@ export function ResendQslButton({
   async function resend() {
     // Confirmed, because it is outbound mail to somebody else and in the log the button
     // sits in a dense table where the wrong row is a few pixels away.
-    if (!confirm(`Send the QSL card to ${callsign} again?`)) return;
+    if (
+      !window.confirm(
+        `Queue another QSL email to ${callsign}? It goes through the QSL queue like any new one.`,
+      )
+    ) {
+      return;
+    }
     setState("busy");
     setDetail(null);
     try {
-      const res = await fetch("/api/qsl/queue", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "resend", qsoId }),
-      });
-      const body = (await res.json().catch(() => null)) as
-        | { result?: { status?: string; detail?: string }; error?: string }
-        | null;
-      if (!res.ok) {
-        setState("failed");
-        setDetail(body?.error ?? `Failed (${res.status})`);
-        return;
-      }
+      const body = await apiPost<{ result?: { status?: string; detail?: string } }>(
+        "/api/qsl/queue",
+        { action: "resend", qsoId },
+      );
       const r = body?.result;
       if (r?.status === "queued") {
         setState("done");
-        setDetail("Queued for the next send");
+        setDetail("Queued");
         return;
       }
       // Everything else is a REASON rather than a failure of the button: opted out, no
@@ -62,9 +61,9 @@ export function ResendQslButton({
       // preference not to be emailed.
       setState("failed");
       setDetail(r?.detail ?? r?.status ?? "Not queued");
-    } catch {
+    } catch (err) {
       setState("failed");
-      setDetail("Could not reach the server");
+      setDetail(err instanceof ApiError ? err.message : "Could not reach the server");
     }
   }
 
@@ -72,37 +71,37 @@ export function ResendQslButton({
   // why it is greyed, and the answer is only that this is not their button.
   if (!isAdmin) return null;
 
-  const tone = state === "done" ? "text-ok" : "text-warn";
+  const note = detail ? (
+    <span role="status" className={`text-xs ${state === "done" ? "text-ok" : "text-warn"}`}>
+      {detail}
+    </span>
+  ) : null;
 
   if (variant === "button") {
     return (
-      <div className="flex items-center gap-2">
-        <button
-          type="button"
-          onClick={() => void resend()}
-          disabled={state === "busy"}
-          className="rounded border border-line px-2 py-1 text-xs text-fg hover:border-accent-bright hover:text-accent-bright disabled:opacity-50"
-        >
-          {state === "busy" ? "Queueing…" : "Re-send card"}
-        </button>
-        {detail ? <span className={`text-xs ${tone}`}>{detail}</span> : null}
+      <div className="flex flex-wrap items-center gap-2">
+        <Button size="sm" loading={state === "busy"} onClick={() => void resend()}>
+          Re-send card
+        </Button>
+        {note}
       </div>
     );
   }
 
   return (
     <span className="inline-flex items-center gap-1">
-      <button
-        type="button"
+      <Button
+        variant="ghost"
+        size="sm"
+        className="px-1 py-0"
+        loading={state === "busy"}
         onClick={() => void resend()}
-        disabled={state === "busy"}
-        title={`Send the QSL card to ${callsign} again`}
+        title={`Queue the QSL card for ${callsign} again`}
         aria-label={`Re-send the QSL card to ${callsign}`}
-        className="text-xs text-fg-subtle hover:text-accent-bright disabled:opacity-50"
       >
-        {state === "busy" ? "…" : "↻"}
-      </button>
-      {detail ? <span className={`text-xs ${tone}`}>{detail}</span> : null}
+        {state === "busy" ? null : <span aria-hidden="true">↻</span>}
+      </Button>
+      {note}
     </span>
   );
 }

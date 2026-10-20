@@ -3,7 +3,7 @@ import type { NextApiRequest, NextApiResponse } from "next";
 import { route, sendError, sendJson } from "@/lib/api/respond";
 import { hashPassword } from "@/lib/auth/password";
 import { createSession, needsSetup } from "@/lib/auth/session";
-import { prisma } from "@/lib/db/prisma";
+import { LOCKS, withInvariantLock } from "@/lib/db/invariant-lock";
 import { setupSchema } from "@/lib/validation/auth";
 
 // First-run bootstrap. Creates the one initial ADMIN and then closes itself
@@ -11,6 +11,7 @@ import { setupSchema } from "@/lib/validation/auth";
 // endpoint refuses. That is what stops it becoming an open backdoor for account
 // creation on a web-facing install.
 async function post(req: NextApiRequest, res: NextApiResponse) {
+  // A fast refusal for the ordinary case. NOT the guard — that is the lock below.
   if (!(await needsSetup())) {
     sendError(
       res,
@@ -22,13 +23,21 @@ async function post(req: NextApiRequest, res: NextApiResponse) {
 
   const input = setupSchema.parse(req.body);
 
-  // The count check and the insert are not atomic on their own, so the unique
-  // constraint on email plus this transaction are what prevent two simultaneous
-  // setup posts from both creating an admin.
-  const user = await prisma.$transaction(async (tx) => {
-    if ((await tx.user.count()) > 0) {
-      throw new Error("ALREADY_SET_UP");
-    }
+  // Hashed BEFORE the lock. scrypt is the slow part of this request and nothing about it
+  // needs serialising, so it must not be what a second request waits behind.
+  const passwordHash = await hashPassword(input.password);
+
+  // ONE BOOTSTRAP, HOWEVER MANY REQUESTS ARRIVE TOGETHER.
+  //
+  // This used to be a plain transaction around `user.count()` and the insert, with a comment
+  // saying the email unique index made it safe. It did not: two posts with DIFFERENT emails
+  // each counted zero in their own snapshot and each created an admin, and the unique index
+  // only ever arbitrates two posts using the same address. The count now runs under the
+  // admins lock (lib/db/invariant-lock.ts), so a second request waits for the first to commit,
+  // then counts its admin and is refused.
+  const user = await withInvariantLock(LOCKS.admins, async (tx) => {
+    if ((await tx.user.count()) > 0) return null;
+
     // THE STATION IS CREATED HERE, not by the seed.
     //
     // It used to come from `prisma/seed.ts` with a hardcoded callsign, so anyone who ran
@@ -48,15 +57,12 @@ async function post(req: NextApiRequest, res: NextApiResponse) {
         email: input.email,
         name: input.name,
         callsign: input.callsign || null,
-        passwordHash: await hashPassword(input.password),
+        passwordHash,
         role: "ADMIN",
         lastLoginAt: new Date(),
       },
       select: { id: true, email: true, name: true, callsign: true, role: true },
     });
-  }).catch((err: unknown) => {
-    if (err instanceof Error && err.message === "ALREADY_SET_UP") return null;
-    throw err;
   });
 
   if (!user) {

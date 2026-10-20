@@ -112,13 +112,14 @@ console.log("\ntokens defined in @theme");
 const SCAN_DIRS = ["pages", "components", "lib", "styles"];
 const SCAN_EXT = new Set([".tsx", ".ts", ".css"]);
 
+/* No try/catch round `readdirSync`, deliberately. It used to catch and return what it had,
+ * so a scan root that was missing or unreadable — the check run from the wrong directory,
+ * a renamed folder — scanned nothing and reported "no class names reference an undefined
+ * token". A search that could not run reported as a search that found nothing is the
+ * fault R20 named in check-contrast; this had the same shape. Now an unreadable directory
+ * throws, and each root must yield files (below). */
 function walk(dir: string, out: string[] = []): string[] {
-  let entries: string[];
-  try {
-    entries = readdirSync(dir);
-  } catch {
-    return out;
-  }
+  const entries = readdirSync(dir);
   for (const e of entries) {
     if (e === "node_modules" || e === ".next" || e.startsWith(".")) continue;
     const full = path.join(dir, e);
@@ -128,7 +129,14 @@ function walk(dir: string, out: string[] = []): string[] {
   return out;
 }
 
-const files = SCAN_DIRS.flatMap((d) => walk(path.join(ROOT, d)));
+const files = SCAN_DIRS.flatMap((d) => {
+  const found = walk(path.join(ROOT, d));
+  if (found.length === 0) {
+    console.log(`  FAIL  ${d}/ yielded no files to scan — run this from the project root`);
+    fail++;
+  }
+  return found;
+});
 
 /** The nine families this project names its colours after. A utility whose value starts
  *  with one of these is ours, not Tailwind's. */
@@ -271,8 +279,29 @@ const scanned = files
   // the block, because that is what globals.css contributed to the join above.
   .replace(stripCssComments(THEME), "");
 
-function isReferenced(name: string): boolean {
+/** var() references made by one theme token's value to another — `--shadow-panel` uses
+ *  `--color-highlight`, and Tailwind keeps the dependency alive, so that IS a use. */
+const themeRefs = new Map<string, Set<string>>();
+for (const [owner, value] of defined) {
+  for (const m of value.matchAll(/var\(\s*(--[a-z0-9-]+)/g)) {
+    if (m[1] === owner) continue;
+    const users = themeRefs.get(m[1]!) ?? new Set<string>();
+    users.add(owner);
+    themeRefs.set(m[1]!, users);
+  }
+}
+
+function isReferenced(name: string, seen = new Set<string>()): boolean {
+  if (seen.has(name)) return false;
+  seen.add(name);
   if (scanned.includes(`var(${name})`)) return true;
+  // Used by another token that is itself used.
+  for (const user of themeRefs.get(name) ?? []) {
+    if (isReferenced(user, seen)) return true;
+  }
+  // `--text-2xs--line-height` is consumed by the `text-2xs` utility along with its size.
+  const sub = name.match(/^(--[a-z0-9-]+?)--[a-z-]+$/);
+  if (sub && defined.has(sub[1]!)) return isReferenced(sub[1]!, seen);
   const bare = name.replace(/^--/, "");
   const [ns, ...rest] = bare.split("-");
   const suffix = rest.join("-");

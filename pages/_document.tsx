@@ -1,12 +1,23 @@
 import { Head, Html, Main, NextScript } from "next/document";
 
+import { THEME_INIT_SCRIPT } from "@/components/ui/ThemeToggle";
+
 // `color-scheme: dark` is set on <html> as an attribute rather than only in CSS
 // so form controls and scrollbars render dark on the very first paint, before
-// the stylesheet applies.
+// the stylesheet applies. Both themes are dark, so it holds for night too.
 export default function AppDocument() {
   return (
     <Html lang="en" style={{ colorScheme: "dark" }}>
       <Head>
+        {/*
+         * The saved theme, applied before anything paints. It is a blocking inline script
+         * on purpose and it is tiny: deferred to React it would run after hydration, and a
+         * night-mode operator would get a frame of the full-brightness palette on every
+         * page load — the one thing night mode exists to prevent. <html> is rendered only
+         * by this document and never hydrated, so setting an attribute on it here cannot
+         * cause a hydration mismatch.
+         */}
+        <script dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />
         {/*
          * PWA head tags live here rather than in _app because they belong to the
          * document, not to a page, and because the manifest link has to be present on

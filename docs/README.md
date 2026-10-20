@@ -1,7 +1,7 @@
 # DigiShack documentation
 
 A self-contained amateur radio logging platform: a full logbook, native FT8/FT4/FT2
-decoding and transmitting straight from a FlexRadio, DXCC and award tracking, QSL cards
+decoding and transmitting straight from a FlexRadio or a networked Icom, DXCC and award tracking, QSL cards
 and email, POTA chasing, and the integrations that connect all of it to the outside
 world.
 
@@ -21,7 +21,7 @@ and a backup moves the whole installation.
 | [Logbook sync](logbook-sync.md) | Uploads, QRZ's differential download, and what Sent and Rcvd actually mean |
 | [Streaming to YouTube](streaming.md) | Putting the waterfall and the receiver audio on YouTube Live |
 | [Backup and moving](backup-and-moving.md) | Bundles, restore, and the two traps that break a migration |
-| [Settings reference](settings.md) | Every one of the 175 settings, generated from the code |
+| [Settings reference](settings.md) | Every setting, generated from the code |
 | [Networked Icom](icom.md) | Driving an IC-7300 or IC-705 over the network, with no bridge software |
 | [Architecture](architecture.md) | What runs where, and why the radio is its own process |
 | [Radio API](radio-api.md) | Driving the active receiver from a dial or other controller through /api/v1/radio |
@@ -35,6 +35,11 @@ and a backup moves the whole installation.
 | [Feld Hell](hell.md) | Feld Hell: Hellschreiber painted live on the page, column by column, and sending |
 | [JTTY](jtty.md) | JTTY: the WSJT keyboard mode for RTTY contesters, every station in the passband, and sending |
 | [Icom protocol](icom-protocol.md) | The RS-BA1 wire format, for anyone working on the driver |
+| [LoTW upload](lotw-upload.md) | Signing and uploading to LoTW from the callsign certificate, without TQSL |
+| [Panadapters](panadapter.md) | The brief the RF panadapter work started from, per radio |
+| [Exposure](exposure.md) | What is reachable without signing in, and how that was checked |
+| [Cloudlog audit](cloudlog-audit.md) | A read of Cloudlog against this codebase: what is missing and worth building |
+| [Roadmap](roadmap.md) | Planned and not built, with the reasoning |
 | [Troubleshooting](troubleshooting.md) | Symptoms, in the order you are likely to meet them |
 | [Development](development.md) | Conventions, the test suite, how to add things |
 
@@ -43,7 +48,7 @@ and a backup moves the whole installation.
 DigiShack is two processes and a database:
 
 - **The web app** (`npm start`) — everything you look at.
-- **The radio bridge** (`npm run bridge`) — talks to the FlexRadio, decodes audio,
+- **The radio bridge** (`npm run bridge`) — talks to the radio (FlexRadio or Icom), decodes audio,
   runs the automatic operating modes, and keys the transmitter. Separate because it
   binds a UDP socket, and a bound UDP socket cannot be shared across workers.
 

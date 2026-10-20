@@ -1,12 +1,10 @@
 import type { GetServerSideProps } from "next";
 import { useState } from "react";
 
-import {
-  Button,
-  ErrorBanner,
-  Field,
-  Input,
-} from "@/components/ui/primitives";
+import { AuthLayout, AuthLink } from "@/components/auth/AuthLayout";
+import { authErrorMessage, focusField } from "@/components/auth/form";
+import { PasswordInput, TOUCH_TEXT } from "@/components/auth/PasswordInput";
+import { Button, ErrorBanner, Field, Input } from "@/components/ui/primitives";
 import { MIN_PASSWORD_LENGTH } from "@/lib/auth/password-policy";
 import { needsSetup } from "@/lib/auth/session";
 import { ApiError, apiPost } from "@/lib/client/api";
@@ -15,26 +13,59 @@ interface Props {
   minPasswordLength: number;
 }
 
+/** Field ids in page order, so a failed submit can put the cursor on the first bad one. */
+const FIELDS = [
+  "name",
+  "callsign",
+  "email",
+  "password",
+  "confirm",
+  "stationCallsign",
+  "stationGrid",
+] as const;
+type FieldId = (typeof FIELDS)[number];
+type FieldErrors = Partial<Record<FieldId, string[]>>;
+
 export default function SetupPage({ minPasswordLength }: Props) {
   const [name, setName] = useState("");
   const [callsign, setCallsign] = useState("");
   // THE STATION identity — what the radio puts on the air. Distinct from the operator's
-  // own callsign above, which is only a label on this account.
+  // own callsign, which is only a label on this account.
   const [stationCallsign, setStationCallsign] = useState("");
   const [stationGrid, setStationGrid] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<ApiError | null>(null);
+  const [banner, setBanner] = useState<string | null>(null);
+  const [alreadySetUp, setAlreadySetUp] = useState(false);
+  const [errors, setErrors] = useState<FieldErrors>({});
 
-  const mismatch = confirm.length > 0 && password !== confirm;
+  /** Set a field and drop its stale error — it was about the old value. */
+  const edit = (field: FieldId, set: (v: string) => void) => (v: string) => {
+    set(v);
+    setErrors((x) => {
+      if (!x[field] && !(field === "password" && x.confirm)) return x;
+      const next = { ...x };
+      delete next[field];
+      // A changed password makes the "don't match" verdict stale too.
+      if (field === "password") delete next.confirm;
+      return next;
+    });
+  };
+
+  const confirmMismatch = (): boolean => confirm.length > 0 && password !== confirm;
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    if (mismatch) return;
+    setBanner(null);
+    setAlreadySetUp(false);
+    if (confirmMismatch()) {
+      setErrors((x) => ({ ...x, confirm: ["The two passwords don't match"] }));
+      focusField("confirm", true);
+      return;
+    }
     setBusy(true);
-    setError(null);
     try {
       await apiPost("/api/auth/setup", {
         name,
@@ -46,66 +77,128 @@ export default function SetupPage({ minPasswordLength }: Props) {
       });
       // The setup response signs you in, so go straight to the dashboard.
       window.location.href = "/";
+      return;
     } catch (err) {
-      setError(
-        err instanceof ApiError ? err : new ApiError(0, "Could not complete setup"),
-      );
+      const found: FieldErrors = {};
+      if (err instanceof ApiError && err.details) {
+        for (const f of FIELDS) {
+          const msgs = err.fieldErrors(f);
+          if (msgs?.length) found[f] = msgs;
+        }
+      }
+      const first = FIELDS.find((f) => found[f]);
+      if (first) {
+        setErrors(found);
+        setBanner("Some details need another look — see the highlighted fields.");
+        focusField(first);
+      } else {
+        setBanner(authErrorMessage(err, "Could not complete setup. Try again."));
+        setAlreadySetUp(err instanceof ApiError && err.status === 409);
+      }
       setBusy(false);
     }
   }
 
-  const fieldErrors = (f: string) => error?.fieldErrors(f);
-
   return (
-    <div className="w-full max-w-md">
-      <div className="flex items-baseline gap-1.5 justify-center mb-1">
-        <span className="font-display text-3xl uppercase tracking-wider">
-          Digi
-        </span>
-        <span className="font-display text-3xl uppercase tracking-wider text-accent-bright">
-          Shack
-        </span>
-      </div>
-      <p className="text-center text-sm text-fg-subtle mb-6">
-        First-time setup — create the admin account
-      </p>
+    <AuthLayout
+      title="Set up DigiShack"
+      wide
+      description="Create the admin account and name your station. This page closes for good once it is done; further accounts are added by an admin from the Users page."
+    >
+      <form onSubmit={submit} className="flex flex-col gap-6">
+        {banner && (
+          <ErrorBanner>
+            {banner}
+            {alreadySetUp && (
+              <>
+                {" "}
+                <AuthLink href="/login">Go to sign in</AuthLink>
+              </>
+            )}
+          </ErrorBanner>
+        )}
 
-      {error && !error.details && (
-        <div className="mb-4">
-          <ErrorBanner>{error.message}</ErrorBanner>
-        </div>
-      )}
+        {/* min-w-0: a fieldset defaults to min-content width and would push a phone
+            screen sideways. */}
+        <fieldset className="min-w-0">
+          <legend className="font-display text-base text-fg">Admin account</legend>
+          <div className="mt-3 flex flex-col gap-4">
+            <div className="grid gap-4 sm:grid-cols-2">
+              <Field label="Your name" htmlFor="name" errors={errors.name}>
+                <Input
+                  id="name"
+                  value={name}
+                  onChange={(e) => edit("name", setName)(e.target.value)}
+                  autoComplete="name"
+                  autoFocus
+                  required
+                  className={TOUCH_TEXT}
+                />
+              </Field>
+              <Field
+                label="Your callsign"
+                htmlFor="callsign"
+                errors={errors.callsign}
+                hint="Optional — a label on your account"
+              >
+                <Input
+                  id="callsign"
+                  value={callsign}
+                  onChange={(e) => edit("callsign", setCallsign)(e.target.value.toUpperCase())}
+                  autoCapitalize="characters"
+                  autoCorrect="off"
+                  spellCheck={false}
+                  className={`font-display tracking-wide ${TOUCH_TEXT}`}
+                />
+              </Field>
+            </div>
 
-      <form
-        onSubmit={submit}
-        className="flex flex-col gap-4 bg-surface border border-line rounded-md p-5"
-      >
-        <div className="grid gap-4 sm:grid-cols-2">
-          <Field label="Name" htmlFor="name" required errors={fieldErrors("name")}>
-            <Input
-              id="name"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              autoFocus
-              required
-            />
-          </Field>
+            <Field label="Email" htmlFor="email" errors={errors.email} hint="You sign in with this">
+              <Input
+                id="email"
+                type="email"
+                value={email}
+                onChange={(e) => edit("email", setEmail)(e.target.value)}
+                autoComplete="username"
+                autoCapitalize="none"
+                spellCheck={false}
+                required
+                className={TOUCH_TEXT}
+              />
+            </Field>
 
-          <Field
-            label="Callsign"
-            htmlFor="callsign"
-            errors={fieldErrors("callsign")}
-            hint="Optional"
-          >
-            <Input
-              id="callsign"
-              value={callsign}
-              onChange={(e) => setCallsign(e.target.value.toUpperCase())}
-              spellCheck={false}
-              className="font-display tracking-wide"
-            />
-          </Field>
-        </div>
+            <Field
+              label="Password"
+              htmlFor="password"
+              errors={errors.password}
+              hint={`At least ${minPasswordLength} characters — a passphrase beats a short complex one`}
+            >
+              <PasswordInput
+                id="password"
+                value={password}
+                onChange={(e) => edit("password", setPassword)(e.target.value)}
+                autoComplete="new-password"
+                minLength={minPasswordLength}
+                required
+              />
+            </Field>
+
+            <Field label="Confirm password" htmlFor="confirm" errors={errors.confirm}>
+              <PasswordInput
+                id="confirm"
+                value={confirm}
+                onChange={(e) => edit("confirm", setConfirm)(e.target.value)}
+                onBlur={() => {
+                  if (confirmMismatch()) {
+                    setErrors((x) => ({ ...x, confirm: ["The two passwords don't match"] }));
+                  }
+                }}
+                autoComplete="new-password"
+                required
+              />
+            </Field>
+          </div>
+        </fieldset>
 
         {/* THE STATION. Asked here because there is no safe default and the radio needs
             one before it will start.
@@ -114,107 +207,60 @@ export default function SetupPage({ minPasswordLength }: Props) {
             operator's callsign — so anyone who ran the sample data would have transmitted
             under somebody else's identity. That is not a bad default, it is unidentified
             operation, and the fix is to ask rather than to guess. */}
-        <div className="rounded-sm border border-line bg-bg-raised/40 p-3 flex flex-col gap-3">
-          <div>
-            <h2 className="text-sm font-medium">Your station</h2>
-            <p className="text-xs text-fg-subtle mt-0.5">
-              What the radio transmits. There is no default for this and there never will
-              be — transmitting under a callsign that is not yours is illegal, so DigiShack
-              refuses to start the transmitter until this is set.
-            </p>
-          </div>
-          <div className="grid gap-4 sm:grid-cols-2">
+        <fieldset className="min-w-0 rounded-sm border border-line bg-bg-raised/40 p-4">
+          <legend className="px-1 font-display text-base text-fg">Your station</legend>
+          <p className="text-sm text-fg-muted">
+            What the radio transmits. There is no default for this and there never will be —
+            transmitting under a callsign that is not yours is illegal, so DigiShack refuses
+            to start the transmitter until this is set.
+          </p>
+          <div className="mt-4 grid gap-4 sm:grid-cols-2">
             <Field
               label="Station callsign"
               htmlFor="stationCallsign"
-              required
-              errors={fieldErrors("stationCallsign")}
+              errors={errors.stationCallsign}
               hint="Goes on the air"
             >
               <Input
                 id="stationCallsign"
                 value={stationCallsign}
-                onChange={(e) => setStationCallsign(e.target.value.toUpperCase())}
-                spellCheck={false}
+                onChange={(e) =>
+                  edit("stationCallsign", setStationCallsign)(e.target.value.toUpperCase())
+                }
                 autoComplete="off"
-                className="font-display tracking-wide"
+                autoCapitalize="characters"
+                autoCorrect="off"
+                spellCheck={false}
+                required
+                className={`font-display tracking-wide ${TOUCH_TEXT}`}
               />
             </Field>
             <Field
               label="Grid square"
               htmlFor="stationGrid"
-              required
-              errors={fieldErrors("stationGrid")}
+              errors={errors.stationGrid}
               hint="4 or 6 characters, e.g. FN31 or FN31pr"
             >
               <Input
                 id="stationGrid"
                 value={stationGrid}
-                onChange={(e) => setStationGrid(e.target.value)}
-                spellCheck={false}
+                onChange={(e) => edit("stationGrid", setStationGrid)(e.target.value)}
                 autoComplete="off"
-                className="font-display tracking-wide"
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
+                required
+                className={`font-display tracking-wide ${TOUCH_TEXT}`}
               />
             </Field>
           </div>
-        </div>
+        </fieldset>
 
-        <Field label="Email" htmlFor="email" required errors={fieldErrors("email")}>
-          <Input
-            id="email"
-            type="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            autoComplete="username"
-            required
-          />
-        </Field>
-
-        <Field
-          label="Password"
-          htmlFor="password"
-          required
-          errors={fieldErrors("password")}
-          hint={`At least ${minPasswordLength} characters — a passphrase beats a short complex one`}
-        >
-          <Input
-            id="password"
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            autoComplete="new-password"
-            minLength={minPasswordLength}
-            required
-          />
-        </Field>
-
-        <Field
-          label="Confirm password"
-          htmlFor="confirm"
-          required
-          errors={mismatch ? ["Passwords don't match"] : undefined}
-        >
-          <Input
-            id="confirm"
-            type="password"
-            value={confirm}
-            onChange={(e) => setConfirm(e.target.value)}
-            autoComplete="new-password"
-            aria-invalid={mismatch}
-            required
-          />
-        </Field>
-
-        <Button type="submit" variant="primary" disabled={busy || mismatch}>
-          {busy ? "Creating…" : "Create admin account"}
+        <Button type="submit" variant="primary" loading={busy} className="w-full">
+          Create admin account
         </Button>
-
-        <p className="text-xs text-fg-subtle">
-          This page closes itself permanently once an account exists. Further
-          accounts are created by an admin from the Users page.
-        </p>
       </form>
-    </div>
+    </AuthLayout>
   );
 }
 

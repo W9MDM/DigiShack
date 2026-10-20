@@ -9,10 +9,12 @@
  * Reads the bridge's own panadapter broadcasts. Does not command the radio: run it,
  * change band from the UI, and watch what centerHz does.
  */
-import WebSocket from "ws";
+import { localBridgeSocket } from "@/lib/bridge/ws-auth";
 
-const url = process.env.BRIDGE_WS ?? "ws://127.0.0.1:8787";
-const ws = new WebSocket(url);
+// With the bridge token, which is the only way a local script is admitted (lib/bridge/ws-auth.ts).
+// The old default here was port 8787, which the bridge has not listened on for a long time.
+const ws = localBridgeSocket(process.env.BRIDGE_WS ?? "/ws/decodes");
+const url = ws.url;
 
 let lastCenter = 0;
 let frames = 0;

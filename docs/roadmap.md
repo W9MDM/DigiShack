@@ -341,12 +341,9 @@ missing entry, because nobody re-examines it.
 - **Cabrillo export.** Only matters if a contest is entered, and it wants the contest's own
   exchange fields rather than a rename of the CSV columns, so it is worth doing when there is a
   contest to test it against.
-- **HRDLOG upload.** `hrdlog.callsign` is a registered setting and nothing uploads there;
-  `UPLOADABLE` is `qrz`, `clublog`, `cloudlog`, `eqsl`, `lotw`.
-- **Club Log uploads remain blocked for an environmental reason.** `putlogs.php` answers 403
-  from nginx even for an empty POST, so the refusal happens before authentication and is not
-  ours to fix. Now that LoTW upload works, pointing Club Log at LoTW populates it without
-  uploading from here at all, which is probably the answer.
+- **HRDLOG upload.** Not built. Nothing ever uploaded there, so its settings were removed
+  rather than left offering credentials no code reads; `UPLOADABLE` is `qrz`, `clublog`,
+  `cloudlog`, `eqsl`, `lotw`, `n3fjp`. The `hrdlogSent` column is still in the schema.
 - **FT2 interoperability**, which needs a second station. Encoder and decoder agree across 219
   assertions; no signal from another operator has ever been decoded here.
 - **The 174 confirmed findings from the 30-persona usability review**, being worked through in

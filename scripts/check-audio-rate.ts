@@ -14,7 +14,7 @@
 // Needs the bridge running with a radio connected and audio flowing. It is a measurement, not
 // a unit test, so it is not in the `check` chain.
 
-import WebSocket from "ws";
+import { localBridgeSocket } from "@/lib/bridge/ws-auth";
 
 // WWV transmits a tick every second, on the second, permanently. So the interval between
 // ticks measured IN SAMPLES is the stream's true sample rate — no assumption required.
@@ -23,7 +23,8 @@ import WebSocket from "ws";
 // 48 kHz 16-bit MONO, and 48,000 int16 per second arrive. That is also exactly what 24 kHz
 // STEREO looks like on the wire, and playing that as mono runs at double speed.
 const CLAIMED = 48_000;
-const ws = new WebSocket("ws://127.0.0.1:3101/ws/audio");
+// With the bridge token: the bridge admits a local script on nothing else (lib/bridge/ws-auth.ts).
+const ws = localBridgeSocket("/ws/audio");
 const samples: number[] = [];
 
 // Without this the script dies on an unhandled 'error' event and a stack trace through

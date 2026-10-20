@@ -1,5 +1,5 @@
 /* eslint-disable no-console */
-// The US HF band plan the panadapter shades.
+// The US band plan the panadapter shades and the Tools page reads.
 //
 // Tested harder than most things here because it is the one part of the display an
 // operator might act on in a way that is not merely wrong but ILLEGAL. Every assertion
@@ -13,6 +13,8 @@ import {
   segmentAt,
   segmentLabel,
   segmentsIn,
+  sixtyMetreChannelAt,
+  US_60M_CHANNELS,
   US_BAND_PLAN,
 } from "@/lib/ham/band-plan";
 
@@ -117,11 +119,51 @@ console.log("\noutside the allocations, and 60 m");
   eq("a broadcast frequency is in no segment", segmentAt(9_500_000), null);
   eq("nor is the gap above 40 m", segmentAt(7_400_000), null);
   ok("nothing is permitted where there is no segment", !permitted(null, "E", "PHONE"));
-  // 60 m is channels, not a range. Drawing it as a segment would say the whole span is
-  // available, which is the one error this strip must not make.
+  // 60 m is four channels and one 15 kHz range (FCC 25-60, in force 13 Feb 2026). The
+  // channels and the range are drawn; the gaps between them must never be.
   ok("60 m is flagged as channelised", isChannelised(5_332_000));
-  eq("and has no continuous segment", segmentAt(5_332_000), null);
+  eq("5.332 is channel 1, General and up", segmentAt(5_332_000) && segmentLabel(segmentAt(5_332_000)!), "Phone General");
+  eq("the gap between channels 1 and 2 is in no segment", segmentAt(5_340_000), null);
+  eq("nor is the gap between the range and channel 4", segmentAt(5_369_000), null);
+  ok("5.357 is inside the 5351.5–5366.5 kHz range", segmentAt(5_357_000) !== null);
+  ok("where a General may send data", permitted(segmentAt(5_357_000), "G", "DATA"));
+  ok("but not an image — §97.305(c) lists phone, RTTY and data only", !permitted(segmentAt(5_357_000), "E", "IMAGE"));
+  ok("and a Technician has nothing on 60 m", !permitted(segmentAt(5_357_000), "T", "CW"));
+  eq("channel 1's USB dial 5330.5 is channel 1", sixtyMetreChannelAt(5_330_500)?.channel, 1);
+  eq("5358.5 is no longer a channel — the range swallowed it", sixtyMetreChannelAt(5_358_500), null);
+  eq("four channels remain", US_60M_CHANNELS.length, 4);
   ok("40 m is not channelised", !isChannelised(7_200_000));
+}
+
+console.log("\nemissions: what §97.305(c) puts where");
+{
+  // Data belongs below the phone edge on 80 through 10 m. The first version of permitted()
+  // answered yes to data in every phone segment.
+  ok("no data in the 20 m phone segment", !permitted(segmentAt(14_230_000), "E", "DATA"));
+  ok("but image is fine there", permitted(segmentAt(14_230_000), "G", "IMAGE"));
+  ok("160 m carries data as well as phone", permitted(segmentAt(1_840_000), "G", "DATA"));
+  // 6 m and 2 m below 50.1/144.1 MHz: §97.305(c) authorises nothing but CW.
+  ok("CW on 50.090", permitted(segmentAt(50_090_000), "T", "CW"));
+  ok("but not data on 50.090", !permitted(segmentAt(50_090_000), "E", "DATA"));
+  ok("data from 50.100 up", permitted(segmentAt(50_313_000), "T", "DATA"));
+  ok("CW only below 144.1", !permitted(segmentAt(144_050_000), "G", "PHONE"));
+  ok("FM on 146.520 for a Tech", permitted(segmentAt(146_520_000), "T", "PHONE"));
+  // Novice and Technician on 28.3–28.5: CW and SSB voice only, §97.307(f)(10).
+  ok("a Tech may talk on 28.400", permitted(segmentAt(28_400_000), "T", "PHONE"));
+  ok("but may not send SSTV there", !permitted(segmentAt(28_400_000), "T", "IMAGE"));
+  ok("a General may", permitted(segmentAt(28_400_000), "G", "IMAGE"));
+  // §97.301(e): Novices hold 28.0–28.5 MHz like Technicians. The table had dropped them
+  // from 28.3–28.5, which told a Novice they had no 10 m phone.
+  ok("a Novice may talk on 28.400", permitted(segmentAt(28_400_000), "N", "PHONE"));
+  // 219–220 MHz is message forwarding and nothing else.
+  ok("data on 219.5", permitted(segmentAt(219_500_000), "T", "DATA"));
+  ok("but not CW", !permitted(segmentAt(219_500_000), "T", "CW"));
+  eq("220–222 MHz is not amateur", segmentAt(221_000_000), null);
+  ok("Novices on 222–225", permitted(segmentAt(223_500_000), "N", "PHONE"));
+  ok("and 1270–1295", permitted(segmentAt(1_282_000_000), "N", "DATA"));
+  ok("but not 1240–1270", !permitted(segmentAt(1_250_000_000), "N", "CW"));
+  ok("2200 m is General and up", permitted(segmentAt(136_000), "G", "DATA") && !permitted(segmentAt(136_000), "T", "CW"));
+  ok("630 m too", permitted(segmentAt(475_000), "G", "CW") && !permitted(segmentAt(475_000), "T", "CW"));
 }
 
 console.log("\nclipping to a display window");

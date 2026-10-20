@@ -32,7 +32,7 @@ station that sent it, so the decoder has to be put on it: **click the signal on 
 waterfall** and the tone pair moves there, or nudge it with the −10 / +10 buttons. The
 panel shows the mark and space frequencies it is listening on and two level bars; a
 signal on the pair fills them and the text starts. The starting centre and shift come
-from Settings → Radio → RTTY and the page moves them live.
+from Settings → Modes → RTTY and the page moves them live.
 
 Mark is the higher radio frequency by convention. On upper sideband (DIGU, which is what
 a data mode on the FlexRadio is) that makes mark the higher audio tone; on lower sideband

@@ -66,52 +66,117 @@ export function invalidateSettingsCache(): void {
 }
 
 /**
- * One stored row, decrypted if it needs to be.
+ * What one stored row holds.
  *
- * Returns null both for "no row" and for "a row that will not decrypt", which are
- * treated the same on purpose: silently using a different credential than the one shown
- * in the UI would be worse than having none.
+ *   absent      no row, or a plain row holding "" (how a cleared field can be stored)
+ *   unreadable  a row IS there and will not decrypt
+ *   value       a usable value; `encrypted` says whether it was stored as a secret
  */
+type StoredValue =
+  | { kind: "absent" }
+  | { kind: "unreadable" }
+  | { kind: "value"; value: string; encrypted: boolean };
+
 function readRow(
   rows: Map<string, CacheEntry>,
   key: string,
-): string | null {
+  quiet = false,
+): StoredValue {
   const row = rows.get(key);
-  if (!row) return null;
+  if (!row) return { kind: "absent" };
   if (row.encrypted) {
     const plain = decryptSecret(row.value);
-    if (plain !== null) return plain;
-    console.error(
-      `[settings] ${key} could not be decrypted — SETTINGS_KEY may have changed`,
-    );
-    return null;
+    if (plain !== null) return { kind: "value", value: plain, encrypted: true };
+    if (!quiet) {
+      console.error(
+        `[settings] ${key} could not be decrypted — SETTINGS_KEY may have changed`,
+      );
+    }
+    return { kind: "unreadable" };
   }
-  return row.value === "" ? null : row.value;
+  return row.value === ""
+    ? { kind: "absent" }
+    : { kind: "value", value: row.value, encrypted: false };
 }
 
-/** Resolved value, or null when nothing is configured anywhere. */
-export async function getSetting(key: string): Promise<string | null> {
+/**
+ * How a setting resolved.
+ *
+ * `unreadable` is the case `getSetting` cannot express: a value IS stored, for this key or
+ * one of its legacy keys, and it will not decrypt. Nothing falls back past it.
+ */
+export type SettingState =
+  | { status: "value"; value: string; source: "database" | "env" | "default" }
+  | { status: "unreadable"; /** The stored key that would not decrypt. */ storedKey: string }
+  | { status: "unset" };
+
+type Resolution =
+  | { status: "value"; value: string; source: "database" | "env" | "default"; encrypted: boolean }
+  | { status: "unreadable"; storedKey: string }
+  | { status: "unset" };
+
+/**
+ * The one resolution order, shared by the readers and the settings page so they cannot
+ * disagree:
+ *
+ *   1. this key's row, then each legacy key's row (a key this setting lived under before
+ *      a rename — ahead of `envFallback` because a value the operator saved in the UI must
+ *      outrank one left in a .env file, behind the current key because a value saved since
+ *      the rename is the newest thing anybody said);
+ *   2. the envFallback;
+ *   3. the registry default.
+ *
+ * ONLY AN ABSENT ROW MOVES ON. This used to treat "will not decrypt" exactly like "no row"
+ * and carry on down the list, so a corrupt saved qrz.password logged in with whatever
+ * QRZ_PASSWORD an old .env still held — a different credential from the one the operator
+ * saved, used without a word (code review R12, reproduced). An unreadable row now stops
+ * the walk and the setting is unavailable until it is re-entered.
+ */
+function resolve(
+  rows: Map<string, CacheEntry>,
+  key: string,
+  quiet = false,
+): Resolution {
   const def = getSettingDef(key);
-  const rows = await load();
-
-  const current = readRow(rows, key);
-  if (current !== null) return current;
-
-  // A key this setting used to live under, before a rename. Ahead of `envFallback`
-  // because a value the operator saved in the UI must outrank one left in a .env file,
-  // and behind the current key because a value saved since the rename is the newest
-  // thing anybody said.
-  for (const legacy of def?.legacyKeys ?? []) {
-    const old = readRow(rows, legacy);
-    if (old !== null) return old;
+  for (const k of [key, ...(def?.legacyKeys ?? [])]) {
+    const stored = readRow(rows, k, quiet);
+    if (stored.kind === "value") {
+      return { status: "value", value: stored.value, source: "database", encrypted: stored.encrypted };
+    }
+    if (stored.kind === "unreadable") return { status: "unreadable", storedKey: k };
   }
 
   if (def?.envFallback) {
     const fromEnv = process.env[def.envFallback];
-    if (fromEnv !== undefined && fromEnv !== "") return fromEnv;
+    if (fromEnv !== undefined && fromEnv !== "") {
+      return { status: "value", value: fromEnv, source: "env", encrypted: false };
+    }
   }
 
-  return def?.default ?? null;
+  if (def?.default !== undefined) {
+    return { status: "value", value: def.default, source: "default", encrypted: false };
+  }
+  return { status: "unset" };
+}
+
+/**
+ * Resolved value, or null when nothing usable is configured.
+ *
+ * Null also for a stored value that cannot be decrypted. That keeps every caller's
+ * contract — nothing that reads a setting starts throwing — and every caller already
+ * treats null as "not configured", which fails closed. Use `getSettingState` to tell the
+ * two apart.
+ */
+export async function getSetting(key: string): Promise<string | null> {
+  const r = resolve(await load(), key);
+  return r.status === "value" ? r.value : null;
+}
+
+/** Like `getSetting`, but says whether a stored value was there and unreadable. */
+export async function getSettingState(key: string): Promise<SettingState> {
+  const r = resolve(await load(), key);
+  if (r.status !== "value") return r;
+  return { status: "value", value: r.value, source: r.source };
 }
 
 export async function getNumberSetting(
@@ -267,6 +332,29 @@ export interface SettingView {
   /** True when the value still comes from .env and hasn't been moved yet. */
   fromEnv: boolean;
   envFallback?: string;
+  /**
+   * A value IS stored and cannot be decrypted. Nothing falls back past it — not a legacy
+   * key, not .env — so the service using it is off until it is re-entered. `source` is
+   * "database" and `configured` stays true, so the field can still be cleared.
+   */
+  unreadable: boolean;
+  /** What is wrong with this field and what to do, for the page to show. Null when fine. */
+  problem: string | null;
+}
+
+/** Shown in the mask slot, which the page already renders as "Currently …". */
+const UNREADABLE_MASK = "⚠ can't be decrypted — re-enter it";
+
+function unreadableProblem(def: SettingDef, storedKey: string): string {
+  const where =
+    storedKey === def.key
+      ? "The stored value"
+      : `The value stored under its old key ${storedKey}`;
+  const why = settingsKeyAvailable()
+    ? "SETTINGS_KEY has changed since it was saved, or the stored row is damaged"
+    : "SETTINGS_KEY is missing or unusable on this server";
+  const fallback = def.envFallback ? ` or to ${def.envFallback}` : "";
+  return `${where} can't be decrypted — re-enter it. ${why}. Nothing falls back to an older value${fallback} while it is unreadable.`;
 }
 
 /**
@@ -279,38 +367,31 @@ export async function describeSettings(): Promise<SettingView[]> {
   const views: SettingView[] = [];
 
   for (const def of SETTINGS) {
-    let row = rows.get(def.key);
-    if (!(row && (row.encrypted || row.value !== ""))) {
-      for (const legacy of def.legacyKeys ?? []) {
-        const old = rows.get(legacy);
-        if (old && (old.encrypted || old.value !== "")) {
-          row = old;
-          break;
-        }
-      }
-    }
+    const r = resolve(rows, def.key, true);
     const secret = isSecret(def.key);
 
     let source: SettingSource = "unset";
     let value: string | null = null;
     let masked: string | null = null;
+    let unreadable = false;
+    let problem: string | null = null;
 
-    if (row && (row.encrypted || row.value !== "")) {
+    if (r.status === "unreadable") {
       source = "database";
-      if (row.encrypted) {
-        const plain = decryptSecret(row.value);
-        masked = plain === null ? "⚠ undecryptable" : maskSecret(plain);
-      } else {
-        value = row.value;
+      masked = UNREADABLE_MASK;
+      unreadable = true;
+      problem = unreadableProblem(def, r.storedKey);
+    } else if (r.status === "value") {
+      source = r.source;
+      if (r.source === "database") {
+        if (r.encrypted) masked = maskSecret(r.value);
+        else value = r.value;
+      } else if (r.source === "env") {
+        if (secret) masked = maskSecret(r.value);
+        else value = r.value;
+      } else if (!secret) {
+        value = r.value;
       }
-    } else if (def.envFallback && process.env[def.envFallback]) {
-      source = "env";
-      const fromEnv = process.env[def.envFallback] ?? "";
-      if (secret) masked = maskSecret(fromEnv);
-      else value = fromEnv;
-    } else if (def.default !== undefined) {
-      source = "default";
-      if (!secret) value = def.default;
     }
 
     views.push({
@@ -330,6 +411,8 @@ export async function describeSettings(): Promise<SettingView[]> {
       configured: source === "database" || source === "env",
       fromEnv: source === "env",
       envFallback: def.envFallback,
+      unreadable,
+      problem,
     });
   }
 

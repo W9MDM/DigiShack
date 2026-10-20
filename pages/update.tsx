@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ToolTabs } from "@/components/settings/ToolTabs";
+import { SettingsLayout } from "@/components/settings/SettingsLayout";
 
 import {
   Badge,
@@ -194,8 +194,7 @@ export default function UpdatePage() {
   }
 
   return (
-    <>
-      <ToolTabs />
+    <SettingsLayout>
       <PageHeader
         title="Updates"
         subtitle={check ? `Running version ${check.version}` : undefined}
@@ -468,7 +467,7 @@ export default function UpdatePage() {
           </Card>
         )}
       </div>
-    </>
+    </SettingsLayout>
   );
 }
 

@@ -22,7 +22,14 @@ import { useCan } from "@/lib/client/session";
  * "hunt" across a radio change would start an unattended session on a radio whose
  * antenna, power and tuner state nobody has looked at yet.
  */
-export function SourcePicker({ source }: { source: "flex" | "icom" | "wsjtx" | null }) {
+export function SourcePicker({
+  source,
+  variant = "card",
+}: {
+  source: "flex" | "icom" | "wsjtx" | null;
+  /** "inline" drops the divider and the standing hint, for a page header's action row. */
+  variant?: "card" | "inline";
+}) {
   const canOperate = useCan("OPERATOR");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -60,6 +67,35 @@ export function SourcePicker({ source }: { source: "flex" | "icom" | "wsjtx" | n
     }
   }
 
+  const options = (
+    <>
+      <option value="flex">FlexRadio</option>
+      <option value="icom">Icom (network)</option>
+      <option value="wsjtx">External decoder</option>
+    </>
+  );
+
+  if (variant === "inline") {
+    // The confirm dialog already says what switching does, so the hint is a tooltip here.
+    return (
+      <span className="inline-flex flex-col items-end gap-1">
+        <label className="inline-flex items-center gap-2 text-sm">
+          <span className="text-fg-subtle">{busy ? "Switching…" : "Radio"}</span>
+          <Select
+            value={source}
+            disabled={busy}
+            onChange={(e) => void pick(e.target.value)}
+            className="w-auto py-1"
+            title="Which radio DigiShack drives. Switching stops any automatic mode; the radio takes a few seconds to come up."
+          >
+            {options}
+          </Select>
+        </label>
+        {error && <span className="text-xs text-danger">{error}</span>}
+      </span>
+    );
+  }
+
   return (
     <div className="mt-4 pt-3 border-t border-line">
       <label className="flex items-center gap-2 text-sm">
@@ -70,9 +106,7 @@ export function SourcePicker({ source }: { source: "flex" | "icom" | "wsjtx" | n
           onChange={(e) => void pick(e.target.value)}
           className="flex-1"
         >
-          <option value="flex">FlexRadio</option>
-          <option value="icom">Icom (network)</option>
-          <option value="wsjtx">External decoder</option>
+          {options}
         </Select>
       </label>
       <p className="mt-1.5 text-xs text-fg-subtle">

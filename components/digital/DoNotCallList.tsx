@@ -1,14 +1,12 @@
 import { useState } from "react";
 
+import { NativeSelect } from "@/components/decodes/controls";
 import { HelpTip } from "@/components/ui/HelpTip";
+import { Badge, Button, Input } from "@/components/ui/primitives";
 import { ApiError, apiDelete, apiPost, useApi } from "@/lib/client/api";
 
-// The "do not contact again" list, on the page where the decodes are.
-//
-// Placed here rather than buried in settings on purpose: the moment somebody asks not to
-// be worked again is the moment you are looking at their callsign in a decode list, and a
-// courtesy that takes four clicks and a page change to record is a courtesy that does not
-// get recorded.
+// The "do not contact again" list, in the automatic-operating settings. It began on the
+// decodes page and moved: a list you set up is not one you watch while operating.
 //
 // It is the only control in this application that restricts operating on somebody ELSE'S
 // behalf, so it says out loud what it does and does not do — an operator who believes this
@@ -78,10 +76,8 @@ export function DoNotCallList() {
             Do not call
           </span>
           <HelpTip label="About the do-not-call list">
-            Per callsign, because people ask for different things. Someone asking not to be
-            worked TWICE on a band and mode is not asking never to be worked again, and
-            recording the stronger request costs them contacts they wanted. Neither kind
-            stops you calling by hand.
+            Someone asking not to be worked TWICE on a band and mode is not asking never to be
+            worked again, and recording the stronger request costs them contacts they wanted.
           </HelpTip>
           <span className="text-xs text-fg-muted tnum">({entries.length})</span>
         </div>
@@ -94,7 +90,7 @@ export function DoNotCallList() {
         </p>
 
         <div className="flex flex-wrap gap-1.5 items-start">
-          <input
+          <Input
             value={call}
             onChange={(e) => setCall(e.target.value.toUpperCase())}
             onKeyDown={(e) => {
@@ -102,9 +98,9 @@ export function DoNotCallList() {
             }}
             placeholder="CALLSIGN"
             aria-label="Callsign to never call"
-            className="w-28 rounded-sm border border-line bg-bg-raised px-2 py-1 text-xs tnum text-fg focus:border-accent-bright"
+            className="w-28 py-1 text-xs tnum"
           />
-          <input
+          <Input
             value={reason}
             onChange={(e) => setReason(e.target.value)}
             onKeyDown={(e) => {
@@ -112,25 +108,19 @@ export function DoNotCallList() {
             }}
             placeholder="Why (optional, but read it back in a year)"
             aria-label="Reason"
-            className="flex-1 min-w-40 rounded-sm border border-line bg-bg-raised px-2 py-1 text-xs text-fg focus:border-accent-bright"
+            className="flex-1 min-w-40 w-auto py-1 text-xs"
           />
-          <select
+          <NativeSelect
             value={kind}
             onChange={(e) => setKind(e.target.value as Kind)}
             aria-label="How much to restrict"
-            className="rounded-sm border border-line bg-bg-raised px-1.5 py-1 text-xs text-fg focus:border-accent-bright"
           >
             <option value="NO_DUPES">No duplicates</option>
             <option value="NEVER">Never call</option>
-          </select>
-          <button
-            type="button"
-            onClick={() => void add()}
-            disabled={busy || !call.trim()}
-            className="px-2 py-1 text-xs rounded-sm border border-line text-fg-muted hover:text-fg hover:border-fg-muted disabled:opacity-40"
-          >
+          </NativeSelect>
+          <Button size="sm" onClick={() => void add()} disabled={busy || !call.trim()}>
             Add
-          </button>
+          </Button>
         </div>
 
         {problem && <p className="text-xs text-danger">{problem}</p>}
@@ -152,33 +142,29 @@ export function DoNotCallList() {
               <li key={e.callsign} className="flex items-baseline gap-2 py-1.5">
                 <span className="tnum font-medium">{e.callsign}</span>
                 <span
-                  className={
-                    "rounded-sm px-1 text-[10px] uppercase tracking-wide " +
-                    (e.kind === "NEVER"
-                      ? "bg-danger/20 text-danger"
-                      : "bg-warn/20 text-warn")
-                  }
                   title={
                     e.kind === "NEVER"
                       ? "Never called by the automatic modes"
                       : "Only called for a band and mode not already in the log"
                   }
                 >
-                  {e.kind === "NEVER" ? "never" : "no dupes"}
+                  <Badge size="sm" tone={e.kind === "NEVER" ? "danger" : "warn"}>
+                    {e.kind === "NEVER" ? "never" : "no dupes"}
+                  </Badge>
                 </span>
                 <span className="flex-1 min-w-0 truncate text-xs text-fg-subtle">
                   {e.reason || "no reason recorded"}
                   {e.addedBy ? ` · ${e.addedBy}` : ""}
                 </span>
-                <button
-                  type="button"
+                <Button
+                  size="sm"
+                  variant="ghost"
                   onClick={() => void remove(e.callsign)}
                   disabled={busy}
                   title={`Allow the automatic modes to call ${e.callsign} again`}
-                  className="text-xs text-fg-muted hover:text-danger disabled:opacity-40"
                 >
-                  remove
-                </button>
+                  Remove
+                </Button>
               </li>
             ))}
           </ul>

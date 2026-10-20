@@ -1,18 +1,32 @@
 import Link from "next/link";
 import { useMemo, useState } from "react";
 
+import { CardTable } from "@/components/dashboard/CardTable";
+import { plural } from "@/components/dashboard/format";
+import { Loading, Notice } from "@/components/dashboard/Notice";
+import { MeterKey, MeterLegend, ProgressMeter } from "@/components/dashboard/ProgressMeter";
+import { Segmented } from "@/components/dashboard/Segmented";
 import {
-  Badge,
+  Button,
   Card,
+  EmptyState,
   ErrorBanner,
+  Field,
   PageHeader,
   Select,
+  Td,
+  Th,
 } from "@/components/ui/primitives";
 import { withPageAuth } from "@/lib/auth/guard";
 import { useApi } from "@/lib/client/api";
 import { BAND_NAMES } from "@/lib/ham/bands";
 import { LOGGABLE_MODES } from "@/lib/ham/modes";
 import type { ListResponse, Station } from "@/lib/types";
+import { cn } from "@/lib/utils";
+
+// Award progress, as a summary first: every award on one screen with its meter, and the
+// codes behind each one a click away. It used to be six tall cards in a row, each a wall
+// of chips, so comparing DXCC with WAS meant scrolling past four hundred entities.
 
 interface AwardSlice {
   worked: number;
@@ -58,26 +72,33 @@ export default function AwardsPage() {
 
   const { data, error, loading } = useApi<AwardsResult>(path);
   const { data: stationsData } = useApi<ListResponse<Station>>("/api/stations");
+  const filtered = Boolean(stationId || band || mode);
+  const clear = () => {
+    setStationId("");
+    setBand("");
+    setMode("");
+  };
 
   return (
     <>
+      {/* The subtitle used to say "confirmed by card, LoTW or eQSL", but this count has
+          never included eQSL — lib/awards/compute.ts leaves it out because ARRL and CQ
+          do not accept it. The page now says what it counts. */}
       <PageHeader
         title="Awards"
         subtitle={
           data
-            ? `${data.qsoCount.toLocaleString()} QSOs · ${data.confirmedQsoCount.toLocaleString()} confirmed by card, LoTW or eQSL`
-            : undefined
+            ? `${plural(data.qsoCount, "QSO")} · ${data.confirmedQsoCount.toLocaleString()} confirmed by card or LoTW`
+            : "DXCC, states, zones, continents, grids and islands"
         }
       />
 
-      {error && <ErrorBanner>{error.message}</ErrorBanner>}
-
-      <Card className="mb-6">
-        <div className="grid gap-3 sm:grid-cols-3">
+      <div className="mb-3 grid grid-cols-2 gap-3 sm:grid-cols-[repeat(3,minmax(0,1fr))_auto] sm:items-end">
+        <Field label="Station" htmlFor="awards-station" className="col-span-2 sm:col-span-1">
           <Select
+            id="awards-station"
             value={stationId}
             onChange={(e) => setStationId(e.target.value)}
-            aria-label="Show awards for which station"
           >
             <option value="">All stations</option>
             {(stationsData?.rows ?? []).map((s) => (
@@ -86,11 +107,9 @@ export default function AwardsPage() {
               </option>
             ))}
           </Select>
-          <Select
-            value={band}
-            onChange={(e) => setBand(e.target.value)}
-            aria-label="Show award progress for which band"
-          >
+        </Field>
+        <Field label="Band" htmlFor="awards-band">
+          <Select id="awards-band" value={band} onChange={(e) => setBand(e.target.value)}>
             <option value="">All bands</option>
             {BAND_NAMES.map((b) => (
               <option key={b} value={b}>
@@ -98,7 +117,9 @@ export default function AwardsPage() {
               </option>
             ))}
           </Select>
-          <Select value={mode} onChange={(e) => setMode(e.target.value)}>
+        </Field>
+        <Field label="Mode" htmlFor="awards-mode">
+          <Select id="awards-mode" value={mode} onChange={(e) => setMode(e.target.value)}>
             <option value="">All modes</option>
             {LOGGABLE_MODES.map((m) => (
               <option key={m} value={m}>
@@ -106,216 +127,283 @@ export default function AwardsPage() {
               </option>
             ))}
           </Select>
-        </div>
-      </Card>
+        </Field>
+        {filtered && (
+          <Button variant="ghost" onClick={clear} className="col-span-2 justify-self-start sm:col-span-1">
+            Clear filters
+          </Button>
+        )}
+      </div>
+      <p className="mb-6 text-sm text-fg-subtle">
+        Confirmed means a paper card or LoTW. eQSL is kept in the log, but ARRL and CQ do not
+        accept it for these awards, so it is not counted here.
+      </p>
 
-      {loading && !data && <p className="text-sm text-fg-subtle">Loading…</p>}
-
-      {data && data.dxccTotal === null && (
+      {error && (
         <div className="mb-6">
           <ErrorBanner>
-            No DXCC reference data loaded, so DXCC progress has no denominator.{" "}
-            <Link href="/dxcc" className="underline">
-              Load cty.xml
-            </Link>
-            .
+            {error.message}
+            {data ? " — showing the last figures that loaded." : " Retrying on its own."}
           </ErrorBanner>
         </div>
       )}
 
-      {data && (
-        <div className="flex flex-col gap-6">
-          {data.awards.map((award) => (
-            <AwardCard key={award.id} award={award} />
-          ))}
-        </div>
+      {!data && !error && <Loading>Counting awards…</Loading>}
+
+      {data && data.dxccTotal === null && (
+        <Notice tone="warn" className="mb-6">
+          No DXCC reference data is loaded, so DXCC has a count but no target.{" "}
+          <Link href="/dxcc" className="underline underline-offset-2">
+            Load cty.xml
+          </Link>{" "}
+          to get one.
+        </Notice>
       )}
+
+      {data &&
+        (data.qsoCount === 0 ? (
+          <Card>
+            <EmptyState
+              title={filtered ? "No contacts match these filters" : "Nothing logged yet"}
+              action={filtered ? <Button onClick={clear}>Clear filters</Button> : undefined}
+            >
+              {filtered
+                ? "Award progress is counted from the contacts the filters select."
+                : "Award progress appears once the log has contacts in it."}
+            </EmptyState>
+          </Card>
+        ) : (
+          <Card
+            title="Progress"
+            actions={
+              loading ? (
+                <span role="status" className="text-xs text-fg-subtle">
+                  Updating…
+                </span>
+              ) : undefined
+            }
+          >
+            <div className={cn("transition-opacity", loading && "opacity-60")} aria-busy={loading}>
+              <MeterKey />
+              <ul className="-mx-4 mt-3 divide-y divide-line border-t border-line">
+                {data.awards.map((award) => (
+                  <AwardRow key={award.id} award={award} />
+                ))}
+              </ul>
+            </div>
+          </Card>
+        ))}
     </>
   );
 }
 
-function AwardCard({ award }: { award: AwardProgress }) {
-  const [tab, setTab] = useState<"worked" | "missing" | "bands">("worked");
+/** The total worth drawing against — none when the reference data is known to be short. */
+const targetOf = (a: AwardProgress) =>
+  a.total !== null && a.total > 0 && !a.totalUnreliable ? a.total : null;
 
-  // Clamped: with stale or partial reference data the numerator can exceed the
-  // denominator, and a bar wider than its track just looks broken.
-  const clamp = (n: number) => Math.max(0, Math.min(100, n));
-  const pctWorked =
-    award.total && award.total > 0
-      ? clamp((award.worked / award.total) * 100)
-      : null;
-  const pctConfirmed =
-    award.total && award.total > 0
-      ? clamp((award.confirmed / award.total) * 100)
-      : null;
-
-  const bands = Object.entries(award.byBand).sort(
-    (a, b) => b[1].worked - a[1].worked,
-  );
+function AwardRow({ award }: { award: AwardProgress }) {
+  // The detail renders only while open: the grid award alone can be thousands of chips.
+  const [open, setOpen] = useState(false);
+  const target = targetOf(award);
 
   return (
-    <Card
-      title={
-        <div className="flex items-baseline gap-2">
-          <h2 className="font-display text-lg uppercase tracking-wide">
-            {award.label}
-          </h2>
-          <span className="text-xs text-fg-subtle">{award.unit}</span>
-        </div>
-      }
-      actions={
-        <div className="flex items-center gap-2 text-sm">
-          <span className="tnum">
-            <span className="text-fg">{award.worked}</span>
-            {award.total !== null && !award.totalUnreliable && (
-              <span className="text-fg-subtle"> / {award.total}</span>
-            )}
+    <li>
+      <details
+        open={open}
+        onToggle={(e) => setOpen(e.currentTarget.open)}
+        className="group"
+      >
+        {/* Spans throughout: <summary> takes phrasing content only. */}
+        <summary className="flex cursor-pointer list-none flex-col gap-2 px-4 py-3 transition-colors hover:bg-surface-2 [&::-webkit-details-marker]:hidden">
+          <span className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+            <span className="flex items-baseline gap-2">
+              <svg
+                viewBox="0 0 12 12"
+                aria-hidden="true"
+                className="size-3 shrink-0 self-center text-fg-subtle transition-transform group-open:rotate-90"
+              >
+                <path d="M4 2l4 4-4 4" fill="none" stroke="currentColor" strokeWidth="1.5" />
+              </svg>
+              <span className="font-display text-base text-fg">{award.label}</span>
+              <span className="text-xs text-fg-subtle">{award.unit}</span>
+            </span>
+            <span className="text-sm tnum text-fg-muted">
+              <span className="text-fg">{award.confirmed.toLocaleString()}</span> confirmed ·{" "}
+              <span className="text-fg">{award.worked.toLocaleString()}</span> worked
+              {target !== null && ` · of ${target.toLocaleString()}`}
+            </span>
           </span>
-          <Badge tone="ok">{award.confirmed} confirmed</Badge>
-          {award.totalUnreliable && <Badge tone="warn">stale reference</Badge>}
-        </div>
-      }
-    >
-      {/* Two-tone bar: confirmed fills solid, worked-but-unconfirmed is muted, so
-          the gap between "worked" and "credited" is visible at a glance. */}
+          <ProgressMeter worked={award.worked} confirmed={award.confirmed} total={target} />
+          {award.totalUnreliable && (
+            <span className="text-xs text-warn">
+              {award.worked.toLocaleString()} worked is more than the {award.total} in the
+              reference data, so its target is out of date. The counts are still right.
+            </span>
+          )}
+          {award.total === null && (
+            <span className="text-xs text-fg-subtle">No fixed total for this award.</span>
+          )}
+        </summary>
+        {open && <AwardDetail award={award} />}
+      </details>
+    </li>
+  );
+}
+
+type DetailTab = "worked" | "missing" | "bands";
+
+/** Low bands first, as a band list is read; anything unrecognised after them. */
+function bandRank(b: string): number {
+  const i = BAND_NAMES.indexOf(b.toUpperCase());
+  return i < 0 ? Number.MAX_SAFE_INTEGER : i;
+}
+
+function AwardDetail({ award }: { award: AwardProgress }) {
+  const [tab, setTab] = useState<DetailTab>("worked");
+  const target = targetOf(award);
+
+  const bands = Object.entries(award.byBand).sort(
+    (a, b) => bandRank(a[0]) - bandRank(b[0]) || a[0].localeCompare(b[0]),
+  );
+
+  const options: { value: DetailTab; label: string }[] = [
+    { value: "worked", label: `Worked (${award.worked.toLocaleString()})` },
+    ...(award.missing
+      ? [{ value: "missing" as const, label: `Missing (${award.missing.length.toLocaleString()})` }]
+      : []),
+    { value: "bands", label: `By band (${bands.length})` },
+  ];
+
+  return (
+    <div className="flex flex-col gap-3 px-4 pb-4">
+      <MeterLegend
+        worked={award.worked}
+        confirmed={award.confirmed}
+        total={target}
+        unit={award.unit}
+      />
       {award.totalUnreliable && (
-        <p className="text-xs text-warn mb-3">
-          {award.worked} worked exceeds the {award.total} in the reference data, so
-          the target set is incomplete or out of date. Reload cty.xml on the{" "}
-          <Link href="/dxcc" className="underline">
+        <p className="text-sm text-warn">
+          Reload cty.xml on the{" "}
+          <Link href="/dxcc" className="underline underline-offset-2">
             DXCC page
           </Link>{" "}
-          — the count above is still correct, only the denominator is not.
+          to bring the target up to date.
         </p>
       )}
 
-      {pctWorked !== null ? (
-        <div className="mb-3">
-          <div className="h-4 bg-surface-2 rounded-sm overflow-hidden flex">
-            <div
-              className="h-full bg-ok"
-              style={{ width: `${pctConfirmed ?? 0}%` }}
-              title={`${award.confirmed} confirmed`}
-            />
-            <div
-              className="h-full bg-accent/50"
-              style={{ width: `${(pctWorked ?? 0) - (pctConfirmed ?? 0)}%` }}
-              title={`${award.worked - award.confirmed} worked, unconfirmed`}
-            />
-          </div>
-          <div className="flex justify-between text-xs text-fg-subtle mt-1 tnum">
-            <span>{(pctConfirmed ?? 0).toFixed(1)}% confirmed</span>
-            <span>{(pctWorked ?? 0).toFixed(1)}% worked</span>
-          </div>
-        </div>
-      ) : (
-        <p className="text-sm text-fg-muted mb-3">
-          {award.worked.toLocaleString()} {award.unit} worked,{" "}
-          {award.confirmed.toLocaleString()} confirmed. No fixed target for this
-          award, so there is no percentage to show.
-        </p>
-      )}
-
-      <div className="flex gap-0.5 mb-3 border-b border-line">
-        {(
-          [
-            ["worked", `Worked (${award.worked})`],
-            ...(award.missing
-              ? ([["missing", `Missing (${award.missing.length})`]] as const)
-              : []),
-            ["bands", `By band (${bands.length})`],
-          ] as const
-        ).map(([id, label]) => (
-          <button
-            key={id}
-            type="button"
-            onClick={() => setTab(id as typeof tab)}
-            className={`px-3 py-1.5 text-sm border-b-2 -mb-px ${
-              tab === id
-                ? "text-fg border-accent"
-                : "text-fg-muted border-transparent hover:text-fg"
-            }`}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
+      <Segmented
+        value={tab}
+        options={options}
+        onChange={setTab}
+        label={`${award.label} detail`}
+        className="self-start"
+      />
 
       {tab === "worked" &&
         (award.entries.length === 0 ? (
           <p className="text-sm text-fg-subtle">
-            Nothing worked yet — QSOs need the underlying field populated.
+            Nothing worked yet — contacts need this field filled in to count.
           </p>
         ) : (
-          <div className="flex flex-wrap gap-1.5">
-            {award.entries.map((e) => (
-              <span
-                key={e.code}
-                title={`${e.label ?? e.code} — ${e.count} QSO${e.count === 1 ? "" : "s"}${e.confirmed ? ", confirmed" : ", not confirmed"}`}
-                className={`inline-flex items-center gap-1 border px-1.5 py-0.5 rounded-sm text-xs ${
-                  e.confirmed
-                    ? "bg-ok/12 text-ok border-ok/35"
-                    : "bg-surface-3 text-fg-muted border-line-strong"
-                }`}
-              >
-                <span className="tnum">{e.code}</span>
-                {e.label && (
-                  <span className="opacity-70 max-w-40 truncate">{e.label}</span>
-                )}
-              </span>
-            ))}
-          </div>
+          <>
+            <p className="text-xs text-fg-subtle">
+              Green is confirmed; grey is worked and waiting for a card or LoTW.
+            </p>
+            <ul className="flex flex-wrap gap-1.5">
+              {award.entries.map((e) => (
+                <li
+                  key={e.code}
+                  title={`${e.label ?? e.code} — ${plural(e.count, "QSO")}`}
+                  className={cn(
+                    "inline-flex items-center gap-1 rounded-sm border px-1.5 py-0.5 text-xs",
+                    e.confirmed
+                      ? "border-ok/35 bg-ok/12 text-ok"
+                      : "border-line-strong bg-surface-3 text-fg-muted",
+                  )}
+                >
+                  <span className="tnum">{e.code}</span>
+                  {e.label && <span className="max-w-40 truncate">{e.label}</span>}
+                  <span className="sr-only">{e.confirmed ? ", confirmed" : ", not confirmed"}</span>
+                </li>
+              ))}
+            </ul>
+          </>
         ))}
 
-      {tab === "missing" && award.missing && (
-        <div className="flex flex-wrap gap-1.5">
-          {award.missing.length === 0 ? (
-            <p className="text-sm text-ok">Complete — nothing missing.</p>
-          ) : (
-            award.missing.map((m) => (
-              <span
+      {tab === "missing" &&
+        award.missing &&
+        (award.missing.length === 0 ? (
+          <p className="text-sm text-ok">Complete — nothing missing.</p>
+        ) : (
+          <ul className="flex flex-wrap gap-1.5">
+            {award.missing.map((m) => (
+              <li
                 key={m.code}
-                className="inline-flex items-center gap-1 border border-line-strong px-1.5 py-0.5 rounded-sm text-xs text-fg-subtle"
-                title={m.name ? `${m.name} (${m.code})` : m.code}
+                className="inline-flex items-center gap-1 rounded-sm border border-line-strong px-1.5 py-0.5 text-xs text-fg-muted"
               >
                 <span className="tnum">{m.code}</span>
                 {m.name && <span className="max-w-40 truncate">{m.name}</span>}
-              </span>
-            ))
-          )}
-        </div>
-      )}
-
-      {tab === "bands" &&
-        (bands.length === 0 ? (
-          <p className="text-sm text-fg-subtle">No data.</p>
-        ) : (
-          <ul className="flex flex-col gap-1">
-            {bands.map(([b, slice]) => (
-              <li key={b} className="flex items-center gap-3 text-sm">
-                <span className="w-16 text-fg-muted shrink-0">{b}</span>
-                <div className="flex-1 h-3 bg-surface-2 rounded-sm overflow-hidden flex">
-                  <div
-                    className="h-full bg-ok"
-                    style={{
-                      width: `${(slice.confirmed / Math.max(1, award.worked)) * 100}%`,
-                    }}
-                  />
-                  <div
-                    className="h-full bg-accent/50"
-                    style={{
-                      width: `${((slice.worked - slice.confirmed) / Math.max(1, award.worked)) * 100}%`,
-                    }}
-                  />
-                </div>
-                <span className="tnum w-20 text-right text-fg-muted">
-                  {slice.worked} / {slice.confirmed}
-                </span>
               </li>
             ))}
           </ul>
         ))}
-    </Card>
+
+      {tab === "bands" && <BandTable award={award} bands={bands} target={target} />}
+    </div>
+  );
+}
+
+function BandTable({
+  award,
+  bands,
+  target,
+}: {
+  award: AwardProgress;
+  bands: [string, AwardSlice][];
+  target: number | null;
+}) {
+  if (bands.length === 0) {
+    return <p className="text-sm text-fg-subtle">Nothing worked on any band yet.</p>;
+  }
+  // Every band's bar runs to the same length, so bands compare: the award's target where
+  // it has one, otherwise everything worked on all bands together.
+  const scale = target ?? Math.max(1, award.worked);
+
+  return (
+    <>
+      <p className="text-xs text-fg-subtle">
+        Each bar runs to{" "}
+        {target !== null
+          ? `the award's ${target.toLocaleString()} ${award.unit}`
+          : `the ${award.worked.toLocaleString()} ${award.unit} worked on any band`}
+        .
+      </p>
+      <CardTable label={`${award.label} by band`}>
+        <thead>
+          <tr className="bg-surface-2 text-left">
+            <Th>Band</Th>
+            <Th className="text-right">Confirmed</Th>
+            <Th className="text-right">Worked</Th>
+            <Th className="w-full">
+              <span className="sr-only">Progress</span>
+            </Th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-line">
+          {bands.map(([b, slice]) => (
+            <tr key={b}>
+              <Td className="whitespace-nowrap text-fg-muted">{b}</Td>
+              <Td className="text-right tnum">{slice.confirmed.toLocaleString()}</Td>
+              <Td className="text-right tnum text-fg-muted">{slice.worked.toLocaleString()}</Td>
+              <Td className="min-w-24">
+                <ProgressMeter worked={slice.worked} confirmed={slice.confirmed} total={scale} />
+              </Td>
+            </tr>
+          ))}
+        </tbody>
+      </CardTable>
+    </>
   );
 }
 

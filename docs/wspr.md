@@ -42,7 +42,7 @@ WSPR decode. Transmit is refused for WSPR at the transmitter, whatever asks.
 
 ## Reporting to wsprnet
 
-Settings → Logbooks → WSPR → **Report spots to wsprnet.org**. Off by default: a spot puts
+Settings → Spotting & broadcast → WSPR → **Report spots to wsprnet.org**. Off by default: a spot puts
 this station's callsign and grid on a public map, which is the point of the service and a
 thing to opt into. Each spot is one request in the format WSJT-X sends; failures are logged
 once a minute at most and never cost a decode. The reporting callsign and grid are the

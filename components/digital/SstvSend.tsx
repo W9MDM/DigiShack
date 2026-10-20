@@ -5,6 +5,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { NativeSelect } from "@/components/decodes/controls";
+import { Button } from "@/components/ui/primitives";
 import { ApiError, apiPost } from "@/lib/client/api";
 import { sstvImageSeconds, sstvModeByName, sstvTestCard } from "@/lib/digital/sstv";
 
@@ -20,8 +22,6 @@ export interface SstvTxState {
   sent?: boolean;
   reason?: string | null;
 }
-
-const BUTTON = "px-2 py-1 text-xs border border-line rounded-sm hover:text-fg disabled:opacity-50";
 
 function toBase64(bytes: Uint8Array): string {
   let s = "";
@@ -51,6 +51,7 @@ export function SstvSend({
   const [error, setError] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const preview = useRef<HTMLCanvasElement>(null);
+  const fileInput = useRef<HTMLInputElement>(null);
   const mode = sstvModeByName(modeName)!;
 
   // Draw the preview: the source scaled to fill the mode's frame, cropped to its shape,
@@ -146,18 +147,18 @@ export function SstvSend({
   return (
     <div className="border border-line rounded-sm p-3 flex flex-col gap-2">
       <div className="flex flex-wrap items-center gap-2 text-xs">
-        <button type="button" className={BUTTON} onClick={() => setOpen((o) => !o)} aria-expanded={open}>
+        <Button size="sm" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
           {open ? "Hide sending" : "Send a picture"}
-        </button>
+        </Button>
         {sending && tx && (
           <>
             <span className="text-accent-bright tnum">
               Sending {tx.mode} · {mmss(elapsed)} of {mmss(tx.durationMs ?? 0)}
               {tx.powerPct != null ? ` · ${tx.powerPct}% power` : ""}
             </span>
-            <button type="button" className={`${BUTTON} border-danger text-danger`} onClick={() => void stop()}>
+            <Button size="sm" variant="danger" onClick={() => void stop()}>
               Stop
-            </button>
+            </Button>
           </>
         )}
         {!sending && tx && tx.sent === false && tx.reason && <span className="text-danger">Not sent: {tx.reason}</span>}
@@ -167,33 +168,37 @@ export function SstvSend({
       {open && (
         <div className="flex flex-col gap-2">
           <div className="flex flex-wrap items-center gap-2 text-xs">
-            <label className={`${BUTTON} cursor-pointer`}>
+            <Button size="sm" onClick={() => fileInput.current?.click()}>
               Choose a file…
-              <input
-                type="file"
-                accept="image/*"
-                className="sr-only"
-                onChange={(e) => {
-                  const f = e.target.files?.[0];
-                  if (f) loadUrl(URL.createObjectURL(f), f.name);
-                }}
-              />
-            </label>
-            <button type="button" className={BUTTON} disabled={!galleryFile} onClick={() => galleryFile && loadUrl(`/api/sstv/${galleryFile}`, "the gallery picture")}>
+            </Button>
+            {/* Hidden rather than sr-only, so it is not a second tab stop beside the button. */}
+            <input
+              ref={fileInput}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) loadUrl(URL.createObjectURL(f), f.name);
+              }}
+            />
+            <Button
+              size="sm"
+              disabled={!galleryFile}
+              onClick={() => galleryFile && loadUrl(`/api/sstv/${galleryFile}`, "the gallery picture")}
+            >
               Use the gallery picture
-            </button>
-            <button
-              type="button"
-              className={BUTTON}
+            </Button>
+            <Button
+              size="sm"
               onClick={() => {
                 setSource("card");
                 setSourceLabel("the test card");
               }}
             >
               Test card
-            </button>
-            <select
-              className="bg-bg-raised border border-line rounded-sm px-1 py-1 text-xs"
+            </Button>
+            <NativeSelect
               value={modeName}
               onChange={(e) => setModeName(e.target.value)}
               aria-label="SSTV mode to send"
@@ -203,19 +208,19 @@ export function SstvSend({
                   {m} · {Math.round(sstvImageSeconds(sstvModeByName(m)!))} s
                 </option>
               ))}
-            </select>
+            </NativeSelect>
             <label className="flex items-center gap-1">
               <input type="checkbox" checked={stamp} onChange={(e) => setStamp(e.target.checked)} />
               <span>{myCall ? `Stamp ${myCall}` : "Stamp callsign (set it in Settings)"}</span>
             </label>
           </div>
-          <div className="bg-black border border-line rounded-sm overflow-hidden flex justify-center">
+          <div className="bg-bg border border-line rounded-sm overflow-hidden flex justify-center">
             <canvas ref={preview} className="block w-full max-w-[480px]" aria-label="The picture as it will be sent" />
           </div>
           <div className="flex flex-wrap items-center gap-2 text-xs text-fg-muted">
-            <button type="button" className={`px-3 ${BUTTON}`} disabled={!source || sending} onClick={() => void send()}>
+            <Button size="sm" disabled={!source || sending} onClick={() => void send()}>
               Send {mode.name}
-            </button>
+            </Button>
             <span>
               {source ? `From ${sourceLabel}. ` : "Choose a picture. "}
               {Math.round(sstvImageSeconds(mode))} s of carrier, at the SSTV power in Settings; the licence class decides where it may go.

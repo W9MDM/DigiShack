@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { ToolTabs } from "@/components/settings/ToolTabs";
+import { SettingsLayout } from "@/components/settings/SettingsLayout";
 import { useRef, useState } from "react";
 
 import {
@@ -147,8 +147,7 @@ export default function DxccPage() {
   }
 
   return (
-    <>
-      <ToolTabs />
+    <SettingsLayout>
       <PageHeader
         title="DXCC"
         subtitle="Callsign-to-entity reference data from Club Log"
@@ -408,7 +407,7 @@ export default function DxccPage() {
           </div>
         </Card>
       </div>
-    </>
+    </SettingsLayout>
   );
 }
 

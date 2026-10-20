@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { ToolTabs } from "@/components/settings/ToolTabs";
+import { SettingsLayout } from "@/components/settings/SettingsLayout";
 
 import {
   Badge,
@@ -70,8 +70,7 @@ export default function AdifPage() {
   const stations = stationsData?.rows ?? [];
 
   return (
-    <>
-      <ToolTabs />
+    <SettingsLayout>
       <PageHeader
         title="ADIF"
         subtitle="Import and export ADIF 3.x logbook files"
@@ -91,7 +90,7 @@ export default function AdifPage() {
         )}
         {canImport && <QrzSyncCard stations={stations} />}
       </div>
-    </>
+    </SettingsLayout>
   );
 }
 

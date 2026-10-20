@@ -156,6 +156,9 @@ export async function runAutoQsl(): Promise<AutoQslResult> {
     );
   }
 
+  // Safe alongside somebody pressing Send in the web process at the same moment: each row is
+  // claimed in the database before it is mailed, so the two runs split the queue between them
+  // rather than both mailing it. See sendApprovedQsls.
   const sendResult = await sendApprovedQsls({ limit: budget });
   out.sent = sendResult.sent;
   out.failed = sendResult.failed;

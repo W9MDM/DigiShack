@@ -1,11 +1,28 @@
 import Link from "next/link";
 import { useState } from "react";
 
-import { Card, ErrorBanner, PageHeader, Select, Td, Th } from "@/components/ui/primitives";
+import { BarList } from "@/components/dashboard/BarList";
+import { CardTable } from "@/components/dashboard/CardTable";
+import { pct, plural } from "@/components/dashboard/format";
+import { Loading } from "@/components/dashboard/Notice";
+import { Section } from "@/components/dashboard/Section";
 import { HelpTip } from "@/components/ui/HelpTip";
+import {
+  Button,
+  Card,
+  EmptyState,
+  ErrorBanner,
+  PageHeader,
+  Select,
+  Td,
+  Th,
+} from "@/components/ui/primitives";
+import { Stat } from "@/components/ui/Stat";
 import { withPageAuth } from "@/lib/auth/guard";
 import { useApi } from "@/lib/client/api";
-import { formatUtc } from "@/lib/time";
+import { useCan } from "@/lib/client/session";
+import { formatUtcDate } from "@/lib/time";
+import { cn } from "@/lib/utils";
 
 // What this station has done, as opposed to what it is doing.
 //
@@ -36,6 +53,7 @@ interface CountRow {
 }
 
 interface History {
+  /** Newest first, with silent years filled in as zero rows. */
   years: YearRow[];
   /** Most contacts in one UTC day, and which day. Null on an empty log. */
   bestDay: { date: string; qsos: number } | null;
@@ -53,85 +71,16 @@ interface History {
   };
 }
 
-/**
- * A share of the log, rounded to a precision the number can carry.
- *
- * WHOLE NUMBERS ARE WRONG BELOW 10%. The best-day record is 488 of 30,083 contacts -
- * 1.62% - and rounding that to "2%" overstates it by nearly a quarter, on a page whose
- * entire job is being accurate about the log. The operator caught it reading the card.
- *
- * One decimal below 10%, none above: at 47% a decimal is noise, at 1.6% it is the
- * difference between a true statement and a flattering one. Sub-0.05% shows "<0.1%"
- * rather than "0.0%", because a band with three contacts in it has not got none.
- */
-const pct = (part: number, whole: number) => {
-  if (whole <= 0) return "—";
-  const p = (part / whole) * 100;
-  if (p > 0 && p < 0.05) return "<0.1%";
-  return p < 10 ? `${p.toFixed(1)}%` : `${Math.round(p)}%`;
-};
+const TOP_OPTIONS = ["10", "25", "50", "100"] as const;
 
-/**
- * A proportional bar behind a row.
- *
- * Scaled against the LARGEST value in the group rather than the total. Against the total, a
- * log dominated by one mode — which every FT8 station is — renders every other row as a bar
- * one pixel wide, and the comparison people want from these tables is between the small
- * values, not between each and the winner.
- */
-function Bar({ value, max, children }: { value: number; max: number; children: React.ReactNode }) {
-  const w = max > 0 ? Math.max(1.5, (value / max) * 100) : 0;
-  return (
-    <div className="relative px-2 py-1">
-      <div
-        className="absolute inset-y-0 left-0 bg-accent/15 rounded-sm"
-        style={{ width: `${w}%` }}
-        aria-hidden
-      />
-      <div className="relative flex justify-between gap-3 text-sm">{children}</div>
-    </div>
-  );
-}
-
-function Breakdown({
-  title,
-  rows,
-  help,
-}: {
-  title: string;
-  rows: CountRow[];
-  help: string;
-}) {
-  const max = rows.reduce((m, r) => Math.max(m, r.qsos), 0);
-  const total = rows.reduce((s, r) => s + r.qsos, 0);
-  return (
-    <Card title={title}>
-      <p className="text-xs text-fg-subtle mb-2">{help}</p>
-      {rows.length === 0 ? (
-        <p className="text-sm text-fg-subtle">Nothing logged yet.</p>
-      ) : (
-        <div className="flex flex-col">
-          {rows.map((r) => (
-            <Bar key={r.label} value={r.qsos} max={max}>
-              <span className="font-mono">{r.label}</span>
-              <span className="tnum text-fg-muted">
-                {r.qsos.toLocaleString()}
-                <span className="text-fg-subtle"> · {pct(r.qsos, total)}</span>
-              </span>
-            </Bar>
-          ))}
-        </div>
-      )}
-    </Card>
-  );
-}
+const toBars = (rows: CountRow[]) =>
+  rows.map((r) => ({ key: r.label, label: r.label, value: r.qsos }));
 
 export default function StatsPage() {
-  const [top, setTop] = useState("25");
-  const { data, error } = useApi<History>(`/api/stats/history?top=${top}`);
+  const [top, setTop] = useState<string>("25");
+  const { data, error, loading } = useApi<History>(`/api/stats/history?top=${top}`);
+  const canLog = useCan("OPERATOR");
 
-  const years = data?.years ?? [];
-  const peakYear = years.reduce((m, y) => Math.max(m, y.qsos), 0);
   const t = data?.totals;
 
   return (
@@ -140,186 +89,314 @@ export default function StatsPage() {
         title="Statistics"
         subtitle={
           t?.firstQso
-            ? `${t.qsos.toLocaleString()} contacts, ${formatUtc(t.firstQso).slice(0, 10)} to ${formatUtc(t.lastQso ?? t.firstQso).slice(0, 10)}`
+            ? `${plural(t.qsos, "contact")}, ${formatUtcDate(t.firstQso)} to ${formatUtcDate(t.lastQso ?? t.firstQso)} (UTC)`
             : "Everything this station has worked"
         }
       />
 
-      {error && <ErrorBanner>{error.message}</ErrorBanner>}
-      {!data && !error && <p className="text-sm text-fg-subtle">Reading the log…</p>}
+      {error && (
+        <div className="mb-6">
+          <ErrorBanner>
+            {error.message}
+            {data ? " — showing the last figures that loaded." : " Retrying on its own."}
+          </ErrorBanner>
+        </div>
+      )}
+      {!data && !error && <Loading>Reading the log…</Loading>}
 
-      {data && (
-        <div className="flex flex-col gap-6">
-          {/*
-            THE BEST DAY, on its own line above the totals.
-
-            Not one of the four cards below, because it is a different KIND of number: those
-            are the log's size, this is a record. Reading "488" beside "30,082 contacts"
-            invites the eye to compare them, and they are not comparable.
-
-            The date is a UTC day — every award, contest and duplicate rule in this
-            application counts days in UTC, and 00:00 UTC is 19:00 local here, so a
-            local-day count would split one evening across two days and under-report the
-            best of them. Labelled so nobody has to guess which convention was used.
-          */}
-          {data.bestDay && (
-            <Card title="Best day">
-              <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-                <span className="font-display text-2xl tnum">
-                  {data.bestDay.qsos.toLocaleString()}
-                </span>
-                <span className="text-sm text-fg-muted">contacts on</span>
-                <span className="font-display text-lg tnum">{data.bestDay.date}</span>
-                <span className="text-xs text-fg-subtle">
-                  UTC · {pct(data.bestDay.qsos, t!.qsos)} of the whole log in one day
-                </span>
-              </div>
-            </Card>
-          )}
-
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            {[
-              { label: "Contacts", value: t!.qsos },
-              { label: "Confirmed", value: t!.confirmed, of: t!.qsos },
-              { label: "Unique callsigns", value: t!.callsigns },
-              { label: "DXCC entities", value: t!.entities },
-            ].map((c) => (
-              <Card key={c.label} title={c.label}>
-                <div className="text-2xl tnum">{c.value.toLocaleString()}</div>
-                {c.of !== undefined && (
-                  <div className="text-xs text-fg-subtle">{pct(c.value, c.of)} of the log</div>
-                )}
-              </Card>
-            ))}
-          </div>
-
-          <Card title="By year">
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm border-collapse">
-                <thead>
-                  <tr className="text-left">
-                    {["Year", "Contacts", "Confirmed", "Stations", "Entities"].map((h) => (
-                      <Th key={h}>{h}</Th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-line">
-                  {years.map((y) => (
-                    // A silent year is dimmed rather than omitted: the gap is part of the
-                    // history, and a table that leaves it out reads as continuous activity.
-                    <tr key={y.year} className={y.qsos === 0 ? "opacity-45" : ""}>
-                      <Td className="tnum font-medium">{y.year}</Td>
-                      <Td>
-                        {/* The bar is scaled to the busiest year, so a quiet one reads as
-                            quiet rather than as almost-nothing. */}
-                        <div className="relative">
-                          <div
-                            className="absolute inset-y-0 left-0 bg-accent/20 rounded-sm"
-                            style={{ width: `${peakYear ? (y.qsos / peakYear) * 100 : 0}%` }}
-                            aria-hidden
-                          />
-                          <span className="relative tnum">{y.qsos.toLocaleString()}</span>
-                        </div>
-                      </Td>
-                      <Td className="tnum text-fg-muted">
-                        {y.confirmed.toLocaleString()}
-                        <span className="text-fg-subtle"> · {pct(y.confirmed, y.qsos)}</span>
-                      </Td>
-                      <Td className="tnum text-fg-muted">
-                        {y.callsigns.toLocaleString()}
-                      </Td>
-                      <Td className="tnum text-fg-muted">{y.entities}</Td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </Card>
-          <div className="grid gap-4 lg:grid-cols-3">
-            <Breakdown
-              title="By mode"
-              rows={data.modes}
-              help="Every contact ever logged, by mode."
-            />
-            <Breakdown
-              title="By band"
-              rows={data.bands}
-              help="Bars are scaled to the busiest band, not to the total."
-            />
-            <Breakdown
-              title="By continent"
-              rows={data.continents}
-              help="A dash is a contact whose entity was never resolved — worth knowing, so it is shown rather than hidden."
-            />
-          </div>
-
-          <Card
-            title="Most worked"
-            actions={
-              <label className="flex items-center gap-2 text-xs text-fg-subtle">
-                Show
-                <Select value={top} onChange={(e) => setTop(e.target.value)} className="w-20">
-                  {["10", "25", "50", "100"].map((n) => (
-                    <option key={n} value={n}>
-                      {n}
-                    </option>
-                  ))}
-                </Select>
-              </label>
+      {data && t && t.qsos === 0 && (
+        <Card>
+          <EmptyState
+            title="Nothing logged yet"
+            action={
+              canLog ? (
+                <Link href="/qsos/new">
+                  <Button variant="primary">Log a QSO</Button>
+                </Link>
+              ) : undefined
             }
           >
-            <div className="flex items-center gap-2 mb-2">
-              <span className="text-xs text-fg-subtle">
-                Stations worked most often, with the span between the first and last contact.
-              </span>
-              <HelpTip label="About most worked">
-                Repeat contacts are not duplicates to be avoided — on the digital bands the
-                same stations are audible for years, and a high count usually means a reliable
-                path rather than an error. The band count is the more interesting number: the
-                same station on eight bands is eight award credits.
-              </HelpTip>
-            </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm border-collapse">
-                <thead>
-                  <tr className="text-left">
-                    {["Callsign", "Contacts", "Bands", "First", "Last"].map((h) => (
-                      <Th key={h}>{h}</Th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-line">
-                  {data.mostWorked.map((w) => (
-                    <tr key={w.callsign}>
-                      <Td>
-                        {/* To their history rather than to the filtered log: the next
-                            question after "who have I worked most" is "on what, and is it
-                            confirmed", which the log's date-ordered rows answer badly. The
-                            history page links on to the log for anyone who wants the rows. */}
-                        <Link
-                          href={`/calls/${encodeURIComponent(w.callsign)}`}
-                          className="font-display tracking-wide hover:text-accent-bright"
-                        >
-                          {w.callsign}
-                        </Link>
-                      </Td>
-                      <Td className="tnum">{w.qsos.toLocaleString()}</Td>
-                      <Td className="tnum text-fg-muted">{w.bands}</Td>
-                      <Td className="tnum text-fg-subtle whitespace-nowrap">
-                        {formatUtc(w.firstWorked).slice(0, 10)}
-                      </Td>
-                      <Td className="tnum text-fg-subtle whitespace-nowrap">
-                        {formatUtc(w.lastWorked).slice(0, 10)}
-                      </Td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </Card>
+            Statistics appear once the log has contacts in it.
+          </EmptyState>
+        </Card>
+      )}
+
+      {data && t && t.qsos > 0 && (
+        <div className="flex flex-col gap-6">
+          <Totals data={data} />
+          <Highlights data={data} />
+          <ByYear years={data.years} />
+
+          <div className="grid gap-4 lg:grid-cols-3">
+            <Card title="By mode">
+              <p className="mb-3 text-sm text-fg-subtle">Every contact ever logged, by mode.</p>
+              <BarList rows={toBars(data.modes)} />
+            </Card>
+            <Card title="By band">
+              <p className="mb-3 text-sm text-fg-subtle">
+                Bars are scaled to the busiest band, not to the total.
+              </p>
+              <BarList rows={toBars(data.bands)} />
+            </Card>
+            <Card title="By continent">
+              <p className="mb-3 text-sm text-fg-subtle">
+                A dash is a contact whose entity was never resolved — shown rather than hidden.
+              </p>
+              <BarList rows={toBars(data.continents)} />
+            </Card>
+          </div>
+
+          <MostWorked rows={data.mostWorked} top={top} setTop={setTop} updating={loading} />
         </div>
       )}
     </>
+  );
+}
+
+function Totals({ data }: { data: History }) {
+  const t = data.totals;
+  // Oldest first for the sparkline; the table below runs newest first.
+  const perYear = [...data.years].reverse();
+  const first = perYear[0]?.year;
+  const last = perYear[perYear.length - 1]?.year;
+
+  return (
+    <Section title="Totals">
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <Stat
+          label="Contacts"
+          value={t.qsos}
+          trend={perYear.length > 1 ? perYear.map((y) => y.qsos) : undefined}
+          trendLabel={
+            first !== undefined && last !== undefined
+              ? `Contacts per year, ${first} to ${last}; the table below has the figures.`
+              : undefined
+          }
+          hint={
+            perYear.length > 1 && first !== undefined && last !== undefined
+              ? `per year, ${first}–${last}`
+              : undefined
+          }
+        />
+        <Stat
+          label="Confirmed"
+          value={t.confirmed}
+          tone="ok"
+          hint={`${pct(t.confirmed, t.qsos)} of the log · card, LoTW or eQSL`}
+        />
+        <Stat label="Unique callsigns" value={t.callsigns} />
+        <Stat label="DXCC entities" value={t.entities} href="/awards" />
+      </div>
+    </Section>
+  );
+}
+
+/**
+ * Records, apart from the totals.
+ *
+ * The best day used to sit on its own line above the totals for a reason that still
+ * holds: it is a different KIND of number. "488" beside "30,082 contacts" invites the eye
+ * to compare two things that are not comparable, so records get their own heading.
+ *
+ * The best day is a UTC day — every award, contest and duplicate rule here counts days in
+ * UTC, and 00:00 UTC is evening local time in the Americas, so a local-day count would
+ * split one evening across two days and under-report the best of them.
+ */
+function Highlights({ data }: { data: History }) {
+  const t = data.totals;
+  const bestYear = data.years.reduce<YearRow | null>(
+    (best, y) => (best === null || y.qsos > best.qsos ? y : best),
+    null,
+  );
+  const thisYear = new Date().getUTCFullYear();
+  const topBand = data.bands[0];
+  const mostWorked = data.mostWorked[0];
+
+  return (
+    <Section title="Highlights">
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        {data.bestDay && (
+          <Stat
+            label="Best day"
+            value={data.bestDay.qsos}
+            hint={`${data.bestDay.date} UTC · ${pct(data.bestDay.qsos, t.qsos)} of the log`}
+          />
+        )}
+        {bestYear && bestYear.qsos > 0 && (
+          <Stat
+            label="Best year"
+            value={bestYear.qsos}
+            hint={`${bestYear.year}${bestYear.year === thisYear ? ", so far" : ""}`}
+          />
+        )}
+        {topBand && (
+          <Stat
+            label="Busiest band"
+            value={topBand.label}
+            hint={`${plural(topBand.qsos, "contact")} · ${pct(topBand.qsos, t.qsos)}`}
+          />
+        )}
+        {mostWorked && (
+          <Stat
+            label="Most worked"
+            value={mostWorked.callsign}
+            hint={`${plural(mostWorked.qsos, "contact")} on ${plural(mostWorked.bands, "band")}`}
+            href={`/calls/${encodeURIComponent(mostWorked.callsign)}`}
+          />
+        )}
+      </div>
+    </Section>
+  );
+}
+
+function ByYear({ years }: { years: YearRow[] }) {
+  const peak = years.reduce((m, y) => Math.max(m, y.qsos), 0);
+  const thisYear = new Date().getUTCFullYear();
+
+  return (
+    <Card title="By year">
+      <CardTable>
+        <thead>
+          <tr className="bg-surface-2 text-left">
+            <Th>Year</Th>
+            <Th>Contacts</Th>
+            <Th className="text-right">Confirmed</Th>
+            <Th className="hidden text-right sm:table-cell">Stations</Th>
+            <Th className="hidden text-right sm:table-cell">Entities</Th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-line">
+          {years.map((y) => {
+            // A silent year stays in the table: the gap is part of the history, and a
+            // table that leaves it out reads as continuous activity.
+            const silent = y.qsos === 0;
+            return (
+              <tr key={y.year} className={cn(silent && "text-fg-subtle")}>
+                <Td className="whitespace-nowrap tnum font-medium">
+                  {y.year}
+                  {y.year === thisYear && (
+                    <span className="block text-xs font-normal text-fg-subtle sm:ml-1.5 sm:inline">
+                      so far
+                    </span>
+                  )}
+                </Td>
+                <Td className="w-full min-w-28">
+                  <div className="flex items-center gap-3">
+                    <span className="w-14 shrink-0 text-right tnum">
+                      {silent ? "—" : y.qsos.toLocaleString()}
+                    </span>
+                    {/* Scaled to the busiest year, so a quiet one reads as quiet rather
+                        than as almost nothing. */}
+                    <span aria-hidden="true" className="h-2 flex-1 rounded-sm bg-surface-2">
+                      <span
+                        className="block h-full rounded-r-sm bg-fg-subtle"
+                        style={{ width: `${peak > 0 ? (y.qsos / peak) * 100 : 0}%` }}
+                      />
+                    </span>
+                  </div>
+                </Td>
+                <Td className="whitespace-nowrap text-right tnum text-fg-muted">
+                  {silent ? (
+                    "—"
+                  ) : (
+                    <>
+                      {y.confirmed.toLocaleString()}
+                      <span className="text-fg-subtle"> · {pct(y.confirmed, y.qsos)}</span>
+                    </>
+                  )}
+                </Td>
+                <Td className="hidden text-right tnum text-fg-muted sm:table-cell">
+                  {silent ? "—" : y.callsigns.toLocaleString()}
+                </Td>
+                <Td className="hidden text-right tnum text-fg-muted sm:table-cell">
+                  {silent ? "—" : y.entities.toLocaleString()}
+                </Td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </CardTable>
+    </Card>
+  );
+}
+
+function MostWorked({
+  rows,
+  top,
+  setTop,
+  updating,
+}: {
+  rows: WorkedRow[];
+  top: string;
+  setTop: (v: string) => void;
+  updating: boolean;
+}) {
+  return (
+    <Card
+      title="Most worked"
+      actions={
+        <label className="flex items-center gap-2 text-sm text-fg-muted">
+          Show
+          <Select value={top} onChange={(e) => setTop(e.target.value)} className="w-20">
+            {TOP_OPTIONS.map((n) => (
+              <option key={n} value={n}>
+                {n}
+              </option>
+            ))}
+          </Select>
+        </label>
+      }
+    >
+      <div className="mb-3 flex items-center gap-2">
+        <p className="text-sm text-fg-subtle">
+          Stations worked most often, with the span between the first and last contact.
+        </p>
+        <HelpTip label="About most worked" align="right">
+          Repeat contacts are not duplicates to be avoided — on the digital bands the same
+          stations are audible for years, and a high count usually means a reliable path
+          rather than an error. The band count is the more interesting number: the same
+          station on eight bands is eight award credits.
+        </HelpTip>
+      </div>
+      {/* The previous rows stay up, dimmed, while a different count loads. */}
+      <div className={cn("transition-opacity", updating && "opacity-60")} aria-busy={updating}>
+        <CardTable>
+          <thead>
+            <tr className="bg-surface-2 text-left">
+              <Th>Callsign</Th>
+              <Th className="text-right">Contacts</Th>
+              <Th className="text-right">Bands</Th>
+              <Th className="hidden sm:table-cell">First</Th>
+              <Th>Last</Th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-line">
+            {rows.map((w) => (
+              <tr key={w.callsign} className="hover:bg-surface-2">
+                <Td>
+                  {/* To their history rather than to the filtered log: the next question
+                      after "who have I worked most" is "on what, and is it confirmed". */}
+                  <Link
+                    href={`/calls/${encodeURIComponent(w.callsign)}`}
+                    className="font-display text-base tracking-wide hover:text-accent-bright"
+                  >
+                    {w.callsign}
+                  </Link>
+                </Td>
+                <Td className="text-right tnum">{w.qsos.toLocaleString()}</Td>
+                <Td className="text-right tnum text-fg-muted">{w.bands}</Td>
+                <Td className="hidden whitespace-nowrap tnum text-fg-subtle sm:table-cell">
+                  {formatUtcDate(w.firstWorked)}
+                </Td>
+                <Td className="whitespace-nowrap tnum text-fg-subtle">
+                  {formatUtcDate(w.lastWorked)}
+                </Td>
+              </tr>
+            ))}
+          </tbody>
+        </CardTable>
+      </div>
+    </Card>
   );
 }
 
