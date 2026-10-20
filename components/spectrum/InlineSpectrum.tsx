@@ -8,6 +8,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { Persistence, Ridgeline } from "@/components/spectrum/ClassicViews";
 import { Spectrogram } from "@/components/spectrum/Spectrogram";
 import { Waterfall3D } from "@/components/spectrum/Waterfall3D";
 import { useNightMode } from "@/lib/client/use-theme";
@@ -16,11 +17,13 @@ import { DEFAULT_PREFS, effectiveColormap, loadPrefs, VIEWS, type SpectrumPrefs,
 import { FrameDecoder, type FeedKind } from "@/lib/spectrum/wire";
 import { cn } from "@/lib/utils";
 
-export type InlineView = "waterfall" | SpectrumView;
+export type InlineView = "waterfall" | SpectrumView | "ridgeline" | "persistence";
 
 export const INLINE_VIEWS: readonly { id: InlineView; label: string }[] = [
   { id: "waterfall", label: "Waterfall" },
   ...VIEWS,
+  { id: "ridgeline", label: "Ridgeline" },
+  { id: "persistence", label: "Persistence" },
 ];
 
 function isInlineView(v: unknown): v is InlineView {
@@ -113,7 +116,7 @@ export function InlineSpectrum({
   dialHz = null,
 }: {
   feed: SpectrumFeed;
-  view: SpectrumView;
+  view: Exclude<InlineView, "waterfall">;
   height: number;
   dialHz?: number | null;
 }) {
@@ -171,6 +174,8 @@ export function InlineSpectrum({
       className={cn("rounded-md border border-line bg-bg overflow-hidden", view === "split" && "grid gap-px md:grid-cols-2")}
       style={{ height: view === "split" ? undefined : height }}
     >
+      {view === "ridgeline" && <Ridgeline feed={feed} contrast={contrast} colormap={colormap} height={height} />}
+      {view === "persistence" && <Persistence feed={feed} contrast={contrast} colormap={colormap} height={height} />}
       {view === "spectrogram" && spectrogram}
       {view === "3d" && surface}
       {view === "split" && (
