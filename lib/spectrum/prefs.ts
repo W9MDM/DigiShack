@@ -14,7 +14,15 @@ import {
 } from "@/lib/spectrum/levels";
 import type { FeedKind } from "@/lib/spectrum/wire";
 
-export type SpectrumView = "spectrum" | "spectrogram" | "3d" | "split" | "ridgeline" | "persistence";
+export type SpectrumView =
+  | "spectrum"
+  | "spectrogram"
+  | "3d"
+  | "split"
+  | "ridgeline"
+  | "persistence"
+  | "delta"
+  | "threshold";
 
 export const VIEWS: readonly { id: SpectrumView; label: string }[] = [
   { id: "spectrum", label: "Spectrum" },
@@ -23,6 +31,8 @@ export const VIEWS: readonly { id: SpectrumView; label: string }[] = [
   { id: "split", label: "Split" },
   { id: "ridgeline", label: "Ridgeline" },
   { id: "persistence", label: "Persistence" },
+  { id: "delta", label: "Delta" },
+  { id: "threshold", label: "Threshold" },
 ];
 
 export const HISTORY_CHOICES_SEC = [60, 120, 300, 600, 900] as const;
@@ -65,8 +75,9 @@ export const DEFAULT_PREFS: SpectrumPrefs = {
 
 export const PREFS_KEY = "digishack.spectrum.prefs.v1";
 
+/** Any view on the switch. Listing only some here once made the others forget themselves on reload. */
 export function isView(v: unknown): v is SpectrumView {
-  return v === "spectrogram" || v === "3d" || v === "split";
+  return VIEWS.some((x) => x.id === v);
 }
 
 export function isFeedKind(v: unknown): v is FeedKind {

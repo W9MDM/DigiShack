@@ -111,8 +111,15 @@ export default function RigPage({ wsUrl }: Props) {
   const [audioScale, setAudioScale] = useState<{ binHz: number; maxHz: number; periodMs: number } | null>(null);
   // DX cluster spots: the bridge's list once, then each new spot off the same socket.
   const [clusterSpots, setClusterSpots] = useState<ClusterSpot[]>([]);
-  // The same frames, recorded for the Spectrogram / 3D views of the display.
-  const onAir = data?.status?.transmitting === true;
+  // The same frames, recorded for the Spectrogram / 3D views of the display, and whether we
+  // are on the air while they are. The 2 s status poll alone is too late for Delta: it
+  // keys up to two seconds after the audio goes quiet, and those rows would be compared as the
+  // whole band dropping out. The bridge's status message on the socket comes with every change,
+  // so it leads; a poll only overrides it when its own answer changes, so a poll that set off
+  // before the key-up cannot undo it.
+  const polledOnAir = data?.status?.transmitting === true;
+  const [onAir, setOnAir] = useState(false);
+  useEffect(() => setOnAir(polledOnAir), [polledOnAir]);
   const liveRf = useLiveSpectrum("rf", onAir);
   const liveAudio = useLiveSpectrum("audio", onAir);
   const [rigView, setRigView] = useInlineView("digishack.rig.view");
@@ -146,6 +153,9 @@ export default function RigPage({ wsUrl }: Props) {
       const s = msg as unknown as { bins: string; binHz: number; maxHz: number; at: number; periodMs: number };
       setAudioSpec({ bins: decodeBase64Bins(s.bins), at: s.at });
       setAudioScale({ binHz: s.binHz, maxHz: s.maxHz, periodMs: s.periodMs });
+    } else if (msg.kind === "status") {
+      const s = msg.status as { transmitting?: unknown } | null | undefined;
+      if (s && typeof s.transmitting === "boolean") setOnAir(s.transmitting);
     } else if (msg.kind === "spot" && isClusterSpot(msg.spot)) {
       const spot = msg.spot;
       setClusterSpots((p) => upsertSpot(p, spot));

@@ -27,11 +27,20 @@ const AXIS_PX = 18;
 
 type Painter = (g: CanvasRenderingContext2D, w: number, h: number, dpr: number) => void;
 
-/** A canvas that fills its box, redraws on new frames (throttled) and pauses when hidden. */
-export function useFeedCanvas(feed: SpectrumFeed, paint: Painter) {
+/**
+ * A canvas that fills its box, redraws on new frames (throttled) and pauses when hidden.
+ * `redrawKey` names the settings the picture depends on (colour map, contrast, a slider): a
+ * change redraws at once, so a stalled feed never leaves the picture behind the controls.
+ */
+export function useFeedCanvas(feed: SpectrumFeed, paint: Painter, redrawKey = "") {
   const ref = useRef<HTMLCanvasElement>(null);
   const paintRef = useRef(paint);
   paintRef.current = paint;
+  const requestRef = useRef<(() => void) | null>(null);
+
+  useEffect(() => {
+    requestRef.current?.();
+  }, [redrawKey]);
 
   useEffect(() => {
     const canvas = ref.current;
@@ -64,6 +73,7 @@ export function useFeedCanvas(feed: SpectrumFeed, paint: Painter) {
       dirty = true;
       if (!raf) raf = requestAnimationFrame(draw);
     };
+    requestRef.current = request;
     const unsub = feed.subscribe(request);
     const ro = new ResizeObserver(request);
     ro.observe(canvas);
@@ -76,6 +86,7 @@ export function useFeedCanvas(feed: SpectrumFeed, paint: Painter) {
     document.addEventListener("visibilitychange", onVis);
     request();
     return () => {
+      requestRef.current = null;
       unsub();
       ro.disconnect();
       io.disconnect();
@@ -197,7 +208,7 @@ export function Ridgeline({ feed, contrast, colormap, height, className }: Class
     }
     const [gr, gg, gb, ga] = chrome.gridLine;
     drawAxis(g, w, h, dpr, span.low, span.high, `rgba(${gr},${gg},${gb},${Math.min(1, ga * 4)})`);
-  });
+  }, `${colormap}|${night}|${contrast.floorOffsetDb}|${contrast.rangeDb}`);
   return (
     <canvas
       ref={ref}
@@ -307,7 +318,7 @@ export function Persistence({ feed, contrast, colormap, height, className }: Cla
     g.stroke();
     const [gr, gg, gb, ga] = chrome.gridLine;
     drawAxis(g, w, h, dpr, span.low, span.high, `rgba(${gr},${gg},${gb},${Math.min(1, ga * 4)})`);
-  });
+  }, `${colormap}|${night}|${contrast.floorOffsetDb}|${contrast.rangeDb}`);
   return (
     <canvas
       ref={ref}

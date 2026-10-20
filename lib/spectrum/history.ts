@@ -75,6 +75,12 @@ export class SpectrumHistory {
   binHz = new Float64Array(0);
   count = new Int32Array(0);
   floorDb = new Float32Array(0);
+  /**
+   * 1 for a row taken while our own station was transmitting. Its receive audio is near
+   * silence, so a view that compares a row with the ones before it (Delta) must not read the
+   * start and end of every over as the whole band switching off and on again.
+   */
+  tx = new Uint8Array(0);
 
   /** Rows started since the last reset; row s lives at physical index s % capacity. */
   seq = 0;
@@ -166,8 +172,12 @@ export class SpectrumHistory {
     return this.size > 0 ? this.startAt[this.physical(0)]! : null;
   }
 
-  /** Store one frame. False when it was ignored (late, duplicate, or malformed). */
-  push(row: HistoryRowInput): boolean {
+  /**
+   * Store one frame. False when it was ignored (late, duplicate, or malformed). `transmitting`
+   * marks the row as taken on the air (see `tx`); frames either side of that change never
+   * share a row, so every row is wholly one or the other.
+   */
+  push(row: HistoryRowInput, transmitting = false): boolean {
     const { count, at, binHz, lowHz, floorDb, ceilingDb } = row;
     if (!(count > 0) || !Number.isFinite(at) || !(binHz > 0) || !Number.isFinite(lowHz)) return false;
     if (!Number.isFinite(floorDb) || !Number.isFinite(ceilingDb)) return false;
@@ -184,10 +194,12 @@ export class SpectrumHistory {
     if (this.seq > 0 && frameGap > 0 && frameGap < 2_000) this.recordGap(frameGap);
 
     const newest = this.seq > 0 ? (this.seq - 1) % this.capacity : -1;
+    const tx = transmitting ? 1 : 0;
     if (
       this.open &&
       contiguous &&
       newest >= 0 &&
+      this.tx[newest] === tx &&
       this.count[newest] === count &&
       this.binHz[newest] === binHz &&
       Math.abs(this.lowHz[newest]! - lowHz) < binHz * 1e-3 &&
@@ -212,6 +224,7 @@ export class SpectrumHistory {
       this.binHz[p] = binHz;
       this.count[p] = count;
       this.floorDb[p] = floorDb;
+      this.tx[p] = tx;
       bytesToDb(row.bytes, count, floorDb, ceilingDb, this.data, p * this.width);
       if (this.seq === 0 || Math.abs(lowHz - this.refHz) > REBASE_HZ) {
         this.refHz = lowHz;
@@ -319,6 +332,7 @@ export class SpectrumHistory {
     this.binHz = new Float64Array(this.capacity);
     this.count = new Int32Array(this.capacity);
     this.floorDb = new Float32Array(this.capacity);
+    this.tx = new Uint8Array(this.capacity);
     this.seq = 0;
     this.open = false;
     this.epoch++;
