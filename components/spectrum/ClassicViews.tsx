@@ -126,7 +126,8 @@ export interface ClassicViewProps {
   feed: SpectrumFeed;
   contrast: Contrast;
   colormap: ColormapId;
-  height: number;
+  /** CSS pixels, or a CSS length such as "100%". */
+  height: number | string;
   className?: string;
 }
 
