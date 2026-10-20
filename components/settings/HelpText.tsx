@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 
+import { HelpTip } from "@/components/ui/HelpTip";
 import { cn } from "@/lib/utils";
 import { helpPreview, highlightSegments, matchesAllTerms } from "@/lib/settings/search";
 
@@ -22,12 +23,13 @@ export function Highlight({ text, terms }: { text: string; terms: readonly strin
 }
 
 /**
- * Help that shows its first sentence and a "More" toggle once it runs long.
+ * Help that shows its first sentence, with the rest behind the ? icon, once it runs long.
  *
  * Every field on the page used to print its whole explanation — some of them 900
  * characters — so the page was mostly paragraphs with the controls lost between them. The
  * explanations are good and the reason the page is usable at all, so none is cut: the
- * first sentence stays in view and the rest is one tap away.
+ * first sentence stays in view and the rest is one tap away, in the same ? popover used
+ * across the app (a "More" link on every field read as clutter).
  *
  * `full` turns the toggle off, for the safety settings, whose consequences should never
  * be behind a click. A search hit in the hidden part opens it, so a match is never
@@ -45,7 +47,7 @@ export function HelpText({
   text: string;
   terms?: readonly string[];
   full?: boolean;
-  /** What the help is about, so a screen reader's list of buttons is not forty "More"s. */
+  /** What the help is about, so a screen reader's list of buttons is not forty identical ones. */
   subject?: string;
   className?: string;
 }) {
@@ -67,18 +69,10 @@ export function HelpText({
   return (
     <p id={id} className={cn("text-sm leading-relaxed text-fg-subtle", className)}>
       <Highlight text={showAll ? text : preview} terms={terms} />
-      {truncated && !full && (
+      {truncated && !showAll && (
         <>
           {" "}
-          <button
-            type="button"
-            aria-expanded={open}
-            onClick={() => setOpen((v) => !v)}
-            className="tap-inline whitespace-nowrap text-accent-bright underline-offset-2 hover:underline"
-          >
-            {open ? "Less" : "More"}
-            {subject && <span className="sr-only"> about {subject}</span>}
-          </button>
+          <HelpTip label={subject ? `More about ${subject}` : "The full explanation"}>{text}</HelpTip>
         </>
       )}
     </p>

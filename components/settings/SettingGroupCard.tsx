@@ -187,7 +187,7 @@ export function SettingGroupCard({
                 className="flex w-full flex-wrap items-center gap-x-2 gap-y-1 rounded-b-md px-4 py-3 text-left text-sm text-fg-muted hover:bg-surface-2 hover:text-fg"
               >
                 <Chevron open={open} />
-                <span className="font-medium">{visible.some((it) => it.advanced) ? "More advanced" : "Advanced"}</span>
+                <span className="font-medium">Advanced</span>
                 <span className="tnum text-fg-subtle">({folded.length})</span>
                 {!open && <span className="text-xs text-fg-subtle">all at their defaults</span>}
               </button>
