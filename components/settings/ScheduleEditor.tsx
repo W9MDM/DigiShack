@@ -211,7 +211,7 @@ function DayStrip({ blocks, sleep }: { blocks: ScheduleBlock[]; sleep: TimeRange
               c.asleep
                 ? {
                     backgroundImage:
-                      "repeating-linear-gradient(45deg, transparent, transparent 2px, rgba(255,255,255,0.18) 2px, rgba(255,255,255,0.18) 4px)",
+                      "repeating-linear-gradient(45deg, transparent, transparent 2px, color-mix(in srgb, var(--color-fg) 18%, transparent) 2px, color-mix(in srgb, var(--color-fg) 18%, transparent) 4px)",
                   }
                 : undefined
             }
