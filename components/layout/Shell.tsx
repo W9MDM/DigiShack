@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { InstallButton } from "@/components/layout/InstallButton";
 import { Ft0Button } from "@/components/layout/Ft0Button";
+import { TxArmButton } from "@/components/layout/TxArmButton";
 import { UtcClock } from "@/components/layout/UtcClock";
 import { useRouter } from "next/router";
 import type { UiFlags } from "@/lib/auth/guard";
@@ -245,6 +246,7 @@ export function Shell({
 
           <div className="ml-auto flex items-center gap-2 md:gap-3">
             <UtcClock />
+            <TxArmButton />
             <Ft0Button />
             {user && (
               <>

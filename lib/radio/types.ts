@@ -265,7 +265,10 @@ export interface RadioTransmitter {
     js8?: { frame: string; txType: number };
   }): Promise<TransmitOutcome>;
 
-  /** Stop immediately and drop carrier. Must be safe to call when idle. */
+  /**
+   * Stop immediately and drop carrier, AND cancel a transmission still waiting for its
+   * window. Must be safe to call when idle.
+   */
   unkey(): Promise<void>;
 }
 

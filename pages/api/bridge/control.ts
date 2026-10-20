@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import { sendError, sendJson } from "@/lib/api/respond";
 import { authedRoute } from "@/lib/auth/guard";
+import type { AuthContext } from "@/lib/auth/session";
 import { getNumberSetting, getSetting } from "@/lib/settings";
 
 // Server-side proxy for the radio service's QSO control API.
@@ -42,7 +43,10 @@ const bodySchema = z.object({
     "olivia",
     "hell",
     "jtty",
+    "transmit-gate",
   ]),
+  /** Arm (true) or disarm (false) the selected radio's transmit gate, for action "transmit-gate". */
+  armed: z.boolean().optional(),
   /** Which radio to drive. Changing it stops any automatic mode. */
   kind: z.enum(["flex", "icom", "wsjtx"]).optional(),
   /** Band to tune to, for action "tune". */
@@ -130,17 +134,35 @@ const bodySchema = z.object({
   active: z.boolean().optional(),
 });
 
-async function post(req: NextApiRequest, res: NextApiResponse) {
+async function post(req: NextApiRequest, res: NextApiResponse, auth: AuthContext) {
   const parsed = bodySchema.safeParse(req.body);
   if (!parsed.success) {
     sendError(res, 400, "Bad control request", parsed.error.flatten().fieldErrors);
     return;
   }
   const { action, autoMode, ...rest } = parsed.data;
+
+  if (action === "transmit-gate") {
+    if (rest.armed === undefined) {
+      sendError(res, 400, "armed (true or false) is required");
+      return;
+    }
+    // Arming is the decision Settings → "Allow transmit" makes, which only an admin can.
+    // Disarming only makes the station safer, so any operator may.
+    if (rest.armed && auth.user.role !== "ADMIN") {
+      sendError(res, 403, "Only an admin can arm transmit");
+      return;
+    }
+  }
+
   // The service's /auto endpoint expects `mode`; the CAT panel's `mode` means
   // the slice's modulation. Keep them distinct in the API and map here.
   const payload: Record<string, unknown> =
-    action === "auto" ? { mode: autoMode } : rest;
+    action === "auto"
+      ? { mode: autoMode }
+      : action === "transmit-gate"
+        ? { armed: rest.armed, actorId: auth.user.id }
+        : rest;
 
   // The shared secret between the web app and DigiShack's own radio service.
   // Self-provisioned by the radio service on startup — nothing to configure; if

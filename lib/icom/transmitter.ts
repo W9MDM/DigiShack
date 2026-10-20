@@ -72,6 +72,8 @@ export class IcomTransmitter implements RadioTransmitter {
   private busy = false;
   private watchdog: NodeJS.Timeout | null = null;
   private cancelled = false;
+  /** Ends the wait for a transmission's window early. Set only while waiting. */
+  private wakePending: (() => void) | null = null;
 
   constructor(private readonly opts: IcomTransmitterOptions) {
     this.allowed = opts.allowTransmit;
@@ -88,8 +90,9 @@ export class IcomTransmitter implements RadioTransmitter {
   setAllowTransmit(allowed: boolean): void {
     this.allowed = allowed;
     // Turning the gate off mid-transmission must stop the current one, not just the
-    // next. An operator reaching for that switch wants the radio to stop now.
-    if (!allowed && this.keyed) void this.unkey();
+    // next — and one waiting for its window. An operator reaching for that switch wants
+    // the radio to stop now.
+    if (!allowed && (this.keyed || this.wakePending)) void this.unkey();
   }
 
   get transmitting(): boolean {
@@ -188,7 +191,43 @@ export class IcomTransmitter implements RadioTransmitter {
           this.busy = false;
           return { sent: false, reason: "Start time is more than a minute away", startedAt: null };
         }
-        if (waitMs > 0) await new Promise((r) => setTimeout(r, waitMs));
+        if (waitMs > 0) {
+          // Wakeable, so unkey() during the wait (HALT, skip, FT-0, voice, disarm) is
+          // seen now rather than after PTT has already gone on.
+          await new Promise<void>((resolve) => {
+            const timer = setTimeout(() => {
+              this.wakePending = null;
+              resolve();
+            }, waitMs);
+            this.wakePending = () => {
+              clearTimeout(timer);
+              this.wakePending = null;
+              resolve();
+            };
+          });
+        }
+      }
+
+      // Checked at the last moment before PTT: a stop or a closed gate during the wait
+      // used to key the radio anyway, briefly, before the send loop noticed.
+      if (this.cancelled) {
+        return { sent: false, reason: "Cancelled before keying", startedAt: null };
+      }
+      if (this.opts.isTransmitAllowed) {
+        let stillArmed = false;
+        try {
+          stillArmed = await this.opts.isTransmitAllowed();
+        } catch {
+          stillArmed = false;
+        }
+        this.allowed = stillArmed;
+        if (!stillArmed) {
+          return { sent: false, reason: "Transmit was turned off while waiting for the window", startedAt: null };
+        }
+        // The read is async; a stop can land while it is in flight.
+        if (this.cancelled) {
+          return { sent: false, reason: "Cancelled before keying", startedAt: null };
+        }
       }
 
       startedAt = nowMs();
@@ -268,6 +307,8 @@ export class IcomTransmitter implements RadioTransmitter {
    */
   async unkey(): Promise<void> {
     this.cancelled = true;
+    // A transmission waiting for its window is cancelled too, not left to key later.
+    this.wakePending?.();
     this.clearWatchdog();
     this.keyed = false;
     try {

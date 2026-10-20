@@ -2,7 +2,8 @@ import { useState } from "react";
 
 import { Badge } from "@/components/ui/primitives";
 import { HelpTip } from "@/components/ui/HelpTip";
-import { apiPost, useApi } from "@/lib/client/api";
+import { apiPost } from "@/lib/client/api";
+import { refreshStationGate, useStationGate } from "@/lib/client/use-station-gate";
 import { cn } from "@/lib/utils";
 
 /**
@@ -23,23 +24,21 @@ import { cn } from "@/lib/utils";
  * prevent.
  */
 export function Ft0Button() {
-  const { data, reload } = useApi<{ status: { ft0?: boolean } | null }>(
-    "/api/bridge/status",
-  );
+  const gate = useStationGate();
   const [busy, setBusy] = useState(false);
   const [confirming, setConfirming] = useState(false);
-  const engaged = data?.status?.ft0 === true;
+  const engaged = gate?.ft0 === true;
 
   const send = async (engage: boolean) => {
     setBusy(true);
     try {
       await apiPost("/api/bridge/control", { action: "ft0", engage });
-      reload();
     } catch {
       // The status poll is the source of truth; a failed call shows up there.
     } finally {
       setBusy(false);
       setConfirming(false);
+      void refreshStationGate();
     }
   };
 

@@ -280,7 +280,7 @@ export class FlexDaxTransmitter {
    * Null once keying starts — from that moment there is a real signal on the air and
    * nothing may take the transmitter. See the supersede rule in `transmit`.
    */
-  private pendingKey: { gen: number; startAt: number; abort: () => void } | null = null;
+  private pendingKey: { gen: number; startAt: number; abort: (reason: string) => void } | null = null;
   private watchdog: NodeJS.Timeout | null = null;
   private packetCount = 0;
 
@@ -907,27 +907,43 @@ export class FlexDaxTransmitter {
       // instrumentation above exists to find it rather than guess again.
       if (waitMs > 0) {
         // Abortable, so a newer request for this window or an earlier one can take over
-        // rather than being refused for the length of the wait. Resolves either way; the
-        // generation check below decides whether this call is still the owner.
-        let superseded = false;
+        // rather than being refused for the length of the wait, and so unkey() (HALT,
+        // skip, FT-0, voice, disarm) cancels it. Resolves either way; the generation
+        // check below decides whether this call is still the owner.
+        let abandoned: string | null = null;
         await new Promise<void>((resolve) => {
           const timer = setTimeout(resolve, waitMs);
           this.pendingKey = {
             gen,
             startAt: req.startAt,
-            abort: () => {
-              superseded = true;
+            abort: (reason) => {
+              abandoned = reason;
               clearTimeout(timer);
               resolve();
             },
           };
         });
         this.pendingKey = null;
-        if (superseded || gen !== this.txGen) {
-          // Someone newer owns the transmitter. Return without keying and WITHOUT touching
-          // the shared flags — the `finally` below is generation-guarded for the same
-          // reason. Clearing them here would unlock a transmitter that is now in use.
-          return { ...base, reason: "Superseded by a newer transmission for the same window" };
+        if (abandoned !== null || gen !== this.txGen) {
+          // Someone newer owns the transmitter, or the operator stopped it. Return without
+          // keying and WITHOUT touching the shared flags here — the `finally` below is
+          // generation-guarded, so it clears them only if this call still owns them.
+          return { ...base, reason: abandoned ?? "Superseded by a newer transmission for the same window" };
+        }
+      }
+
+      // The gate was read before the wait, which can be most of a period. Read it again
+      // at the last moment, so turning transmit off during the wait means this never keys.
+      if (this.opts.isTransmitAllowed) {
+        let stillArmed = false;
+        try {
+          stillArmed = await this.opts.isTransmitAllowed();
+        } catch {
+          stillArmed = false;
+        }
+        this.opts.allowTransmit = stillArmed;
+        if (!stillArmed) {
+          return { ...base, reason: "Transmit was turned off while waiting for the window" };
         }
       }
 
@@ -1012,7 +1028,7 @@ export class FlexDaxTransmitter {
     // The moment `keyed` is true this does not apply at any price — there is RF on the air
     // and taking the transmitter would truncate a real transmission mid-symbol.
     if (this.busy && !this.keyed && this.pendingKey) {
-      this.pendingKey.abort();
+      this.pendingKey.abort("Superseded by a newer transmission for the same window");
       this.pendingKey = null;
       this.busy = false;
       this.busySince = null;
@@ -1066,12 +1082,15 @@ export class FlexDaxTransmitter {
       };
     }
     this.keyed = true;
-    const packetsSent = await this.streamAudio(wave);
+    const { complete, packetsSent, plannedPackets } = await this.streamAudio(wave);
     await this.unkey();
     const unkeyedAt = Date.now();
     return {
       ...base,
-      sent: true,
+      // A waveform cut short by unkey() is not a transmission the other station can
+      // decode, so it must not be reported as sent.
+      sent: complete,
+      ...(complete ? {} : { reason: `Stopped after ${packetsSent} of ${plannedPackets} packets` }),
       keyedAt,
       unkeyedAt,
       timingErrorMs: audioStartAt === null ? 0 : keyedAt + linkLagMs - audioStartAt,
@@ -1265,7 +1284,10 @@ export class FlexDaxTransmitter {
     }
   }
 
-  private async streamAudio(wave: Float32Array): Promise<number> {
+  /** Packet slots processed (silent ones included), and whether all of them were. */
+  private async streamAudio(
+    wave: Float32Array,
+  ): Promise<{ complete: boolean; packetsSent: number; plannedPackets: number }> {
     const socket = this.socket;
     if (!socket) throw new Error("Socket closed");
 
@@ -1274,7 +1296,8 @@ export class FlexDaxTransmitter {
     const startedAt = Date.now();
 
     for (let i = 0; i < totalPackets; i++) {
-      if (!this.keyed) break; // unkeyed underneath us — stop sending
+      // Unkeyed underneath us — stop sending, and say so.
+      if (!this.keyed) return { complete: false, packetsSent: i, plannedPackets: totalPackets };
 
       const offset = i * FRAMES_PER_PACKET;
       const frames = Math.min(FRAMES_PER_PACKET, wave.length - offset);
@@ -1306,7 +1329,7 @@ export class FlexDaxTransmitter {
       if (sleep > 0) await new Promise((r) => setTimeout(r, sleep));
     }
 
-    return totalPackets;
+    return { complete: true, packetsSent: totalPackets, plannedPackets: totalPackets };
   }
 
   /**
@@ -1374,9 +1397,20 @@ export class FlexDaxTransmitter {
     this.watchdog = null;
   }
 
-  /** Idempotent. Safe to call when not keyed. */
+  /**
+   * Stop: drop carrier, and cancel a transmission still waiting for its window.
+   * Idempotent. Safe to call when not keyed.
+   *
+   * Every caller outside this class means "stop" (HALT, skip, FT-0, voice, a source
+   * switch, disarming). Unkeying only the transmission in progress let a key scheduled
+   * up to a period ahead go out after the operator had stopped everything.
+   */
   async unkey(): Promise<void> {
     this.clearWatchdog();
+    if (this.pendingKey && !this.keyed) {
+      this.pendingKey.abort("Cancelled before keying");
+      this.pendingKey = null;
+    }
     if (!this.client) {
       this.keyed = false;
       return;

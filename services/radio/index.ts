@@ -724,6 +724,8 @@ let autoResumeMode: AutoMode | null = null;
  */
 let ft0RestoreTx = false;
 let ft0RestoreAuto: AutoMode = "off";
+/** The auto mode a header disarm paused, so arming from the header can resume it. In memory for the same reason as the FT-0 notes. */
+let disarmRestoreAuto: AutoMode = "off";
 let autoRunStartedAt: number | null = null;
 let autoQsosThisRun = 0;
 
@@ -4549,6 +4551,87 @@ async function main(): Promise<void> {
             error: err instanceof Error ? err.message : "Could not reconnect to the radio",
           });
         }
+        return;
+      }
+
+      // POST /transmit-gate {armed, actorId?} — arm or disarm THIS radio from the header.
+      //
+      // The same per-radio setting as Settings → "Allow transmit", but written here so it
+      // takes effect at once: a write from the web tier reached this process only when its
+      // 30 s settings cache expired, then the 10 s gate poll. Disarming is a stop in the
+      // FT-0 sense without dropping the radio: the contact in flight is halted, auto is
+      // paused, and unkey() cancels a transmission still waiting for its window. Arming
+      // from here resumes the auto mode that a header disarm paused, and nothing else.
+      if (url.pathname === "/transmit-gate") {
+        const body = await readJson(req);
+        if (typeof body.armed !== "boolean") {
+          sendJson(res, 400, { error: "armed must be true or false" });
+          return;
+        }
+        const armed = body.armed;
+        if (armed && status.ft0) {
+          sendJson(res, 409, { error: "FT-0 is engaged. Resume the radio first, then arm transmit." });
+          return;
+        }
+        const actorId = typeof body.actorId === "string" && body.actorId ? body.actorId : null;
+        const user = actorId
+          ? { id: actorId }
+          : await prisma.user.findFirst({ select: { id: true } });
+        if (!user) {
+          sendJson(res, 500, { error: "No user exists to record the change against" });
+          return;
+        }
+
+        let pausedAuto: AutoMode = "off";
+        if (!armed) {
+          pausedAuto = activeAuto()?.state.mode ?? "off";
+          activeAuto()?.setMode("off");
+          autoResumeMode = null;
+          const qso = activeQso();
+          try {
+            if (qso?.state.active) await qso.halt();
+            else await activeTx?.unkey();
+          } catch {
+            /* the gate below still closes; the watchdog and exit hooks are the backstop */
+          }
+        }
+
+        const key = transmitGateKey(activeRadio);
+        await writeSettings([{ key, value: armed ? "true" : "false" }], user.id);
+        invalidateSettingsCache();
+
+        const on = await transmitArmed();
+        const why = on ? null : transmitRefusal();
+        status.allowTransmit = on;
+        status.transmitOffReason = why;
+
+        let resumedAuto: AutoMode | null = null;
+        if (armed) {
+          const restore = disarmRestoreAuto;
+          disarmRestoreAuto = "off";
+          if (on && restore !== "off" && activeAuto()) {
+            activeAuto()!.setMode(restore);
+            resumedAuto = restore;
+          }
+        } else if (pausedAuto !== "off") {
+          disarmRestoreAuto = pausedAuto;
+        }
+
+        broadcast({ kind: "status", status });
+        console.log(
+          `[radio] transmit ${armed ? "ARMED" : "DISARMED"} from the header (${key})` +
+            (armed && !on ? ` — still held: ${why}` : "") +
+            (pausedAuto !== "off" ? `, auto "${pausedAuto}" paused` : "") +
+            (resumedAuto ? `, auto "${resumedAuto}" resumed` : ""),
+        );
+        sendJson(res, 200, {
+          ok: true,
+          armed: on,
+          radio: activeRadio,
+          offReason: why,
+          pausedAuto: pausedAuto === "off" ? null : pausedAuto,
+          resumedAuto,
+        });
         return;
       }
 
