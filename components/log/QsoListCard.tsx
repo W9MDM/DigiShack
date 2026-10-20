@@ -2,7 +2,7 @@ import Link from "next/link";
 
 import { ResendQslButton } from "@/components/qsl/ResendQslButton";
 import { Badge } from "@/components/ui/primitives";
-import { formatDistance, gridDistanceKm, type DistanceUnit } from "@/lib/geo/distance";
+import { formatDistance, gridDistanceKm, type DistanceUnit } from "@/lib/ham/grid-geometry";
 import { formatFreqMHz } from "@/lib/ham/bands";
 import { formatUtc } from "@/lib/time";
 import type { Qso } from "@/lib/types";
