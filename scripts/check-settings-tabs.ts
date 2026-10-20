@@ -288,7 +288,7 @@ console.log("\nthe sidebar reaches every group, the quiet ones under More");
   eq([...listed].sort(), [...ids].sort(), "no group is unreachable from the sidebar, and none is listed twice");
 
   const advancedOnly = nav.filter((n) => n.advancedOnly);
-  console.log(`        (advanced-only, so under More until one is changed: ${advancedOnly.map((n) => n.id).join(", ") || "none"})`);
+  console.log(`        (advanced-only, shown muted until one is changed: ${advancedOnly.map((n) => n.id).join(", ") || "none"})`);
   for (const n of advancedOnly) {
     const tab = settingsTabFor(n.id);
     const { more } = splitQuietGroups(groupsInTab(tab.id, ids), quiet);
@@ -373,7 +373,10 @@ console.log("\nunreadable stored values are shown, not papered over");
   ok(page.includes("problemGroups") && page.includes("quietGroups"), "the page tells the sidebar about both");
   const layout = readFileSync("components/settings/SettingsLayout.tsx", "utf8");
   ok(layout.includes("problemGroups.has(") && layout.includes('tone="warn"'), "the sidebar dots groups and categories with a problem");
-  ok(layout.includes("splitQuietGroups("), "the sidebar puts quiet groups under More");
+  // 1.250.2: no "More" sub-list — every group is listed directly in its category.
+  ok(!layout.includes("splitQuietGroups(") && !/>More</.test(layout), "the sidebar lists every group directly, with no More sub-list");
+  const view = readFileSync("components/settings/CategoryView.tsx", "utf8");
+  ok(!view.includes("More in"), "and the category page has no separate More section");
   const card = readFileSync("components/settings/SettingGroupCard.tsx", "utf8");
   ok(card.includes("layoutGroup(") && card.includes("blurbLine("), "group cards use the folding rule and the one-line blurb");
 }

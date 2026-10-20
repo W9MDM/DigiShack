@@ -46,10 +46,9 @@ export function CategoryView({
   const tab = SETTINGS_TABS.find((t) => t.id === tabId) ?? SETTINGS_TABS[0]!;
   const ids = useMemo(() => groupsInTab(tab.id, groups.map((g) => g.id)), [tab.id, groups]);
 
-  // Groups with something to show first; then, under "More", the ones that are advanced
-  // only and entirely at their defaults — the same split the sidebar makes, so the two list
-  // the groups in the same order. Decided from what is stored, so nothing moves while typing.
-  const { sections, quietFrom } = useMemo(() => {
+  // In the category's own order, the same as the sidebar. Advanced-only groups fold to one
+  // line in SettingGroupCard; they are not moved to a separate section.
+  const { sections } = useMemo(() => {
     const all = ids
       .map((id) => {
         const group = groups.find((g) => g.id === id);
@@ -63,9 +62,7 @@ export function CategoryView({
       })
       .filter((x) => x !== null)
       .filter((x) => x.items.length > 0 || x.extra);
-    const main = all.filter((x) => !x.quiet);
-    const quiet = all.filter((x) => x.quiet);
-    return { sections: [...main, ...quiet], quietFrom: main.length };
+    return { sections: all };
   }, [ids, groups, settings, byKey]);
 
   // Which group is under the header, for the sidebar's highlight. A band across the top of
@@ -108,16 +105,8 @@ export function CategoryView({
       </div>
       <div className="flex flex-col gap-6">
         {categoryExtra?.(ctx)}
-        {sections.map(({ group, items, extra }, i) => (
+        {sections.map(({ group, items, extra }) => (
           <Fragment key={group.id}>
-            {i === quietFrom && (
-              <div className="-mb-3 mt-2">
-                <h3 className="text-sm font-semibold text-fg-muted">More in {tab.label}</h3>
-                <p className="text-sm text-fg-subtle">
-                  Advanced only, and every setting in these is at its default. Show one to see or change it.
-                </p>
-              </div>
-            )}
             <SettingGroupCard
               group={group}
               items={items}
