@@ -112,8 +112,9 @@ export default function RigPage({ wsUrl }: Props) {
   // DX cluster spots: the bridge's list once, then each new spot off the same socket.
   const [clusterSpots, setClusterSpots] = useState<ClusterSpot[]>([]);
   // The same frames, recorded for the Spectrogram / 3D views of the display.
-  const liveRf = useLiveSpectrum("rf");
-  const liveAudio = useLiveSpectrum("audio");
+  const onAir = data?.status?.transmitting === true;
+  const liveRf = useLiveSpectrum("rf", onAir);
+  const liveAudio = useLiveSpectrum("audio", onAir);
   const [rigView, setRigView] = useInlineView("digishack.rig.view");
   const { connected: wsConnected } = useBridgeSocket(wsUrl, (msg) => {
     if (msg.kind === "panadapter") {

@@ -93,6 +93,13 @@ export class SpectrumFeed {
   /** Latest frame's description. Mutated in place; read, do not keep. */
   readonly info: FeedInfo;
   frames = 0;
+  /**
+   * While the station transmits, its receive audio goes quiet and the bridge reports a far
+   * lower floor for those rows. Tracking it snapped the colour scale down and recoloured every
+   * received row solid red for the length of each over. Rows are still stored (they are what
+   * was received: nothing); the levels just hold.
+   */
+  transmitting = false;
   /** performance.now() of the last stored frame. */
   lastReceived = Number.NEGATIVE_INFINITY;
   private readonly listeners = new Set<() => void>();
@@ -132,7 +139,7 @@ export class SpectrumFeed {
       if (!frame.calibrated) this.levels.reset();
     }
     if (!stored) return false;
-    this.levels.update(frame.floorDb, frame.ceilingDb, frame.at);
+    if (!this.transmitting) this.levels.update(frame.floorDb, frame.ceilingDb, frame.at);
     this.clock.observe(frame.at, receivedPerf);
     this.rate.mark(receivedPerf);
     this.frames++;
