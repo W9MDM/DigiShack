@@ -28,7 +28,7 @@ const AXIS_PX = 18;
 type Painter = (g: CanvasRenderingContext2D, w: number, h: number, dpr: number) => void;
 
 /** A canvas that fills its box, redraws on new frames (throttled) and pauses when hidden. */
-function useFeedCanvas(feed: SpectrumFeed, paint: Painter) {
+export function useFeedCanvas(feed: SpectrumFeed, paint: Painter) {
   const ref = useRef<HTMLCanvasElement>(null);
   const paintRef = useRef(paint);
   paintRef.current = paint;
@@ -88,7 +88,7 @@ function useFeedCanvas(feed: SpectrumFeed, paint: Painter) {
 }
 
 /** The frequency span of the newest row, absolute Hz. */
-function newestSpan(feed: SpectrumFeed): { low: number; high: number } | null {
+export function newestSpan(feed: SpectrumFeed): { low: number; high: number } | null {
   const h = feed.history;
   if (h.size === 0) return null;
   const p = h.physical(h.size - 1);
@@ -96,11 +96,11 @@ function newestSpan(feed: SpectrumFeed): { low: number; high: number } | null {
   return { low, high: low + h.binHz[p]! * h.count[p]! };
 }
 
-function rgba(c: readonly [number, number, number], a = 1): string {
+export function rgba(c: readonly [number, number, number], a = 1): string {
   return `rgba(${c[0]},${c[1]},${c[2]},${a})`;
 }
 
-function drawAxis(
+export function drawAxis(
   g: CanvasRenderingContext2D,
   w: number,
   h: number,

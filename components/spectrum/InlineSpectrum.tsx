@@ -8,6 +8,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { Analyzer } from "@/components/spectrum/Analyzer";
 import { Persistence, Ridgeline } from "@/components/spectrum/ClassicViews";
 import { Spectrogram } from "@/components/spectrum/Spectrogram";
 import { Waterfall3D } from "@/components/spectrum/Waterfall3D";
@@ -170,8 +171,10 @@ export function InlineSpectrum({
   return (
     <div
       className={cn("rounded-md border border-line bg-bg overflow-hidden", view === "split" && "grid gap-px md:grid-cols-2")}
-      style={{ height: view === "split" ? undefined : height }}
+      // Two panels and a toolbar need more room than the waterfall slot gives.
+      style={{ height: view === "split" ? undefined : view === "spectrum" ? Math.max(height, 440) : height }}
     >
+      {view === "spectrum" && <Analyzer feed={feed} contrast={contrast} colormap={colormap} height="100%" />}
       {view === "ridgeline" && <Ridgeline feed={feed} contrast={contrast} colormap={colormap} height={height} />}
       {view === "persistence" && <Persistence feed={feed} contrast={contrast} colormap={colormap} height={height} />}
       {view === "spectrogram" && spectrogram}
