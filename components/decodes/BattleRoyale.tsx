@@ -1,4 +1,6 @@
 
+import { useEffect, useState } from "react";
+
 import { CallChip } from "@/components/decodes/controls";
 import type { DecodeEvent } from "@/components/decodes/types";
 import { ErrorBanner } from "@/components/ui/primitives";
@@ -8,16 +10,49 @@ import { formatUtcTime } from "@/lib/time";
 import { cn } from "@/lib/utils";
 
 export function BattleRoyaleAutoWarning({ autoMode }: { autoMode: string }) {
+  const [dismissedFor, setDismissedFor] = useState<string | null>(null);
+  useEffect(() => {
+    try {
+      setDismissedFor(window.localStorage.getItem(DISMISS_KEY));
+    } catch {
+    }
+  }, []);
+
+  if (dismissedFor === autoMode) return null;
+
+  const dismiss = () => {
+    setDismissedFor(autoMode);
+    try {
+      window.localStorage.setItem(DISMISS_KEY, autoMode);
+    } catch {
+    }
+  };
+
   return (
     <div className="mb-4">
       <ErrorBanner>
-        <strong>The auto operator is running ({autoMode}).</strong> FT8 Battle Royale requires
-        human-operated contacts — automated operation is detected and carries a permanent ban.
-        Stop auto before logging contacts you intend to score.
+        <div className="flex items-start gap-3">
+          <p className="min-w-0 flex-1">
+            <strong>The auto operator is running ({autoMode}).</strong> FT8 Battle Royale requires
+            human-operated contacts — automated operation is detected and carries a permanent ban.
+            Stop auto before logging contacts you intend to score.
+          </p>
+          <button
+            type="button"
+            onClick={dismiss}
+            aria-label="Dismiss this warning"
+            title={`Hide this while auto is in ${autoMode}. It comes back if the auto mode changes.`}
+            className="-my-0.5 shrink-0 rounded-sm px-1.5 text-lg leading-none text-danger hover:bg-danger/15 focus-visible:outline-2 focus-visible:outline-danger"
+          >
+            ×
+          </button>
+        </div>
       </ErrorBanner>
     </div>
   );
 }
+
+const DISMISS_KEY = "digishack.brAutoWarningDismissed";
 
 export function BattleRoyaleFeed({
   feed,
