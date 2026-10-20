@@ -25,7 +25,7 @@ import {
 } from "@/components/log/log-query";
 import { isConfirmed, qslChannels } from "@/components/log/qsl";
 import { QslBadges } from "@/components/log/QslBadges";
-import { formatDistance, gridDistanceKm } from "@/lib/geo/distance";
+import { formatDistance, gridDistanceKm } from "@/lib/ham/grid-geometry";
 import * as propagation from "@/lib/propagation";
 
 let pass = 0;

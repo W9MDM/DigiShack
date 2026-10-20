@@ -1,15 +1,21 @@
 // Great-circle arithmetic for the map pages.
 //
-// gridToLatLon, bearingDeg, distanceKm and formatDistance are the same formulae as
-// lib/propagation, restated rather than imported because that module imports Prisma: a page
-// that called them at render time would pull @prisma/client into the browser bundle, which
-// is the fault scripts/check-client-bundle.ts exists to catch. scripts/check-greyline.ts
-// asserts the two copies agree, so they cannot drift apart silently.
+// gridToLatLon, bearingDeg, distanceKm and formatDistance come from lib/ham/grid-geometry,
+// the one browser-safe home for them (no imports, so no Prisma in the client bundle).
+// lib/propagation re-exports the same module, so the map, the log's distance column and the
+// server-side propagation code cannot disagree. This file used to restate all four.
 
-import type { DistanceUnit } from "@/lib/propagation";
+import {
+  bearingDeg,
+  distanceKm,
+  formatDistance,
+  gridToLatLon,
+  type DistanceUnit,
+} from "@/lib/ham/grid-geometry";
 
 import type { LatLon } from "./projection";
 
+export { bearingDeg, distanceKm, formatDistance, gridToLatLon };
 export type { DistanceUnit };
 
 export const EARTH_RADIUS_KM = 6371;
@@ -17,56 +23,6 @@ export const EARTH_RADIUS_KM = 6371;
 export const HALF_CIRCUMFERENCE_KM = Math.PI * EARTH_RADIUS_KM;
 
 const RAD = Math.PI / 180;
-
-/** Maidenhead to lat/lon, centre of the square (4 or 6 characters). */
-export function gridToLatLon(grid: string): LatLon | null {
-  const g = grid.trim().toUpperCase();
-  if (!/^[A-R]{2}[0-9]{2}([A-X]{2})?/.test(g)) return null;
-  const A = 65;
-  let lon = (g.charCodeAt(0) - A) * 20 - 180;
-  let lat = (g.charCodeAt(1) - A) * 10 - 90;
-  lon += Number(g[2]) * 2;
-  lat += Number(g[3]) * 1;
-  if (g.length >= 6) {
-    lon += (g.charCodeAt(4) - A) * (2 / 24) + 1 / 24;
-    lat += (g.charCodeAt(5) - A) * (1 / 24) + 0.5 / 24;
-  } else {
-    lon += 1;
-    lat += 0.5;
-  }
-  return { lat, lon };
-}
-
-/** Initial great-circle bearing from a to b, degrees true, 0–360. */
-// Written exactly as lib/propagation writes them, rounding included, so the check can
-// demand identical results rather than "close enough".
-const toRad = (d: number) => (d * Math.PI) / 180;
-
-export function bearingDeg(a: LatLon, b: LatLon): number {
-  const phi1 = toRad(a.lat);
-  const phi2 = toRad(b.lat);
-  const dLon = toRad(b.lon - a.lon);
-  const y = Math.sin(dLon) * Math.cos(phi2);
-  const x = Math.cos(phi1) * Math.sin(phi2) - Math.sin(phi1) * Math.cos(phi2) * Math.cos(dLon);
-  const deg = (Math.atan2(y, x) * 180) / Math.PI;
-  return (deg + 360) % 360;
-}
-
-/** Great-circle distance in km. */
-export function distanceKm(a: LatLon, b: LatLon): number {
-  const dLat = toRad(b.lat - a.lat);
-  const dLon = toRad(b.lon - a.lon);
-  const h =
-    Math.sin(dLat / 2) ** 2 + Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.sin(dLon / 2) ** 2;
-  return 2 * EARTH_RADIUS_KM * Math.asin(Math.min(1, Math.sqrt(h)));
-}
-
-/** "1,234 mi" or "1,987 km", per the operator's unit preference. */
-export function formatDistance(km: number, unit: DistanceUnit): string {
-  return unit === "km"
-    ? `${Math.round(km).toLocaleString()} km`
-    : `${Math.round(km * 0.621371).toLocaleString()} mi`;
-}
 
 const POINTS = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"];
 
