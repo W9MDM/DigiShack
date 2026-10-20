@@ -525,6 +525,24 @@ interface LockRecord {
   pid: number;
   host: string;
   acquiredAt: string;
+  /**
+   * The holder's start time from /proc/<pid>/stat (Linux), so a pid that was reused after the
+   * holder died — likely in a container's small pid space, after PM2 restarts an OOM-killed web
+   * tier — is not mistaken for it. Absent off Linux and in locks from before 1.253.2.
+   */
+  startTicks?: string;
+}
+
+/** Field 22 of /proc/<pid>/stat: start time in clock ticks since boot. Null off Linux. */
+function procStartTicks(pid: number): string | null {
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+    // The command name (field 2) is parenthesised and may contain spaces: split after it.
+    const rest = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+    return rest[19] ?? null;
+  } catch {
+    return null;
+  }
 }
 
 /** A held run lock. `release()` is idempotent and only ever removes this holder's own file. */
@@ -588,17 +606,28 @@ function inspectLock(): LockView {
       ? { state: "stale", raw, why: "it is unreadable" }
       : { state: "held" };
   }
-  if (!(now - Date.parse(record.acquiredAt) < LOCK_MAX_AGE_MS)) {
-    return { state: "stale", raw, why: `it was taken at ${record.acquiredAt}` };
-  }
+  // Liveness before age: a holder that is provably still the process that took the lock keeps
+  // it however long it has been — a slow pre-update dump is allowed up to two hours itself.
   if (record.host === hostname()) {
     if (record.pid === process.pid) {
       if (heldLock.__digishackUpdateLock !== record.token) {
         return { state: "stale", raw, why: "an earlier process with this pid left it" };
       }
-    } else if (!processAlive(record.pid)) {
+      return { state: "held" };
+    }
+    if (!processAlive(record.pid)) {
       return { state: "stale", raw, why: `process ${record.pid} is gone` };
     }
+    if (record.startTicks !== undefined) {
+      const ticks = procStartTicks(record.pid);
+      if (ticks !== null && ticks !== record.startTicks) {
+        return { state: "stale", raw, why: `pid ${record.pid} now belongs to a different process` };
+      }
+      if (ticks !== null) return { state: "held" };
+    }
+  }
+  if (!(now - Date.parse(record.acquiredAt) < LOCK_MAX_AGE_MS)) {
+    return { state: "stale", raw, why: `it was taken at ${record.acquiredAt}` };
   }
   return { state: "held" };
 }
@@ -656,6 +685,7 @@ export function acquireUpdateLock(): UpdateLock | null {
     pid: process.pid,
     host: hostname(),
     acquiredAt: new Date().toISOString(),
+    ...(procStartTicks(process.pid) !== null ? { startTicks: procStartTicks(process.pid)! } : {}),
   };
   // The first create, and up to two more after clearing an abandoned lock.
   for (let attempt = 0; attempt < 3; attempt++) {
