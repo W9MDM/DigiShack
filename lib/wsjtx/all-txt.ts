@@ -24,6 +24,8 @@
 // is not a contact, and inventing one from a hopeful-looking exchange would put a QSO in the
 // log that the other operator has no record of — which is worse than the missing entry.
 
+import { GRID4_ANY_CASE_RE } from "@/lib/ham/grid-geometry";
+
 /** One line of ALL.TXT. */
 export interface DecodeLine {
   at: Date;
@@ -336,7 +338,7 @@ export function recoverQsos(
       }
       if (isAcknowledgement(a.rest)) {
         p.acked = true;
-      } else if (/^[A-R]{2}\d{2}$/i.test(a.rest.trim())) {
+      } else if (GRID4_ANY_CASE_RE.test(a.rest.trim())) {
         // A bare four-character grid, which is what they answer a CQ with.
         //
         // ELSE-IF, and the acknowledgement is tested FIRST. `RR73` is two letters in A-R

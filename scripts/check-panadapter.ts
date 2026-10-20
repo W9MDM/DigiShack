@@ -811,6 +811,14 @@ console.log("\nspot labels thin out instead of piling up");
   );
 
   eq("no spots, no labels", labelledSpots([], LOW, SPAN).size, 0);
+
+  // The gap is never narrower than a label in pixels: on a phone-width display the same
+  // three spots 1.5 kHz apart on a 20 kHz span (7.5% apart) would sit on top of each other.
+  const tight = [spot("A", 14_066_000), spot("B", 14_067_500), spot("C", 14_069_000)];
+  eq("spots 7.5% apart, width not yet measured: all labelled", labelledSpots(tight, 14_064_000, 20_000).size, 3);
+  eq("  at 1200 px (6% gap wins): all labelled", labelledSpots(tight, 14_064_000, 20_000, 1200).size, 3);
+  eq("  at 830 px (a label is just over 6%): all labelled", labelledSpots(tight, 14_064_000, 20_000, 830).size, 3);
+  eq("  at 320 px (a label is 15.6%): only the lowest", labelledSpots(tight, 14_064_000, 20_000, 320).size, 1);
 }
 
 console.log("\nfilter presets carry the sideband's sign");

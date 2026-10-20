@@ -24,11 +24,26 @@ export function ZoomControls({
         <span className="[@media(pointer:coarse)]:hidden">{hint}</span>
         <span className="hidden [@media(pointer:coarse)]:inline">{touchHint}</span>
       </p>
+      {/* The coarse-pointer rule in globals.css makes these 44px tall on a phone but leaves
+          the width alone, so − and + were 44 by 32: a narrow target for a thumb, sat right
+          next to each other. Squared up there; the mouse size is unchanged. */}
       <div className="flex items-center gap-1">
-        <Button size="sm" variant="ghost" aria-label="Zoom out" className="w-8" onClick={() => onZoom(1 / 0.7)}>
+        <Button
+          size="sm"
+          variant="ghost"
+          aria-label="Zoom out"
+          className="w-8 [@media(pointer:coarse)]:w-11"
+          onClick={() => onZoom(1 / 0.7)}
+        >
           −
         </Button>
-        <Button size="sm" variant="ghost" aria-label="Zoom in" className="w-8" onClick={() => onZoom(0.7)}>
+        <Button
+          size="sm"
+          variant="ghost"
+          aria-label="Zoom in"
+          className="w-8 [@media(pointer:coarse)]:w-11"
+          onClick={() => onZoom(0.7)}
+        >
           +
         </Button>
         <Button size="sm" variant="ghost" disabled={!zoomed} onClick={onReset}>

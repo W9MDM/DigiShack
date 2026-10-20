@@ -432,8 +432,10 @@ export default function GridMapPage({ wsUrl }: Props) {
 
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_300px]">
         <div className="flex flex-col gap-3 min-w-0">
-          <div className="flex flex-wrap items-end gap-3">
-            <Field label="Band" htmlFor="gm-band" className="w-32">
+          {/* Two to a row on a phone, each filling its half, rather than fixed widths
+              wrapping into a ragged 2 + 1. */}
+          <div className="grid grid-cols-2 gap-3 sm:flex sm:flex-wrap sm:items-end">
+            <Field label="Band" htmlFor="gm-band" className="sm:w-32">
               <Select id="gm-band" value={prefs.band} onChange={(e) => update({ band: e.target.value })}>
                 <option value="">All bands</option>
                 {BAND_NAMES.map((b) => (
@@ -443,7 +445,7 @@ export default function GridMapPage({ wsUrl }: Props) {
                 ))}
               </Select>
             </Field>
-            <Field label="Log period" htmlFor="gm-days" className="w-36">
+            <Field label="Log period" htmlFor="gm-days" className="sm:w-36">
               <Select id="gm-days" value={prefs.days} onChange={(e) => update({ days: e.target.value })}>
                 <option value="1">Last 24 hours</option>
                 <option value="7">Last 7 days</option>
@@ -452,7 +454,7 @@ export default function GridMapPage({ wsUrl }: Props) {
                 <option value="0">Whole log</option>
               </Select>
             </Field>
-            <Field label="Heard-by window" htmlFor="gm-heard" className="w-36">
+            <Field label="Heard-by window" htmlFor="gm-heard" className="sm:w-36">
               <Select id="gm-heard" value={prefs.heardMinutes} onChange={(e) => update({ heardMinutes: e.target.value })}>
                 <option value="15">Last 15 minutes</option>
                 <option value="60">Last hour</option>
@@ -521,7 +523,8 @@ export default function GridMapPage({ wsUrl }: Props) {
             <p className="text-sm text-warn">{heardBy.data.collector.detail}</p>
           )}
 
-          <section className="bg-surface border border-line rounded-md shadow-panel overflow-hidden">
+          {/* Edge to edge on a phone, where the page gutter is 32px of a 371px screen. */}
+          <section className="bg-surface border border-line shadow-panel overflow-hidden -mx-4 border-x-0 rounded-none sm:mx-0 sm:border-x sm:rounded-md">
             <WorldMap
               scene={scene}
               centreLon={home?.lon ?? null}

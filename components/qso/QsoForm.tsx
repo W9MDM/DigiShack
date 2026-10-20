@@ -801,6 +801,13 @@ function focusField(id: string): void {
 // 36rem form, and the time row goes to eight from 72rem.
 const GRID = "grid grid-cols-2 gap-x-3 gap-y-4 @xl:grid-cols-4 @xl:gap-x-4";
 
+// Full width below a 36rem form, one column of four above it. For the fields whose label or
+// hint is a sentence: at half a phone's width "Their references (SIG_INFO)" broke onto two
+// lines and pushed its input below its neighbour's, a four-line hint stood beside a
+// one-line one, and the station select cut its own callsign and grid short. The short
+// pairs (RST, band and mode, state, zone) stay side by side, where they read as pairs.
+const WIDE_ON_PHONE = "col-span-2 @xl:col-span-1";
+
 function Group({
   id,
   title,
@@ -1220,6 +1227,7 @@ export function QsoForm({
                 htmlFor="sig"
                 errors={fieldErrors("sig")}
                 hint="POTA, SOTA, WWFF…"
+                className={WIDE_ON_PHONE}
               >
                 <Input
                   id="sig"
@@ -1235,6 +1243,7 @@ export function QsoForm({
                 htmlFor="sigInfo"
                 errors={refErrors.length > 0 ? refErrors : undefined}
                 hint="Comma-separate several parks; the first is the one ADIF exports."
+                className={WIDE_ON_PHONE}
               >
                 <Input
                   id="sigInfo"
@@ -1348,6 +1357,7 @@ export function QsoForm({
                 htmlFor="mySig"
                 errors={fieldErrors("mySig")}
                 hint="The programme YOU are activating"
+                className={WIDE_ON_PHONE}
               >
                 <Input
                   id="mySig"
@@ -1363,6 +1373,7 @@ export function QsoForm({
                 htmlFor="mySigInfo"
                 errors={fieldErrors("mySigInfo")}
                 hint="The park YOU are in. Carries to the next contact — set it once."
+                className={WIDE_ON_PHONE}
               >
                 <Input
                   id="mySigInfo"
@@ -1392,6 +1403,7 @@ export function QsoForm({
                     ? `Where YOU were. Blank exports the station's ${station.grid}.`
                     : "Where YOU were. Blank exports the station's grid."
                 }
+                className={WIDE_ON_PHONE}
               >
                 <Input
                   id="myGridSquare"
@@ -1403,7 +1415,13 @@ export function QsoForm({
                 />
               </Field>
 
-              <Field label="My station" htmlFor="stationId" required errors={fieldErrors("stationId")}>
+              <Field
+                label="My station"
+                htmlFor="stationId"
+                required
+                errors={fieldErrors("stationId")}
+                className={WIDE_ON_PHONE}
+              >
                 <Select
                   id="stationId"
                   value={values.stationId}
@@ -1430,6 +1448,7 @@ export function QsoForm({
                     ? "No operators on this station yet"
                     : "Optional"
                 }
+                className={WIDE_ON_PHONE}
               >
                 <Select
                   id="operatorId"

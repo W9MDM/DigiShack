@@ -1,35 +1,30 @@
-// Maidenhead locators, positions, and the great-circle path between two of them.
+// Maidenhead locators, positions, and the great-circle path between two of them, as the
+// Tools page reads and prints them.
 //
-// NOT lib/propagation, though that module has gridToLatLon, bearingDeg and distanceKm: it
-// also imports Prisma for its caches, so a page that imports it puts @prisma/client in the
-// browser bundle — check:client-bundle refuses exactly that. This module is pure. It agrees
-// with lib/propagation for 4- and 6-character locators (check:ham-tools asserts it) and adds
-// what the Tools page needs on top: the 8-character extended square, position to locator,
-// the long path and the antipode.
+// The arithmetic is lib/ham/grid-geometry's, re-exported here so this page, the log, the
+// maps and lib/propagation run one copy of it. What lives here is the page's own: a
+// locator parser that says which character is wrong, coordinate entry, and the formatting.
+// Not lib/propagation directly: it imports Prisma for its caches, and check:client-bundle
+// refuses a page that would ship that to the browser.
 
+import {
+  EARTH_RADIUS_KM,
+  gridSquare,
+  type GridSquare,
+} from "@/lib/ham/grid-geometry";
 import type { Parsed } from "@/lib/ham/tools/number";
 
-export interface LatLon {
-  lat: number;
-  lon: number;
-}
+export {
+  antipode,
+  EARTH_RADIUS_KM,
+  greatCircle,
+  latLonToGrid,
+  type GreatCirclePath,
+  type GridSquare,
+  type LatLon,
+} from "@/lib/ham/grid-geometry";
 
-export interface GridSquare {
-  /** Normalised the way it is written on a QSL card: "EN61aa45". */
-  grid: string;
-  chars: 4 | 6 | 8;
-  centre: LatLon;
-  south: number;
-  north: number;
-  west: number;
-  east: number;
-}
-
-/** Mean Earth radius, km — the same figure lib/propagation uses, so the two agree. */
-export const EARTH_RADIUS_KM = 6371;
 export const KM_PER_MILE = 1.609344;
-
-const A = 65;
 
 /** A locator, or which character is wrong with it. Case-insensitive. */
 export function parseGrid(text: string): Parsed<GridSquare> {
@@ -49,72 +44,11 @@ export function parseGrid(text: string): Parsed<GridSquare> {
   }
   if (u.length === 8 && !/^.{6}\d{2}$/.test(u)) return { ok: false, error: "Characters 7 and 8 are digits" };
 
-  const chars = u.length as 4 | 6 | 8;
-  let west = (u.charCodeAt(0) - A) * 20 - 180 + (u.charCodeAt(2) - 48) * 2;
-  let south = (u.charCodeAt(1) - A) * 10 - 90 + (u.charCodeAt(3) - 48);
-  let w = 2;
-  let h = 1;
-  if (chars >= 6) {
-    w = 2 / 24;
-    h = 1 / 24;
-    west += (u.charCodeAt(4) - A) * w;
-    south += (u.charCodeAt(5) - A) * h;
-  }
-  if (chars === 8) {
-    w = 2 / 240;
-    h = 1 / 240;
-    west += (u.charCodeAt(6) - 48) * w;
-    south += (u.charCodeAt(7) - 48) * h;
-  }
-  return {
-    ok: true,
-    value: {
-      grid: normaliseGrid(u),
-      chars,
-      centre: { lat: south + h / 2, lon: west + w / 2 },
-      south,
-      north: south + h,
-      west,
-      east: west + w,
-    },
-  };
-}
-
-function normaliseGrid(u: string): string {
-  return u.slice(0, 4) + u.slice(4, 6).toLowerCase() + u.slice(6);
-}
-
-/**
- * The locator containing a position.
- *
- * The north pole and the antimeridian sit on the far edge of the last field, so they are
- * pulled just inside it: 90° N, 180° E is RR99xx99, not a field "S" that does not exist.
- */
-export function latLonToGrid(p: LatLon, chars: 4 | 6 | 8): string {
-  let lon = Math.min(Math.max(p.lon, -180), 180) + 180;
-  let lat = Math.min(Math.max(p.lat, -90), 90) + 90;
-  const step = (value: number, size: number, count: number): number =>
-    Math.min(Math.max(Math.floor(value / size), 0), count - 1);
-
-  const f1 = step(lon, 20, 18);
-  const f2 = step(lat, 10, 18);
-  lon -= f1 * 20;
-  lat -= f2 * 10;
-  const s1 = step(lon, 2, 10);
-  const s2 = step(lat, 1, 10);
-  lon -= s1 * 2;
-  lat -= s2;
-  let out = String.fromCharCode(A + f1, A + f2) + s1 + s2;
-  if (chars === 4) return out;
-
-  const x1 = step(lon, 2 / 24, 24);
-  const x2 = step(lat, 1 / 24, 24);
-  lon -= x1 * (2 / 24);
-  lat -= x2 * (1 / 24);
-  out += String.fromCharCode(97 + x1, 97 + x2);
-  if (chars === 6) return out;
-
-  return out + step(lon, 2 / 240, 10) + step(lat, 1 / 240, 10);
+  // Every well-formed locator gets here. One that does not is text whose length changed
+  // when it was uppercased ("ß" becomes "SS"), which the character checks above cannot see.
+  const square = gridSquare(u);
+  if (!square) return { ok: false, error: "That is not a Maidenhead locator" };
+  return { ok: true, value: square };
 }
 
 const COORD = /^([NSEW])?\s*([+-]?(?:\d+\.?\d*|\.\d+))\s*°?\s*([NSEW])?$/i;
@@ -158,55 +92,7 @@ export function parseLongitude(text: string): Parsed<number> {
   return parseCoordinate(text, "lon");
 }
 
-export interface GreatCirclePath {
-  km: number;
-  /** Initial bearing, degrees true. Null when the two points coincide or are antipodal. */
-  bearing: number | null;
-  longKm: number;
-  longBearing: number | null;
-  /** Every direction is a great circle to the antipode, so no bearing is THE bearing. */
-  antipodal: boolean;
-}
-
 const toRad = (d: number): number => (d * Math.PI) / 180;
-const toDeg = (r: number): number => (r * 180) / Math.PI;
-
-/**
- * Short and long path between two points on a sphere.
- *
- * The long path is the rest of the same great circle: the distance is the circumference
- * less the short path, and the beam heading is the reciprocal of the short-path one.
- */
-export function greatCircle(a: LatLon, b: LatLon): GreatCirclePath {
-  const phi1 = toRad(a.lat);
-  const phi2 = toRad(b.lat);
-  const dPhi = phi2 - phi1;
-  const dLambda = toRad(b.lon - a.lon);
-  const h =
-    Math.sin(dPhi / 2) ** 2 + Math.cos(phi1) * Math.cos(phi2) * Math.sin(dLambda / 2) ** 2;
-  const km = 2 * EARTH_RADIUS_KM * Math.asin(Math.min(1, Math.sqrt(h)));
-  const circumference = 2 * Math.PI * EARTH_RADIUS_KM;
-  const antipodal = Math.abs(km - circumference / 2) < 0.5;
-
-  let bearing: number | null = null;
-  if (km >= 0.001 && !antipodal) {
-    const y = Math.sin(dLambda) * Math.cos(phi2);
-    const x = Math.cos(phi1) * Math.sin(phi2) - Math.sin(phi1) * Math.cos(phi2) * Math.cos(dLambda);
-    bearing = (toDeg(Math.atan2(y, x)) + 360) % 360;
-  }
-  return {
-    km,
-    bearing,
-    longKm: circumference - km,
-    longBearing: bearing === null ? null : (bearing + 180) % 360,
-    antipodal,
-  };
-}
-
-/** The point on the opposite side of the Earth. */
-export function antipode(p: LatLon): LatLon {
-  return { lat: -p.lat, lon: p.lon > 0 ? p.lon - 180 : p.lon + 180 };
-}
 
 export function kmToMiles(km: number): number {
   return km / KM_PER_MILE;
@@ -217,7 +103,12 @@ const POINTS = [
   "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW",
 ] as const;
 
-/** The sixteen-point compass name for a bearing: 47.7° is "NE". */
+/**
+ * The sixteen-point compass name for a bearing: 47.7° is "NE".
+ *
+ * From the unrounded bearing, so 11.3° is NNE. The maps' formatBearing rounds to a whole
+ * degree first and calls the same 11.3° N, matching the "11°" it prints beside it.
+ */
 export function compassPoint(deg: number): string {
   if (!Number.isFinite(deg)) return "—";
   return POINTS[Math.round((((deg % 360) + 360) % 360) / 22.5) % 16] ?? "—";

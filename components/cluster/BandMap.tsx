@@ -178,8 +178,12 @@ export function BandMap({
                 {isNewest && <span className="sr-only">(newest)</span>}
               </>
             );
+            // `tap-inline`: the coarse-pointer rule in globals.css gives every button a 44px
+            // minimum height, and these are buttons positioned for a 24px row by
+            // bandMapLayout — on a phone each label covered the one below it, so a tap
+            // could tune the wrong station. The 24px label is the target, as laid out.
             const cls = cn(
-              "absolute right-1 flex items-center gap-1.5 overflow-hidden whitespace-nowrap rounded-sm border px-1.5 text-left text-xs",
+              "tap-inline absolute right-1 flex items-center gap-1.5 overflow-hidden whitespace-nowrap rounded-sm border px-1.5 text-left text-xs",
               labelTone(s),
               ageOpacity(s, now),
               isNewest && "ring-2 ring-fg/70 font-semibold",

@@ -29,6 +29,8 @@
 // for an FT2 station, and `unpack77` reports them as unsupported rather than
 // mis-rendering them, so a decode is never silently wrong.
 
+import { isGrid4 } from "@/lib/ham/grid-geometry";
+
 /** Alphabets, verbatim from the reference. Their exact contents and order matter. */
 const A1 = " 0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"; // 37
 const A2 = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"; // 36
@@ -381,12 +383,8 @@ export function toGrid4(nIn: number): { grid: string; ok: boolean } {
   };
 }
 
-const GRID4_RE = /^[A-R][A-R][0-9][0-9]$/;
-
-/** Is this a four-character grid square? */
-export function isGrid4(s: string): boolean {
-  return GRID4_RE.test(s);
-}
+/** Is this a four-character grid square? Upper case only, as a packed message carries it. */
+export { isGrid4 };
 
 // ---------------------------------------------------------------------------
 // Bit packing

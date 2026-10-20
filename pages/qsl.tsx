@@ -957,7 +957,11 @@ export default function QslPage() {
             </p>
           ) : (
             <>
-              <ul className="-mx-4 max-h-[22rem] divide-y divide-line overflow-y-auto">
+              {/* Its own scroller only from sm up. On a phone this panel is below the queue,
+                  at the foot of the page, and a list that scrolls inside a page that scrolls
+                  catches the thumb: the page stops moving and the list moves instead. It is
+                  at most 25 short rows, so a phone simply shows them all. */}
+              <ul className="-mx-4 divide-y divide-line sm:max-h-[22rem] sm:overflow-y-auto">
                 {candidates.map((c) => (
                   <li key={c.qsoId} className="flex items-baseline justify-between gap-3 px-4 py-1.5">
                     <span className="font-mono text-sm">{c.callsign}</span>
@@ -985,10 +989,13 @@ export default function QslPage() {
 function EmptyQueue({ tab, sender }: { tab: TabId; sender: QslSenderStatus | undefined }) {
   if (tab === "pending") {
     return (
-      <EmptyState title="Nothing waiting for review" className="py-8">
+      <EmptyState title="Nothing waiting for review" className="py-6 sm:py-8">
         {/* Whether anything FILLS this list is a separate fact from whether it is empty.
-            `!sender` says nothing rather than defaulting an unknown to a claim. */}
-        Queue some contacts from the panel alongside
+            `!sender` says nothing rather than defaulting an unknown to a claim. The panel
+            is named rather than placed: it is alongside from lg up and below this one
+            under that, so "alongside" was wrong on every phone and tablet. Quoted, because
+            bare, the panel's title read as part of the sentence. */}
+        Queue some contacts from the “Not yet queued” list
         {!sender
           ? "."
           : sender.enabled && sender.running
@@ -1007,7 +1014,7 @@ function EmptyQueue({ tab, sender }: { tab: TabId; sender: QslSenderStatus | und
   };
   const [title, body] = copy[tab];
   return (
-    <EmptyState title={title} className="py-8">
+    <EmptyState title={title} className="py-6 sm:py-8">
       {body}
     </EmptyState>
   );

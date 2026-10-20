@@ -39,7 +39,8 @@ import {
 import { FrameDecoder, type FeedKind } from "@/lib/spectrum/wire";
 import { cn } from "@/lib/utils";
 
-// Spectrum: a full-page spectrogram and 3D waterfall of what the radio is receiving.
+// Spectrum: what the radio is receiving, full page — Waterfall HD (the high-resolution
+// waterfall), a 3D waterfall and the analyser views.
 //
 // Receive-only. Nothing here tunes, keys or changes the radio, so it is open to every
 // signed-in role. Both feeds are recorded from the moment the page opens, whichever is on
@@ -71,6 +72,9 @@ interface FeedStats {
 /** Range slider limits, dB. */
 const RANGE_MIN = 6;
 const RANGE_MAX = 100;
+
+/** Each half of the controls card when a phone splits it in two (see the controls below). */
+const PHONE_CARD = "flex flex-wrap items-end gap-x-4 gap-y-2 rounded-md border border-line bg-surface px-3 py-2 shadow-panel";
 
 export default function SpectrumPage({ wsUrl }: Props) {
   const router = useRouter();
@@ -210,7 +214,7 @@ export default function SpectrumPage({ wsUrl }: Props) {
     <div className="flex flex-col gap-3 md:h-[calc(100dvh-8.5rem)] md:min-h-[520px]">
       <PageHeader
         title="Spectrum"
-        subtitle="What the radio is hearing, live — spectrogram and 3D waterfall"
+        subtitle="What the radio is hearing, live — Waterfall HD, 3D and more"
         actions={
           <>
             {status?.transmitting && <Badge tone="danger">TX</Badge>}
@@ -227,118 +231,132 @@ export default function SpectrumPage({ wsUrl }: Props) {
         }
       />
 
-      <div className="flex flex-wrap items-end gap-x-4 gap-y-2 rounded-md border border-line bg-surface px-3 py-2 shadow-panel">
-        <Segmented
-          label="View"
-          value={prefs.view}
-          options={VIEWS.map((v) => ({ value: v.id, label: v.label }))}
-          onChange={(v) => update({ view: v })}
-        />
-        <Segmented
-          label="Source"
-          value={source}
-          options={[
-            { value: "audio", label: "Audio" },
-            {
-              value: "rf",
-              label: "RF",
-              disabled: !seen.rf,
-              title: seen.rf
-                ? "The radio's RF panadapter"
-                : "No RF panadapter frames yet — only a FlexRadio with the panadapter on sends them",
-            },
-          ]}
-          onChange={(v) => update({ source: v })}
-        />
-        <label className="flex flex-col gap-1 text-xs text-fg-muted">
-          Colours
-          <Select
-            value={colormap}
-            onChange={(e) => {
-              if (isColormapId(e.target.value)) update({ colormap: e.target.value, colormapChosen: true });
-            }}
-            className="w-auto py-1 text-xs"
-          >
-            {COLORMAPS.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.label}
-              </option>
-            ))}
-          </Select>
-        </label>
-        <label className="flex flex-col gap-1 text-xs text-fg-muted">
-          <span className="tnum">
-            Floor {contrast.floorOffsetDb >= 0 ? "+" : ""}
-            {contrast.floorOffsetDb} dB
-          </span>
-          <input
-            type="range"
-            min={MIN_FLOOR_OFFSET_DB}
-            max={MAX_FLOOR_OFFSET_DB}
-            step={1}
-            value={contrast.floorOffsetDb}
-            onChange={(e) => setContrast({ ...contrast, floorOffsetDb: Number(e.target.value) })}
-            className="w-28 accent-accent"
-            aria-label="Where the colour map starts, in dB above the tracked noise floor"
+      {/* One card from sm: up. On a phone the full card was about 280px tall and pushed the
+          picture, which is what the page is for, most of a screen down. There the wrapper
+          dissolves (`contents`) and its two halves are cards of their own: the view and source
+          switches stay above the picture, the colour-scale controls drop below it. From sm: up
+          the halves are `contents` instead, so every control lands in this one row in the same
+          order as before. */}
+      <div className="contents sm:flex sm:flex-wrap sm:items-end sm:gap-x-4 sm:gap-y-2 sm:rounded-md sm:border sm:border-line sm:bg-surface sm:px-3 sm:py-2 sm:shadow-panel">
+        <div className={cn(PHONE_CARD, "sm:contents")}>
+          <Segmented
+            label="View"
+            className="max-sm:basis-full"
+            value={prefs.view}
+            options={VIEWS.map((v) => ({ value: v.id, label: v.label }))}
+            onChange={(v) => update({ view: v })}
           />
-        </label>
-        <label className="flex flex-col gap-1 text-xs text-fg-muted">
-          <span className="tnum">
-            Range {Math.round(win.rangeDb)} dB{contrast.rangeDb === null ? " (auto)" : ""}
-          </span>
-          <input
-            type="range"
-            min={RANGE_MIN}
-            max={RANGE_MAX}
-            step={1}
-            value={Math.round(Math.max(RANGE_MIN, Math.min(RANGE_MAX, win.rangeDb)))}
-            onChange={(e) => setContrast({ ...contrast, rangeDb: Number(e.target.value) })}
-            className="w-28 accent-accent"
-            aria-label="How many dB the colour map spans"
+          <Segmented
+            label="Source"
+            value={source}
+            options={[
+              { value: "audio", label: "Audio" },
+              {
+                value: "rf",
+                label: "RF",
+                disabled: !seen.rf,
+                title: seen.rf
+                  ? "The radio's RF panadapter"
+                  : "No RF panadapter frames yet — only a FlexRadio with the panadapter on sends them",
+              },
+            ]}
+            onChange={(v) => update({ source: v })}
           />
-        </label>
-        <div className="flex flex-col gap-1 text-xs text-fg-muted">
-          <span className="flex items-center gap-1.5">
-            Scale
-            <HelpTip label="About the contrast controls">
-              The floor follows the noise floor the bridge measures, so 0 dB colours the band the way
-              the Decodes waterfall does. Raise it to darken noise, narrow the range to lift weak
-              signals. Changes recolour all history at once. Bins below the bridge&apos;s floor arrive
-              clipped, so a negative floor shows them as one flat colour.
-              {source === "rf" && " Panadapter levels are not calibrated dBm."}
-            </HelpTip>
-          </span>
-          <span className="flex items-center gap-2">
-            <canvas ref={legendRef} width={256} height={1} className="h-3 w-24 rounded-sm" aria-hidden="true" />
-            <span className="tnum text-[11px] text-fg-subtle">
-              {s.floorDb === null
-                ? "—"
-                : `${Math.round(win.loDb)}…${Math.round(win.loDb + win.rangeDb)} ${unit}`}
-            </span>
-          </span>
         </div>
-        <Button
-          size="sm"
-          variant="ghost"
-          onClick={() => setContrast({ ...DEFAULT_CONTRAST })}
-          disabled={contrast.floorOffsetDb === 0 && contrast.rangeDb === null}
-        >
-          Reset scale
-        </Button>
-        <label className="flex flex-col gap-1 text-xs text-fg-muted">
-          History
-          <Select
-            value={String(prefs.historySec)}
-            onChange={(e) => update({ historySec: Number(e.target.value) })}
-            className="w-auto py-1 text-xs"
+        {/* On a phone: Colours and History share the first row, Floor and Range split the next
+            (wider sliders are easier to drag with a thumb), Scale and Reset the last. */}
+        <div className={cn(PHONE_CARD, "order-last sm:contents")}>
+          <label className="flex flex-col gap-1 text-xs text-fg-muted">
+            Colours
+            <Select
+              value={colormap}
+              onChange={(e) => {
+                if (isColormapId(e.target.value)) update({ colormap: e.target.value, colormapChosen: true });
+              }}
+              className="w-auto py-1 text-xs"
+            >
+              {COLORMAPS.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.label}
+                </option>
+              ))}
+            </Select>
+          </label>
+          <label className="flex flex-col gap-1 text-xs text-fg-muted max-sm:order-1 max-sm:flex-1 max-sm:basis-32">
+            <span className="tnum">
+              Floor {contrast.floorOffsetDb >= 0 ? "+" : ""}
+              {contrast.floorOffsetDb} dB
+            </span>
+            <input
+              type="range"
+              min={MIN_FLOOR_OFFSET_DB}
+              max={MAX_FLOOR_OFFSET_DB}
+              step={1}
+              value={contrast.floorOffsetDb}
+              onChange={(e) => setContrast({ ...contrast, floorOffsetDb: Number(e.target.value) })}
+              className="w-28 accent-accent max-sm:w-full"
+              aria-label="Where the colour map starts, in dB above the tracked noise floor"
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-xs text-fg-muted max-sm:order-1 max-sm:flex-1 max-sm:basis-32">
+            <span className="tnum">
+              Range {Math.round(win.rangeDb)} dB{contrast.rangeDb === null ? " (auto)" : ""}
+            </span>
+            <input
+              type="range"
+              min={RANGE_MIN}
+              max={RANGE_MAX}
+              step={1}
+              value={Math.round(Math.max(RANGE_MIN, Math.min(RANGE_MAX, win.rangeDb)))}
+              onChange={(e) => setContrast({ ...contrast, rangeDb: Number(e.target.value) })}
+              className="w-28 accent-accent max-sm:w-full"
+              aria-label="How many dB the colour map spans"
+            />
+          </label>
+          <div className="flex flex-col gap-1 text-xs text-fg-muted max-sm:order-1">
+            <span className="flex items-center gap-1.5">
+              Scale
+              <HelpTip label="About the contrast controls">
+                The floor follows the noise floor the bridge measures, so 0 dB colours the band the way
+                the Decodes waterfall does. Raise it to darken noise, narrow the range to lift weak
+                signals. Changes recolour all history at once. Bins below the bridge&apos;s floor arrive
+                clipped, so a negative floor shows them as one flat colour.
+                {source === "rf" && " Panadapter levels are not calibrated dBm."}
+              </HelpTip>
+            </span>
+            <span className="flex items-center gap-2">
+              <canvas ref={legendRef} width={256} height={1} className="h-3 w-24 rounded-sm" aria-hidden="true" />
+              <span className="tnum text-[11px] text-fg-subtle">
+                {s.floorDb === null
+                  ? "—"
+                  : `${Math.round(win.loDb)}…${Math.round(win.loDb + win.rangeDb)} ${unit}`}
+              </span>
+            </span>
+          </div>
+          <Button
+            size="sm"
+            variant="ghost"
+            className="max-sm:order-1"
+            onClick={() => setContrast({ ...DEFAULT_CONTRAST })}
+            disabled={contrast.floorOffsetDb === 0 && contrast.rangeDb === null}
           >
-            {HISTORY_CHOICES_SEC.map((sec) => (
-              <option key={sec} value={sec}>
-                {sec / 60} min
-              </option>
-            ))}
-          </Select>
-        </label>
+            Reset scale
+          </Button>
+          <label className="flex flex-col gap-1 text-xs text-fg-muted">
+            History
+            <Select
+              value={String(prefs.historySec)}
+              onChange={(e) => update({ historySec: Number(e.target.value) })}
+              className="w-auto py-1 text-xs"
+            >
+              {HISTORY_CHOICES_SEC.map((sec) => (
+                <option key={sec} value={sec}>
+                  {sec / 60} min
+                </option>
+              ))}
+            </Select>
+          </label>
+        </div>
       </div>
 
       <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-fg-muted tnum" aria-live="polite">
@@ -369,9 +387,14 @@ export default function SpectrumPage({ wsUrl }: Props) {
         {source === "rf" && rfStale && <span className="text-warn">RF panadapter frames stopped</span>}
       </p>
 
+      {/* flex-1 only from md:, where the page is a fixed-height column for it to fill. Below
+          md: the column has no height, so flex-1's zero basis threw the 72dvh away: the box
+          shrank to its content and a canvas view fell back to the canvas's own 2:1 shape,
+          about 170px tall on a phone, with Waterfall HD (whose canvas is absolutely placed)
+          shorter still. */}
       <div
         className={cn(
-          "relative min-h-0 flex-1 h-[72dvh] md:h-auto",
+          "relative min-h-0 h-[72dvh] md:h-auto md:flex-1",
           prefs.view === "split" && "grid grid-rows-2 gap-3 lg:grid-cols-2 lg:grid-rows-1",
         )}
       >
@@ -413,17 +436,26 @@ function Segmented<T extends string>({
   value,
   options,
   onChange,
+  className,
 }: {
   label: string;
   value: T;
   options: { value: T; label: string; disabled?: boolean; title?: string }[];
   onChange: (v: T) => void;
+  className?: string;
 }) {
   return (
-    <div className="flex flex-col gap-1 text-xs text-fg-muted">
+    <div className={cn("flex flex-col gap-1 text-xs text-fg-muted", className)}>
       <span id={`seg-${label}`}>{label}</span>
-      {/* Wraps on a phone: the View group alone is wider than the controls card there. */}
-      <div role="group" aria-labelledby={`seg-${label}`} className="inline-flex max-w-full flex-wrap rounded-sm border border-line-strong">
+      {/* Wraps on a phone: the View group alone is wider than the controls card there. Below
+          sm: the buttons grow to fill each wrapped row and the dividers come from a 1px gap
+          over the border colour, so the two rows read as one even grid rather than a ragged
+          row with a hole at its end. Each button is 44px tall there too, the app's touch size. */}
+      <div
+        role="group"
+        aria-labelledby={`seg-${label}`}
+        className="inline-flex max-w-full flex-wrap rounded-sm border border-line-strong max-sm:gap-px max-sm:bg-line-strong"
+      >
         {options.map((o) => {
           const active = o.value === value;
           return (
@@ -437,6 +469,7 @@ function Segmented<T extends string>({
               className={cn(
                 "px-2.5 py-1 text-xs transition-colors first:rounded-l-sm last:rounded-r-sm",
                 "border-r border-line-strong last:border-r-0",
+                "max-sm:min-h-11 max-sm:grow max-sm:border-r-0",
                 "disabled:cursor-not-allowed disabled:opacity-60",
                 active ? "bg-accent text-accent-fg" : "bg-surface-2 text-fg-muted hover:text-fg",
               )}

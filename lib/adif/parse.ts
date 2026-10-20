@@ -8,6 +8,7 @@ import {
   type QslStatus,
 } from "@/lib/adif/fields";
 import { freqToBand, getBand, isBandName } from "@/lib/ham/bands";
+import { GRID_LOCATOR_RE } from "@/lib/ham/grid-geometry";
 import { isLoggableMode } from "@/lib/ham/modes";
 
 // ADIF 3.x parser.
@@ -304,7 +305,7 @@ export function recordsToQsos(records: AdifFields[]): ParseResult {
       endTime: endTime && endTime >= startTime ? endTime : null,
       rstSent: (r.RST_SENT ?? "").trim() || null,
       rstRcvd: (r.RST_RCVD ?? "").trim() || null,
-      gridSquare: grid && /^[A-R]{2}(\d{2}([A-X]{2}(\d{2})?)?)?$/.test(grid) ? grid : null,
+      gridSquare: grid && GRID_LOCATOR_RE.test(grid) ? grid : null,
       // TX_PWR is watts and may be fractional — QRP logs record 0.5 and 2.5.
       // Anything unparseable, zero, negative or beyond what any licence permits is
       // dropped rather than stored: NaN passes none of these, and a bogus power is
@@ -343,7 +344,7 @@ export function recordsToQsos(records: AdifFields[]): ParseResult {
       // Validated exactly as GRIDSQUARE is, and dropped rather than kept when it fails.
       // A malformed locator places the activation in no square at all, and storing it
       // would export it onward as fact.
-      myGridSquare: myGrid && /^[A-R]{2}(\d{2}([A-X]{2}(\d{2})?)?)?$/.test(myGrid) ? myGrid : null,
+      myGridSquare: myGrid && GRID_LOCATOR_RE.test(myGrid) ? myGrid : null,
       qslSent: adifToQslSent(r.QSL_SENT ?? ""),
       qslSentVia: adifToQslRoute(r.QSL_SENT_VIA),
       qslRcvdVia: adifToQslRoute(r.QSL_RCVD_VIA),

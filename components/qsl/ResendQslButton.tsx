@@ -97,10 +97,14 @@ export function ResendQslButton({
 
   return (
     <span className="inline-flex items-center gap-1">
+      {/* globals.css gives a touch screen 44px of height but leaves width to the content,
+          and a lone glyph is about 18px wide: a thumb aimed at it opened the contact
+          underneath instead. 40px wide on a coarse pointer only, so the log table stays
+          dense under a mouse. */}
       <Button
         variant="ghost"
         size="sm"
-        className="px-1 py-0"
+        className="px-1 py-0 pointer-coarse:min-w-10"
         loading={state === "busy"}
         onClick={() => void resend()}
         title={`Queue the QSL card for ${callsign} again`}

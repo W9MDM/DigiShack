@@ -52,6 +52,26 @@ import { useVisibleInterval } from "@/lib/client/use-visible-interval";
 /** Refresh often enough to be a spot list, rarely enough to be polite. */
 const REFRESH_MS = 60_000;
 
+/** "5m ago", or "just now": `formatAgo` says "now" inside a minute, and "now ago" is not English. */
+function ago(d: Parameters<typeof formatAgo>[0]): string {
+  const a = formatAgo(d);
+  return a === "now" ? "just now" : `${a} ago`;
+}
+
+/**
+ * What the log already has of a spot.
+ *
+ * Three different answers, and they matter differently. Worked TODAY almost certainly
+ * means this same activation — a dupe. The park being in the log is an award fact. The
+ * activator being known is neither, just context.
+ */
+function InTheLog({ s }: { s: PotaReport["spots"][number] }) {
+  if (s.workedToday) return <Badge size="sm" tone="warn">Today</Badge>;
+  if (s.workedPark) return <Badge size="sm">Park worked</Badge>;
+  if (s.workedActivator) return <Badge size="sm">Call worked</Badge>;
+  return <Badge size="sm" tone="ok">New</Badge>;
+}
+
 /** The small right-hand label naming where a panel's figures come from. */
 function Source({ children }: { children: string }) {
   return <span className="text-xs text-fg-subtle">{children}</span>;
@@ -123,7 +143,7 @@ function ActivationInProgress() {
         </span>
         <span className="text-xs text-fg-subtle tnum">
           {session.sig} · UTC day {utcDayKey(new Date())}
-          {session.startedAt ? ` · started ${formatAgo(session.startedAt)} ago` : ""}
+          {session.startedAt ? ` · started ${ago(session.startedAt)}` : ""}
         </span>
         <Link href="/qsos/new" className="ml-auto">
           <Button variant="primary">Log a contact</Button>
@@ -430,7 +450,7 @@ export default function PotaPage() {
         }
         actions={
           <span className="text-xs text-fg-subtle tnum">
-            updated {formatAgo(data.fetchedAt)} ago
+            updated {ago(data.fetchedAt)}
           </span>
         }
       />
@@ -439,7 +459,7 @@ export default function PotaPage() {
         {error && (
           <ErrorBanner>
             The last refresh failed ({error.message}) — showing what loaded{" "}
-            {formatAgo(data.fetchedAt)} ago.
+            {ago(data.fetchedAt)}.
           </ErrorBanner>
         )}
 
@@ -488,9 +508,15 @@ export default function PotaPage() {
         )}
 
         <Card
-          title={`Live spots${data.spotsError ? "" : ` (${spots.length})`}`}
+          // Not a plain string so it can refuse to wrap: beside the filters on a phone,
+          // "Live spots (24)" broke after "spots" and stood two lines tall.
+          title={
+            <h2 className="font-display text-base text-fg whitespace-nowrap">
+              Live spots{data.spotsError ? "" : ` (${spots.length})`}
+            </h2>
+          }
           actions={
-            <div className="flex flex-wrap items-center gap-3">
+            <div className="flex flex-wrap items-center justify-end gap-3">
               <Segmented
                 value={modeFilter}
                 onChange={setModeFilter}
@@ -524,70 +550,98 @@ export default function PotaPage() {
                   : `No ${modeFilter} activators spotted at the moment.`}
             </EmptyState>
           ) : (
-            <CardTable label="POTA activators spotted on FT8 and FT4">
-              <thead>
-                <tr className="bg-surface-2 text-left">
-                  <Th>Activator</Th>
-                  <Th>Park</Th>
-                  <Th className="text-right">Freq</Th>
-                  <Th>Mode</Th>
-                  <Th className="hidden md:table-cell">Where</Th>
-                  <Th>Spotted</Th>
-                  <Th>In the log</Th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-line">
+            <>
+              {/* A phone gets one stacked row per spot. As a seven-column table only the
+                  activator and the park fitted on screen, and the frequency, the mode and
+                  whether the park is new — what decides whether to chase it — were all off
+                  to the right behind a sideways scroll. */}
+              <ul
+                aria-label="POTA activators spotted on FT8 and FT4"
+                className="-mx-4 divide-y divide-line border-t border-line sm:hidden"
+              >
                 {spots.map((s) => (
-                  <tr key={s.spotId} className="hover:bg-surface-2">
-                    <Td>
+                  <li key={s.spotId} className="flex flex-col gap-0.5 px-4 py-2">
+                    <div className="flex items-baseline gap-2">
                       <Link
                         href={`/qsos?q=${encodeURIComponent(s.activator)}`}
                         className="font-display text-base tracking-wide hover:text-accent-bright"
                       >
                         {s.activator}
                       </Link>
-                    </Td>
-                    <Td>
-                      <span className="tnum text-fg-muted">{s.reference}</span>
-                      {s.parkName && (
-                        <span className="block max-w-56 truncate text-xs text-fg-subtle">
-                          {s.parkName}
-                        </span>
-                      )}
-                    </Td>
-                    <Td className="whitespace-nowrap text-right tnum">
-                      {(s.freqHz / 1e6).toFixed(3)}
-                    </Td>
-                    <Td className="whitespace-nowrap">
-                      {/* Neutral: the mode is a label on every row, not news. */}
-                      <Badge size="sm">{s.mode}</Badge>
-                      {s.band && <span className="ml-1 text-xs text-fg-subtle">{s.band}</span>}
-                    </Td>
-                    <Td className="hidden text-xs text-fg-muted md:table-cell">
-                      {s.location ?? "—"}
-                    </Td>
-                    <Td className="whitespace-nowrap text-xs tnum text-fg-subtle">
-                      {formatAgo(s.spottedAt)} ago
-                    </Td>
-                    <Td>
-                      {/* Three different answers, and they matter differently. Worked
-                          TODAY almost certainly means this same activation — a dupe.
-                          The park being in the log is an award fact. The activator
-                          being known is neither, just context. */}
-                      {s.workedToday ? (
-                        <Badge size="sm" tone="warn">Today</Badge>
-                      ) : s.workedPark ? (
-                        <Badge size="sm">Park worked</Badge>
-                      ) : s.workedActivator ? (
-                        <Badge size="sm">Call worked</Badge>
-                      ) : (
-                        <Badge size="sm" tone="ok">New</Badge>
-                      )}
-                    </Td>
-                  </tr>
+                      <span className="text-xs tnum text-fg-subtle">{ago(s.spottedAt)}</span>
+                      <span className="ml-auto whitespace-nowrap tnum">
+                        {(s.freqHz / 1e6).toFixed(3)}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="min-w-0 truncate text-sm">
+                        <span className="tnum text-fg-muted">{s.reference}</span>
+                        {s.parkName && (
+                          <span className="text-xs text-fg-subtle"> · {s.parkName}</span>
+                        )}
+                      </span>
+                      <span className="ml-auto flex shrink-0 items-center gap-1">
+                        <Badge size="sm">{s.mode}</Badge>
+                        {s.band && <span className="text-xs text-fg-subtle">{s.band}</span>}
+                        <InTheLog s={s} />
+                      </span>
+                    </div>
+                  </li>
                 ))}
-              </tbody>
-            </CardTable>
+              </ul>
+              <CardTable label="POTA activators spotted on FT8 and FT4" className="hidden sm:table">
+                <thead>
+                  <tr className="bg-surface-2 text-left">
+                    <Th>Activator</Th>
+                    <Th>Park</Th>
+                    <Th className="text-right">Freq</Th>
+                    <Th>Mode</Th>
+                    <Th className="hidden md:table-cell">Where</Th>
+                    <Th>Spotted</Th>
+                    <Th>In the log</Th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-line">
+                  {spots.map((s) => (
+                    <tr key={s.spotId} className="hover:bg-surface-2">
+                      <Td>
+                        <Link
+                          href={`/qsos?q=${encodeURIComponent(s.activator)}`}
+                          className="font-display text-base tracking-wide hover:text-accent-bright"
+                        >
+                          {s.activator}
+                        </Link>
+                      </Td>
+                      <Td>
+                        <span className="tnum text-fg-muted">{s.reference}</span>
+                        {s.parkName && (
+                          <span className="block max-w-56 truncate text-xs text-fg-subtle">
+                            {s.parkName}
+                          </span>
+                        )}
+                      </Td>
+                      <Td className="whitespace-nowrap text-right tnum">
+                        {(s.freqHz / 1e6).toFixed(3)}
+                      </Td>
+                      <Td className="whitespace-nowrap">
+                        {/* Neutral: the mode is a label on every row, not news. */}
+                        <Badge size="sm">{s.mode}</Badge>
+                        {s.band && <span className="ml-1 text-xs text-fg-subtle">{s.band}</span>}
+                      </Td>
+                      <Td className="hidden text-xs text-fg-muted md:table-cell">
+                        {s.location ?? "—"}
+                      </Td>
+                      <Td className="whitespace-nowrap text-xs tnum text-fg-subtle">
+                        {ago(s.spottedAt)}
+                      </Td>
+                      <Td>
+                        <InTheLog s={s} />
+                      </Td>
+                    </tr>
+                  ))}
+                </tbody>
+              </CardTable>
+            </>
           )}
         </Card>
 
@@ -625,7 +679,10 @@ export default function PotaPage() {
           </Card>
         )}
 
-        <div className="grid gap-4 lg:grid-cols-2">
+        {/* `grid-cols-1` is minmax(0, 1fr). With no template the single phone column was
+            `auto`, which grew to the min-content width of these two tables, so the whole
+            page scrolled sideways rather than the tables scrolling inside their cards. */}
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
           {p && p.recentActivations.length > 0 && (
             <Card title="Your recent activations" actions={<Source>from pota.app</Source>}>
               <CardTable>

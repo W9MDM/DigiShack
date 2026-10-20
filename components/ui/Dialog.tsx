@@ -176,7 +176,9 @@ export function Dialog({
         tabIndex={-1}
         className={cn(
           "w-full max-h-[calc(100dvh_-_2rem)] overflow-y-auto",
-          "rounded-md border border-line-strong bg-surface p-5 shadow-pop",
+          // 16px inside on a phone, like a Card: inside the backdrop's own 16px, 20 more
+          // left a 375px screen's dialog with under 300px for its text. 20px from `sm`.
+          "rounded-md border border-line-strong bg-surface p-4 sm:p-5 shadow-pop",
           "focus:outline-none",
           SIZES[size],
         )}

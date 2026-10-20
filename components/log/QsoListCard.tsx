@@ -34,12 +34,18 @@ export function sigSummary(qso: Qso): { text: string; extra: number; title: stri
 /**
  * One contact as a card, for widths where the table would scroll sideways. The callsign
  * link is stretched over the whole card; QRZ and re-send sit above it with `z-10`.
+ *
+ * Two lines where it fits, not three. The QSL badges used to have a line of their own,
+ * which on most contacts held nothing else, so a phone showed about five contacts a
+ * screen. They now ride at the end of the details line with `ml-auto`: right-aligned
+ * beside the report when there is room, and dropping to their own line, still
+ * right-aligned, when a grid and distance have filled it.
  */
 export function QsoListCard({ qso, unit }: { qso: Qso; unit: DistanceUnit }) {
   const distance = qsoDistance(qso, unit);
   const sig = sigSummary(qso);
   return (
-    <article className="relative rounded-md border border-line bg-surface px-3 py-2.5 shadow-panel transition-colors hover:bg-surface-2">
+    <article className="relative rounded-md border border-line bg-surface px-3 py-2 shadow-panel transition-colors hover:bg-surface-2">
       <div className="flex items-baseline justify-between gap-3">
         <div className="flex min-w-0 items-baseline gap-2">
           <Link
@@ -48,11 +54,13 @@ export function QsoListCard({ qso, unit }: { qso: Qso; unit: DistanceUnit }) {
           >
             {qso.callsign}
           </Link>
+          {/* `-m-2 p-2` grows what a thumb can hit without moving the text: a miss here
+              lands on the card's own link and opens the contact instead of QRZ. */}
           <a
             href={qrzUrl(qso.callsign)}
             target="_blank"
             rel="noopener noreferrer"
-            className="tap-inline relative z-10 text-xs text-fg-subtle hover:text-fg"
+            className="tap-inline relative z-10 -m-2 p-2 text-xs text-fg-subtle hover:text-fg"
           >
             QRZ<span aria-hidden="true">↗</span>
             <span className="sr-only">, {qso.callsign} on QRZ.com (opens in a new tab)</span>
@@ -78,18 +86,13 @@ export function QsoListCard({ qso, unit }: { qso: Qso; unit: DistanceUnit }) {
             {distance && ` · ${distance}`}
           </span>
         )}
-      </div>
-
-      <div className="mt-1.5 flex flex-wrap items-center justify-between gap-2">
-        {sig ? (
+        {sig && (
           <span className="tnum text-xs text-fg-subtle" title={sig.title}>
             {sig.text}
             {sig.extra > 0 && ` +${sig.extra}`}
           </span>
-        ) : (
-          <span />
         )}
-        <span className="inline-flex items-center gap-1.5">
+        <span className="ml-auto inline-flex items-center gap-1.5">
           <QslBadges qso={qso} />
           <span className="relative z-10">
             <ResendQslButton qsoId={qso.id} callsign={qso.callsign} />

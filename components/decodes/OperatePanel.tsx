@@ -190,12 +190,15 @@ function AutoBar({
           Re-arm transmit
         </Button>
       )}
+      {/* A full-width bar of its own on a phone, where there is no Escape key and it was
+          otherwise wherever the wrap happened to leave it; inline from `sm` up. */}
       {(mode !== "off" || qso?.active) && (
         <Button
           variant="danger-solid"
           disabled={busy}
           onClick={() => void act({ action: "qso-halt" })}
           title="Stop transmitting immediately — this contact AND any automatic mode. Escape does the same."
+          className="w-full py-2.5 sm:w-auto sm:py-1.5"
         >
           HALT TX
         </Button>

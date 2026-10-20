@@ -128,9 +128,11 @@ export function UdpBroadcastPreview({ target }: { target: "br" | "udp" }) {
             <table className="w-full text-sm border-collapse">
               <thead>
                 <tr className="bg-surface-2 text-left">
-                  {["Field", "Value", ""].map((h) => (
-                    <Th key={h}>{h}</Th>
-                  ))}
+                  <Th>Field</Th>
+                  <Th>Value</Th>
+                  <Th className="hidden sm:table-cell">
+                    <span className="sr-only">Source</span>
+                  </Th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-line">
@@ -140,17 +142,22 @@ export function UdpBroadcastPreview({ target }: { target: "br" | "udp" }) {
                   // and the disagreement would show an operator a field as editable that is
                   // not — which is the most annoying possible way to be wrong.
                   const fromContact = PROTECTED_FIELDS.has(f.name);
+                  const source = fromContact ? (
+                    <Badge tone="neutral">from the contact</Badge>
+                  ) : (
+                    <Badge tone="info">yours</Badge>
+                  );
                   return (
                     <tr key={f.name}>
                       <Td className="font-mono whitespace-nowrap">{f.name}</Td>
-                      <Td className="font-mono break-all text-fg-muted">{f.value}</Td>
-                      <Td className="whitespace-nowrap">
-                        {fromContact ? (
-                          <Badge tone="neutral">from the contact</Badge>
-                        ) : (
-                          <Badge tone="info">yours</Badge>
-                        )}
+                      <Td className="font-mono break-all text-fg-muted">
+                        {f.value}
+                        {/* On a phone the badge column took a third of the width and left the
+                            value one or two characters wide — "3.1.4" over three lines. Below
+                            sm the badge goes under the value instead. */}
+                        <span className="mt-1 block break-normal font-sans sm:hidden">{source}</span>
                       </Td>
+                      <Td className="hidden whitespace-nowrap sm:table-cell">{source}</Td>
                     </tr>
                   );
                 })}

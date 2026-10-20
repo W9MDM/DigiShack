@@ -8,8 +8,7 @@
   the same network, for the native digital modes. Everything else works with no radio at
   all.
 
-Redis is not needed. BullMQ and Redis are still listed in `package.json`, but nothing
-imports them.
+Redis is not needed: nothing queues work.
 
 Windows, Linux and macOS all work. Most of this was developed on Windows against a
 FLEX-6400.

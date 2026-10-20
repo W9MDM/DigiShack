@@ -322,9 +322,11 @@ export function Threshold({ feed, contrast, colormap, height, className }: Class
   }, key);
   return (
     <div className={cn("flex flex-col", className)} style={{ height }}>
+      {/* Below sm: the slider takes whatever the count leaves of the row: a 112px slider
+          spanning 3–30 dB is hard to set to the dB with a thumb. */}
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-b border-line px-2 py-1 text-xs text-fg-muted">
-        <label className="inline-flex items-center gap-1.5">
-          <span className="tnum">Threshold {thresholdDb} dB</span>
+        <label className="inline-flex items-center gap-1.5 max-sm:min-w-0 max-sm:flex-1">
+          <span className="tnum shrink-0">Threshold {thresholdDb} dB</span>
           <input
             type="range"
             min={MIN_THRESHOLD_DB}
@@ -332,7 +334,7 @@ export function Threshold({ feed, contrast, colormap, height, className }: Class
             step={1}
             value={thresholdDb}
             onChange={(e) => choose(Number(e.target.value))}
-            className="w-28 accent-accent"
+            className="w-28 accent-accent max-sm:w-auto max-sm:min-w-0 max-sm:flex-1"
             aria-label="How many dB above the noise floor a signal must be to be drawn"
           />
         </label>

@@ -144,7 +144,7 @@ const nextConfig: NextConfig = {
 
   // Prisma must not be bundled into the serverless/edge trace; it needs its
   // generated native query engine at runtime.
-  serverExternalPackages: ["@prisma/client", "prisma", "bullmq", "ioredis"],
+  serverExternalPackages: ["@prisma/client", "prisma"],
 
   // The backup route walks data/ and backups/ at runtime. The bundler reads a
   // directory walk under process.cwd() as a possible dynamic import and pulls the

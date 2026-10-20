@@ -149,11 +149,15 @@ export function SaveBar({
                     </p>
                   )}
                 </div>
-                <div className="flex shrink-0 items-center gap-2">
-                  <Button variant="ghost" onClick={onDiscard} disabled={saving}>
+                {/* On a phone the buttons take a line of their own, half the width each:
+                    squeezed beside the summary they left it a word or two wide, and Save
+                    is the one control on this page that has to be easy to hit. From sm up
+                    they sit at the end of the line as before. */}
+                <div className="flex w-full shrink-0 items-center gap-2 sm:w-auto">
+                  <Button variant="ghost" onClick={onDiscard} disabled={saving} className="flex-1 sm:flex-initial">
                     Discard
                   </Button>
-                  <Button variant="primary" onClick={onSave} loading={saving}>
+                  <Button variant="primary" onClick={onSave} loading={saving} className="flex-1 sm:flex-initial">
                     Save changes
                   </Button>
                 </div>
@@ -205,11 +209,11 @@ export function SaveBar({
                 <p className="min-w-0 flex-1 text-sm text-fg-muted">
                   Discarded {plural(discarded.count, "change", "changes")}.
                 </p>
-                <div className="flex shrink-0 items-center gap-2">
-                  <Button variant="ghost" onClick={onDismissDiscarded}>
+                <div className="flex w-full shrink-0 items-center gap-2 sm:w-auto">
+                  <Button variant="ghost" onClick={onDismissDiscarded} className="flex-1 sm:flex-initial">
                     Dismiss
                   </Button>
-                  <Button variant="secondary" onClick={onUndoDiscard}>
+                  <Button variant="secondary" onClick={onUndoDiscard} className="flex-1 sm:flex-initial">
                     Undo
                   </Button>
                 </div>

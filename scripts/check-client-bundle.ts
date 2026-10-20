@@ -50,8 +50,6 @@ const FORBIDDEN_PACKAGES = [
   "nodemailer",
   "sharp",
   "ws",
-  "ioredis",
-  "bullmq",
   "child_process",
   "worker_threads",
   "fs",

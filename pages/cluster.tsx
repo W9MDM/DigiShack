@@ -275,6 +275,35 @@ export default function ClusterPage({ wsUrl }: Props) {
   }
   // From here the cluster is enabled and has spots.
   const c = cluster!;
+  // formatAgo says "now" inside a minute, and "now ago" is not English.
+  const heardAgo = c.lastLineAt ? formatAgo(c.lastLineAt) : null;
+
+  /** The band map's band buttons; placed by `className`, since a phone and a desktop put them in different spots. */
+  const bandPicker = (className: string) =>
+    bands.length > 1 ? (
+      <div className={cn("flex flex-wrap gap-1", className)}>
+        {bands.map((b) => (
+          <button
+            key={b.band}
+            type="button"
+            onClick={() => setMapBand(b.band)}
+            aria-pressed={b.band === shownBand}
+            title={`${b.count} spot${b.count === 1 ? "" : "s"} on ${b.band}${b.band === radio.band ? " — the radio is here" : ""}`}
+            // Wider and 12px on a phone: the coarse-pointer rule already makes them 44px
+            // tall there, but at 11px with 6px of padding "20M" was a sliver to aim at.
+            className={cn(
+              "rounded-sm border px-2.5 py-0.5 text-xs tnum sm:px-1.5 sm:text-[11px]",
+              b.band === shownBand
+                ? "border-accent bg-accent/10 text-accent-bright"
+                : "border-line text-fg-muted hover:text-fg",
+            )}
+          >
+            {b.band}
+            {b.band === radio.band ? " •" : ""}
+          </button>
+        ))}
+      </div>
+    ) : null;
 
   return (
     <>
@@ -356,7 +385,9 @@ export default function ClusterPage({ wsUrl }: Props) {
         <p className="mt-3 text-xs text-fg-subtle">
           {c.counts.spots.toLocaleString()} spots and {c.counts.dupes.toLocaleString()} repeats since the
           bridge started
-          {c.lastLineAt ? ` · last heard from the node ${formatAgo(c.lastLineAt)} ago` : ""}
+          {heardAgo
+            ? ` · last heard from the node ${heardAgo === "now" ? "just now" : `${heardAgo} ago`}`
+            : ""}
           {canTune ? " · click a frequency to tune the receiver" : ""}
         </p>
       </Card>
@@ -395,31 +426,11 @@ export default function ClusterPage({ wsUrl }: Props) {
         <Card
           title={shownBand ? `Band map — ${shownBand}` : "Band map"}
           className="min-w-0"
-          actions={
-            bands.length > 1 ? (
-              <div className="flex flex-wrap justify-end gap-1">
-                {bands.map((b) => (
-                  <button
-                    key={b.band}
-                    type="button"
-                    onClick={() => setMapBand(b.band)}
-                    aria-pressed={b.band === shownBand}
-                    title={`${b.count} spot${b.count === 1 ? "" : "s"} on ${b.band}${b.band === radio.band ? " — the radio is here" : ""}`}
-                    className={cn(
-                      "rounded-sm border px-1.5 py-0.5 text-[11px] tnum",
-                      b.band === shownBand
-                        ? "border-accent bg-accent/10 text-accent-bright"
-                        : "border-line text-fg-muted hover:text-fg",
-                    )}
-                  >
-                    {b.band}
-                    {b.band === radio.band ? " •" : ""}
-                  </button>
-                ))}
-              </div>
-            ) : undefined
-          }
+          actions={bandPicker("hidden justify-end sm:flex")}
         >
+          {/* On a phone the picker sits in the body: beside the title, a row of band
+              buttons squeezed "Band map — 20M" into a column three words tall. */}
+          {bandPicker("mb-3 sm:hidden")}
           {shownBand ? (
             <BandMap
               band={shownBand}

@@ -9,7 +9,11 @@ import { cn } from "@/lib/utils";
 // The live spot list. The frequency is the tune button, so the one action on a row is aimed
 // at deliberately rather than taken by clicking anywhere on a busy table.
 
-/** The same three chips the Digital page uses for the same three facts: gold for an entity, blue for a slot. */
+/**
+ * The same three chips the Digital page uses for the same three facts: gold for an entity,
+ * blue for a slot. The blue ones are 11px in a desktop table and 12px on a phone, where
+ * 11px uppercase is below what reads at arm's length.
+ */
 function NeededChips({ s }: { s: ClusterSpot }) {
   if (!s.needed) return null;
   if (s.needed.entity) {
@@ -23,7 +27,7 @@ function NeededChips({ s }: { s: ClusterSpot }) {
     <>
       {s.needed.band && (
         <span
-          className="rounded-sm border border-info/40 bg-info/12 px-1 py-0.5 text-[11px] uppercase tracking-wide text-info"
+          className="rounded-sm border border-info/40 bg-info/12 px-1 py-0.5 text-xs sm:text-[11px] uppercase tracking-wide text-info"
           title={`${s.entity?.name ?? "This entity"} is not in the log on ${s.band}`}
         >
           new band
@@ -31,13 +35,35 @@ function NeededChips({ s }: { s: ClusterSpot }) {
       )}
       {s.needed.mode && (
         <span
-          className="rounded-sm border border-info/40 bg-info/12 px-1 py-0.5 text-[11px] uppercase tracking-wide text-info"
+          className="rounded-sm border border-info/40 bg-info/12 px-1 py-0.5 text-xs sm:text-[11px] uppercase tracking-wide text-info"
           title={`${s.entity?.name ?? "This entity"} is not in the log in ${s.modeCategory?.toLowerCase() ?? "this mode"}`}
         >
           new mode
         </span>
       )}
     </>
+  );
+}
+
+/** The mode, with a question mark when it was guessed from the band plan. */
+function ModeBadge({ s }: { s: ClusterSpot }) {
+  return s.mode ? (
+    <span
+      title={
+        s.modeSource === "comment"
+          ? "The spot says so"
+          : "Guessed from where it sits in the band — the spot does not say"
+      }
+    >
+      <Badge size="sm">
+        {s.mode}
+        {s.modeSource !== "comment" ? "?" : ""}
+      </Badge>
+    </span>
+  ) : (
+    <span className="text-fg-subtle" title="Nothing in the spot or the band plan says">
+      —
+    </span>
   );
 }
 
@@ -65,7 +91,11 @@ export function SpotTable({
             <Th size="sm" className="hidden sm:table-cell">
               Entity
             </Th>
-            <Th size="sm">Mode</Th>
+            {/* Below sm the mode moves under the call, beside the entity: as its own column
+                it was the one that tipped the table past a phone's width. */}
+            <Th size="sm" className="hidden sm:table-cell">
+              Mode
+            </Th>
             <Th size="sm" className="hidden md:table-cell">
               Spotter
             </Th>
@@ -126,8 +156,13 @@ export function SpotTable({
                     </Link>
                     <NeededChips s={s} />
                   </div>
-                  {/* The entity column is gone below sm; the name still matters there. */}
-                  {s.entity && <div className="text-xs text-fg-subtle sm:hidden">{s.entity.name}</div>}
+                  {/* The entity and mode columns are gone below sm; both still matter there. */}
+                  {(s.mode || s.entity) && (
+                    <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs text-fg-subtle sm:hidden">
+                      {s.mode && <ModeBadge s={s} />}
+                      {s.entity && <span>{s.entity.name}</span>}
+                    </div>
+                  )}
                 </Td>
                 <Td size="sm" className="hidden sm:table-cell">
                   {s.entity ? (
@@ -141,25 +176,8 @@ export function SpotTable({
                     <span className="text-fg-subtle">—</span>
                   )}
                 </Td>
-                <Td size="sm" className="whitespace-nowrap">
-                  {s.mode ? (
-                    <span
-                      title={
-                        s.modeSource === "comment"
-                          ? "The spot says so"
-                          : "Guessed from where it sits in the band — the spot does not say"
-                      }
-                    >
-                      <Badge size="sm">
-                        {s.mode}
-                        {s.modeSource !== "comment" ? "?" : ""}
-                      </Badge>
-                    </span>
-                  ) : (
-                    <span className="text-fg-subtle" title="Nothing in the spot or the band plan says">
-                      —
-                    </span>
-                  )}
+                <Td size="sm" className="hidden whitespace-nowrap sm:table-cell">
+                  <ModeBadge s={s} />
                 </Td>
                 <Td size="sm" className="hidden whitespace-nowrap md:table-cell">
                   <span className="text-fg-muted">{s.spotter}</span>

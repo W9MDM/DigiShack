@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { freqInBand, freqToBand, isBandName } from "@/lib/ham/bands";
+import { GRID_LOCATOR_RE } from "@/lib/ham/grid-geometry";
 import { isLoggableMode } from "@/lib/ham/modes";
 
 // Callsign rule is deliberately permissive. Real logbooks have to accept
@@ -26,10 +27,7 @@ const GRID = z
   .string()
   .trim()
   .toUpperCase()
-  .regex(
-    /^[A-R]{2}(\d{2}([A-X]{2}(\d{2})?)?)?$/,
-    "Not a valid Maidenhead grid (e.g. EN61, EN61bx)",
-  );
+  .regex(GRID_LOCATOR_RE, "Not a valid Maidenhead grid (e.g. EN61, EN61bx)");
 
 const BAND = z
   .string()

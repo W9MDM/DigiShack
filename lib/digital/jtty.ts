@@ -20,6 +20,7 @@
 // Licence: WSJT-X is GPL-3.0. The tables and algorithms here follow it.
 
 import { chkcall, pack28, unpack28 } from "@/lib/digital/pack77";
+import { isGrid4 } from "@/lib/ham/grid-geometry";
 
 // --- The waveform's numbers -------------------------------------------------------
 
@@ -243,7 +244,7 @@ function validToken(token: string): boolean {
 }
 
 function gridValue(grid: string): number | null {
-  if (!/^[A-R]{2}[0-9]{2}$/.test(grid)) return null;
+  if (!isGrid4(grid)) return null;
   return ((grid.charCodeAt(0) - 65) * 18 + (grid.charCodeAt(1) - 65)) * 100 + Number(grid.slice(2));
 }
 

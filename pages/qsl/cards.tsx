@@ -401,12 +401,15 @@ export default function QslCardsPage() {
               onChange={(e) => setFilter(e.target.value)}
               className="w-full sm:w-48"
             />
-            <div className="flex flex-wrap items-center gap-2 sm:ml-auto">
+            {/* Two even columns on a phone — route and Mark sent, then Mark received and
+                Print labels — where a wrapping row left a ragged pair of different widths and
+                an empty half line. From sm up it is the original right-aligned row. */}
+            <div className="grid w-full grid-cols-2 gap-2 sm:ml-auto sm:flex sm:w-auto sm:flex-wrap sm:items-center">
               <Select
                 aria-label="Route"
                 value={route}
                 onChange={(e) => setRoute(e.target.value as Route)}
-                className="w-32"
+                className="w-full sm:w-32"
               >
                 {ROUTES.map((r) => (
                   <option key={r.id} value={r.id}>
@@ -473,7 +476,11 @@ export default function QslCardsPage() {
           ) : visible.length === 0 ? (
             <p className="py-6 text-sm text-fg-subtle">No callsign here matches “{filter.trim()}”.</p>
           ) : (
-            <div className="-mx-4 max-h-[32rem] overflow-auto">
+            /* On a phone the list is as tall as the screen under the app bar, not 32rem.
+               The search and batch buttons above it take most of the first screen, so a
+               fixed 32rem left the list scrolling inside half a screen. Scroll the page
+               until the list meets the app bar and the whole screen is rows. */
+            <div className="-mx-4 max-h-[calc(100dvh-7rem)] overflow-auto sm:max-h-[32rem]">
               <table className="w-full border-collapse text-sm">
                 <thead className="sticky top-0 z-10 bg-surface-2">
                   <tr className="text-left">

@@ -26,7 +26,10 @@ export type SpectrumView =
 
 export const VIEWS: readonly { id: SpectrumView; label: string }[] = [
   { id: "spectrum", label: "Spectrum" },
-  { id: "spectrogram", label: "Spectrogram" },
+  // Shown as "Waterfall HD": next to the Spectrum analyser, "Spectrogram" read as another
+  // spectrum view rather than the high-resolution waterfall it is. The id stays, because it is
+  // what saved preferences and ?view= links carry.
+  { id: "spectrogram", label: "Waterfall HD" },
   { id: "3d", label: "3D" },
   { id: "split", label: "Split" },
   { id: "ridgeline", label: "Ridgeline" },

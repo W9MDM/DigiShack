@@ -41,12 +41,18 @@ export default function ToolsPage({ myGrid, licence }: Props) {
   return (
     <>
       <PageHeader title="Tools" subtitle="Calculators and references for the shack. Everything here works offline." />
-      <nav aria-label="Tools on this page" className="mb-4 flex flex-wrap gap-x-4 gap-y-1.5 text-sm">
+      {/* On a phone these wrapped into three lines of bare words, each about 20px tall to
+          aim at. Below sm they are one row of chips that scrolls sideways in its own strip;
+          from sm up the plain wrapped links come back exactly as they were. */}
+      <nav
+        aria-label="Tools on this page"
+        className="mb-4 flex gap-2 overflow-x-auto pb-1 text-sm sm:flex-wrap sm:gap-x-4 sm:gap-y-1.5 sm:overflow-visible sm:pb-0"
+      >
         {INDEX.map((t) => (
           <a
             key={t.id}
             href={`#${t.id}`}
-            className="text-fg-muted hover:text-accent-bright underline-offset-2 hover:underline"
+            className="inline-flex min-h-10 shrink-0 items-center whitespace-nowrap rounded-sm border border-line-strong bg-surface-2 px-3 text-fg-muted hover:text-accent-bright underline-offset-2 hover:underline sm:inline sm:min-h-0 sm:shrink sm:whitespace-normal sm:rounded-none sm:border-0 sm:bg-transparent sm:px-0"
           >
             {t.label}
           </a>

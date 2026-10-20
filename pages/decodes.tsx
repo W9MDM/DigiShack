@@ -272,7 +272,7 @@ export default function DigitalPage({ wsUrl }: Props) {
     lastCallsign: string | null;
   }>("/api/stats/today");
   const [spectrum, setSpectrum] = useState<{ bins: Uint8Array; at: number } | null>(null);
-  // The same frames, recorded for the Spectrogram / 3D views of the waterfall.
+  // The same frames, recorded for the Waterfall HD / 3D / analyzer views of the waterfall.
   const liveAudio = useLiveSpectrum("audio", status?.transmitting === true);
   const [wfView, setWfView] = useInlineView("digishack.decodes.view");
   const [scale, setScale] = useState({ binHz: 5.86, maxHz: 3000, periodMs: 15000 });
@@ -1288,7 +1288,7 @@ export default function DigitalPage({ wsUrl }: Props) {
           <Link
             href="/spectrum?source=audio"
             className="ml-auto text-accent-bright hover:underline"
-            title="This waterfall as a spectrogram and 3D waterfall"
+            title="This waterfall in Waterfall HD, 3D and the analyzer views"
           >
             Open spectrum
           </Link>

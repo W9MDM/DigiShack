@@ -17,6 +17,7 @@
 // talk, prompts, the login banner — returns null. Those are the node talking, not a spot.
 
 import { freqToBand } from "@/lib/ham/bands";
+import { GRID4_OR_6_ANY_CASE_RE as GRID } from "@/lib/ham/grid-geometry";
 
 export interface SkimmerFields {
   mode: string;
@@ -74,8 +75,6 @@ export function baseSpotter(raw: string): string {
     .replace(/-\d+$/, "")
     .replace(/[-#]+$/, "");
 }
-
-const GRID = /^[A-R]{2}[0-9]{2}(?:[A-X]{2})?$/i;
 
 /** Maidenhead in its conventional case: field and square upper, subsquare lower. */
 function normaliseGrid(g: string): string {

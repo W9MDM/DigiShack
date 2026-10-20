@@ -89,25 +89,33 @@ export function TxArmButton() {
 
   let tone: Tone;
   let label: string;
+  // The phone label. It used to be "TX" for armed, off and voice alike and "AIR" on the
+  // air, which read as a truncated "ON AIR" and left armed and off told apart by colour
+  // alone. Every state now has a word of its own, none longer than "ON AIR", so the pill
+  // also stops changing width at every key-up; Shell.tsx tightens the header to fit it.
   let short: string;
   let title: string;
   let onClick: (() => void) | null = null;
+  // While FT-0 is engaged the pill can only say "off" and cannot be pressed, and the
+  // FT-0 badge beside it already says why. On a phone that badge and its "resume" need
+  // the pill's width, so the pill steps aside there.
+  let phoneHidden = false;
 
   if (!gate.running) {
     tone = "idle";
     label = "TX —";
-    short = "TX";
+    short = "TX —";
     title = "The radio service isn't running, so nothing can transmit.";
   } else if (gate.transmitting) {
     tone = "air";
     label = "ON AIR";
-    short = "AIR";
+    short = "ON AIR";
     title = `Transmitting on ${radio}.${canDisarm ? " Click to disarm: stops this transmission now." : ""}`;
     if (canDisarm) onClick = () => void send(false);
   } else if (gate.armed) {
     tone = "armed";
     label = "TX ARMED";
-    short = "TX";
+    short = "ARMED";
     title =
       `Transmit is armed on ${radio}${power}.` +
       (canDisarm ? " Click to disarm: halts any contact in progress and pauses auto." : "");
@@ -115,17 +123,18 @@ export function TxArmButton() {
   } else if (gate.ft0) {
     tone = "off";
     label = "TX OFF";
-    short = "TX";
+    short = "TX OFF";
     title = "FT-0 is engaged. Resume the radio first, then arm transmit.";
+    phoneHidden = true;
   } else if (gate.voice) {
     tone = "held";
     label = "TX · VOICE";
-    short = "TX";
+    short = "VOICE";
     title = gate.offReason ?? "Voice mode is holding transmit.";
   } else {
     tone = "off";
     label = "TX OFF";
-    short = "TX";
+    short = "TX OFF";
     title = isAdmin
       ? `Transmit is off on ${radio}. Click to arm.`
       : "Transmit is off. Only an admin can arm it.";
@@ -133,7 +142,7 @@ export function TxArmButton() {
   }
 
   return (
-    <div ref={wrapRef} className="relative">
+    <div ref={wrapRef} className={cn("relative", phoneHidden && "hidden sm:block")}>
       <button
         type="button"
         onClick={onClick ?? undefined}
@@ -143,7 +152,10 @@ export function TxArmButton() {
         aria-label={title}
         title={title}
         className={cn(
-          "inline-flex items-center gap-1.5 rounded-sm border px-2 py-1 text-xs font-medium tracking-wide",
+          "inline-flex items-center gap-1.5 rounded-sm border px-1.5 sm:px-2 py-1 text-xs font-medium tracking-wide",
+          // Never wraps on a phone: "ON AIR" broken over two lines in a squeezed header is
+          // worse than the few pixels it would give back.
+          "whitespace-nowrap sm:whitespace-normal",
           "transition-colors disabled:cursor-default",
           busy && "opacity-60",
           PILL[tone],

@@ -46,6 +46,7 @@ import type { AutoOperator, AutoMode } from "./auto-operator";
 import { isAutoMode } from "@/lib/radio/auto-mode";
 import { FlexClient } from "@/lib/flex/client";
 import { resolveAntenna } from "@/lib/flex/antennas";
+import { replaceTxSliceBlockers, txSliceBlockers } from "@/lib/flex/tx-slice";
 import { LivenessWatchdog, windowTimeoutMs } from "@/lib/radio/watchdog";
 import {
   isTransmitArmed,
@@ -2512,6 +2513,16 @@ async function startFlexSource(): Promise<() => Promise<void>> {
         ? []
         : [`TX slice mode is ${slice.mode}, not DIGU/DIGL - no audio will reach the transmitter`]),
     ];
+    // The slice blockers, for the same reason. Only once a transmitter is attached, since
+    // until then there is no slice of ours to measure against; the indices are the radio's,
+    // so this connection's view of the slices answers for the shared one. A transmit slice
+    // moved onto another band still blocks here, and one moved back clears.
+    if (flexSliceIndex !== null) {
+      status.txBlockers = replaceTxSliceBlockers(
+        status.txBlockers,
+        txSliceBlockers({ slices: [...rig.state.slices.values()], operatingSliceIndex: flexSliceIndex }),
+      );
+    }
     status.deCall = rig.state.callsign;
     // What the radio calls itself, from `info` — "FLEX-6400". Set here rather than at
     // connect because readInfo() is what fills it in.

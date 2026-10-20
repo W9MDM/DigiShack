@@ -675,6 +675,10 @@ console.log("\nthreshold: noise floor, signal count and the stored slider");
   const ids = VIEWS.map((x) => x.id);
   ok(ids.indexOf("delta") === ids.indexOf("persistence") + 1 && ids.indexOf("threshold") === ids.indexOf("delta") + 1, "Delta and Threshold follow Persistence on the switch");
   ok(sanitizePrefs({ view: "delta" }).view === "delta" && sanitizePrefs({ view: "ridgeline" }).view === "ridgeline", "every view on the switch is remembered, not just the first three");
+  ok(
+    VIEWS.find((x) => x.id === "spectrogram")?.label === "Waterfall HD" && !VIEWS.some((x) => x.label === "Spectrogram"),
+    "the high-resolution waterfall is labelled Waterfall HD, under its old id so saved views and ?view=spectrogram links still work",
+  );
 }
 
 // ---------------------------------------------------------------------------------------

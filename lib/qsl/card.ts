@@ -17,6 +17,7 @@ import path from "node:path";
 
 import sharp from "sharp";
 
+import { escapeHtml } from "@/lib/html";
 import { getBooleanSetting, getNumberSetting, getSetting } from "@/lib/settings";
 import {
   DEFAULT_CARD_FONT,
@@ -101,14 +102,8 @@ export async function loadCardSettings(): Promise<CardSettings> {
   };
 }
 
-/** XML-escape, since every value here lands inside SVG markup. */
-function esc(s: string): string {
-  return s
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-}
+/** XML-escape, since every value here lands inside SVG markup (double-quoted attributes). */
+const esc = escapeHtml;
 
 /**
  * Approximate text width in a condensed sans face.

@@ -129,9 +129,9 @@ export default function QsoDetailPage() {
         </div>
       )}
 
-      <QsoSummary qso={qso} className="mb-6" />
+      <QsoSummary qso={qso} className="mb-4 sm:mb-6" />
 
-      <div className="grid gap-6 xl:grid-cols-3">
+      <div className="grid gap-4 sm:gap-6 xl:grid-cols-3">
         <Card title={canEdit ? "Edit QSO" : "QSO details"} className="xl:col-span-2">
           <QsoForm
             values={values}
@@ -168,7 +168,7 @@ export default function QsoDetailPage() {
           />
         </Card>
 
-        <div className="flex flex-col gap-6">
+        <div className="flex flex-col gap-4 sm:gap-6">
           <Destinations qsoId={qso.id} canEdit={canEdit} />
 
           <Card

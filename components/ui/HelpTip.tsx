@@ -135,6 +135,16 @@ export function HelpTip({
         }}
         className={cn(
           "inline-flex h-4 w-4 items-center justify-center rounded-full border text-3xs leading-none",
+          // On a touch screen the coarse-pointer rule in globals.css gave this a 44px
+          // min-height, which turned the 16px circle into a 16x44 capsule and made every
+          // line holding one 44px tall — label rows, hints, the FT-0 marker in the header.
+          // `tap-inline` keeps the circle; an invisible 24x32 box round it keeps a
+          // target a finger can hit. Only 4px of it reaches sideways, the gap the header
+          // leaves between this marker and FT-0 on one side and Night on the other: any
+          // wider and a thumb aimed at the edge of the kill switch opened this tip
+          // instead. Coarse pointers only, so a mouse sees no change.
+          "tap-inline pointer-coarse:relative pointer-coarse:after:absolute",
+          "pointer-coarse:after:-inset-x-1 pointer-coarse:after:-inset-y-2",
           "transition-colors",
           FOCUS_RING,
           open

@@ -242,6 +242,9 @@ function Highlights({ data }: { data: History }) {
             value={mostWorked.callsign}
             hint={`${plural(mostWorked.qsos, "contact")} on ${plural(mostWorked.bands, "band")}`}
             href={`/calls/${encodeURIComponent(mostWorked.callsign)}`}
+            // A portable call at text-2xl is wider than half a phone screen; let it break
+            // rather than run out of its tile.
+            className="break-words"
           />
         )}
       </div>
@@ -260,7 +263,8 @@ function ByYear({ years }: { years: YearRow[] }) {
           <tr className="bg-surface-2 text-left">
             <Th>Year</Th>
             <Th>Contacts</Th>
-            <Th className="text-right">Confirmed</Th>
+            {/* Last visible below sm: the 16px edge CardTable gives a last cell, by hand. */}
+            <Th className="text-right pr-4 sm:pr-3">Confirmed</Th>
             <Th className="hidden text-right sm:table-cell">Stations</Th>
             <Th className="hidden text-right sm:table-cell">Entities</Th>
           </tr>
@@ -295,7 +299,7 @@ function ByYear({ years }: { years: YearRow[] }) {
                     </span>
                   </div>
                 </Td>
-                <Td className="whitespace-nowrap text-right tnum text-fg-muted">
+                <Td className="whitespace-nowrap text-right tnum text-fg-muted pr-4 sm:pr-3">
                   {silent ? (
                     "—"
                   ) : (
@@ -365,9 +369,13 @@ function MostWorked({
             <tr className="bg-surface-2 text-left">
               <Th>Callsign</Th>
               <Th className="text-right">Contacts</Th>
-              <Th className="text-right">Bands</Th>
+              {/* The last visible column below sm, so it takes the 16px edge CardTable gives
+                  the last cell — that cell is the hidden one there. */}
+              <Th className="text-right pr-4 sm:pr-3">Bands</Th>
               <Th className="hidden sm:table-cell">First</Th>
-              <Th>Last</Th>
+              {/* Below sm the last date rides under the callsign instead: as a fourth
+                  column it pushed the table about 50px past a phone's width. */}
+              <Th className="hidden sm:table-cell">Last</Th>
             </tr>
           </thead>
           <tbody className="divide-y divide-line">
@@ -382,13 +390,16 @@ function MostWorked({
                   >
                     {w.callsign}
                   </Link>
+                  <span className="block whitespace-nowrap text-xs tnum text-fg-subtle sm:hidden">
+                    last {formatUtcDate(w.lastWorked)}
+                  </span>
                 </Td>
                 <Td className="text-right tnum">{w.qsos.toLocaleString()}</Td>
-                <Td className="text-right tnum text-fg-muted">{w.bands}</Td>
+                <Td className="text-right tnum text-fg-muted pr-4 sm:pr-3">{w.bands}</Td>
                 <Td className="hidden whitespace-nowrap tnum text-fg-subtle sm:table-cell">
                   {formatUtcDate(w.firstWorked)}
                 </Td>
-                <Td className="whitespace-nowrap tnum text-fg-subtle">
+                <Td className="hidden whitespace-nowrap tnum text-fg-subtle sm:table-cell">
                   {formatUtcDate(w.lastWorked)}
                 </Td>
               </tr>

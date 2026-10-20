@@ -49,7 +49,8 @@ receiver and transmitter cards, receiver audio in the browser, and a voice mode 
 closes the digital path and hands the radio back. The Rig page is off the menu until
 **Show the experimental Rig page** (`ui.experimental.rig`) is switched on.
 
-**Spectrum.** A WebGL spectrogram and a 3D waterfall of the audio passband or the
+**Spectrum.** Waterfall HD (a WebGL high-resolution waterfall), a 3D waterfall, and analyzer
+views (Spectrum, Ridgeline, Persistence, Delta, Threshold) of the audio passband or the
 FlexRadio's RF panadapter, receive-only, with selectable colormaps that recolour the whole
 history at once.
 
@@ -89,7 +90,7 @@ per browser. The waterfall, spectrum and SSTV canvases keep their own palettes.
 | — | Dashboard | `/` | everyone | Live station card, today's figures, recent contacts, all-time totals |
 | Operate | Digital | `/decodes` | everyone (operating needs OPERATOR) | Decode list, waterfall, click-to-call, the automatic modes, HALT TX |
 | Operate | Grid map | `/gridmap` | everyone | Live decodes and worked squares on a world map, with the greyline |
-| Operate | Spectrum | `/spectrum` | everyone | Spectrogram, 3D waterfall, or both |
+| Operate | Spectrum | `/spectrum` | everyone | Waterfall HD, 3D, analyzer views |
 | Operate | DX cluster | `/cluster` | everyone | Cluster spots, filters and a band map |
 | Operate | Rig control | `/rig` | OPERATOR, once `ui.experimental.rig` is on | The radio's control surface |
 | Log | Logbook | `/qsos` | everyone | Filterable log; filters, sort and page live in the URL |
@@ -161,7 +162,7 @@ which also lists a page per digital mode. The main ones:
 |---|---|
 | Framework | Next.js 16, **Pages Router** |
 | DB / ORM | MySQL + Prisma |
-| Background work | Timers in the two processes, listed in `lib/schedule/jobs.ts`. BullMQ and Redis are installed but unused |
+| Background work | Timers in the two processes, listed in `lib/schedule/jobs.ts`. No job queue and no Redis |
 | Process manager | PM2 (no Docker) |
 | Reverse proxy | NGINX |
 | Realtime | WebSocket (`ws`) for the live decode feed and receiver audio, sign-in required |
@@ -845,9 +846,9 @@ Phases 1 to 5 are implemented. The last open Phase 2 item, the DX cluster, lande
 
 ### Not yet addressed
 
-- **BullMQ/Redis are installed but unused.** Nothing queues work yet; PSKReporter
-  reporting batches in-process on a timer instead, which is sufficient for one
-  station.
+- **There is no job queue.** BullMQ and ioredis were installed and never used, and have
+  been removed. PSKReporter reporting batches in-process on a timer instead, which is
+  sufficient for one station.
 - **QRZ and eQSL are verified against the live services.** QRZ uploads are
   round-trip checked; the eQSL inbox sync has been applied to the real log.
 - **Club Log needs an API key, and its absence looks like a block.** Without the `api`

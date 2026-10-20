@@ -20,8 +20,9 @@ import { createGl } from "./gl";
 import { LabelPool, useDrawScheduler } from "./render-loop";
 import { Spectrogram2D, SpectrogramGL, type SpectrogramRenderer } from "./spectrogram-render";
 
-// The spectrogram: frequency across, time down (newest at the bottom, as on the Decodes
-// page), history recoloured live from dB values held on the GPU.
+// The spectrogram, labelled "Waterfall HD" on the view switch: frequency across, time down
+// (newest at the bottom, as on the Decodes page), history recoloured live from dB values held
+// on the GPU.
 //
 // React renders the frame around the canvas — ruler, gridlines, the dial marker — which
 // changes only on a zoom, a resize or a retune. Everything that moves with every frame (the
@@ -520,7 +521,7 @@ export function Spectrogram({
           className="relative flex-1 min-w-0 overflow-hidden cursor-crosshair touch-pan-y outline-none focus-visible:outline-2 focus-visible:outline-accent-bright"
           tabIndex={0}
           role="img"
-          aria-label={`${sourceLabel} spectrogram, newest at the bottom. Drag or use the mouse wheel to zoom frequency, plus and minus keys to zoom, arrow keys to pan, 0 to reset.`}
+          aria-label={`Waterfall HD of the ${rf ? sourceLabel : "receive audio"}, newest at the bottom. Drag or use the mouse wheel to zoom frequency, plus and minus keys to zoom, arrow keys to pan, 0 to reset.`}
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
           onPointerUp={onPointerUp}
@@ -590,7 +591,12 @@ export function Spectrogram({
               Reset zoom
             </button>
           ) : (
-            <span className="hidden sm:inline">Drag or wheel to zoom · double-click resets</span>
+            // The mouse hint on a desktop, the touch one on a phone or tablet: a phone used to
+            // get no hint at all, and drag and wheel mean nothing to a finger.
+            <>
+              <span className="hidden sm:pointer-fine:inline">Drag or wheel to zoom · double-click resets</span>
+              <span className="hidden pointer-coarse:inline">Pinch to zoom · double-tap resets</span>
+            </>
           )}
         </span>
       </div>

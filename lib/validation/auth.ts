@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { MIN_PASSWORD_LENGTH } from "@/lib/auth/password-policy";
+import { GRID4_OR_6_ANY_CASE_RE } from "@/lib/ham/grid-geometry";
 import { ROLES } from "@/lib/validation/station";
 
 const EMAIL = z
@@ -57,7 +58,7 @@ export const setupSchema = z.object({
     .string()
     .trim()
     .toUpperCase()
-    .regex(/^[A-R]{2}[0-9]{2}([A-X]{2})?$/i, "That is not a Maidenhead grid square")
+    .regex(GRID4_OR_6_ANY_CASE_RE, "That is not a Maidenhead grid square")
     .transform((g) => g.slice(0, 4).toUpperCase() + g.slice(4).toLowerCase()),
 });
 

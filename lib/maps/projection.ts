@@ -7,14 +7,13 @@
 // Moved out of pages/gridmap.tsx so scripts/check-gridmap.ts can assert the code the page
 // actually runs; it used to restate these and could only prove its own copies right.
 
+import { GRID4_RE, gridToLatLon, type LatLon } from "@/lib/ham/grid-geometry";
+
+export type { LatLon };
+
 /** The projected world, in map units. 4 units per degree. */
 export const WORLD_W = 1440;
 export const WORLD_H = 720;
-
-export interface LatLon {
-  lat: number;
-  lon: number;
-}
 
 export function project(lat: number, lon: number): { x: number; y: number } {
   return { x: ((lon + 180) / 360) * WORLD_W, y: ((90 - lat) / 180) * WORLD_H };
@@ -24,25 +23,21 @@ export function unproject(x: number, y: number): LatLon {
   return { lon: (x / WORLD_W) * 360 - 180, lat: 90 - (y / WORLD_H) * 180 };
 }
 
-const SQUARE_RE = /^[A-R]{2}\d{2}$/;
-
 /** Centre of a 4-character grid square. */
 export function gridCentre(grid: string): LatLon | null {
   const g = grid.trim().toUpperCase();
-  if (!SQUARE_RE.test(g)) return null;
+  if (!GRID4_RE.test(g)) return null;
   // RR73 is a real square in the Arctic Ocean that nobody calls from — which is why the
   // protocol uses it as an acknowledgement. gridFromMessage refuses it upstream, but this
   // refuses too: whatever caller arrives here, an RR73 must never become a dot on the map.
   if (g === "RR73") return null;
-  const lon = (g.charCodeAt(0) - 65) * 20 - 180 + Number(g[2]) * 2 + 1;
-  const lat = (g.charCodeAt(1) - 65) * 10 - 90 + Number(g[3]) * 1 + 0.5;
-  return { lat, lon };
+  return gridToLatLon(g);
 }
 
 /** South-west corner of a 4-character square, for shading it as a rectangle. */
 export function squareSW(grid: string): LatLon | null {
   const g = grid.trim().toUpperCase();
-  if (!SQUARE_RE.test(g)) return null;
+  if (!GRID4_RE.test(g)) return null;
   return {
     lon: (g.charCodeAt(0) - 65) * 20 - 180 + Number(g[2]) * 2,
     lat: (g.charCodeAt(1) - 65) * 10 - 90 + Number(g[3]) * 1,

@@ -71,7 +71,11 @@ export function Shell({
         Skip to content
       </a>
       <header className="border-b border-line bg-surface sticky top-0 z-20 pt-[env(safe-area-inset-top)]">
-        <div className="mx-auto max-w-[1600px] flex items-center gap-3 md:gap-6 px-4 h-12">
+        {/* The phone header has no width to spare: menu, logo, TX pill, FT-0 and its
+            marker, and Night fill 360px to within a few pixels. The tighter gaps and the
+            smaller logo below `sm` are what buy the TX pill room to say ON AIR in full
+            rather than a bare "AIR"; from `sm` up every value is what it was. */}
+        <div className="mx-auto max-w-[1600px] flex items-center gap-2 sm:gap-3 md:gap-6 px-4 h-12">
           {/*
            * The menu button, and the whole reason this file was rewritten.
            *
@@ -94,7 +98,7 @@ export function Shell({
             aria-controls="mobile-nav"
             aria-label={menuOpen ? "Close menu" : "Open menu"}
             className={cn(
-              "md:hidden -ml-2 inline-flex items-center justify-center",
+              "md:hidden -ml-2 inline-flex h-10 items-center justify-center",
               "rounded-sm px-2 text-fg-muted hover:text-fg hover:bg-surface-2",
             )}
           >
@@ -126,10 +130,10 @@ export function Shell({
           </button>
 
           <Link href="/" className="flex items-baseline gap-1.5 shrink-0">
-            <span className="font-display text-xl uppercase tracking-wider">
+            <span className="font-display text-lg sm:text-xl uppercase tracking-wider">
               Digi
             </span>
-            <span className="font-display text-xl uppercase tracking-wider text-accent-bright">
+            <span className="font-display text-lg sm:text-xl uppercase tracking-wider text-accent-bright">
               Shack
             </span>
           </Link>
@@ -143,7 +147,7 @@ export function Shell({
             onOpenDrawer={() => setMenuOpen(true)}
           />
 
-          <div className="ml-auto flex items-center gap-1.5 sm:gap-2 md:gap-3">
+          <div className="ml-auto flex items-center gap-1 sm:gap-2 md:gap-3">
             <UtcClock />
             <TxArmButton />
             <Ft0Button />
@@ -235,9 +239,12 @@ export function Shell({
         onOpen={() => setMenuOpen(false)}
       />
 
+      {/* 16px above and below the page on a phone rather than 24, matching the 16px side
+          gutter; with PageHeader's smaller phone title this gives every page about 20px
+          of its first screen back. 24px from `sm` up, as before. */}
       <main
         id="main"
-        className="flex-1 mx-auto w-full max-w-[1600px] px-4 py-6"
+        className="flex-1 mx-auto w-full max-w-[1600px] px-4 py-4 sm:py-6"
       >
         {children}
       </main>

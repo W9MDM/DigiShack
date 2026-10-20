@@ -147,7 +147,13 @@ export function TuneCard({
           ))}
         </div>
       </div>
-      <div role="group" aria-labelledby="rig-bands-label" className="mt-2 flex flex-wrap gap-1">
+      {/* Four even columns of taller buttons on a phone, rather than a ragged wrap that
+          left 6M alone on its own row. From `sm` up they wrap as before. */}
+      <div
+        role="group"
+        aria-labelledby="rig-bands-label"
+        className="mt-2 grid grid-cols-4 gap-1 sm:flex sm:flex-wrap"
+      >
         {bands.map((b) => {
           const hz = target === "calling" ? b.callingHz : b.centreHz;
           const label = `band-${b.band}`;
@@ -158,7 +164,7 @@ export function TuneCard({
               disabled={!canControl || busy === label}
               onClick={() => void send({ freqHz: hz }, label, "tune")}
               title={`${b.band} — ${formatFreqMHz(hz)} MHz`}
-              className="min-w-[3rem]"
+              className="min-w-[3rem] py-2 sm:py-1"
             >
               {b.band}
             </ChoiceButton>
