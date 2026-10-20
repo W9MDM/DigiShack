@@ -28,8 +28,13 @@ function isInlineView(v: unknown): v is InlineView {
 }
 
 /** A feed this page fills from its own socket messages. `ingest` ignores other kinds. */
-export function useLiveSpectrum(kind: FeedKind): { feed: SpectrumFeed; ingest: (msg: Record<string, unknown>) => void } {
+export function useLiveSpectrum(
+  kind: FeedKind,
+  /** The station is on the air: hold the colour scale (see SpectrumFeed.transmitting). */
+  transmitting = false,
+): { feed: SpectrumFeed; ingest: (msg: Record<string, unknown>) => void } {
   const [feed] = useState(() => new SpectrumFeed(kind));
+  feed.transmitting = transmitting;
   const decoder = useRef(new FrameDecoder());
   const ingest = useCallback(
     (msg: Record<string, unknown>) => {

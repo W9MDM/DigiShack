@@ -122,6 +122,8 @@ export default function SpectrumPage({ wsUrl }: Props) {
   const update = useCallback((patch: Partial<SpectrumPrefs>) => setPrefs((p) => ({ ...p, ...patch })), []);
 
   const source: FeedKind = prefs.source === "rf" && seen.rf ? "rf" : "audio";
+  // Hold the colour scale while on the air (see SpectrumFeed.transmitting).
+  feeds.audio.transmitting = feeds.rf.transmitting = status?.transmitting === true;
   const feed = feeds[source];
   const contrast = prefs.contrast[source];
   const setContrast = (c: Contrast) => setPrefs((p) => ({ ...p, contrast: { ...p.contrast, [source]: c } }));

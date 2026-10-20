@@ -130,6 +130,8 @@ export class Waterfall3DGL {
   readonly mvp = mat4();
   private readonly proj = mat4();
   private readonly view = mat4();
+  private readonly model = mat4();
+  private readonly pv = mat4();
   private readonly eye = new Float32Array(3);
   private surface: Program;
   private lines: Program;
@@ -223,10 +225,16 @@ export class Waterfall3DGL {
     gl.clearColor(bg[0] / 255, bg[1] / 255, bg[2] / 255, 1);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
-    perspective(this.proj, FOV_Y, w / Math.max(1, h), 0.05, 50);
+    const aspect = w / Math.max(1, h);
+    perspective(this.proj, FOV_Y, aspect, 0.05, 50);
     const e = cameraEye(f.camera, this.eye);
     lookAt(this.view, e[0]!, e[1]!, e[2]!, f.camera.tx, f.camera.ty, f.camera.tz);
-    multiply(this.mvp, this.proj, this.view);
+    // The surface is about square, so in a wide, short canvas (the Digital waterfall's slot)
+    // it sat as a small island in the middle. Stretch it across instead; labels are projected
+    // through the same matrix, so they follow.
+    this.model[0] = Math.min(3.2, Math.max(1, aspect / 1.8));
+    multiply(this.pv, this.proj, this.view);
+    multiply(this.mvp, this.pv, this.model);
 
     gl.enable(gl.DEPTH_TEST);
     gl.depthFunc(gl.LEQUAL);
