@@ -734,6 +734,27 @@ let autoResumeMode: AutoMode | null = null;
  */
 let ft0RestoreTx = false;
 let ft0RestoreAuto: AutoMode = "off";
+/**
+ * A FlexRadio tune carrier (`transmit tune 1`, the Rig page's Tune) is ended by the bridge
+ * itself after this long, and by every stop. Nothing used to end it: `xmit 0` — what HALT,
+ * FT-0, a disarm and voice mode send — does not cover the tune carrier, so a Tune whose "off"
+ * never arrived (tab closed, network blip, a stuck button) stayed on the air until the radio
+ * was rebooted. Reported as "tuning can lock up and keep tuning, only way to stop is reboot".
+ */
+const TUNE_MAX_MS = 30_000;
+let tuneOffTimer: NodeJS.Timeout | null = null;
+
+/** End any Flex tune carrier. Idempotent, and harmless when nothing is tuning. */
+async function stopFlexTune(why: string): Promise<void> {
+  const wasTiming = tuneOffTimer !== null;
+  if (tuneOffTimer) clearTimeout(tuneOffTimer);
+  tuneOffTimer = null;
+  const rig = flexGuiClient ?? flexRig;
+  if (!rig) return;
+  await rig.command("transmit tune 0").catch(() => {});
+  if (wasTiming) console.log(`[radio] tune carrier stopped: ${why}`);
+}
+
 /** The auto mode a header disarm paused, so arming from the header can resume it. In memory for the same reason as the FT-0 notes. */
 let disarmRestoreAuto: AutoMode = "off";
 let autoRunStartedAt: number | null = null;
@@ -4403,6 +4424,7 @@ async function main(): Promise<void> {
        */
       if (url.pathname === "/restart") {
         console.log("[bridge] restart requested from the web UI — unkeying and exiting");
+        await stopFlexTune("restart");
         try {
           await activeTx?.unkey();
         } catch {
@@ -4508,6 +4530,7 @@ async function main(): Promise<void> {
           autoResumeMode = null;
           disarmRestoreAuto = "off";
           void persistAutoMode("off");
+          await stopFlexTune("FT-0");
           if (user) {
             await writeSettings(
               [{ key: transmitGateKey(activeRadio), value: "false" }],
@@ -4628,6 +4651,7 @@ async function main(): Promise<void> {
           autoResumeMode = null;
           // Saved: the in-memory note is what resumes it from the header, not a restart.
           if (pausedAuto !== "off") void persistAutoMode("off");
+          void stopFlexTune("transmit disarmed");
           const qso = activeQso();
           try {
             if (qso?.state.active) await qso.halt();
@@ -5175,6 +5199,7 @@ async function main(): Promise<void> {
           activeAuto()?.setMode("off");
           disarmRestoreAuto = "off";
           void persistAutoMode("off");
+          void stopFlexTune("voice mode");
           // Close the gate the TRANSMITTERS read, not just the one the endpoints read.
           // Without this a QSO already in flight kept keying and sending FT8 while the
           // operator was switching to voice — see isTransmitArmed.
@@ -5604,6 +5629,13 @@ async function main(): Promise<void> {
           results.push({ cmd, status: r.status });
         }
         const allOk = results.every((r) => r.status === 0);
+        if (body.tune === true && allOk) {
+          if (tuneOffTimer) clearTimeout(tuneOffTimer);
+          tuneOffTimer = setTimeout(() => void stopFlexTune(`it ran ${TUNE_MAX_MS / 1000} s, the limit`), TUNE_MAX_MS);
+        } else if (body.tune === false && tuneOffTimer) {
+          clearTimeout(tuneOffTimer);
+          tuneOffTimer = null;
+        }
 
         // Record the noise settings the radio will not report back. Only on success, so a
         // refused command never leaves the panel claiming a state the radio is not in.
@@ -5677,10 +5709,16 @@ async function main(): Promise<void> {
           // Waits for the tuner to finish rather than returning on the acknowledgement.
           // "Tuning started" is not the answer to "is the antenna matched".
           const r = await src.tuneAtu();
+          // Still tuning at the limit: drop PTT rather than leave the tuner keyed with nobody
+          // waiting on it. Unverified on the IC-7300 — whether PTT-off aborts its cycle.
+          if (!r.ok && r.state === "tuning") {
+            await activeTx?.unkey().catch(() => {});
+            console.log("[radio] ATU still tuning at its limit — PTT dropped");
+          }
           sendJson(res, r.ok ? 200 : 502, {
             ok: r.ok,
             state: r.state,
-            detail: r.reason,
+            detail: r.state === "tuning" ? `${r.reason ?? "Still tuning"} — transmit dropped` : r.reason,
           });
           return;
         }
@@ -5808,6 +5846,7 @@ async function main(): Promise<void> {
             // the watchdog) resumed the hunt the operator had stopped: N9MMR, 2026-10-20.
             activeAuto()?.setMode("off");
             void persistAutoMode("off");
+            void stopFlexTune("HALT");
             await qso.halt();
             sendJson(res, 200, { ok: true, qso: qso.state });
             return;
@@ -6462,6 +6501,7 @@ async function main(): Promise<void> {
         // Armed by some other route (Settings, FT-0 release): that is a fresh decision, not the
         // header resume a pending note was waiting for.
         if (on && !status.allowTransmit) disarmRestoreAuto = "off";
+        if (!on && tuneOffTimer) void stopFlexTune("transmit turned off");
         status.allowTransmit = on;
         status.transmitOffReason = why;
         console.log(
