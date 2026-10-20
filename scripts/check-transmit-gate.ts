@@ -9,6 +9,7 @@
 // It writes real settings, so it refuses to run while the station is operating.
 
 import {
+  closeTransmitGateForExit,
   digitalTransmitHeld,
   isTransmitArmed,
   setDigitalTransmitHold,
@@ -197,7 +198,27 @@ async function main(): Promise<void> {
   if (fail > 0) process.exit(1);
 }
 
-void main().catch(async (err) => {
+/**
+ * The exit latch, which the no-power restart closes before it exits. Needs no database: a
+ * closed gate answers before any setting is read, which is the property being tested.
+ *
+ * LAST, and outside main(), because it is one way - nothing in this process can reopen it -
+ * and because main() returns early without a database, where this must still run.
+ */
+async function exitLatch(): Promise<void> {
+  console.log("\nthe exit latch, which the no-power restart closes");
+  closeTransmitGateForExit();
+  eq(await transmitGate("flex")(), false, "closes the gate the FlexRadio transmitter reads");
+  eq(await transmitGate("icom")(), false, "and the Icom's");
+  eq(await isTransmitArmed("flex"), false, "and the direct call the endpoints use");
+  setDigitalTransmitHold(true);
+  setDigitalTransmitHold(false);
+  eq(await isTransmitArmed("flex"), false, "and releasing the voice hold does not reopen it");
+  console.log(`\n${pass} passed, ${fail} failed (exit latch)\n`);
+  if (fail > 0) process.exit(1);
+}
+
+void main().then(exitLatch).catch(async (err) => {
   console.error(err);
   await prisma.$disconnect().catch(() => undefined);
   process.exit(1);

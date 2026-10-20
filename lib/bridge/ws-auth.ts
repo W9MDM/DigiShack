@@ -49,6 +49,12 @@
 // once, and that should cost one query per session, not one per socket. Open sockets are
 // re-checked against the database every REVALIDATE_MS and closed if their session has
 // ended: signed out, expired, password changed, account disabled.
+//
+// READ ONLY. Sessions slide — the web app's getAuth() pushes expiresAt out each time one is
+// used — but the bridge never does that itself: a WebSocket handshake is no place to
+// re-issue the cookie, and a row extended without its cookie would outlive what the
+// browser holds. The re-check above reads expiresAt fresh, so it sees every extension the
+// pages' own requests make.
 
 import { createHash, timingSafeEqual } from "node:crypto";
 import { STATUS_CODES, type IncomingHttpHeaders, type IncomingMessage } from "node:http";

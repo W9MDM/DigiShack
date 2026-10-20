@@ -7,7 +7,8 @@ import { getAuth, needsSetup } from "@/lib/auth/session";
 // the client uses to *discover* its auth state, and a 401 here would be noise in
 // the console on every visit to the login page.
 async function get(req: NextApiRequest, res: NextApiResponse) {
-  const auth = await getAuth(req);
+  // A use like any other, so it extends the session (and re-issues the cookie) too.
+  const auth = await getAuth(req, res);
 
   if (!auth) {
     sendJson(res, 200, {

@@ -11,16 +11,27 @@ export const SESSION_COOKIE = "digishack_session";
 
 /**
  * Session lifetime, from the /settings UI (falling back to SESSION_TTL_DAYS and
- * then 30). Read per session creation rather than cached at module load so
- * changing it in the UI takes effect without a restart.
+ * then 30). Read per use rather than cached at module load so changing it in the
+ * UI takes effect without a restart. It is a window of INACTIVITY: every use of a
+ * session pushes its expiry out to this far from now (see getAuth).
  */
 async function ttlDays(): Promise<number> {
   const n = await getNumberSetting("app.sessionTtlDays", 30);
   return n > 0 ? n : 30;
 }
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+
 /** Skip the lastSeenAt write unless it's this stale — one UPDATE per request is wasteful. */
 const LAST_SEEN_THROTTLE_MS = 5 * 60 * 1000;
+
+/**
+ * Extend a session only once it has lost this much of its lifetime. Without it every
+ * request would send a fresh cookie; with it a session in constant use gets one Set-Cookie
+ * an hour, adds no UPDATE of its own (it rides on the lastSeenAt write), and is never
+ * much more than an hour short of a full TTL.
+ */
+export const EXTEND_THROTTLE_MS = 60 * 60 * 1000;
 
 export interface AuthUser {
   id: string;
@@ -94,15 +105,21 @@ function isSecureRequest(req: IncomingMessage): boolean {
   return Boolean((req.socket as { encrypted?: boolean }).encrypted);
 }
 
-function appendSetCookie(res: ServerResponse, cookie: string): void {
+/**
+ * Add a session cookie to the response, replacing any session cookie already on it.
+ *
+ * One response can now carry two: the guard re-issues the old cookie when it extends the
+ * session, and then a handler such as the password change revokes every session and
+ * creates a new one. Browsers apply duplicates in order so appending alone would work,
+ * but dropping the earlier one means the response never offers a cookie that is already
+ * dead. Other cookies on the response are kept.
+ */
+function setSessionCookie(res: ServerResponse, cookie: string): void {
   const existing = res.getHeader("Set-Cookie");
-  if (existing === undefined) {
-    res.setHeader("Set-Cookie", cookie);
-  } else if (Array.isArray(existing)) {
-    res.setHeader("Set-Cookie", [...existing, cookie]);
-  } else {
-    res.setHeader("Set-Cookie", [String(existing), cookie]);
-  }
+  const kept = (existing === undefined ? [] : Array.isArray(existing) ? existing : [String(existing)])
+    .map(String)
+    .filter((c) => !c.startsWith(`${SESSION_COOKIE}=`));
+  res.setHeader("Set-Cookie", kept.length === 0 ? cookie : [...kept, cookie]);
 }
 
 /** Read the session cookie. Works for both API requests and getServerSideProps. */
@@ -136,8 +153,8 @@ export async function createSession(
   res: ServerResponse,
 ): Promise<void> {
   const token = newToken();
-  const days = await ttlDays();
-  const expiresAt = new Date(Date.now() + days * 24 * 60 * 60 * 1000);
+  const ttlMs = (await ttlDays()) * DAY_MS;
+  const expiresAt = new Date(Date.now() + ttlMs);
 
   await prisma.session.create({
     data: {
@@ -149,18 +166,29 @@ export async function createSession(
     },
   });
 
-  appendSetCookie(
+  issueSessionCookie(req, res, token, expiresAt, ttlMs);
+}
+
+/** The cookie for a live session, kept by the browser exactly as long as the row lasts. */
+function issueSessionCookie(
+  req: IncomingMessage,
+  res: ServerResponse,
+  token: string,
+  expiresAt: Date,
+  ttlMs: number,
+): void {
+  setSessionCookie(
     res,
     serializeCookie(SESSION_COOKIE, token, {
       expires: expiresAt,
-      maxAge: days * 24 * 60 * 60,
+      maxAge: ttlMs / 1000,
       secure: isSecureRequest(req),
     }),
   );
 }
 
 export function clearSessionCookie(res: ServerResponse): void {
-  appendSetCookie(
+  setSessionCookie(
     res,
     serializeCookie(SESSION_COOKIE, "", { expires: new Date(0), maxAge: 0 }),
   );
@@ -170,8 +198,23 @@ export function clearSessionCookie(res: ServerResponse): void {
  * Resolve the current user, or null. Rejects expired sessions and deactivated
  * users — an admin disabling an account takes effect on the next request rather
  * than whenever a token happens to expire.
+ *
+ * SLIDING EXPIRY. A session that passes is extended to a full TTL from now, so it ends
+ * after TTL days of not being used rather than TTL days after sign-in, however often it
+ * was used in between. That needs `res`: the browser keeps the cookie only as long as
+ * its own Max-Age says, so the row and the cookie are extended together or not at all.
+ * Without `res` (the login page's "already signed in?" probe) nothing is extended.
+ *
+ * The extension is housekeeping, like lastSeenAt. If it fails — the settings read or the
+ * UPDATE — the request is still signed in on the expiry the session already had, and the
+ * next use tries again. It never revives anything: a session past its expiry is refused
+ * above and deleted, a revoked one has no row to find, and the UPDATE itself only matches
+ * a row that is still unexpired, so a revocation racing this request is not undone.
  */
-export async function getAuth(req: IncomingMessage): Promise<AuthContext | null> {
+export async function getAuth(
+  req: IncomingMessage,
+  res?: ServerResponse,
+): Promise<AuthContext | null> {
   const token = readTokenFromRequest(req);
   if (!token) return null;
 
@@ -201,11 +244,7 @@ export async function getAuth(req: IncomingMessage): Promise<AuthContext | null>
 
   if (!session.user.active) return null;
 
-  if (Date.now() - session.lastSeenAt.getTime() > LAST_SEEN_THROTTLE_MS) {
-    await prisma.session
-      .update({ where: { id: session.id }, data: { lastSeenAt: new Date() } })
-      .catch(() => {});
-  }
+  await touchSession(req, res, token, session);
 
   return {
     sessionId: session.id,
@@ -217,6 +256,58 @@ export async function getAuth(req: IncomingMessage): Promise<AuthContext | null>
       role: session.user.role,
     },
   };
+}
+
+/**
+ * The once-in-a-while write for a session that was just accepted: lastSeenAt when it is
+ * stale, and the sliding extension when it is due. Both go in one UPDATE. Never throws.
+ *
+ * The extension is only considered when lastSeenAt is due anyway, and an extension sets
+ * lastSeenAt too. So a request inside the five-minute window costs nothing at all, not even
+ * the settings read the TTL needs, and the extension is at most five minutes late.
+ */
+async function touchSession(
+  req: IncomingMessage,
+  res: ServerResponse | undefined,
+  token: string,
+  session: { id: string; expiresAt: Date; lastSeenAt: Date },
+): Promise<void> {
+  const now = Date.now();
+  if (now - session.lastSeenAt.getTime() <= LAST_SEEN_THROTTLE_MS) return;
+  const data: { lastSeenAt: Date; expiresAt?: Date } = { lastSeenAt: new Date(now) };
+
+  let ttlMs: number | null = null;
+  if (res && !res.headersSent) {
+    try {
+      ttlMs = (await ttlDays()) * DAY_MS;
+    } catch {
+      // Settings unreadable: no extension this time, and the request goes on.
+    }
+  }
+  // Only ever later: a TTL lowered in Settings leaves a longer-lived session alone until
+  // its remaining time falls under the new TTL, as "lowering it does not revoke" promises.
+  const extendTo =
+    ttlMs !== null && now + ttlMs - session.expiresAt.getTime() > EXTEND_THROTTLE_MS
+      ? new Date(now + ttlMs)
+      : null;
+  if (extendTo) data.expiresAt = extendTo;
+
+  let wrote = false;
+  try {
+    // The expiresAt condition is what keeps this from reviving a session that ran out (or
+    // was cut short) since it was read: no unexpired row, nothing updated, and it throws.
+    await prisma.session.update({
+      where: { id: session.id, expiresAt: { gt: new Date(now) } },
+      data,
+    });
+    wrote = true;
+  } catch {
+    // Like the lastSeenAt write always was: skipped, not fatal.
+  }
+
+  if (wrote && extendTo && ttlMs !== null && res && !res.headersSent) {
+    issueSessionCookie(req, res, token, extendTo, ttlMs);
+  }
 }
 
 export async function destroyCurrentSession(

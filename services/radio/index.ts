@@ -49,6 +49,7 @@ import { resolveAntenna } from "@/lib/flex/antennas";
 import { replaceTxSliceBlockers, txSliceBlockers } from "@/lib/flex/tx-slice";
 import { LivenessWatchdog, windowTimeoutMs } from "@/lib/radio/watchdog";
 import {
+  closeTransmitGateForExit,
   isTransmitArmed,
   setDigitalTransmitHold,
   transmitGate,
@@ -140,7 +141,18 @@ import {
 } from "@/lib/ham/digital-freqs";
 import { clearAlert, raiseAlert } from "@/lib/alerts";
 import { guardFaultsCleared, watchGuardFaults } from "./guard-alerts";
-import { NO_POWER_TAG, NoPowerWatch, TxPowerTracker, UNMETERED_TAG, applyNoPowerVerdict } from "@/lib/radio/power";
+import {
+  NO_POWER_RECOVERY_DEFAULTS,
+  NO_POWER_TAG,
+  NoPowerWatch,
+  TxPowerTracker,
+  UNMETERED_TAG,
+  applyNoPowerVerdict,
+  noPowerRecovery,
+  noPowerRecoveryConfig,
+  type NoPowerRecoveryConfig,
+  type NoPowerVerdict,
+} from "@/lib/radio/power";
 import { NoiseFloor } from "@/lib/radio/noise";
 import { UNREAD_RECEIVER, type ReceiverControls } from "@/lib/radio/receiver-controls";
 import { getEqslCredentials, syncEqslInbox } from "@/lib/integrations/eqsl";
@@ -811,6 +823,196 @@ async function resumeHeldAutoMode(): Promise<void> {
       autoRunStartedAt ? new Date(autoRunStartedAt).toISOString() : "now"
     }, ${autoQsosThisRun} QSOs so far)`,
   );
+}
+
+/**
+ * HALT: the contact in progress, any automatic mode and any tune carrier, all stopped, and
+ * the automatic mode SAVED as off.
+ *
+ * Unsaved, the stored mode outlived the halt and the next bridge restart (a deploy, the
+ * watchdog) resumed the hunt the operator had stopped: N9MMR, 2026-10-20. One function so the
+ * HALT button and the no-power recovery cannot drift into two different meanings of "stop".
+ */
+async function haltOperating(why: string): Promise<void> {
+  activeAuto()?.setMode("off");
+  const saved = persistAutoMode("off");
+  void stopFlexTune(why);
+  await activeQso()?.halt();
+  await saved;
+}
+
+/** Resolves after `ms` whatever `p` does, so a dead socket cannot hold up an exit. */
+async function atMost(p: Promise<unknown>, ms: number): Promise<void> {
+  await Promise.race([p.catch(() => {}), new Promise((r) => setTimeout(r, ms))]);
+}
+
+/**
+ * Exit so PM2 restarts the bridge, emailing first. The liveness watchdogs and the no-power
+ * recovery all end here.
+ *
+ * UNKEYS FIRST, as /restart does: exiting mid-transmission leaves the finals keyed until the
+ * radio's own timeout notices. Bounded, because the reason for restarting may well be a link
+ * that no longer answers.
+ *
+ * The email races a 3 s cap, then the process goes regardless: the restart is the actual
+ * remedy and must not wait on a mail server. The alert has no matching clear - a successful
+ * restart IS the recovery, and the fresh process has no memory of raising it, which is the
+ * correct amnesia. Every restart mails, cooldown or not: two in an evening is a materially
+ * worse situation than one, and the whole value of the second message is that it is the
+ * second.
+ */
+function exitForRestart(key: string, subject: string, lines: string[]): void {
+  // Nothing keys in the seconds this spends unkeying and mailing: not a hunt's next window,
+  // not a Call pressed at the wrong moment. Shut for good - only the fresh process reopens it.
+  closeTransmitGateForExit();
+  void (async () => {
+    await atMost(
+      (async () => {
+        await stopFlexTune("restart");
+        await activeTx?.unkey();
+      })(),
+      2_000,
+    );
+    await atMost(raiseAlert(key, subject, lines, { always: true }), 3_000);
+  })().finally(() => setTimeout(() => process.exit(1), 250));
+}
+
+/**
+ * When the bridge last restarted itself for no power out. State, not configuration, written
+ * straight to the table like the resume mode above, so it survives the very restart it records
+ * and the next run can tell that a restart was already tried.
+ */
+const KEY_NO_POWER_RESTART_AT = "bridge.noPowerRestartAt";
+/** No-power transmissions in a row so far. See noPowerRecovery. */
+let noPowerRun = 0;
+/** Set once a recovery has begun, so a verdict arriving mid-exit cannot start a second one. */
+let noPowerRecovering = false;
+
+/**
+ * A transmission has been judged: count it, and act if a run of them made no power.
+ *
+ * FlexRadio only. The Icom feeds NoPowerWatch meter readings but has no key and unkey hook
+ * into it, so it never produces a verdict and this never sees one from it.
+ */
+async function onNoPowerVerdict(verdict: NoPowerVerdict | null): Promise<void> {
+  if (noPowerRecovering || !verdict) return;
+  // A database that cannot be read cannot say whether a restart was already tried, and a
+  // restart that might be the tenth in a row is not one to make. So an unreadable setting
+  // still counts the run, on the defaults, and ends it with auto off rather than an exit.
+  let unreadable = false;
+  let cfg: NoPowerRecoveryConfig;
+  let lastAt: number | null = null;
+  try {
+    cfg = noPowerRecoveryConfig({
+      enabled: await getBooleanSetting("bridge.watchdog.noPower.enabled", true),
+      after: await getNumberSetting("bridge.watchdog.noPower.after", NO_POWER_RECOVERY_DEFAULTS.after),
+      windowMinutes: await getNumberSetting(
+        "bridge.watchdog.noPower.windowMinutes",
+        NO_POWER_RECOVERY_DEFAULTS.windowMinutes,
+      ),
+      restartAllowed: await getBooleanSetting("bridge.watchdog.enabled", true),
+    });
+    const lastRaw = await getSetting(KEY_NO_POWER_RESTART_AT);
+    const lastParsed = lastRaw ? Date.parse(lastRaw) : NaN;
+    lastAt = Number.isFinite(lastParsed) ? lastParsed : null;
+  } catch (err) {
+    console.error(`[bridge] no-power recovery could not read its settings: ${err instanceof Error ? err.message : err}`);
+    unreadable = true;
+    cfg = noPowerRecoveryConfig({ enabled: true, ...NO_POWER_RECOVERY_DEFAULTS, restartAllowed: false });
+  }
+  const now = Date.now();
+  const before = noPowerRun;
+  const step = noPowerRecovery(noPowerRun, verdict, cfg, lastAt, now);
+  noPowerRun = step.run;
+  if (step.action === "none") return;
+  noPowerRecovering = true;
+  const count = before + 1;
+
+  if (step.action === "restart") {
+    const subject = `Bridge restarted itself (${count} transmissions in a row with no power out)`;
+    console.error(`[bridge] ${subject} - unkeying and exiting so PM2 restarts it with a fresh connection to the radio`);
+    // What was running or waiting for its window is stopped first, so nothing automated keys
+    // while the restart is recorded. The automatic mode is stopped in memory only - the saved
+    // one is what resumes after the restart, which is the point of restarting. exitForRestart
+    // then shuts the gate for good.
+    activeAuto()?.setMode("off");
+    js8Sender.cancel();
+    await atMost(activeQso()?.halt() ?? Promise.resolve(), 2_000);
+    // Recorded BEFORE exiting, or the loop guard would never see it - and only a restart that
+    // WAS recorded goes ahead. One that was not would leave the next process blind to it, and
+    // PM2 restarts anything that ran past min_uptime, so a database that took writes badly
+    // would turn into keying blind and restarting every few minutes for as long as it lasted.
+    // Bounded, so a database that does not answer cannot hold the station either way.
+    const value = new Date(now).toISOString();
+    let recorded = false;
+    await atMost(
+      prisma.setting
+        .upsert({
+          where: { key: KEY_NO_POWER_RESTART_AT },
+          create: { key: KEY_NO_POWER_RESTART_AT, value, encrypted: false },
+          update: { value },
+        })
+        .then(() => {
+          recorded = true;
+          invalidateSettingsCache();
+        })
+        .catch((err: unknown) => {
+          console.error(`[bridge] could not record the no-power restart: ${err instanceof Error ? err.message : err}`);
+        }),
+      3_000,
+    );
+    if (recorded) {
+      exitForRestart("no-power", subject, [
+        `The radio keyed ${count} times in a row and reported no forward power out each time.`,
+        "The usual cause is traffic between the bridge and the radio stalling, which loses the transmit audio, so the bridge unkeyed and exited for PM2 to restart it with a fresh connection. A running automatic mode resumes on its own after the restart.",
+        `If it happens again within ${Math.round(cfg.windowMs / 60_000)} minutes the bridge will not restart a second time: it turns the automatic mode off instead.`,
+      ]);
+      return;
+    }
+    await turnAutoOffForNoPower(count, "the restart could not be recorded, so it could not be told from a restart loop");
+    return;
+  }
+
+  // AUTO OFF: a restart was already tried and did not cure it (or the bridge may not restart
+  // itself). Stop transmitting, saved, and stay up so the operator can see why.
+  const why = unreadable
+    ? "the bridge could not read its settings, so it could not tell whether a restart was already tried"
+    : cfg.restartAllowed
+      ? `a restart ${Math.max(0, Math.round((now - (lastAt ?? now)) / 60_000))} min ago did not help`
+      : "restarting is off (bridge.watchdog.enabled)";
+  await turnAutoOffForNoPower(count, why);
+}
+
+/**
+ * The end of a no-power run that does not restart: auto off and saved off, the alarm kept up
+ * with the reason, an alert, and the bridge left running so the operator can see why.
+ */
+async function turnAutoOffForNoPower(count: number, why: string): Promise<void> {
+  console.error(`[bridge] ${count} transmissions in a row with no power out and ${why} - automatic mode turned off`);
+  // HALT's own steps. Bounded, because the likely cause is a link to the radio that has
+  // stopped answering, and an unkey waiting on it must not keep the alarm off the screen.
+  // The automatic mode is off before the first await inside, whatever happens after.
+  await atMost(haltOperating("no power out"), 3_000);
+  autoResumeMode = null;
+  disarmRestoreAuto = "off";
+  const note = `automatic mode was turned off after ${count} transmissions in a row with no power out`;
+  const i = status.txWarnings.findIndex((w) => w.includes(NO_POWER_TAG));
+  status.txWarnings =
+    i >= 0
+      ? status.txWarnings.map((w, j) => (j === i ? `${w} - ${note}` : w))
+      : [`${NO_POWER_TAG}: ${note}`, ...status.txWarnings];
+  broadcast({ kind: "status", status });
+  void raiseAlert(
+    "no-power-auto-off",
+    `Automatic mode turned off (${count} transmissions in a row with no power out)`,
+    [
+      `The radio keyed ${count} times in a row and reported no forward power out each time, and ${why}.`,
+      "The automatic mode is off and saved as off, so it will not resume after a restart. The bridge is still running.",
+      "Check the radio's transmit path - the TX slice mode, the DAX TX channel, the antenna, and the network between the bridge and the radio - then start it again from the Rig page.",
+    ],
+    { always: true },
+  );
+  noPowerRecovering = false;
 }
 
 /** The flex rig-control connection, for settings like RF power. */
@@ -2689,6 +2891,8 @@ async function startFlexSource(): Promise<() => Promise<void>> {
         }
         status.txWarnings = warnings;
       }
+      // And a run of them is recovered from, not only reported: see onNoPowerVerdict.
+      void onNoPowerVerdict(verdict);
     }
     // Duty tracking follows the RADIO, not our intent. An ATU tune, a manual key from
     // the front panel or SmartSDR all heat the same finals, and a cooldown that only
@@ -2747,25 +2951,11 @@ async function startFlexSource(): Promise<() => Promise<void>> {
           `[bridge] WATCHDOG: no ${label} activity for ${Math.round(sinceMs / 1000)}s — ` +
             `the process is running but not working. Exiting so PM2 restarts it.`,
         );
-        // The email races a 3 s cap, then the process goes regardless: the restart
-        // is the actual remedy and must not wait on a mail server. The alert has no
-        // matching clear — a successful restart IS the recovery, and the fresh
-        // process has no memory of raising it, which is the correct amnesia.
-        void Promise.race([
-          raiseAlert(
-            "watchdog",
-            `Bridge restarted itself (${label} stalled)`,
-            [
-              `No ${label} activity for ${Math.round(sinceMs / 1000)}s — the process was running but not working, so it exited for PM2 to restart.`,
-              "One of these is routine after a network blip. Several in a row means something is genuinely wrong — read the bridge log.",
-            ],
-            // Every restart mails, cooldown or not. Two in an evening is a materially
-            // worse situation than one, and the whole value of the second message is
-            // that it is the second.
-            { always: true },
-          ),
-          new Promise((r) => setTimeout(r, 3_000)),
-        ]).finally(() => setTimeout(() => process.exit(1), 250));
+        // Unkey, email, exit: see exitForRestart.
+        exitForRestart("watchdog", `Bridge restarted itself (${label} stalled)`, [
+          `No ${label} activity for ${Math.round(sinceMs / 1000)}s — the process was running but not working, so it exited for PM2 to restart.`,
+          "One of these is routine after a network blip. Several in a row means something is genuinely wrong — read the bridge log.",
+        ]);
       },
     });
     watchdog.start();
@@ -2801,19 +2991,11 @@ async function startFlexSource(): Promise<() => Promise<void>> {
           `[bridge] WATCHDOG: no ${label} from the radio for ${Math.round(sinceMs / 1000)}s — ` +
             `the control link may still be up, but nothing is being received. Exiting so PM2 restarts it.`,
         );
-        void Promise.race([
-          raiseAlert(
-            "watchdog-audio",
-            "Bridge restarted itself (receiver audio stopped)",
-            [
-              `No audio arrived from the radio for ${Math.round(sinceMs / 1000)}s.`,
-              "The control connection can stay up while the radio stops sending DAX audio and panadapter frames — decoding quietly stops and the waterfall freezes, with nothing in the log to say so.",
-              "The bridge exited so PM2 could restart it, which re-creates the DAX stream.",
-            ],
-            { always: true },
-          ),
-          new Promise((r) => setTimeout(r, 3_000)),
-        ]).finally(() => setTimeout(() => process.exit(1), 250));
+        exitForRestart("watchdog-audio", "Bridge restarted itself (receiver audio stopped)", [
+          `No audio arrived from the radio for ${Math.round(sinceMs / 1000)}s.`,
+          "The control connection can stay up while the radio stops sending DAX audio and panadapter frames — decoding quietly stops and the waterfall freezes, with nothing in the log to say so.",
+          "The bridge exited so PM2 could restart it, which re-creates the DAX stream.",
+        ]);
       },
     });
     audioWatchdog.start();
@@ -5877,12 +6059,7 @@ async function main(): Promise<void> {
           }
           case "/qso-halt":
             // HALT means everything: the active QSO and any auto mode — and it is SAVED as off.
-            // Unsaved, the stored mode outlived the halt and the next bridge restart (a deploy,
-            // the watchdog) resumed the hunt the operator had stopped: N9MMR, 2026-10-20.
-            activeAuto()?.setMode("off");
-            void persistAutoMode("off");
-            void stopFlexTune("HALT");
-            await qso.halt();
+            await haltOperating("HALT");
             sendJson(res, 200, { ok: true, qso: qso.state });
             return;
           case "/qso-skip":

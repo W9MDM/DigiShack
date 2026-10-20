@@ -10,6 +10,11 @@
 // out", and a lookup that ANSWERED no — no cookie, unknown token, expired, disabled — must
 // still go to /login exactly as before.
 //
+// SLIDING EXPIRY is checked here too, because it lives in the same lookup: a session that
+// is used is pushed out to a full TTL from now and its cookie re-issued to match, at most
+// once an hour and only alongside the five-minute lastSeenAt write; and none of that may
+// revive an expired or revoked session, or turn a failed write into a sign-out.
+//
 // No database. A fake Prisma is put on globalThis BEFORE anything that imports
 // lib/db/prisma is loaded, which is why the application imports below are dynamic.
 
@@ -45,17 +50,49 @@ interface FakeSession {
 const sessions = new Map<string, FakeSession>();
 /** What the next session lookup does instead of answering. */
 let lookupFails: (() => Error) | null = null;
-let lastSeenFails = false;
+/** Every session write (lastSeenAt, the sliding extension) fails. */
+let updateFails = false;
+/** Runs just before a session write lands: a revocation racing the request. */
+let beforeUpdate: (() => void) | null = null;
+let settingsFail = false;
 let deletes = 0;
+const updates: Array<{ id: string; data: { lastSeenAt?: Date; expiresAt?: Date } }> = [];
 
+let nextId = 0;
 (globalThis as unknown as { prisma?: unknown }).prisma = {
   session: {
     findUnique: async (args: { where: { tokenHash: string } }) => {
       if (lookupFails) throw lookupFails();
-      return sessions.get(args.where.tokenHash) ?? null;
+      const s = sessions.get(args.where.tokenHash);
+      // A copy, as a real query returns: the row can change after it was read.
+      return s ? { ...s, user: { ...s.user } } : null;
     },
-    update: async () => {
-      if (lastSeenFails) throw new Error("lastSeenAt write timed out (simulated)");
+    update: async (args: {
+      where: { id: string; expiresAt?: { gt: Date } };
+      data: { lastSeenAt?: Date; expiresAt?: Date };
+    }) => {
+      beforeUpdate?.();
+      if (updateFails) throw new Error("session write timed out (simulated)");
+      const s = [...sessions.values()].find((x) => x.id === args.where.id);
+      const gt = args.where.expiresAt?.gt;
+      if (!s || (gt && s.expiresAt.getTime() <= gt.getTime())) {
+        throw new Prisma.PrismaClientKnownRequestError("Record to update not found.", {
+          code: "P2025",
+          clientVersion: "test",
+        });
+      }
+      Object.assign(s, args.data);
+      updates.push({ id: s.id, data: args.data });
+      return {};
+    },
+    create: async (args: { data: { tokenHash: string; expiresAt: Date; userId: string } }) => {
+      sessions.set(args.data.tokenHash, {
+        id: `s${nextId++}`,
+        tokenHash: args.data.tokenHash,
+        expiresAt: args.data.expiresAt,
+        lastSeenAt: new Date(),
+        user: { id: args.data.userId, email: "op@example.com", name: "Op", callsign: null, role: "ADMIN", active: true },
+      });
       return {};
     },
     delete: async (args: { where: { id: string } }) => {
@@ -63,21 +100,42 @@ let deletes = 0;
       for (const [k, s] of sessions) if (s.id === args.where.id) sessions.delete(k);
       return {};
     },
-    deleteMany: async () => ({ count: 0 }),
+    deleteMany: async (args: { where: { userId?: string } }) => {
+      let count = 0;
+      for (const [k, s] of sessions) {
+        if (args.where.userId !== undefined && s.user.id === args.where.userId) {
+          sessions.delete(k);
+          count++;
+        }
+      }
+      return { count };
+    },
   },
   user: { count: async () => 1 },
-  setting: { findMany: async () => [] },
+  setting: {
+    findMany: async () => {
+      if (settingsFail) throw new Error("settings read timed out (simulated)");
+      return [];
+    },
+  },
 };
 
+// The TTL is read from settings, which fall back to this. Not the default 30, so a cookie
+// or expiry that came out right only by coincidence with the default would show.
+process.env.SESSION_TTL_DAYS = "7";
+const TTL_MS = 7 * 86_400_000;
+
 const SESSION_COOKIE = "digishack_session";
-function addSession(opts: { expired?: boolean; active?: boolean; role?: Role } = {}): string {
+function addSession(
+  opts: { expired?: boolean; active?: boolean; role?: Role; expiresInMs?: number; lastSeenAgoMs?: number } = {},
+): string {
   const token = randomBytes(32).toString("base64url");
   const tokenHash = createHash("sha256").update(token).digest("hex");
   sessions.set(tokenHash, {
-    id: `s${sessions.size}`,
+    id: `s${nextId++}`,
     tokenHash,
-    expiresAt: new Date(Date.now() + (opts.expired ? -60_000 : 86_400_000)),
-    lastSeenAt: new Date(Date.now() - 60 * 60_000),
+    expiresAt: new Date(Date.now() + (opts.expired ? -60_000 : (opts.expiresInMs ?? 86_400_000))),
+    lastSeenAt: new Date(Date.now() - (opts.lastSeenAgoMs ?? 60 * 60_000)),
     user: {
       id: `u${sessions.size}`,
       email: "op@example.com",
@@ -94,11 +152,11 @@ function addSession(opts: { expired?: boolean; active?: boolean; role?: Role } =
 // Request and response doubles, enough of each for the guards and sendJson
 // ---------------------------------------------------------------------------
 
-function fakeReq(token: string | null, method = "GET"): IncomingMessage {
+function fakeReq(token: string | null, method = "GET", extra: Record<string, string> = {}): IncomingMessage {
   return {
     method,
     url: "/gridmap",
-    headers: token ? { cookie: `other=1; ${SESSION_COOKIE}=${token}` } : {},
+    headers: { ...(token ? { cookie: `other=1; ${SESSION_COOKIE}=${token}` } : {}), ...extra },
     cookies: token ? { [SESSION_COOKIE]: token } : {},
     socket: { remoteAddress: "127.0.0.1" },
   } as unknown as IncomingMessage;
@@ -160,9 +218,9 @@ async function main(): Promise<void> {
   const { withPageAuth, authedRoute } = await import("../lib/auth/guard");
 
   const gssp = withPageAuth();
-  async function page(token: string | null) {
+  async function page(token: string | null, extra: Record<string, string> = {}) {
     const res = fakeRes();
-    const ctx = { req: fakeReq(token), res, resolvedUrl: "/gridmap", query: {} };
+    const ctx = { req: fakeReq(token, "GET", extra), res, resolvedUrl: "/gridmap", query: {} };
     const result = (await gssp(ctx as never)) as Record<string, unknown>;
     return { result, res };
   }
@@ -228,9 +286,9 @@ async function main(): Promise<void> {
   console.log("a valid session is signed in, even when the lastSeenAt write fails");
   // -------------------------------------------------------------------------
   {
-    lastSeenFails = true;
+    updateFails = true;
     const { result } = await page(addSession());
-    lastSeenFails = false;
+    updateFails = false;
     ok((result.props as { user?: unknown } | undefined)?.user !== undefined, "props carry the user");
     eq(redirectOf(result), null, "no redirect");
   }
@@ -274,6 +332,210 @@ async function main(): Promise<void> {
     const bogus = await call(randomBytes(32).toString("base64url"));
     eq(bogus.statusCode, 401, "an unknown token is still a 401");
     eq(ran, 1, "the handler ran for neither");
+  }
+
+  // -------------------------------------------------------------------------
+  // Sliding expiry
+  // -------------------------------------------------------------------------
+  const { getAuth, createSession } = await import("../lib/auth/session");
+  const { invalidateSettingsCache } = await import("../lib/settings");
+  const rowOf = (token: string) => sessions.get(createHash("sha256").update(token).digest("hex"));
+  const sessionCookies = (res: FakeRes) => {
+    const raw = res.headers["set-cookie"];
+    const list = raw === undefined ? [] : Array.isArray(raw) ? raw : [raw];
+    return list.filter((c) => c.startsWith(`${SESSION_COOKIE}=`));
+  };
+  const near = (a: number, b: number, slackMs = 5_000) => Math.abs(a - b) <= slackMs;
+  const signedIn = (r: Record<string, unknown>) =>
+    (r.props as { user?: unknown } | undefined)?.user !== undefined;
+  const apiHandler = authedRoute({
+    GET: { role: "VIEWER", handler: (_req, res) => void res.status(200).send("{}") },
+  });
+  async function api(token: string | null) {
+    const res = fakeRes();
+    await apiHandler(fakeReq(token) as never, res as never);
+    return res;
+  }
+
+  console.log("a session that is used is extended to a full TTL, and its cookie re-issued");
+  {
+    // Signed in six days ago on a seven-day TTL: one day left.
+    const token = addSession({ expiresInMs: 86_400_000 });
+    const writes = updates.length;
+    const { result, res } = await page(token);
+    ok(signedIn(result), "page: signed in");
+    const row = rowOf(token);
+    ok(row !== undefined && near(row.expiresAt.getTime(), Date.now() + TTL_MS), "page: the row now expires a full TTL from now", row?.expiresAt);
+    eq(updates.length, writes + 1, "page: one UPDATE, carrying both expiresAt and lastSeenAt");
+    const last = updates[updates.length - 1];
+    ok(last?.data.expiresAt !== undefined && last.data.lastSeenAt !== undefined, "page: the UPDATE has both fields");
+    const cookies = sessionCookies(res);
+    eq(cookies.length, 1, "page: exactly one session cookie on the response");
+    const c = cookies[0] ?? "";
+    ok(c.startsWith(`${SESSION_COOKIE}=${token};`), "page: it is the SAME token, re-issued", c);
+    ok(c.includes(`Max-Age=${TTL_MS / 1000}`), "page: Max-Age is the TTL", c);
+    const expires = /Expires=([^;]+)/.exec(c)?.[1];
+    ok(
+      expires !== undefined && row !== undefined && Math.abs(Date.parse(expires) - row.expiresAt.getTime()) < 1_000,
+      "page: Expires matches the row",
+      expires,
+    );
+    ok(/HttpOnly/.test(c) && /SameSite=Lax/.test(c) && /Path=\//.test(c), "page: same attributes as at sign-in", c);
+    ok(!/Secure/.test(c), "page: no Secure over plain HTTP", c);
+    eq(redirectOf(result), null, "page: no redirect");
+    eq(res.statusCode, 200, "page: not a 503");
+    eq(res.headers["cache-control"], undefined, "page: the guard sets no Cache-Control of its own (Next's stands)");
+
+    const viaTls = await page(addSession({ expiresInMs: 86_400_000 }), { "x-forwarded-proto": "https" });
+    ok(/Secure/.test(sessionCookies(viaTls.res)[0] ?? ""), "page: Secure when the request came over TLS");
+
+    const apiToken = addSession({ expiresInMs: 86_400_000 });
+    const r = await api(apiToken);
+    eq(r.statusCode, 200, "api: the handler answered");
+    const apiRow = rowOf(apiToken);
+    ok(apiRow !== undefined && near(apiRow.expiresAt.getTime(), Date.now() + TTL_MS), "api: the row was extended");
+    ok((sessionCookies(r)[0] ?? "").startsWith(`${SESSION_COOKIE}=${apiToken};`), "api: the cookie rides on the API response");
+  }
+
+  console.log("the extension is throttled: a session used again within the hour is not rewritten");
+  {
+    const token = addSession({ expiresInMs: 86_400_000 });
+    await page(token);
+    const writes = updates.length;
+    const before = rowOf(token)?.expiresAt.getTime();
+    const second = await page(token);
+    ok(signedIn(second.result), "the second request is signed in");
+    eq(updates.length, writes, "no second UPDATE");
+    eq(sessionCookies(second.res).length, 0, "no second cookie");
+    eq(rowOf(token)?.expiresAt.getTime(), before, "expiry unchanged");
+
+    // Fifty minutes into the hour, with lastSeenAt stale: lastSeenAt is written, expiry is not.
+    const t2 = addSession({ expiresInMs: TTL_MS - 50 * 60_000, lastSeenAgoMs: 10 * 60_000 });
+    const was = rowOf(t2)?.expiresAt.getTime();
+    const w2 = updates.length;
+    const r2 = await page(t2);
+    eq(updates.length, w2 + 1, "a stale lastSeenAt is still written");
+    eq(updates[updates.length - 1]?.data.expiresAt, undefined, "but without extending");
+    eq(rowOf(t2)?.expiresAt.getTime(), was, "expiry unchanged");
+    eq(sessionCookies(r2.res).length, 0, "and no cookie");
+
+    // Seventy minutes short of a full TTL: due.
+    const t3 = addSession({ expiresInMs: TTL_MS - 70 * 60_000, lastSeenAgoMs: 10 * 60_000 });
+    const r3 = await page(t3);
+    eq(sessionCookies(r3.res).length, 1, "over an hour short of a full TTL: extended");
+
+    // Seen two minutes ago: inside the lastSeenAt window nothing is considered, even with a
+    // day left. It is picked up on the first request after the window.
+    const t5 = addSession({ expiresInMs: 86_400_000, lastSeenAgoMs: 2 * 60_000 });
+    const w5 = updates.length;
+    const r5 = await page(t5);
+    eq(updates.length, w5, "seen two minutes ago: no write");
+    eq(sessionCookies(r5.res).length, 0, "seen two minutes ago: no cookie yet");
+
+    // A TTL lowered since sign-in never shortens a session.
+    const t4 = addSession({ expiresInMs: 30 * 86_400_000, lastSeenAgoMs: 10 * 60_000 });
+    const long = rowOf(t4)?.expiresAt.getTime();
+    const r4 = await page(t4);
+    eq(rowOf(t4)?.expiresAt.getTime(), long, "a session longer than the TTL is not cut short");
+    eq(sessionCookies(r4.res).length, 0, "nor re-issued");
+  }
+
+  console.log("an expired session is not revived, and a revoked one is still refused");
+  {
+    const writes = updates.length;
+    const expiredToken = addSession({ expired: true });
+    const expired = await page(expiredToken);
+    eq(redirectOf(expired.result), "/login?next=%2Fgridmap", "expired: to /login");
+    eq(rowOf(expiredToken), undefined, "expired: the row is gone, not extended");
+    eq(sessionCookies(expired.res).length, 0, "expired: no cookie re-issued");
+    const expiredApi = await api(addSession({ expired: true }));
+    eq(expiredApi.statusCode, 401, "expired: the API says 401");
+    eq(sessionCookies(expiredApi).length, 0, "expired: no cookie on the 401");
+
+    const revoked = addSession({ expiresInMs: 86_400_000 });
+    sessions.delete(createHash("sha256").update(revoked).digest("hex"));
+    const gone = await page(revoked);
+    eq(redirectOf(gone.result), "/login?next=%2Fgridmap", "revoked: to /login");
+    eq(sessionCookies(gone.res).length, 0, "revoked: no cookie");
+
+    const disabled = await page(addSession({ active: false, expiresInMs: 86_400_000 }));
+    eq(redirectOf(disabled.result), "/login?next=%2Fgridmap", "disabled account: to /login");
+    eq(sessionCookies(disabled.res).length, 0, "disabled account: no cookie");
+    eq(updates.length, writes, "none of them wrote to a session row");
+
+    // Revoked WHILE the request was in flight: read as valid, gone by the time of the write.
+    const racing = addSession({ expiresInMs: 86_400_000 });
+    const hash = createHash("sha256").update(racing).digest("hex");
+    beforeUpdate = () => sessions.delete(hash);
+    const raced = await page(racing);
+    beforeUpdate = null;
+    eq(sessions.has(hash), false, "revoked mid-request: the row stays gone");
+    eq(sessionCookies(raced.res).length, 0, "revoked mid-request: no cookie re-issued");
+
+    // Expired between the read and the write: the conditional UPDATE matches nothing.
+    const edge = addSession({ expiresInMs: 86_400_000 });
+    beforeUpdate = () => {
+      const s = sessions.get(createHash("sha256").update(edge).digest("hex"));
+      if (s) s.expiresAt = new Date(Date.now() - 1);
+    };
+    const late = await page(edge);
+    beforeUpdate = null;
+    ok((rowOf(edge)?.expiresAt.getTime() ?? 0) < Date.now(), "expired mid-request: not pushed back out");
+    eq(sessionCookies(late.res).length, 0, "expired mid-request: no cookie re-issued");
+  }
+
+  console.log("a failed extension skips the extension and nothing else");
+  {
+    const token = addSession({ expiresInMs: 86_400_000 });
+    const was = rowOf(token)?.expiresAt.getTime();
+    updateFails = true;
+    const p = await page(token);
+    const a = await api(token);
+    updateFails = false;
+    ok(signedIn(p.result), "write fails: the page is still signed in");
+    eq(p.res.statusCode, 200, "write fails: not a 503");
+    eq(sessionCookies(p.res).length, 0, "write fails: no cookie (it would promise what the row does not have)");
+    eq(a.statusCode, 200, "write fails: the API still answers");
+    eq(sessionCookies(a).length, 0, "write fails: no cookie on the API either");
+    eq(rowOf(token)?.expiresAt.getTime(), was, "write fails: the expiry it had");
+    const after = await page(token);
+    eq(sessionCookies(after.res).length, 1, "write fails: the next use extends it");
+
+    const t2 = addSession({ expiresInMs: 86_400_000 });
+    settingsFail = true;
+    invalidateSettingsCache();
+    const s = await page(t2);
+    settingsFail = false;
+    invalidateSettingsCache();
+    ok(signedIn(s.result), "settings unreadable: still signed in");
+    eq(s.res.statusCode, 200, "settings unreadable: not a 503");
+    eq(sessionCookies(s.res).length, 0, "settings unreadable: no extension this time");
+  }
+
+  console.log("getAuth without a response extends nothing, and one response carries one session cookie");
+  {
+    const token = addSession({ expiresInMs: 86_400_000 });
+    const was = rowOf(token)?.expiresAt.getTime();
+    ok((await getAuth(fakeReq(token))) !== null, "no res: signed in");
+    eq(rowOf(token)?.expiresAt.getTime(), was, "no res: not extended (a row longer than its cookie would be a lie)");
+
+    // The password change: the guard re-issues the old cookie, then the handler replaces it.
+    const pw = authedRoute({
+      POST: {
+        role: "VIEWER",
+        handler: async (req, res, auth) => {
+          for (const [k, s] of sessions) if (s.user.id === auth.user.id) sessions.delete(k);
+          await createSession(auth.user.id, req, res);
+          res.status(200).send("{}");
+        },
+      },
+    });
+    const old = addSession({ expiresInMs: 86_400_000 });
+    const res = fakeRes();
+    await pw(fakeReq(old, "POST") as never, res as never);
+    const cookies = sessionCookies(res);
+    eq(cookies.length, 1, "password change: one session cookie, not the extended old one as well");
+    ok(!(cookies[0] ?? "").startsWith(`${SESSION_COOKIE}=${old};`), "password change: and it is the new one");
   }
 
   console.log("");
