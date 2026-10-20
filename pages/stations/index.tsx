@@ -162,18 +162,21 @@ function StationCard({
   return (
     <Card
       title={
-        <div className="flex items-center gap-2">
+        // Wraps, because the Card header beside it does not: at phone width callsign, grid,
+        // count, Edit and Delete in one line pushed the whole page 35px wider than the
+        // screen. Now the count drops under the callsign instead.
+        <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
           <h2 className="font-display text-lg tracking-wide">
             {station.callsign}
           </h2>
           <Badge tone="neutral">{station.grid}</Badge>
-          <span className="text-xs text-fg-subtle tnum">
+          <span className="whitespace-nowrap text-xs text-fg-subtle tnum">
             {qsoCount.toLocaleString()} QSO{qsoCount === 1 ? "" : "s"}
           </span>
         </div>
       }
       actions={
-        <div className="flex items-center gap-2">
+        <div className="flex shrink-0 items-center gap-2">
           {canEdit && !editing && (
             <Button onClick={() => setEditing(true)}>Edit</Button>
           )}
@@ -273,7 +276,11 @@ function StationCard({
                       // to be reported as stations that could not be removed.
                       aria-label={`Remove operator ${op.callsign}`}
                       title={`Remove operator ${op.callsign} from this station`}
-                      className="text-fg-muted hover:text-danger text-xs px-1 rounded-sm focus-visible:outline-2 focus-visible:outline-accent-bright"
+                      // A 14px-wide target beside the role badge. On a touch screen the
+                      // global rule makes it 44px tall but never widens a button, so it
+                      // gets the width here — by pointer, like that rule, because a
+                      // viewport class would also cancel the height on a touch tablet.
+                      className="text-fg-muted hover:text-danger text-xs px-1 rounded-sm focus-visible:outline-2 focus-visible:outline-accent-bright pointer-coarse:min-w-11"
                       onClick={async () => {
                         if (!window.confirm(`Remove operator ${op.callsign}?`))
                           return;
@@ -386,8 +393,10 @@ function NewOperatorForm({
   const [busy, setBusy] = useState(false);
 
   return (
+    // Two-by-two on a phone, each control filling its half, rather than four fixed widths
+    // wrapping raggedly with a gap at the end of each line. sm restores the single row.
     <form
-      className="flex flex-wrap items-end gap-2"
+      className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:items-end"
       onSubmit={async (e) => {
         e.preventDefault();
         setBusy(true);
@@ -407,19 +416,22 @@ function NewOperatorForm({
         value={callsign}
         onChange={(e) => setCallsign(e.target.value.toUpperCase())}
         placeholder="Callsign"
+        aria-label="New operator callsign"
         spellCheck={false}
-        className="w-28"
+        className="sm:w-28"
       />
       <Input
         value={name}
         onChange={(e) => setName(e.target.value)}
         placeholder="Name"
-        className="w-32"
+        aria-label="New operator name"
+        className="sm:w-32"
       />
       <Select
         value={role}
         onChange={(e) => setRole(e.target.value)}
-        className="w-28"
+        aria-label="New operator role"
+        className="sm:w-28"
       >
         {ROLES.map((r) => (
           <option key={r} value={r}>

@@ -111,7 +111,7 @@ export default function RigPage({ wsUrl }: Props) {
   const [audioScale, setAudioScale] = useState<{ binHz: number; maxHz: number; periodMs: number } | null>(null);
   // DX cluster spots: the bridge's list once, then each new spot off the same socket.
   const [clusterSpots, setClusterSpots] = useState<ClusterSpot[]>([]);
-  // The same frames, recorded for the Spectrogram / 3D views of the display, and whether we
+  // The same frames, recorded for the Waterfall HD / 3D / analyzer views of the display, and whether we
   // are on the air while they are. The 2 s status poll alone is too late for Delta: it
   // keys up to two seconds after the audio goes quiet, and those rows would be compared as the
   // whole band dropping out. The bridge's status message on the socket comes with every change,
@@ -424,8 +424,10 @@ export default function RigPage({ wsUrl }: Props) {
       <div className="flex flex-col gap-4">
         {/* PERSISTENT, and not dismissible: a dismissed warning is never seen again by the
             operator who most needs it, the one back a month later. The specifics are named
-            because "experimental" alone tells nobody what to distrust. */}
-        <p className="rounded-sm border border-warn/40 bg-warn/10 px-3 py-2 text-xs text-fg-muted">
+            because "experimental" alone tells nobody what to distrust. Still shown on a
+            phone, but at the foot of the page: there its five lines stood between the
+            operator and the dial and any "will not transmit" banner. */}
+        <p className="order-last rounded-sm border border-warn/40 bg-warn/10 px-3 py-2 text-xs text-fg-muted md:order-none">
           <span className="font-medium uppercase tracking-wide text-warn">Experimental</span>{" "}
           — useful and unfinished. The panadapter&apos;s dB window is{" "}
           <strong className="text-fg">not calibrated</strong>, the FlexRadio accepts display
@@ -555,7 +557,7 @@ export default function RigPage({ wsUrl }: Props) {
         </RigDial>
 
         {/* THE BAND. The reason to be on this page: tens of kHz of RF with every station
-            on it — as the panadapter, or as a spectrogram / 3D surface of the same frames. */}
+            on it — as the panadapter, or in Waterfall HD / 3D / the analyzer views of the same frames. */}
         {((pan && panScale) || (!caps.panadapter && audioSpec && audioScale)) && (
           <div className="-mb-2 flex items-center justify-end">
             <ViewSwitch value={rigView} onChange={setRigView} />
@@ -619,7 +621,7 @@ export default function RigPage({ wsUrl }: Props) {
                 <Link
                   href="/spectrum?source=rf&view=3d"
                   className="text-accent-bright hover:underline"
-                  title="This band as a spectrogram and 3D waterfall"
+                  title="This band in Waterfall HD, 3D and the analyzer views"
                 >
                   Open spectrum
                 </Link>
@@ -641,7 +643,7 @@ export default function RigPage({ wsUrl }: Props) {
               <Link
                 href="/spectrum?source=audio"
                 className="ml-auto text-accent-bright hover:underline"
-                title="The receiver audio as a spectrogram and 3D waterfall"
+                title="The receiver audio in Waterfall HD, 3D and the analyzer views"
               >
                 Open spectrum
               </Link>

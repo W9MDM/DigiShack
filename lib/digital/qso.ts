@@ -7,6 +7,8 @@
 // what makes the whole QSO flow testable offline the same way the transmit chain
 // was — by the time this drives a transmitter, every path has already run.
 
+import { GRID4_RE as GRID_RE } from "@/lib/ham/grid-geometry";
+
 export type QsoRole = "caller" | "answerer";
 
 /** A decoded FT8/FT4 message, structurally understood. */
@@ -69,7 +71,6 @@ const CONTEST_EXCHANGE_RE = new RegExp(
   `^${CONTEST_EXCHANGE_GROUP.source}(?: ${CONTEST_EXCHANGE_GROUP.source})?$`,
 );
 
-const GRID_RE = /^[A-R]{2}\d{2}$/;
 const REPORT_RE = /^([+-]\d{2})$/;
 const R_REPORT_RE = /^R([+-]\d{2})$/;
 

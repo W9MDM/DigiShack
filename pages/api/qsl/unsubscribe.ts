@@ -1,5 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 
+import { escapeHtml } from "@/lib/html";
 import { optOut, tokenValid } from "@/lib/qsl/opt-out";
 
 // The one-click opt-out endpoint.
@@ -70,8 +71,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
 /** A self-contained page. No stylesheet, no fonts, nothing fetched — a stranger's browser. */
 function page(title: string, body: string): string {
-  const esc = (t: string) =>
-    t.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!);
+  const esc = escapeHtml;
   return `<!doctype html><html lang="en"><head><meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <title>${esc(title)}</title></head>

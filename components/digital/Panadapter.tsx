@@ -247,16 +247,27 @@ function timeStepSec(totalSec: number): number {
  */
 const LABEL_GAP_PCT = 6;
 
+/**
+ * A callsign label's width at its 11px type, with its padding: about 50 px. Six percent is
+ * wider than that on a desk and a third of it on a phone, where W4LXX, VK3XX and W4SK sat
+ * on top of one another. So the gap is never narrower than a label, which only ever
+ * widens it below about 830 px of display.
+ */
+const LABEL_MIN_PX = 50;
+
 export function labelledSpots(
   spotsInWindow: PanadapterSpot[],
   lowHz: number,
   spanHz: number,
+  /** The display's measured width; 0 (not yet measured) keeps the percentage alone. */
+  widthPx = 0,
 ): Set<string> {
+  const gapPct = widthPx > 0 ? Math.max(LABEL_GAP_PCT, (LABEL_MIN_PX / widthPx) * 100) : LABEL_GAP_PCT;
   const out = new Set<string>();
   let lastPct = -Infinity;
   for (const s of spotsInWindow) {
     const p = ((s.freqHz - lowHz) / spanHz) * 100;
-    if (p - lastPct >= LABEL_GAP_PCT) {
+    if (p - lastPct >= gapPct) {
       out.add(s.key);
       lastPct = p;
     }
@@ -399,7 +410,7 @@ export function Panadapter({
   const visibleSpots = spots
     .filter((s) => s.freqHz > lowHz && s.freqHz < lowHz + spanHz)
     .sort((a, b) => a.freqHz - b.freqHz);
-  const labelled = labelledSpots(visibleSpots, lowHz, spanHz);
+  const labelled = labelledSpots(visibleSpots, lowHz, spanHz, widthPx);
   const planSegments = segmentsIn(lowHz, lowHz + spanHz);
 
   // Where the waterfall starts, so spot labels sit just inside it instead of on top of

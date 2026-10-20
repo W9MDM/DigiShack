@@ -275,7 +275,8 @@ function SectionPicker({
   };
 
   return (
-    <div className="mb-5 flex items-center gap-2">
+    // Phone-only (the wrapper is md:hidden), so the tighter gap costs desktop nothing.
+    <div className="mb-4 flex items-center gap-2">
       <label htmlFor={id} className="shrink-0 text-sm text-fg-muted">
         Section
       </label>

@@ -201,7 +201,8 @@ function ChangePassword({ email }: { email: string | null }) {
           />
         </Field>
         <div>
-          <Button type="submit" variant="primary" loading={busy}>
+          {/* Full width on a phone, like the fields above it; its own size from sm up. */}
+          <Button type="submit" variant="primary" loading={busy} className="w-full sm:w-auto">
             Change password
           </Button>
         </div>

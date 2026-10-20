@@ -64,21 +64,52 @@ export function Ft0Button() {
   if (confirming) {
     return (
       <div className="flex items-center gap-2">
-        <button
-          type="button"
-          disabled={busy}
-          onClick={() => void send(true)}
-          className="rounded-sm border border-accent px-2 py-1 text-xs text-fg hover:bg-accent/20 disabled:opacity-50"
-        >
-          {busy ? "stopping…" : "Stop everything"}
-        </button>
+        {/* On a phone, "Stop everything" and "cancel" in this slot pushed the header about
+            80px past the right edge of the screen, and "cancel" went with it. There FT-0
+            stays where it was, shown pressed (pressing it again cancels), and the two
+            buttons drop into a panel under the header the way the TX pill's confirmation
+            does. From `sm` up the panel classes all undo themselves and the row is the
+            inline pair it always was. */}
         <button
           type="button"
           onClick={() => setConfirming(false)}
-          className="text-xs text-fg-subtle hover:text-fg"
+          aria-expanded="true"
+          title="Cancel FT-0"
+          className="sm:hidden rounded-sm border border-accent bg-accent/15 px-2 py-1 text-xs tracking-wide text-accent-bright"
         >
-          cancel
+          FT-0
         </button>
+        <div
+          role="group"
+          aria-label="Stop everything?"
+          className={cn(
+            "fixed inset-x-4 top-[calc(3rem+env(safe-area-inset-top)+0.5rem)] z-40",
+            "flex flex-wrap items-center justify-end gap-2",
+            "rounded-md border border-line-strong bg-surface p-3 shadow-pop",
+            "sm:static sm:z-auto sm:flex-nowrap sm:justify-start",
+            "sm:rounded-none sm:border-0 sm:bg-transparent sm:p-0 sm:shadow-none",
+          )}
+        >
+          <p className="sm:hidden w-full text-sm text-fg-muted">
+            Unkey the radio, stop the automatic modes, turn transmit off and release the
+            radio?
+          </p>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => void send(true)}
+            className="rounded-sm border border-accent px-3 py-2 text-sm sm:px-2 sm:py-1 sm:text-xs text-fg hover:bg-accent/20 disabled:opacity-50"
+          >
+            {busy ? "stopping…" : "Stop everything"}
+          </button>
+          <button
+            type="button"
+            onClick={() => setConfirming(false)}
+            className="px-2 text-sm sm:px-0 sm:text-xs text-fg-subtle hover:text-fg"
+          >
+            cancel
+          </button>
+        </div>
       </div>
     );
   }

@@ -553,7 +553,7 @@ function LogSkeleton() {
     <div aria-hidden="true">
       <div className="flex flex-col gap-2 md:hidden">
         {Array.from({ length: 5 }, (_, i) => (
-          <div key={i} className="h-24 animate-pulse rounded-md border border-line bg-surface" />
+          <div key={i} className="h-20 animate-pulse rounded-md border border-line bg-surface" />
         ))}
       </div>
       <div className="hidden rounded-md border border-line bg-surface p-3 md:flex md:flex-col md:gap-3">

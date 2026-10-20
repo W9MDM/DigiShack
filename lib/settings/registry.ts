@@ -454,9 +454,10 @@ export const SETTINGS: SettingDef[] = [
     envFallback: "SESSION_TTL_DAYS",
     default: "30",
   },
-  // `redis.url` was here. Nothing ever read it: BullMQ and ioredis are installed and no
-  // queue was ever defined, so the field asked every operator for the address of a
-  // service the application does not use. Bring it back with the first real queue.
+  // `redis.url` was here. Nothing ever read it: no queue was ever defined (BullMQ and
+  // ioredis have since been removed from package.json), so the field asked every operator
+  // for the address of a service the application does not use. Bring it back with the
+  // first real queue.
 
   // --- QRZ ---
   {

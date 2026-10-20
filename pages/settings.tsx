@@ -98,7 +98,9 @@ export default function SettingsPage() {
         },
       }}
     >
-      <div className={barVisible ? "max-w-5xl pb-28" : "max-w-5xl"}>
+      {/* The save bar is taller on a phone, where its buttons wrap onto their own line, so
+          the room left under the last setting is too. */}
+      <div className={barVisible ? "max-w-5xl pb-40 sm:pb-28" : "max-w-5xl"}>
         <PageHeader
           title="Settings"
           subtitle="How this station runs: radios, modes, automation, logbook services and email. Kept in the database, with passwords and keys encrypted."
@@ -148,6 +150,7 @@ export default function SettingsPage() {
               toggleExpanded={nav.toggleExpanded}
               flashId={nav.flashId}
               onActiveGroup={nav.setActiveGroup}
+              onJumpGroup={(group) => jump({ group })}
             />
           </>
         )}

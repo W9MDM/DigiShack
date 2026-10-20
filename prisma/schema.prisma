@@ -16,7 +16,7 @@
 //      PskSpot's dedupe key legal.
 //   4. `createdAt` / `updatedAt` audit columns.
 //
-// One dedupe constraint is added on PskSpot so the Phase 5 BullMQ poller is
+// One dedupe constraint is added on PskSpot so the PSKReporter poll timer is
 // idempotent — PSKReporter returns overlapping windows on repeat polls, and
 // without this every poll would insert duplicate spot rows.
 

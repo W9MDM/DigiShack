@@ -62,8 +62,10 @@ const WORTH_CHIP: Record<WorthTier, string> = {
 /** Up to three reasons on the row: `title` never fires on touch, so hidden ones did not exist. */
 const MAX_REASONS_SHOWN = 3;
 
-/** Looser on a phone, where the row is the tap target; tighter on a desk, for more rows. */
-const CELL = "px-2.5 py-1.5 lg:py-0.5";
+const ROW = "flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5 px-2.5 py-1.5 sm:table-row sm:p-0";
+const CELL = "p-0 sm:px-2.5 sm:py-1.5 lg:py-0.5";
+/** A unit or name the column header says on a desk; on a phone the header is hidden. */
+const PHONE_UNIT = "text-fg-subtle sm:hidden";
 
 function gridOf(message: string): string | null {
   const p = parseMessage(message);
@@ -124,10 +126,11 @@ export const DecodeTable = memo(function DecodeTable({
     // Below `lg` there is no inner scroller: a scroller inside a scrolling page traps
     // touches on iOS. `overflow-x-auto` stays at every width (scripts/check-pwa.ts).
     <div className="-mx-4 overflow-x-auto lg:overflow-auto lg:max-h-[52rem]">
-      <table className="w-full border-collapse" style={{ fontSize: `${fontPx}px` }}>
-        {/* Sticky only where there is an inner scroller to stick to. */}
-        <thead className="bg-surface-2 lg:sticky lg:top-0">
-          <tr className="text-left">
+      <table role="table" className="block w-full border-collapse sm:table" style={{ fontSize: `${fontPx}px` }}>
+        {/* Sticky only where there is an inner scroller to stick to. Hidden on a phone,
+            where each figure is labelled in its own cell instead. */}
+        <thead role="rowgroup" className="hidden bg-surface-2 sm:table-header-group lg:sticky lg:top-0">
+          <tr role="row" className="text-left">
             {headers.map((h) => (
               <Th key={h.label} size="sm" className={cn("px-2.5 py-1", h.numeric && "text-right")}>
                 {h.label}
@@ -135,7 +138,7 @@ export const DecodeTable = memo(function DecodeTable({
             ))}
           </tr>
         </thead>
-        <tbody className="divide-y divide-line font-mono">
+        <tbody role="rowgroup" className="block divide-y divide-line font-mono sm:table-row-group">
           {rows.map((d) => {
             const call = d.callsign?.toUpperCase() ?? null;
             const isCq = /^CQ\b/i.test(d.message);
@@ -155,9 +158,12 @@ export const DecodeTable = memo(function DecodeTable({
                     .reduce((best, t) => (WORTH_RANK[t] > WORTH_RANK[best] ? t : best), "minor" as WorthTier);
             const selectable = callable && d.callsign !== null;
             const score = brMode && call ? brScores.get(call) : undefined;
+            const tierEdge =
+              tier === "entity" ? "border-l-warn" : tier === "award" ? "border-l-info/60" : "border-l-transparent";
 
             return (
               <tr
+                role="row"
                 key={`${d.timestamp}-${d.freqOffset}-${d.message}`}
                 onClick={selectable ? () => onSelect(d) : undefined}
                 title={
@@ -170,6 +176,11 @@ export const DecodeTable = memo(function DecodeTable({
                         : `Select ${d.callsign} — the Call button transmits straight away`
                 }
                 className={cn(
+                  ROW,
+                  // The award edge: on the row while it is a flex box, on the first cell
+                  // once it is a table row (see below).
+                  "border-l-2 sm:border-l-0",
+                  tierEdge,
                   "hover:bg-surface-2",
                   selectable && "cursor-pointer",
                   tier === "entity" && "bg-warn/10",
@@ -184,17 +195,15 @@ export const DecodeTable = memo(function DecodeTable({
                     cannot shift by 2px, and it sits on a cell because a row border under
                     border-collapse loses to the cell borders. */}
                 <Td
+                  role="cell"
                   size="sm"
-                  className={cn(
-                    CELL,
-                    "tnum text-fg-subtle whitespace-nowrap border-l-2",
-                    tier === "entity" ? "border-l-warn" : tier === "award" ? "border-l-info/60" : "border-l-transparent",
-                  )}
+                  className={cn(CELL, "tnum text-fg-subtle whitespace-nowrap sm:border-l-2", tierEdge)}
                 >
                   {formatUtcTime(d.timestamp)}
                 </Td>
                 {brMode && (
                   <Td
+                    role="cell"
                     size="sm"
                     className={cn(
                       CELL,
@@ -219,26 +228,34 @@ export const DecodeTable = memo(function DecodeTable({
                           (score.min === score.max ? String(score.min) : `${score.min}–${score.max}`)}
                   </Td>
                 )}
+                {/* The two figures scanned down the list keep a fixed width on a phone, so
+                    they still line up as columns without a header. */}
                 <Td
+                  role="cell"
                   size="sm"
                   className={cn(
                     CELL,
-                    "tnum text-right whitespace-nowrap",
+                    "min-w-[6ch] sm:min-w-0 tnum text-right whitespace-nowrap",
                     d.snr >= 0 ? "text-ok" : d.snr > -15 ? "text-fg" : "text-fg-subtle",
                   )}
                 >
                   {d.snr > 0 ? `+${d.snr}` : d.snr}
+                  <span className={PHONE_UNIT}> dB</span>
                 </Td>
-                <Td size="sm" className={cn(CELL, "tnum text-right text-fg-muted")}>
+                <Td role="cell" size="sm" className={cn(CELL, "min-w-[7ch] sm:min-w-0 tnum text-right whitespace-nowrap text-fg-muted")}>
                   {d.freqOffset}
+                  <span className={PHONE_UNIT}> Hz</span>
                 </Td>
-                <Td size="sm" className={cn(CELL, "tnum text-right text-fg-subtle")}>
+                <Td role="cell" size="sm" className={cn(CELL, "tnum text-right whitespace-nowrap text-fg-subtle")}>
+                  <span className={PHONE_UNIT}>dt </span>
                   {d.deltaTime.toFixed(1)}
                 </Td>
-                <Td size="sm" className={cn(CELL, "text-fg-subtle")}>
+                <Td role="cell" size="sm" className={cn(CELL, "text-fg-subtle")}>
                   {d.mode}
                 </Td>
-                <Td size="sm" className={CELL}>
+                {/* Last and full width on a phone, and a step larger there: it is what the
+                    row is for. From `sm` up it is the last column at the table's size. */}
+                <Td role="cell" size="sm" className={cn(CELL, "order-last basis-full text-[1.15em] sm:text-[1em]")}>
                   <span className={cn(mine && "text-accent-bright font-semibold", isCq && !mine && "text-ok")}>
                     {d.message}
                   </span>

@@ -152,14 +152,20 @@ export default function DxccPage() {
         subtitle="Callsign-to-entity reference data from Club Log"
       />
 
-      {error && <ErrorBanner>{error.message}</ErrorBanner>}
+      {error && (
+        <div className="mb-4">
+          <ErrorBanner>{error.message}</ErrorBanner>
+        </div>
+      )}
       {actionError && (
         <div className="mb-4">
           <ErrorBanner>{actionError.message}</ErrorBanner>
         </div>
       )}
 
-      <div className="grid gap-6 lg:grid-cols-2">
+      {/* `grid-cols-1` is minmax(0, 1fr): without a template the one phone column is
+          `auto`, which grows to its widest card's content and pushes the page sideways. */}
+      <div className="grid grid-cols-1 gap-4 sm:gap-6 lg:grid-cols-2">
         <Card
           title="Status"
           actions={
@@ -334,7 +340,7 @@ export default function DxccPage() {
               a prefix guess.
             </p>
 
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2">
               <Button
                 disabled={busy !== null || !status?.loaded}
                 onClick={() => void doBackfill(true)}

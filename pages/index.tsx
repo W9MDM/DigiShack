@@ -63,9 +63,12 @@ export default function DashboardPage() {
       />
 
       <div className="flex flex-col gap-6">
-        <div className="grid gap-4 lg:grid-cols-3">
+        {/* Below `lg` the pair is one column anyway, so `contents` lets the links drop to
+            the foot of the page: on a phone they repeat the menu and stood between the
+            station and today's figures. From `lg` up, the side-by-side grid as before. */}
+        <div className="contents gap-4 lg:grid lg:grid-cols-3">
           <StationPanel className="lg:col-span-2" />
-          <QuickLinks links={LINKS} />
+          <QuickLinks links={LINKS} className="order-last lg:order-none" />
         </div>
 
         {error && (

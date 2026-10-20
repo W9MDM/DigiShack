@@ -5,6 +5,7 @@ import { CATEGORY_EXTRAS, GROUP_EXTRAS, type ExtraContext } from "@/components/s
 import { SettingGroupCard } from "@/components/settings/SettingGroupCard";
 import type { ClientSetting, SettingGroup } from "@/components/settings/types";
 import { isQuietGroup } from "@/components/settings/visibility";
+import { Button } from "@/components/ui/primitives";
 import { groupsInTab, SETTINGS_TABS } from "@/lib/settings/tabs";
 
 export const CATEGORY_HEADING_ID = "settings-category";
@@ -28,6 +29,7 @@ export function CategoryView({
   toggleExpanded,
   flashId,
   onActiveGroup,
+  onJumpGroup,
   hidden,
 }: {
   tabId: string;
@@ -41,6 +43,8 @@ export function CategoryView({
   toggleExpanded: (group: string) => void;
   flashId: string | null;
   onActiveGroup: (group: string) => void;
+  /** Go to one of this category's groups — the phone's stand-in for the sidebar's group links. */
+  onJumpGroup?: (group: string) => void;
   hidden: boolean;
 }) {
   const tab = SETTINGS_TABS.find((t) => t.id === tabId) ?? SETTINGS_TABS[0]!;
@@ -97,13 +101,31 @@ export function CategoryView({
 
   return (
     <section aria-labelledby={`${CATEGORY_HEADING_ID}-title`} hidden={hidden}>
-      <div id={CATEGORY_HEADING_ID} className="mb-5 scroll-mt-20">
+      <div id={CATEGORY_HEADING_ID} className="mb-4 scroll-mt-20 sm:mb-5">
         <h2 id={`${CATEGORY_HEADING_ID}-title`} tabIndex={-1} className="font-display text-xl text-fg outline-none">
           {tab.label}
         </h2>
         <p className="mt-0.5 text-sm text-fg-muted">{tab.description}</p>
       </div>
-      <div className="flex flex-col gap-6">
+      {/* Below md the sidebar, and with it every group link, is gone: the Section picker
+          names categories only, so reaching Bridge under Radio meant scrolling past four
+          screens of FlexRadio and Icom. One row of the same groups, scrolling sideways in
+          its own strip rather than wrapping into three. md:hidden — the sidebar is back. */}
+      {onJumpGroup && sections.length > 1 && (
+        <nav aria-label={`Groups in ${tab.label}`} className="mb-4 flex gap-2 overflow-x-auto pb-1 md:hidden">
+          {sections.map(({ group }) => (
+            <Button
+              key={group.id}
+              variant="secondary"
+              className="shrink-0 whitespace-nowrap"
+              onClick={() => onJumpGroup(group.id)}
+            >
+              {group.title}
+            </Button>
+          ))}
+        </nav>
+      )}
+      <div className="flex flex-col gap-4 sm:gap-6">
         {categoryExtra?.(ctx)}
         {sections.map(({ group, items, extra }) => (
           <Fragment key={group.id}>

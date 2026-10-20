@@ -823,9 +823,18 @@ export function EmptyState({
   className?: string;
   children?: ReactNode;
 }) {
+  /* 32px above and below on a phone, 48 from `sm` up. Applied only when the caller has
+   * not set its own vertical padding: `cn` cannot tell that a caller's `py-8` was meant to
+   * replace a responsive default, so it would keep `sm:py-12` and quietly undo the
+   * override on every desktop. */
+  const ownPadding = /(?:^|\s)(?:\S+:)?p[tby]?-/.test(className ?? "");
   return (
     <div
-      className={cn("flex flex-col items-center gap-2 py-12 text-center", className)}
+      className={cn(
+        "flex flex-col items-center gap-2 text-center",
+        !ownPadding && "py-8 sm:py-12",
+        className,
+      )}
     >
       <p className="font-display text-lg text-fg-muted">{title}</p>
       {children && <div className="text-sm text-fg-subtle">{children}</div>}
@@ -867,10 +876,14 @@ export function PageHeader({
   subtitle?: string;
   actions?: ReactNode;
 }) {
+  /* On a phone the title is one step smaller and the gap under it is `mb-4`. At 24px in
+   * capitals, with 24px above it (the Shell's `main`) and 24px below, the page's name was
+   * about 100px of a phone's first screen on every page; this and the Shell's `py-4` bring
+   * that to about 80. From `sm` up it is the desktop title exactly: `text-2xl`, `mb-6`. */
   return (
-    <div className="flex flex-wrap items-end justify-between gap-3 mb-6">
+    <div className="flex flex-wrap items-end justify-between gap-3 mb-4 sm:mb-6">
       <div>
-        <h1 className="font-display text-2xl uppercase tracking-wide">
+        <h1 className="font-display text-xl sm:text-2xl uppercase tracking-wide">
           {title}
         </h1>
         {subtitle && <p className="text-sm text-fg-muted mt-0.5">{subtitle}</p>}

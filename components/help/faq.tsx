@@ -86,12 +86,13 @@ export const FAQ: FaqSection[] = [
       {
         id: "new-pages",
         q: "What are the Spectrum, Tools and DX cluster pages?",
-        keywords: "spectrogram 3d waterfall toolkit calculator maidenhead dx spots bandmap new",
+        keywords: "spectrogram waterfall hd analyzer delta threshold 3d waterfall toolkit calculator maidenhead dx spots bandmap new",
         a: (
           <List>
             <li>
-              <To href="/spectrum">Spectrum</To> — a spectrogram and a 3D waterfall, of either the
-              audio passband or the radio&apos;s RF panadapter. Receive only.
+              <To href="/spectrum">Spectrum</To> — Waterfall HD (a high-resolution waterfall), a 3D
+              waterfall and the analyzer views, of either the audio passband or the radio&apos;s RF
+              panadapter. Receive only.
             </li>
             <li>
               <To href="/tools">Tools</To> — the ham toolkit: grid squares, band privileges,
@@ -130,12 +131,12 @@ export const FAQ: FaqSection[] = [
       {
         id: "spectrum-links",
         q: "Can I link straight to a Spectrum view?",
-        keywords: "spectrum url query view source 3d split spectrogram rf audio bookmark deep link",
+        keywords: "spectrum url query view source 3d split spectrogram waterfall hd rf audio bookmark deep link",
         a: (
           <>
             <p>
-              Yes. <code>/spectrum?view=</code> takes <code>spectrogram</code>, <code>3d</code> or{" "}
-              <code>split</code> (both at once), and <code>?source=</code> takes{" "}
+              Yes. <code>/spectrum?view=</code> takes <code>spectrogram</code> (Waterfall HD),{" "}
+              <code>3d</code>, <code>split</code> (both at once) or any other view on the switch, and <code>?source=</code> takes{" "}
               <code>audio</code> (the receiver&apos;s passband) or <code>rf</code> (the FlexRadio&apos;s
               panadapter). They combine:{" "}
               <code>/spectrum?view=split&amp;source=rf</code>. The RF view needs panadapter frames
@@ -488,7 +489,7 @@ export const FAQ: FaqSection[] = [
             <strong>audio passband</strong> — the few kHz of audio the receiver is demodulating,
             where decode offsets are marked. The Rig page&apos;s panadapter is <strong>RF</strong>:
             tens of kHz of the band with every station on it. The <To href="/spectrum">Spectrum</To>{" "}
-            page draws either of those as a spectrogram or a 3D waterfall. No setting makes the
+            page draws either of those in Waterfall HD, 3D or the analyzer views. No setting makes the
             audio and RF views match.
           </p>
         ),

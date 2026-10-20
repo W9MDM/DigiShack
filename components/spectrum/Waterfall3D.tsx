@@ -421,14 +421,21 @@ export function Waterfall3D({
         {error && (
           <div className="absolute inset-0 flex items-center justify-center p-4 text-center text-sm text-fg-muted">
             <p>
-              The 3D view needs WebGL2. {error} The spectrogram still works.
+              The 3D view needs WebGL2. {error} Waterfall HD still works.
             </p>
           </div>
         )}
       </div>
+      {/* The mouse instructions ran to three lines on a phone, most of them about a shift key
+          and a right button a phone does not have; a touch screen gets its own, shorter set. */}
       <div className="border-t border-line px-2 py-1 text-[11px] text-fg-subtle">
-        Newest at the front · drag to orbit · shift- or right-drag, or two fingers, to pan · wheel or pinch
-        to zoom · double-click to reset
+        <span className="pointer-coarse:hidden">
+          Newest at the front · drag to orbit · shift- or right-drag, or two fingers, to pan · wheel or pinch
+          to zoom · double-click to reset
+        </span>
+        <span className="hidden pointer-coarse:inline">
+          Newest at the front · drag to orbit · two fingers to pan or pinch to zoom · double-tap to reset
+        </span>
       </div>
     </div>
   );

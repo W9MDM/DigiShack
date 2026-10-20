@@ -82,8 +82,10 @@ export default function MapPage() {
         subtitle="Every contact by bearing and distance from the station — which way the antenna works"
       />
 
-      <div className="flex flex-wrap items-end gap-3 mb-4">
-        <Field label="Band" htmlFor="cov-band" className="w-32">
+      {/* Two to a row on a phone, each filling its half: as fixed widths they wrapped into
+          a ragged 2 + 1 that stopped short of the plot's edge. */}
+      <div className="grid grid-cols-2 gap-3 mb-4 sm:flex sm:flex-wrap sm:items-end">
+        <Field label="Band" htmlFor="cov-band" className="sm:w-32">
           <Select id="cov-band" value={band} onChange={(e) => setBand(e.target.value)}>
             <option value="">All bands</option>
             {BAND_NAMES.map((b) => (
@@ -93,7 +95,7 @@ export default function MapPage() {
             ))}
           </Select>
         </Field>
-        <Field label="Mode" htmlFor="cov-mode" className="w-32">
+        <Field label="Mode" htmlFor="cov-mode" className="sm:w-32">
           <Select id="cov-mode" value={mode} onChange={(e) => setMode(e.target.value)}>
             <option value="">All modes</option>
             {LOGGABLE_MODES.map((m) => (
@@ -103,7 +105,7 @@ export default function MapPage() {
             ))}
           </Select>
         </Field>
-        <Field label="Period" htmlFor="cov-days" className="w-36">
+        <Field label="Period" htmlFor="cov-days" className="sm:w-36">
           <Select id="cov-days" value={days} onChange={(e) => setDays(e.target.value)}>
             <option value="0">Whole log</option>
             <option value="1">Last 24 hours</option>
@@ -132,7 +134,9 @@ export default function MapPage() {
         <ErrorBanner>{error.message}</ErrorBanner>
       ) : (
         <div className="grid gap-6 lg:grid-cols-3">
-          <section className="lg:col-span-2 bg-surface border border-line rounded-md shadow-panel overflow-hidden">
+          {/* Edge to edge on a phone: the page gutter is 32px of a 371px screen, and the
+              plot is square, so the gutter cost it height as well as width. */}
+          <section className="lg:col-span-2 bg-surface border border-line shadow-panel overflow-hidden -mx-4 border-x-0 rounded-none sm:mx-0 sm:border-x sm:rounded-md">
             <CoveragePlot
               dots={dots}
               unit={unit}

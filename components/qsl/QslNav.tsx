@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { useRef, type KeyboardEvent } from "react";
+import { useEffect, useRef, type KeyboardEvent } from "react";
 
 import { cn } from "@/lib/utils";
 
@@ -93,9 +93,33 @@ export function StatusTabs<T extends string>({
     refs.current.get(t.id)?.focus();
   }
 
+  const strip = useRef<HTMLDivElement | null>(null);
+
+  // The chosen tab is brought into view, so one picked by the URL (?tab=skipped) or by the
+  // arrow keys is never selected off the edge of a phone's strip. The strip is scrolled by
+  // hand rather than with scrollIntoView, which would also scroll the PAGE to the strip —
+  // yanking a restored scroll position back up to the tabs on Back.
+  useEffect(() => {
+    const box = strip.current;
+    const tab = refs.current.get(active);
+    if (!box || !tab) return;
+    const b = box.getBoundingClientRect();
+    const t = tab.getBoundingClientRect();
+    if (t.left < b.left) box.scrollLeft -= b.left - t.left;
+    else if (t.right > b.right) box.scrollLeft += t.right - b.right;
+  }, [active]);
+
   return (
     <div className={cn("border-b border-line", className)}>
-      <div role="tablist" aria-label={label} className="flex gap-1 overflow-x-auto pb-px">
+      {/* No scrollbar below sm. Where a window draws one it took a 15px band under the tabs,
+          on top of the underline, for a strip whose cut-off last tab already says there is
+          more. From sm up all of a page's tabs fit, so nothing changes there. */}
+      <div
+        ref={strip}
+        role="tablist"
+        aria-label={label}
+        className="flex gap-1 overflow-x-auto pb-px max-sm:[scrollbar-width:none]"
+      >
         {tabs.map((t, i) => {
           const on = t.id === active;
           const loud = t.tone !== undefined && (t.count ?? 0) > 0;
@@ -115,7 +139,7 @@ export function StatusTabs<T extends string>({
               onClick={() => onSelect(t.id)}
               onKeyDown={(e) => onKey(e, i)}
               className={cn(
-                "-mb-px inline-flex shrink-0 items-center gap-2 border-b-2 px-3 py-2 text-sm transition-colors",
+                "-mb-px inline-flex shrink-0 items-center gap-2 border-b-2 px-2.5 py-2 text-sm sm:px-3 transition-colors",
                 on ? "border-accent text-fg" : "border-transparent text-fg-muted hover:text-fg",
               )}
             >

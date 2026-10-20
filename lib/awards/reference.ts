@@ -10,6 +10,8 @@
 // worked" rather than "N of M", because inventing a denominator would be worse
 // than not having one.
 
+import { GRID4_PREFIX_RE } from "@/lib/ham/grid-geometry";
+
 /** ARRL Worked All States: 50 states. DC is not a WAS entity. */
 export const WAS_STATES: readonly { code: string; name: string }[] = [
   { code: "AL", name: "Alabama" },
@@ -92,6 +94,6 @@ export function stateName(code: string): string | undefined {
 /** Maidenhead field+square, e.g. "EN61bx" -> "EN61". Grid awards count squares. */
 export function gridSquare4(grid: string): string | null {
   const g = grid.trim().toUpperCase();
-  if (!/^[A-R]{2}\d{2}/.test(g)) return null;
+  if (!GRID4_PREFIX_RE.test(g)) return null;
   return g.slice(0, 4);
 }

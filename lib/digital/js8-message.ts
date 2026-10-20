@@ -32,6 +32,7 @@
 // until the table is carried; see js8-jsc.ts when it exists.
 
 import { JS8_ALPHABET } from "@/lib/digital/js8";
+import { GRID4_ANY_CASE_RE } from "@/lib/ham/grid-geometry";
 
 export const JS8_TX_FIRST = 1;
 export const JS8_TX_LAST = 2;
@@ -386,7 +387,7 @@ export function js8UnpackCompoundFrame(text: string): Js8CompoundFrame | null {
 /** A heartbeat or CQ: "HB", "HEARTBEAT", or one of the CQ strings, with an optional grid. */
 export function js8PackHeartbeat(callsign: string, kind: "HB" | (typeof JS8_CQ_STRINGS)[number], grid = ""): string | null {
   let extra = NMAXGRID;
-  if (/^[A-R]{2}[0-9]{2}$/i.test(grid)) extra = js8PackGrid(grid);
+  if (GRID4_ANY_CASE_RE.test(grid)) extra = js8PackGrid(grid);
   let bits3 = 0;
   if (kind !== "HB") {
     extra |= 1 << 15;

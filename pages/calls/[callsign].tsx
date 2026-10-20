@@ -12,6 +12,7 @@ import { withPageAuth } from "@/lib/auth/guard";
 import { useApi } from "@/lib/client/api";
 import { formatFreqMHz } from "@/lib/ham/bands";
 import { formatUtc, formatUtcDate } from "@/lib/time";
+import { cn } from "@/lib/utils";
 
 // One station's history with us.
 //
@@ -19,6 +20,11 @@ import { formatUtc, formatUtcDate } from "@/lib/time";
 // date order, leaving the operator to work out from twenty of them whether 20 m is already
 // confirmed. What is wanted is per band and mode, because that is the unit awards are counted
 // in and the unit a decision to call is made in.
+
+// A contact row is the way into that contact, and at the table's `sm` density it is about
+// 28px tall: short of a thumb, with the next contact a few pixels away. Taller on a phone
+// only; from sm up the cells are back to `py-1`.
+const ROW_PAD = "py-2.5 sm:py-1";
 
 interface Slice {
   band: string;
@@ -120,7 +126,7 @@ export default function CallsignPage() {
       )}
 
       {data && (
-        <div className="flex flex-col gap-6">
+        <div className="flex flex-col gap-4 sm:gap-6">
           {/* The two flags that change what an operator should DO, above everything else.
               Further down they would be read after the decision was made. */}
           {data.doNotCall && (
@@ -173,7 +179,7 @@ export default function CallsignPage() {
                         </div>
                       ))}
                     </dl>
-                    <p className="mt-2 text-xs text-fg-subtle">
+                    <p className="mt-2 text-sm text-fg-subtle sm:text-xs">
                       From the most recent contact that recorded each field. A blank on a
                       newer contact does not erase what an older one knew.
                     </p>
@@ -247,7 +253,7 @@ export default function CallsignPage() {
                           className="cursor-pointer hover:bg-surface-2 focus-within:bg-surface-2"
                           onClick={(e) => openRow(e, q.id)}
                         >
-                          <Td size="sm" className="tnum">
+                          <Td size="sm" className={cn(ROW_PAD, "tnum")}>
                             <Link
                               href={`/qsos/${q.id}`}
                               className="text-fg underline-offset-2 hover:underline"
@@ -257,10 +263,10 @@ export default function CallsignPage() {
                               <span className="hidden sm:inline">{formatUtc(q.startTime)}</span>
                             </Link>
                           </Td>
-                          <Td size="sm">
+                          <Td size="sm" className={ROW_PAD}>
                             <Badge size="sm">{q.band}</Badge>
                           </Td>
-                          <Td size="sm">
+                          <Td size="sm" className={ROW_PAD}>
                             <Badge size="sm">{q.mode}</Badge>
                           </Td>
                           <Td size="sm" className="hidden tnum text-fg-muted sm:table-cell">
@@ -272,7 +278,7 @@ export default function CallsignPage() {
                           <Td size="sm" className="hidden tnum text-fg-muted sm:table-cell">
                             {q.rstRcvd ?? "—"}
                           </Td>
-                          <Td size="sm">
+                          <Td size="sm" className={ROW_PAD}>
                             <QslBadges qso={q} />
                           </Td>
                         </tr>

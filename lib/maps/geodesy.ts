@@ -1,24 +1,24 @@
 // Great-circle arithmetic for the map pages.
 //
-// gridToLatLon, bearingDeg, distanceKm and formatDistance come from lib/ham/grid-geometry,
-// the one browser-safe home for them (no imports, so no Prisma in the client bundle).
-// lib/propagation re-exports the same module, so the map, the log's distance column and the
-// server-side propagation code cannot disagree. This file used to restate all four.
+// gridToLatLon, bearingDeg, distanceKm, formatDistance and the Earth's radius come from
+// lib/ham/grid-geometry, the one browser-safe home for them (no imports, so no Prisma in
+// the client bundle). lib/propagation and the Tools page re-export the same module, so the
+// map, the log's distance column and the server-side propagation code cannot disagree.
+// What is here is the drawing: paths that never null a bearing, and polylines.
 
 import {
   bearingDeg,
   distanceKm,
+  EARTH_RADIUS_KM,
   formatDistance,
   gridToLatLon,
   type DistanceUnit,
+  type LatLon,
 } from "@/lib/ham/grid-geometry";
 
-import type { LatLon } from "./projection";
-
-export { bearingDeg, distanceKm, formatDistance, gridToLatLon };
+export { bearingDeg, distanceKm, EARTH_RADIUS_KM, formatDistance, gridToLatLon };
 export type { DistanceUnit };
 
-export const EARTH_RADIUS_KM = 6371;
 /** Half the circumference: the longest a short path can be. */
 export const HALF_CIRCUMFERENCE_KM = Math.PI * EARTH_RADIUS_KM;
 

@@ -7,7 +7,24 @@
 // (cross and dot products on unit vectors) that shares no formula with the haversine
 // grid.ts uses. A check that recomputed the answer the same way would agree with any bug.
 
+import { isGrid4 as pack77IsGrid4 } from "@/lib/digital/pack77";
 import { permitted, segmentAt } from "@/lib/ham/band-plan";
+import {
+  GRID4_ANY_CASE_RE,
+  GRID4_OR_6_ANY_CASE_RE,
+  GRID4_OR_6_RE,
+  GRID4_PREFIX_RE,
+  GRID4_RE,
+  GRID_LOCATOR_RE,
+  gridSquare,
+  isGrid4,
+} from "@/lib/ham/grid-geometry";
+import * as geometry from "@/lib/ham/grid-geometry";
+import * as toolsGrid from "@/lib/ham/tools/grid";
+import { escapeHtml } from "@/lib/html";
+import * as geodesy from "@/lib/maps/geodesy";
+import * as propagation from "@/lib/propagation";
+import { gridCentre } from "@/lib/maps/projection";
 import { bearingDeg, distanceKm, gridToLatLon } from "@/lib/propagation";
 import {
   antennaLengths,
@@ -253,6 +270,212 @@ console.log("\ngreat-circle paths (vector-method answers)");
   near(greatCircle({ lat: 0, lon: 0 }, { lat: 0, lon: 90 }).km, 10007.543, 0.001, "a quarter of the equator is 10,007.5 km");
   eq(compassPoint(47.657), "NE", "47.7° is NE");
   eq(compassPoint(354), "N", "354° is N");
+}
+
+// The copies that lib/ham/grid-geometry replaced, frozen here exactly as they were, so the
+// consolidation can be shown to change nothing. Unlike the answers above these are not
+// independent: they are the old code, and the point is that the new code agrees with it.
+const before = {
+  /** lib/ham/grid-geometry gridToLatLon, as of 1.256. */
+  gridToLatLon(grid: string): { lat: number; lon: number } | null {
+    const g = grid.trim().toUpperCase();
+    if (!/^[A-R]{2}[0-9]{2}([A-X]{2})?/.test(g)) return null;
+    let lon = (g.charCodeAt(0) - 65) * 20 - 180;
+    let lat = (g.charCodeAt(1) - 65) * 10 - 90;
+    lon += Number(g[2]) * 2;
+    lat += Number(g[3]) * 1;
+    if (g.length >= 6) {
+      lon += (g.charCodeAt(4) - 65) * (2 / 24) + 1 / 24;
+      lat += (g.charCodeAt(5) - 65) * (1 / 24) + 0.5 / 24;
+    } else {
+      lon += 1;
+      lat += 0.5;
+    }
+    return { lat, lon };
+  },
+  /** lib/ham/tools/grid parseGrid's arithmetic, given an already-valid uppercase locator. */
+  square(u: string): { centre: { lat: number; lon: number }; south: number; north: number; west: number; east: number } {
+    let west = (u.charCodeAt(0) - 65) * 20 - 180 + (u.charCodeAt(2) - 48) * 2;
+    let south = (u.charCodeAt(1) - 65) * 10 - 90 + (u.charCodeAt(3) - 48);
+    let w = 2;
+    let h = 1;
+    if (u.length >= 6) {
+      w = 2 / 24;
+      h = 1 / 24;
+      west += (u.charCodeAt(4) - 65) * w;
+      south += (u.charCodeAt(5) - 65) * h;
+    }
+    if (u.length === 8) {
+      w = 2 / 240;
+      h = 1 / 240;
+      west += (u.charCodeAt(6) - 48) * w;
+      south += (u.charCodeAt(7) - 48) * h;
+    }
+    return { centre: { lat: south + h / 2, lon: west + w / 2 }, south, north: south + h, west, east: west + w };
+  },
+  /** lib/ham/tools/grid greatCircle's own haversine, before it used distanceKm. */
+  km(a: { lat: number; lon: number }, b: { lat: number; lon: number }): number {
+    const r = (d: number) => (d * Math.PI) / 180;
+    const h = Math.sin((r(b.lat) - r(a.lat)) / 2) ** 2 + Math.cos(r(a.lat)) * Math.cos(r(b.lat)) * Math.sin(r(b.lon - a.lon) / 2) ** 2;
+    return 2 * 6371 * Math.asin(Math.min(1, Math.sqrt(h)));
+  },
+  /** lib/maps/projection gridCentre, before it used gridToLatLon. */
+  projectionCentre(grid: string): { lat: number; lon: number } | null {
+    const g = grid.trim().toUpperCase();
+    if (!/^[A-R]{2}\d{2}$/.test(g) || g === "RR73") return null;
+    return {
+      lat: (g.charCodeAt(1) - 65) * 10 - 90 + Number(g[3]) * 1 + 0.5,
+      lon: (g.charCodeAt(0) - 65) * 20 - 180 + Number(g[2]) * 2 + 1,
+    };
+  },
+  /** lib/qsl/card esc and lib/qsl/email escapeHtml (identical). */
+  escapeSequential(s: string): string {
+    return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  },
+  /** pages/api/qsl/unsubscribe page() esc. */
+  escapeOnePass(t: string): string {
+    return t.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!);
+  },
+};
+
+const sameLatLon = (a: { lat: number; lon: number } | null, b: { lat: number; lon: number } | null): boolean =>
+  a === null || b === null ? a === b : Object.is(a.lat, b.lat) && Object.is(a.lon, b.lon);
+
+console.log("\none copy of the grid maths: the new code agrees with the copies it replaced");
+{
+  const good = [
+    "EN61", "EM48sq", "FN31pr", "JJ00aa", "RR99xx", "AA00aa", "IO91", "QF56", "PM95vr",
+    "FN31pr21", "EM48sq45", "RR99xx99", "AA00aa00", "RR73", "AR09", "RA90",
+  ];
+  const lower = ["en61", "em48SQ", "fn31pr", "jj00AA", "rr99xx", " FN31 ", "em48sq45"];
+  const bad = ["", "EN", "EN6", "EN61j", "SN52", "ZZ99", "1234", "FN31pr2", "FN31 pr", "EM48sz", "EM48sqXX99", "EN61zz", "EN61ZZ", "FN31 extra"];
+  const table = [...good, ...lower, ...bad];
+
+  let agree = 0;
+  for (const g of table) {
+    if (sameLatLon(gridToLatLon(g), before.gridToLatLon(g))) agree++;
+    else ok(false, `gridToLatLon("${g}") is unchanged`);
+  }
+  eq(agree, table.length, `gridToLatLon is bit-identical on all ${table.length} table entries`);
+  eq(gridToLatLon("en61")?.lat, gridToLatLon("EN61")?.lat, "lower case reads the same as upper");
+  // The lenient reader's quirk is kept, not fixed in passing: it does not range-check the
+  // subsquare, so EN61ZZ lands outside EN61. Nothing that validates first can reach it.
+  ok((gridToLatLon("EN61ZZ")?.lon ?? 0) > -86, "gridToLatLon still reads EN61ZZ past its square's east edge (kept)");
+
+  for (const g of table) {
+    const p = parseGrid(g);
+    const sq = gridSquare(g);
+    ok(p.ok === (sq !== null), `parseGrid and gridSquare agree on whether "${g}" is a locator`);
+    if (!p.ok || !sq) continue;
+    const o = before.square(g.trim().toUpperCase());
+    ok(
+      sameLatLon(p.value.centre, o.centre) && Object.is(p.value.south, o.south) && Object.is(p.value.north, o.north) &&
+        Object.is(p.value.west, o.west) && Object.is(p.value.east, o.east),
+      `  "${g}": centre and edges bit-identical to the old parseGrid`,
+    );
+    // Centre vs centre: the two readers agree for 4 and 6 characters. For 8, gridToLatLon
+    // gives the centre of the 6-character subsquare on purpose; the Tools page gives the 8's.
+    const loose = gridToLatLon(g)!;
+    const want = p.value.chars === 8 ? gridSquare(g.trim().slice(0, 6))!.centre : p.value.centre;
+    ok(Math.abs(loose.lat - want.lat) < 1e-9 && Math.abs(loose.lon - want.lon) < 1e-9, `  "${g}": gridToLatLon gives the ${p.value.chars === 8 ? "6-character subsquare's" : "same"} centre`);
+  }
+  ok(!parseGrid("EN61ßx").ok, "a locator that changes length when uppercased is refused, not read as 7 characters");
+
+  let worst = 0;
+  let bearingsSame = true;
+  for (const a of good) {
+    for (const b of good) {
+      const pa = gridToLatLon(a)!;
+      const pb = gridToLatLon(b)!;
+      const gc = greatCircle(pa, pb);
+      worst = Math.max(worst, Math.abs(gc.km - before.km(pa, pb)));
+      ok(Object.is(gc.km, distanceKm(pa, pb)), `${a} to ${b}: greatCircle and distanceKm are one sum`);
+      const pp = geodesy.paths(pa, pb);
+      if (gc.bearing !== null && !Object.is(gc.bearing, pp.short.bearing)) bearingsSame = false;
+      if (gc.bearing !== null && !Object.is(gc.bearing, bearingDeg(pa, pb))) bearingsSame = false;
+      if (!Object.is(pp.short.km, gc.km) || Math.abs(pp.long.km - gc.longKm) > 1e-9) bearingsSame = false;
+    }
+  }
+  ok(worst < 1e-9, "greatCircle's distance moved by less than a micrometre", `worst ${worst} km`);
+  ok(bearingsSame, "greatCircle, paths and bearingDeg give one bearing and one long path");
+  near(distanceKm(gridToLatLon("FN31pr")!, gridToLatLon("PM95vr")!), 10788.483, 0.01, "FN31pr to PM95vr is still 10,788.5 km");
+  near(bearingDeg(gridToLatLon("FN31pr")!, gridToLatLon("PM95vr")!), 333.93, 0.01, "  heading 333.9°");
+
+  let centres = 0;
+  const L = "ABCDEFGHIJKLMNOPQR";
+  for (const f1 of L) {
+    for (const f2 of L) {
+      for (let n = 0; n < 100; n++) {
+        const g = `${f1}${f2}${String(n).padStart(2, "0")}`;
+        if (sameLatLon(gridCentre(g), before.projectionCentre(g)) && sameLatLon(gridCentre(g.toLowerCase()), before.projectionCentre(g))) centres++;
+      }
+    }
+  }
+  eq(centres, 32_400, "the grid map's square centres are bit-identical for all 32,400 squares");
+  eq(gridCentre("RR73"), null, "and RR73 is still never a dot on the map");
+
+  // The re-exports are the same function objects, not lookalikes: a future edit that
+  // restates one of them in place breaks this, before it can drift from the others.
+  ok(
+    propagation.gridToLatLon === geometry.gridToLatLon &&
+      propagation.bearingDeg === geometry.bearingDeg &&
+      propagation.distanceKm === geometry.distanceKm &&
+      geodesy.gridToLatLon === geometry.gridToLatLon &&
+      geodesy.bearingDeg === geometry.bearingDeg &&
+      geodesy.distanceKm === geometry.distanceKm &&
+      geodesy.formatDistance === geometry.formatDistance &&
+      toolsGrid.greatCircle === geometry.greatCircle &&
+      toolsGrid.latLonToGrid === geometry.latLonToGrid &&
+      toolsGrid.antipode === geometry.antipode,
+    "lib/propagation, lib/maps/geodesy and lib/ham/tools/grid re-export one copy",
+  );
+  eq(geodesy.EARTH_RADIUS_KM, geometry.EARTH_RADIUS_KM, "  and one Earth radius");
+  eq(toolsGrid.EARTH_RADIUS_KM, geometry.EARTH_RADIUS_KM, "  on the Tools page too");
+}
+
+console.log("\none copy of the grid patterns: each replaces its regex exactly");
+{
+  // Every regex the shared patterns replaced, against the pattern that replaced it, over a
+  // corpus of real locators, near misses and noise, in every case.
+  let seed = 7;
+  const rnd = (n: number): number => {
+    seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+    return seed % n;
+  };
+  const alphabet = "ABJRSXYZabjrsxz0459 ß";
+  const corpus = ["", "RR73", "EN61", "FN31pr", "FN31pr21", "EN", "fn31PR", "EN61ZZ", "FN31 extra"];
+  for (let i = 0; i < 20_000; i++) {
+    let s = "";
+    for (let j = rnd(10); j > 0; j--) s += alphabet[rnd(alphabet.length)];
+    corpus.push(s);
+  }
+  const all = corpus.flatMap((s) => [s, s.toUpperCase(), s.toLowerCase()]);
+  const replaced: [string, RegExp, (s: string) => boolean][] = [
+    ["lib/adif/parse, lib/validation/qso, lib/validation/station", /^[A-R]{2}(\d{2}([A-X]{2}(\d{2})?)?)?$/, (s) => GRID_LOCATOR_RE.test(s)],
+    ["lib/cluster/parse", /^[A-R]{2}[0-9]{2}(?:[A-X]{2})?$/i, (s) => GRID4_OR_6_ANY_CASE_RE.test(s)],
+    ["lib/validation/auth", /^[A-R]{2}[0-9]{2}([A-X]{2})?$/i, (s) => GRID4_OR_6_ANY_CASE_RE.test(s)],
+    ["lib/digital/pack77", /^[A-R][A-R][0-9][0-9]$/, pack77IsGrid4],
+    ["lib/digital/jtty", /^[A-R]{2}[0-9]{2}$/, isGrid4],
+    ["lib/digital/qso, lib/maps/projection", /^[A-R]{2}\d{2}$/, (s) => GRID4_RE.test(s)],
+    ["lib/wsjtx/all-txt", /^[A-R]{2}\d{2}$/i, (s) => GRID4_ANY_CASE_RE.test(s)],
+    ["lib/digital/js8-message js8PackHeartbeat", /^[A-R]{2}[0-9]{2}$/i, (s) => GRID4_ANY_CASE_RE.test(s)],
+    ["lib/awards/reference", /^[A-R]{2}\d{2}/, (s) => GRID4_PREFIX_RE.test(s)],
+    ["lib/ham/grid-geometry gridToLatLon", /^[A-R]{2}[0-9]{2}([A-X]{2})?/, (s) => GRID4_PREFIX_RE.test(s)],
+  ];
+  for (const [site, old, now] of replaced) {
+    const differ = all.filter((s) => old.test(s) !== now(s));
+    ok(differ.length === 0, `${site}: same answer on all ${all.length} strings`, `first difference: "${differ[0]}"`);
+  }
+  ok(GRID4_OR_6_RE.test("FN31PR") && !GRID4_OR_6_RE.test("fn31pr") && !GRID4_OR_6_RE.test("FN31PR21"), "the 4-or-6 pattern is upper case and refuses eight characters");
+  ok(GRID_LOCATOR_RE.test("FN") && GRID_LOCATOR_RE.test("FN31PR21") && !GRID_LOCATOR_RE.test("FN3"), "the ADIF pattern takes 2, 4, 6 or 8 characters");
+}
+
+console.log("\none HTML escape: lib/html matches the QSL card, email and opt-out page copies");
+{
+  const samples = ["", "plain", "a&b", "<x y=\"1\">'q'</x>", "&amp;lt;", "O'Neil & \"Sons\" <73>", "éß—", "&&<<>>\"\"''"];
+  ok(samples.every((s) => escapeHtml(s) === before.escapeSequential(s)), "byte-identical to the card and email copy");
+  ok(samples.every((s) => escapeHtml(s) === before.escapeOnePass(s)), "byte-identical to the opt-out page's copy");
+  eq(escapeHtml("it's"), "it's", "a single quote is left alone, as all three copies did");
 }
 
 console.log("\nwhere can I operate (US Part 97)");

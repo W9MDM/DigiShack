@@ -1,5 +1,6 @@
 import nodemailer, { type Transporter } from "nodemailer";
 
+import { escapeHtml } from "@/lib/html";
 import { loadCardSettings, renderQslCard } from "@/lib/qsl/card";
 import { rulesFor, withWl2kPrefix } from "@/lib/qsl/gateways";
 import { applyTemplate, renderTemplate, templateValues } from "@/lib/qsl/template";
@@ -94,14 +95,6 @@ export async function loadQslTemplates(): Promise<QslTemplates> {
     embedCard: await getBooleanSetting("qsl.email.embedCard", true),
     attachCard: await getBooleanSetting("qsl.email.attachCard", true),
   };
-}
-
-function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
 }
 
 /**

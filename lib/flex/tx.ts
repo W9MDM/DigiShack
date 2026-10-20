@@ -3,6 +3,7 @@ import dgram from "node:dgram";
 
 import { FlexClient } from "@/lib/flex/client";
 import { resolveAntenna } from "@/lib/flex/antennas";
+import { txSliceBlockers } from "@/lib/flex/tx-slice";
 import {
   lateTxToleranceMs,
   PERIOD_MS,
@@ -288,8 +289,17 @@ export class FlexDaxTransmitter {
   private pendingKey: { gen: number; startAt: number; abort: (reason: string) => void } | null = null;
   private watchdog: NodeJS.Timeout | null = null;
   private packetCount = 0;
+  /**
+   * The frequency the caller actually asked for, or null.
+   *
+   * Kept apart from `opts.freqHz`, which falls back to 7.074 MHz so a slice can be created
+   * on a radio with none. The preflight compares the transmit slice against THIS: against
+   * the fallback, every attach on another band reported a wrong-frequency blocker.
+   */
+  private readonly intendedHz: number | null;
 
   constructor(options: TransmitterOptions) {
+    this.intendedHz = options.freqHz ?? null;
     this.opts = {
       host: options.host,
       port: options.port ?? 4992,
@@ -723,36 +733,21 @@ export class FlexDaxTransmitter {
 
     // WHICH SLICE IS THE TRANSMIT SLICE, AND IS IT THE ONE WE ARE USING.
     //
-    // Observed live 2026-08-30, with the station apparently working people and putting
-    // 0.0 W on the air across every transmission:
+    // Transmit was once bound to a 40 m slice while the operator worked 20 m on a second
+    // slice that was in CW with no transmit and no DAX. Reported as "you keep adding a b
+    // slice" and "theres no tx on b slice" — the operator could see it on the radio's own
+    // display and nothing in this application ever looked. See lib/flex/tx-slice.ts.
     //
-    //     slice 0 | 7.074000  | DIGU | tx 1 | dax 1 | active 0
-    //     slice 1 | 14.074000 | CW   | tx 0 | dax 0 | active 1
-    //
-    // Transmit was bound to a 40 m slice while the operator worked 20 m on a second slice
-    // that was in CW with no transmit and no DAX. Reported as "you keep adding a b slice"
-    // and "theres no tx on b slice" — the operator could see it on the radio's own display
-    // and nothing in this application ever looked.
+    // Measured against the slice we are attached to, not `opts.freqHz`: in shared mode
+    // that is only the 7.074 MHz fallback for creating a slice, and nobody operates there.
     const allSlices = [...client.state.slices.values()];
-    if (allSlices.length > 0 && !txSlice) {
-      blockers.push(
-        `No slice is set as the transmit slice (${allSlices.length} slice(s) in use) — ` +
-          `keying would produce no RF`,
-      );
-    }
-    // A tolerance rather than equality: the transmit slice sits at the dial and the
-    // operator may have nudged it, but a whole band away is a different slice entirely.
-    const OFF_FREQUENCY_HZ = 50_000;
-    if (txSlice?.freqHz && this.opts.freqHz) {
-      const offBy = Math.abs(txSlice.freqHz - this.opts.freqHz);
-      if (offBy > OFF_FREQUENCY_HZ) {
-        blockers.push(
-          `The transmit slice is on ${(txSlice.freqHz / 1e6).toFixed(6)} MHz but this station is ` +
-            `operating on ${(this.opts.freqHz / 1e6).toFixed(6)} MHz — transmissions would go out ` +
-            `on the wrong frequency, or nowhere`,
-        );
-      }
-    }
+    blockers.push(
+      ...txSliceBlockers({
+        slices: allSlices,
+        operatingSliceIndex: this.sliceIndex,
+        intendedHz: this.intendedHz,
+      }),
+    );
     if (allSlices.length > 1) {
       warnings.push(
         `${allSlices.length} slices are in use (` +

@@ -1,5 +1,5 @@
 // The /spectrum renderers inside another page's display — the Digital waterfall, the Rig
-// panadapter — behind a Waterfall / Spectrogram / 3D / Split switch.
+// panadapter — behind a Waterfall / Spectrum / Waterfall HD / 3D / … switch.
 //
 // The page feeds the frames it already receives on its own socket into `useLiveSpectrum`;
 // there is no second connection. Recording starts with the page, whichever view is showing,
@@ -78,6 +78,11 @@ export function useInlineView(storageKey: string): [InlineView, (v: InlineView) 
  * The view switch. It wraps rather than running off the screen: in its callers' right-aligned
  * row, a phone is narrower than all nine buttons, and an overflow off the left edge can't be
  * scrolled back to.
+ *
+ * Below sm: it takes the full width and the buttons grow to fill each wrapped row, so the two
+ * rows are even instead of one short ragged one, and each button is 44px tall (the app's touch
+ * size) rather than a 20px strip of text. From sm: up it is the compact right-aligned strip it
+ * always was.
  */
 export function ViewSwitch({
   value,
@@ -89,7 +94,11 @@ export function ViewSwitch({
   className?: string;
 }) {
   return (
-    <div role="radiogroup" aria-label="Display" className={cn("inline-flex max-w-full flex-wrap rounded-sm border border-line p-0.5", className)}>
+    <div
+      role="radiogroup"
+      aria-label="Display"
+      className={cn("inline-flex max-w-full flex-wrap rounded-sm border border-line p-0.5 max-sm:flex max-sm:w-full", className)}
+    >
       {INLINE_VIEWS.map((v) => {
         const on = v.id === value;
         return (
@@ -100,7 +109,7 @@ export function ViewSwitch({
             aria-checked={on}
             onClick={() => onChange(v.id)}
             className={cn(
-              "rounded-[2px] px-2 py-0.5 text-xs transition-colors",
+              "rounded-[2px] px-2 py-0.5 text-xs transition-colors max-sm:min-h-11 max-sm:grow",
               on ? "bg-accent/20 text-accent-bright" : "text-fg-muted hover:bg-surface-2 hover:text-fg",
             )}
           >
@@ -112,7 +121,7 @@ export function ViewSwitch({
   );
 }
 
-/** Spectrogram, 3D or both, at the height the page's own display uses. */
+/** Any view but the page's own waterfall, at the height the page's own display uses. */
 export function InlineSpectrum({
   feed,
   view,

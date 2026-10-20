@@ -173,7 +173,13 @@ export function WorldMap({
         hint="Drag to pan · scroll or double-click to zoom"
         touchHint="Drag to pan · pinch to zoom · tap a station"
       />
-      <div ref={boxRef} className="relative w-full aspect-[2/1] min-h-[260px] max-h-[75vh] overflow-hidden">
+      {/* 2:1 is the whole world at desktop width. At phone width 2:1 is about 185px tall —
+          a strip — so the floor is raised there, up to 60% of the screen; the view fits the
+          taller box by showing less longitude, centred on the station. */}
+      <div
+        ref={boxRef}
+        className="relative w-full aspect-[2/1] min-h-[min(340px,60vh)] sm:min-h-[260px] max-h-[75vh] overflow-hidden"
+      >
         <canvas
           ref={canvasRef}
           tabIndex={0}

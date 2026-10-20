@@ -37,7 +37,7 @@ export function SettingsSearchBox({
   }, []);
 
   return (
-    <div className="mb-6 flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-4">
+    <div className="mb-4 flex flex-col gap-2 sm:mb-6 sm:flex-row sm:items-center sm:gap-4">
       <div role="search" className="relative min-w-0 flex-1">
         <svg
           viewBox="0 0 16 16"

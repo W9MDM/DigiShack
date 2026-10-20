@@ -24,7 +24,9 @@ function ZoneRow({ z, onRemove, label }: { z: ZoneTime; onRemove?: () => void; l
     <li className="flex items-center gap-3 py-1.5 border-b border-line/50 last:border-0">
       <div className="min-w-0 flex-1">
         <p className="text-sm text-fg truncate">{label ?? z.place}</p>
-        <p className="text-xs text-fg-subtle truncate">
+        {/* Wraps on a phone rather than truncating: the clipped end was the UTC offset,
+            which is the part a sked needs. */}
+        <p className="text-xs text-fg-subtle sm:truncate">
           {z.zone} · {z.offsetLabel}
           {z.abbreviation ? ` · ${z.abbreviation}` : ""}
         </p>
@@ -34,7 +36,17 @@ function ZoneRow({ z, onRemove, label }: { z: ZoneTime; onRemove?: () => void; l
         <p className="text-xs text-fg-subtle">{shift ? `${z.date}, ${shift}` : z.date}</p>
       </div>
       {onRemove && (
-        <Button size="sm" variant="ghost" aria-label={`Remove ${z.place}`} onClick={onRemove}>
+        // A bare ✕ at `sm` is about 24px wide. On a touch screen the global rule already
+        // makes it 44px tall but never widens a button, so it was a tall sliver: 44px wide
+        // there too. Keyed to the pointer, like that rule, not the width — a viewport class
+        // would also cancel the 44px height on a touch tablet. A mouse sees no change.
+        <Button
+          size="sm"
+          variant="ghost"
+          aria-label={`Remove ${z.place}`}
+          onClick={onRemove}
+          className="pointer-coarse:min-w-11"
+        >
           ✕
         </Button>
       )}
