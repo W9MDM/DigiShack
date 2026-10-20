@@ -1,4 +1,3 @@
-import Link from "next/link";
 import { useRouter } from "next/router";
 import { useEffect, useMemo, useState } from "react";
 
@@ -20,6 +19,9 @@ import {
   writeActivation,
   writeDraft,
 } from "@/components/qso/QsoForm";
+import { LinkButton, TextLink } from "@/components/log/links";
+import { lastLogUrl } from "@/components/log/log-query";
+import { Notice } from "@/components/log/Notice";
 import {
   Badge,
   Button,
@@ -38,7 +40,6 @@ import {
 } from "@/lib/pota/activation";
 import { formatUtc } from "@/lib/time";
 import type { ListResponse, Qso, Station } from "@/lib/types";
-import { cn } from "@/lib/utils";
 
 export default function NewQsoPage() {
   const router = useRouter();
@@ -68,7 +69,7 @@ export default function NewQsoPage() {
   const [draftReady, setDraftReady] = useState(false);
 
   /** Did the last draft write actually land? Governs what the failure message claims. */
-  const [draftSaved, setDraftSaved] = useState(false);
+  const [, setDraftSaved] = useState(false);
 
   /** `savedAt` of a draft recovered on this mount, so the page can say what it did. */
   const [restoredAt, setRestoredAt] = useState<string | null>(null);
@@ -85,6 +86,19 @@ export default function NewQsoPage() {
   const [savedTick, setSavedTick] = useState(0);
 
   const stations = stationsData?.rows ?? [];
+
+  /** Back to the log as it was left — same filter, same page. */
+  const [logHref, setLogHref] = useState("/qsos");
+  useEffect(() => {
+    setLogHref(lastLogUrl());
+    // Start typing the callsign straight away at a keyboard. Not on touch, where focusing
+    // would throw the soft keyboard over the form before the operator has looked at it.
+    try {
+      if (window.matchMedia("(pointer: fine)").matches) document.getElementById("callsign")?.focus();
+    } catch {
+      /* no matchMedia */
+    }
+  }, []);
 
   /** The activation in progress, or "". The form is the live copy; storage is the backup. */
   const activationRef = values.mySigInfo.trim().toUpperCase();
@@ -332,13 +346,15 @@ export default function NewQsoPage() {
       <>
         <PageHeader title="New QSO" />
         <Card>
-          <EmptyState title="No station configured">
+          <EmptyState
+            title="No station configured"
+            action={
+              <LinkButton href="/stations" variant="primary">
+                Set up a station
+              </LinkButton>
+            }
+          >
             Every QSO is attributed to a station, so create one first.
-            <div className="mt-3">
-              <Link href="/stations">
-                <Button variant="primary">Set up a station</Button>
-              </Link>
-            </div>
           </EmptyState>
         </Card>
       </>
@@ -351,11 +367,11 @@ export default function NewQsoPage() {
     <>
       <PageHeader
         title="New QSO"
-        subtitle="Times are UTC"
+        subtitle="All times are UTC"
         actions={
-          <Link href="/qsos">
-            <Button>Back to log</Button>
-          </Link>
+          <LinkButton href={logHref} variant="ghost">
+            <span aria-hidden="true">←</span> Back to log
+          </LinkButton>
         }
       />
 
@@ -367,14 +383,7 @@ export default function NewQsoPage() {
           Rendered only once a reference is set, which is after the mount effect — so it
           is client-only and carries no hydration risk from the clock read below. */}
       {activationRef && (
-        <div
-          className={cn(
-            "mb-4 flex flex-wrap items-center gap-2 border text-sm px-3 py-2 rounded-sm",
-            activation.qualifies
-              ? "border-ok/40 bg-ok/10 text-ok"
-              : "border-accent/40 bg-accent/10 text-accent-bright",
-          )}
-        >
+        <Notice tone={activation.qualifies ? "ok" : "accent"} className="mb-4">
           <Badge tone={activation.qualifies ? "ok" : "accent"}>
             {activation.count}/{ACTIVATION_MINIMUM}
           </Badge>
@@ -385,38 +394,42 @@ export default function NewQsoPage() {
               ? `${activation.count} contacts, this activation counts.`
               : `${activation.remaining} more contact${activation.remaining === 1 ? "" : "s"} for a valid activation.`}
           </span>
-          {/* The day is named, not implied. POTA's boundary is UTC midnight, which in the
-              US falls in the EVENING — mid-activation — and an operator who does not know
-              which day they are being counted for cannot make sense of a total that
-              restarts at what feels like teatime. */}
-          <span className="text-fg-subtle text-xs tnum">
-            UTC day {utcDayKey(new Date())}
-          </span>
-          <Button onClick={endActivation}>End activation</Button>
-        </div>
+          {/* The day is named, not implied: POTA's boundary is UTC midnight, which in the
+              US falls mid-activation in the evening. */}
+          <span className="text-fg-subtle text-xs tnum">UTC day {utcDayKey(new Date())}</span>
+          <Button size="sm" className="ml-auto" onClick={endActivation}>
+            End activation
+          </Button>
+        </Notice>
       )}
 
       {lastLogged && (
-        <div className="mb-4 flex items-center gap-2 border border-ok/40 bg-ok/10 text-ok text-sm px-3 py-2 rounded-sm">
-          Logged{" "}
-          <Link href={`/qsos/${lastLogged.id}`} className="underline font-medium">
-            {lastLogged.callsign}
-          </Link>{" "}
-          on {lastLogged.band} {lastLogged.mode}. Ready for the next one.
-        </div>
+        <Notice tone="ok" role="status" className="mb-4">
+          <span>
+            Logged{" "}
+            <TextLink
+              href={`/qsos/${lastLogged.id}`}
+              className="font-medium text-current decoration-current/50 hover:decoration-current"
+            >
+              {lastLogged.callsign}
+            </TextLink>{" "}
+            on {lastLogged.band} {lastLogged.mode}. Ready for the next one.
+          </span>
+        </Notice>
       )}
 
-      {/* A form that fills itself in is alarming unless it says why. This also gives the
-          operator the way out — a recovered contact they no longer want is otherwise
-          cleared field by field. */}
+      {/* A form that fills itself in is alarming unless it says why, and this is the way
+          out — a recovered contact is otherwise cleared field by field. */}
       {restoredAt !== null && (
-        <div className="mb-4 flex flex-wrap items-center gap-2 border border-warn/40 bg-warn/10 text-warn text-sm px-3 py-2 rounded-sm">
+        <Notice tone="warn" className="mb-4">
           <span>
             Unlogged contact recovered from {formatUtc(restoredAt)} — it was never
             saved to the log.
           </span>
-          <Button onClick={discardDraft}>Discard</Button>
-        </div>
+          <Button size="sm" className="ml-auto" onClick={discardDraft}>
+            Discard
+          </Button>
+        </Notice>
       )}
 
       <Card>
@@ -425,7 +438,8 @@ export default function NewQsoPage() {
           onChange={setValues}
           stations={stations}
           submitting={submitting}
-          error={error}
+          // The offline failure is told once, beside Retry, rather than twice.
+          error={offline ? null : error}
           onSubmit={() => void submit(false)}
           submitLabel="Log QSO"
           secondaryAction={
@@ -434,21 +448,16 @@ export default function NewQsoPage() {
             </Button>
           }
           submitFooter={
-            offline ? (
-              <div className="flex flex-wrap items-center gap-2 border border-warn/40 bg-warn/10 text-warn text-sm px-3 py-2 rounded-sm">
-                <span>
-                  {draftSaved
-                    ? "Not logged — no answer from the server. The contact is held on this device."
-                    : "Not logged — no answer from the server, and this browser is blocking storage. Keep this page open."}
+            offline && error ? (
+              <Notice tone="warn" role="alert">
+                <span className="min-w-0 flex-1">
+                  {/* Wording decided by what writeDraft actually returned. */}
+                  {error.message}
                 </span>
-                <Button
-                  variant="primary"
-                  disabled={submitting}
-                  onClick={() => void submit(false)}
-                >
-                  {submitting ? "Retrying…" : "Retry"}
+                <Button variant="primary" loading={submitting} onClick={() => void submit(false)}>
+                  Retry
                 </Button>
-              </div>
+              </Notice>
             ) : null
           }
         />

@@ -226,6 +226,10 @@ async function post(req: NextApiRequest, res: NextApiResponse, auth: AuthContext
       return;
     }
     case "send": {
+      // No busy flag here, deliberately: the other sender is the bridge, another process,
+      // which no flag in this one could see. Rows are claimed one at a time in the database
+      // instead, so a double-click or the bridge's timer firing mid-run cannot mail anybody
+      // twice. `skipped` and `contended` in the result say what was left out and why.
       const result = await sendApprovedQsls({ limit: body.limit });
       sendJson(res, 200, result);
       return;

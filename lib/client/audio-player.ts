@@ -22,10 +22,42 @@ export interface AudioPlayerState {
   packets: number;
   /** How much audio is buffered, reported by the worklet itself. */
   bufferedMs: number;
-  /** Times the ring ran dry — the honest network-quality reading. */
+  /** Times the ring ran dry — the honest network-quality reading. Events, not samples. */
   underruns: number;
+  /** The silence those dropouts added up to, ms. Not counted for the first pre-roll. */
+  starvedMs: number;
+  /** True while the worklet is holding back for its pre-roll and playing silence. */
+  waiting: boolean;
   /** What the AudioContext says about itself: running, suspended or closed. */
   contextState: string;
+}
+
+/**
+ * Thrown by `start()` when `stop()` was called before it finished. The stop won: everything
+ * the start had built is already released, and there is nothing to report to the operator.
+ */
+export class AudioStartCancelled extends Error {
+  constructor() {
+    super("Audio start was cancelled by stop()");
+    this.name = "AudioStartCancelled";
+  }
+}
+
+/** Contexts already being closed, so a second release of one never calls close() again. */
+const closing = new WeakSet<AudioContext>();
+
+/**
+ * Close a context and swallow the outcome. A context that fails to close is not news worth
+ * replacing a real failure with, and a closed one cannot be closed twice.
+ */
+async function closeQuietly(ctx: AudioContext): Promise<void> {
+  if (closing.has(ctx) || ctx.state === "closed") return;
+  closing.add(ctx);
+  try {
+    await ctx.close();
+  } catch {
+    /* already closed, or the browser refused; either way it is not ours any more */
+  }
 }
 
 /**
@@ -102,7 +134,16 @@ export class ReceiverAudio {
   private packets = 0;
   private bufferedMs = 0;
   private underruns = 0;
+  private starvedMs = 0;
+  private waiting = true;
   private resampler: StreamingResampler | null = null;
+
+  /** The start in progress, so a second call joins it instead of building a second context. */
+  private starting: Promise<void> | null = null;
+  /** The context that start is building, so stop() can close it before it is ever published. */
+  private pendingCtx: AudioContext | null = null;
+  /** Bumped by stop(). A start that finds it changed has been overruled and backs out. */
+  private generation = 0;
 
   /**
    * The radio's sample rate, which arrives AFTER the context has to be created.
@@ -114,44 +155,111 @@ export class ReceiverAudio {
    */
   private sampleRate = 0;
 
+  /**
+   * The stream's format, from the bridge's hello — and again whenever the bridge sends a new
+   * one mid-stream, which it does when it switches radios (Flex 24 kHz, Icom 48 kHz).
+   *
+   * A hello is a fresh start of the stream either way: the resampler is rebuilt, so the old
+   * radio's last sample is not interpolated into the new radio's first and the ratio is the
+   * new one, and whatever the worklet still has queued from the old source is dropped so the
+   * new one starts on a clean pre-roll. Nothing is lost by the drop that was worth hearing:
+   * it is a fraction of a second of the radio that was just switched away from.
+   */
   setSampleRate(rate: number): void {
-    if (rate !== this.sampleRate) this.resampler = null;
     this.sampleRate = rate;
+    this.resampler = null;
+    this.node?.port.postMessage({ type: "flush" });
   }
 
   /**
    * Start the audio context and load the worklet.
    *
-   * Must be called from a user gesture. Awaiting `addModule` inside it is fine — the gesture's
-   * permission survives an await in the same chain, unlike a context first created in a
-   * network callback.
+   * Must be called from a user gesture, and the context is created SYNCHRONOUSLY inside this
+   * call, before its first await: Safari only honours a gesture within the same call stack.
+   * Awaiting `addModule` afterwards is fine — the context already exists.
+   *
+   * Never leaves anything behind. A failure at any step (resume refused, worklet unreachable,
+   * node construction) closes the context it created and rethrows the ORIGINAL error, which is
+   * what the page shows. A stop() during startup wins: the context is closed at once, and this
+   * rejects with `AudioStartCancelled` instead of publishing anything. Calls made while a start
+   * is already in flight join it.
    */
-  async start(volume = 0.8): Promise<void> {
-    if (this.ctx) return;
+  start(volume = 0.8): Promise<void> {
+    if (this.ctx) return Promise.resolve();
+    if (this.starting) return this.starting;
+    const attempt = this.build(this.generation, volume).finally(() => {
+      if (this.starting === attempt) this.starting = null;
+    });
+    this.starting = attempt;
+    return attempt;
+  }
+
+  private async build(generation: number, volume: number): Promise<void> {
     const Ctor: typeof AudioContext =
       window.AudioContext ??
       (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
     const ctx = new Ctor();
-    if (ctx.state === "suspended") await ctx.resume();
+    this.pendingCtx = ctx;
+    let node: AudioWorkletNode | null = null;
+    let gain: GainNode | null = null;
+    const overruled = () => this.generation !== generation;
 
-    await ctx.audioWorklet.addModule(WORKLET_URL);
+    try {
+      if (ctx.state === "suspended") await ctx.resume();
+      if (overruled()) throw new AudioStartCancelled();
 
-    const node = new AudioWorkletNode(ctx, "pcm-player", {
-      numberOfInputs: 0,
-      numberOfOutputs: 1,
-      outputChannelCount: [1],
-    });
-    node.port.onmessage = (event: MessageEvent) => {
-      const m = event.data as { bufferedMs?: number; underruns?: number };
-      if (typeof m.bufferedMs === "number") this.bufferedMs = m.bufferedMs;
-      if (typeof m.underruns === "number") this.underruns = m.underruns;
-    };
+      // Absent, not failing, on a page that is not a secure context: AudioWorklet is
+      // https-or-localhost only. Said as such, because "cannot read properties of undefined"
+      // sends the operator looking at the radio.
+      if (!ctx.audioWorklet) {
+        throw new Error(
+          window.isSecureContext === false
+            ? "audio worklets need a secure page; open DigiShack over https (or on localhost)"
+            : "this browser has no AudioWorklet",
+        );
+      }
+      await ctx.audioWorklet.addModule(WORKLET_URL);
+      if (overruled()) throw new AudioStartCancelled();
 
-    const gain = ctx.createGain();
-    gain.gain.value = volume;
-    node.connect(gain);
-    gain.connect(ctx.destination);
+      node = new AudioWorkletNode(ctx, "pcm-player", {
+        numberOfInputs: 0,
+        numberOfOutputs: 1,
+        outputChannelCount: [1],
+      });
+      node.port.onmessage = (event: MessageEvent) => {
+        const m = event.data as {
+          bufferedMs?: number;
+          underruns?: number;
+          starvedMs?: number;
+          waiting?: boolean;
+        };
+        if (typeof m.bufferedMs === "number") this.bufferedMs = m.bufferedMs;
+        if (typeof m.underruns === "number") this.underruns = m.underruns;
+        if (typeof m.starvedMs === "number") this.starvedMs = m.starvedMs;
+        if (typeof m.waiting === "boolean") this.waiting = m.waiting;
+      };
 
+      gain = ctx.createGain();
+      gain.gain.value = volume;
+      node.connect(gain);
+      gain.connect(ctx.destination);
+    } catch (err) {
+      // Everything this attempt made goes, whichever step failed. A failed start used to
+      // keep its AudioContext open with nothing able to close it, and browsers cap how many
+      // a page may hold.
+      for (const made of [node, gain]) {
+        try {
+          made?.disconnect();
+        } catch {
+          /* never connected */
+        }
+      }
+      if (this.pendingCtx === ctx) this.pendingCtx = null;
+      await closeQuietly(ctx);
+      throw err;
+    }
+
+    this.pendingCtx = null;
     this.ctx = ctx;
     this.gain = gain;
     this.node = node;
@@ -182,21 +290,40 @@ export class ReceiverAudio {
       packets: this.packets,
       bufferedMs: this.bufferedMs,
       underruns: this.underruns,
+      starvedMs: this.starvedMs,
+      waiting: this.waiting,
       // "running" is the only value that makes sound: a suspended context accepts everything
       // and plays none of it, which is exactly what "I still don't hear any audio" looks like.
       contextState: this.ctx?.state ?? "closed",
     };
   }
 
-  /** Stop and release the device. Idempotent — called from cleanup and from a button. */
+  /**
+   * Stop and release the device. Idempotent — called from cleanup and from a button.
+   *
+   * Also overrules a start still in flight, and closes the context it is building NOW rather
+   * than whenever that start next looks: a worklet load that never settles would otherwise
+   * hold the device open for as long as the tab lives.
+   */
   async stop(): Promise<void> {
+    this.generation++;
+    // Forgotten as well as overruled, so a start() after this builds afresh instead of
+    // joining the attempt that is about to reject as cancelled.
+    this.starting = null;
     const ctx = this.ctx;
-    this.node?.disconnect();
-    this.gain?.disconnect();
+    const pending = this.pendingCtx;
+    for (const made of [this.node, this.gain]) {
+      try {
+        made?.disconnect();
+      } catch {
+        /* already disconnected */
+      }
+    }
     this.ctx = null;
     this.gain = null;
     this.node = null;
+    this.pendingCtx = null;
     this.resampler = null;
-    if (ctx) await ctx.close().catch(() => {});
+    await Promise.all([ctx ? closeQuietly(ctx) : null, pending ? closeQuietly(pending) : null]);
   }
 }

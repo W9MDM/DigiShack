@@ -4,11 +4,13 @@ import { sendError, sendJson } from "@/lib/api/respond";
 import { authedRoute } from "@/lib/auth/guard";
 import type { AuthContext } from "@/lib/auth/session";
 import {
+  acquireUpdateLock,
   checkForUpdate,
   isRunning,
   runningVersion,
   performUpdate,
   readState,
+  type UpdateLock,
 } from "@/lib/update/runner";
 
 // GET               current version, branch, whether behind, and the last run's state
@@ -44,34 +46,59 @@ async function post(
     return;
   }
 
-  if (isRunning()) {
+  // ADMISSION FIRST, BEFORE ANY AWAIT.
+  //
+  // This used to ask `isRunning()` and then await `checkForUpdate()` — seconds of git fetch —
+  // before starting anything, so two requests in that window both got in and two runs went
+  // through npm ci, migrate and build on top of each other. The lock is taken synchronously
+  // here, so the second request is refused before the first has yielded at all; it works
+  // across processes because it is an O_EXCL file (lib/update/runner.ts, "The run lock").
+  let lock: UpdateLock | null;
+  try {
+    lock = acquireUpdateLock();
+  } catch (err) {
+    sendError(
+      res,
+      500,
+      `Could not take the update lock: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    return;
+  }
+  if (!lock) {
     sendError(res, 409, "An update is already in progress.");
     return;
   }
 
-  const check = await checkForUpdate();
-  if (!check.allowed) {
-    sendError(
-      res,
-      403,
-      "Updating from the UI is turned off. Enable it under Settings → Software updates.",
-    );
-    return;
+  // Released here on every path that does not start a run; a started run releases it itself.
+  let handedOver = false;
+  try {
+    const check = await checkForUpdate();
+    if (!check.allowed) {
+      sendError(
+        res,
+        403,
+        "Updating from the UI is turned off. Enable it under Settings → Software updates.",
+      );
+      return;
+    }
+
+    // Started, not awaited: the run takes minutes and ends by replacing this
+    // process, so there is no response to send at the end of it. The client polls
+    // GET for progress, and the state file survives the reload.
+    void performUpdate(`${auth.user.email} (${auth.user.role})`, { lock }).catch((err) => {
+      console.error("[update] run failed:", err);
+    });
+    handedOver = true;
+
+    sendJson(res, 202, {
+      started: true,
+      triggeredBy: auth.user.email,
+      behind: check.behind,
+      incoming: check.incoming,
+    });
+  } finally {
+    if (!handedOver) lock.release();
   }
-
-  // Started, not awaited: the run takes minutes and ends by replacing this
-  // process, so there is no response to send at the end of it. The client polls
-  // GET for progress, and the state file survives the reload.
-  void performUpdate(`${auth.user.email} (${auth.user.role})`).catch((err) => {
-    console.error("[update] run failed:", err);
-  });
-
-  sendJson(res, 202, {
-    started: true,
-    triggeredBy: auth.user.email,
-    behind: check.behind,
-    incoming: check.incoming,
-  });
 }
 
 export default authedRoute({

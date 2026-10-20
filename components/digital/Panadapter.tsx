@@ -1,9 +1,11 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 
 import { SpectrumCanvas } from "@/components/digital/spectrum-canvas";
 import { SpectrumTrace } from "@/components/digital/SpectrumTrace";
+import { Button } from "@/components/ui/primitives";
 import { formatFreqMHz } from "@/lib/ham/bands";
 import { segmentLabel, segmentsIn } from "@/lib/ham/band-plan";
+import { cn } from "@/lib/utils";
 
 /**
  * The receiver's passband, in Hz either side of the dial.
@@ -136,6 +138,10 @@ export interface PanadapterProps {
   spots?: PanadapterSpot[];
   /** Tune to a spot. Separate from onTune so the caller can also log which was taken. */
   onSpot?: (spot: PanadapterSpot) => void;
+  /** Shown at the right of the toolbar: the window and which radio it came from. */
+  caption?: ReactNode;
+  /** No frame has arrived for a while: say so rather than show a frozen picture as live. */
+  stale?: boolean;
 }
 
 export interface PanadapterSpot {
@@ -154,15 +160,13 @@ export interface PanadapterSpot {
  * activity either side of it — the point of a panadapter is seeing what you were not
  * already looking at. 5 kHz is the radio's own minimum and shows a single FT8 window.
  */
-const SPAN_PRESETS: { label: string; hz: number }[] = [
-  { label: "1 MHz", hz: 1_000_000 },
-  { label: "500k", hz: 500_000 },
-  { label: "200k", hz: 200_000 },
-  { label: "100k", hz: 100_000 },
-  { label: "50k", hz: 50_000 },
-  { label: "20k", hz: 20_000 },
-  { label: "5k", hz: 5_000 },
+const SPAN_PRESETS: number[] = [
+  1_000_000, 500_000, 200_000, 100_000, 50_000, 20_000, 5_000,
 ];
+
+function spanLabel(hz: number): string {
+  return hz >= 1_000_000 ? `${hz / 1_000_000} MHz` : `${Math.round(hz / 1000)} kHz`;
+}
 
 /**
  * The step a click on the spectrum snaps to, in Hz.
@@ -261,19 +265,48 @@ export function labelledSpots(
 }
 
 /**
- * Tick spacing that gives roughly six to ten labels across the span.
+ * Tick spacing that gives at most `maxTicks` labels across the span.
  *
  * Chosen from the span rather than fixed, because this display covers anything from
  * 5 kHz to 7 MHz. A fixed 500 Hz ruler — which is what the audio waterfall uses — would
- * be 14,000 lines at 7 MHz.
+ * be 14,000 lines at 7 MHz. And from the measured WIDTH: eight labels fit at 1600 px and
+ * overlap into an unreadable strip on a phone.
  */
-function tickStepHz(spanHz: number): number {
-  const rough = spanHz / 8;
+function tickStepHz(spanHz: number, maxTicks: number): number {
+  const rough = spanHz / Math.max(2, maxTicks);
   const pow = 10 ** Math.floor(Math.log10(rough));
   for (const mult of [1, 2, 2.5, 5, 10]) {
     if (rough <= pow * mult) return pow * mult;
   }
   return pow * 10;
+}
+
+/** MHz decimals that show every tick of this step exactly, and never fewer than kHz. */
+function tickDecimals(stepHz: number): number {
+  for (let d = 3; d < 6; d++) {
+    const unit = 10 ** (6 - d);
+    if (Math.abs(stepHz / unit - Math.round(stepHz / unit)) < 1e-9) return d;
+  }
+  return 6;
+}
+
+/** Pixels a label of `chars` characters needs at the ruler's type size, with margin. */
+const LABEL_PX_PER_CHAR = 6.5;
+
+/** The container's rendered width, for spacing labels. 0 until measured. */
+function useWidth<T extends HTMLElement>(): [RefObject<T | null>, number] {
+  const ref = useRef<T | null>(null);
+  const [width, setWidth] = useState(0);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const measure = () => setWidth(el.getBoundingClientRect().width);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+  return [ref, width];
 }
 
 export function Panadapter({
@@ -293,14 +326,15 @@ export function Panadapter({
   filterHiHz = null,
   spots = [],
   onSpot,
+  caption,
+  stale = false,
 }: PanadapterProps) {
   // Where the mouse is, in Hz. Null when it is not over the spectrum.
   //
-  // This is the single thing that made click-to-tune discoverable. The caption said
-  // "click the spectrum to tune" and the only marker was a two-pixel line, so there
-  // was no way to tell WHERE a click would land until after making it — which is not
-  // how any other SDR behaves, and is why it did not feel like tuning.
+  // This is the single thing that made click-to-tune discoverable: with only a two-pixel
+  // dial line there was no way to tell WHERE a click would land until after making it.
   const [hoverHz, setHoverHz] = useState<number | null>(null);
+  const [stackRef, widthPx] = useWidth<HTMLDivElement>();
 
   // How long one waterfall row represents, measured rather than assumed.
   //
@@ -308,8 +342,7 @@ export function Panadapter({
   // vertical scale — "vertical resolution is time", as docs/panadapter.md puts it. It
   // cannot be taken from the configured frame rate, because that is what was ASKED for:
   // the radio delivered 95 against a request of 100, a busy bridge drops frames, and a
-  // band change pauses the sweep entirely. An axis built on the request would be
-  // confidently wrong in exactly the conditions where an operator looks at it.
+  // band change pauses the sweep entirely.
   //
   // Smoothed hard and only re-rendered on a real change, because this component already
   // re-renders on every row and a label that jitters between 9 and 11 seconds is worse
@@ -332,7 +365,6 @@ export function Panadapter({
       clock.ms = clock.ms * 0.9 + gap * 0.1;
     }
     if (clock.ms === null) return;
-    // Re-render only on a change worth showing.
     if (rowMs === null || Math.abs(clock.ms - rowMs) / clock.ms > 0.08) {
       setRowMs(clock.ms);
     }
@@ -348,130 +380,114 @@ export function Panadapter({
       timeTicks.push({ sec, topPx: height - (sec / historySec) * height });
     }
   }
+
   const lowHz = centerHz - spanHz / 2;
-  const step = tickStepHz(spanHz);
+  // One label per ~80 px; before the first measurement, the desktop default of eight.
+  const maxTicks = widthPx > 0 ? Math.floor(widthPx / 80) : 8;
+  const step = tickStepHz(spanHz, maxTicks);
+  const decimals = tickDecimals(step);
   const ticks: number[] = [];
-  for (
-    let hz = Math.ceil(lowHz / step) * step;
-    hz < lowHz + spanHz;
-    hz += step
-  ) {
+  for (let hz = Math.ceil(lowHz / step) * step; hz < lowHz + spanHz; hz += step) {
     ticks.push(hz);
   }
 
   const pct = (hz: number): number => ((hz - lowHz) / spanHz) * 100;
   const passband = passbandOf(radioMode, filterLoHz, filterHiHz);
 
-  // Only the spots inside the window, and only as many as can be read.
-  //
-  // A 1 MHz span over a busy weekend can hold sixty activators, which as labels is an
-  // unreadable stack of overlapping text that hides the very spectrum it describes. Sorted
-  // by frequency and thinned so no two labels sit within a few percent of each other —
-  // the ones dropped are the ones that would have been illegible anyway, and the marker
-  // line is still drawn for every spot so nothing vanishes silently.
+  // Only the spots inside the window, sorted, and labels thinned so no two sit within a
+  // few percent of each other — the marker line is still drawn for every spot.
   const visibleSpots = spots
     .filter((s) => s.freqHz > lowHz && s.freqHz < lowHz + spanHz)
     .sort((a, b) => a.freqHz - b.freqHz);
   const labelled = labelledSpots(visibleSpots, lowHz, spanHz);
   const planSegments = segmentsIn(lowHz, lowHz + spanHz);
 
+  // Where the waterfall starts, so spot labels sit just inside it instead of on top of
+  // the ruler's text: trace + border, band plan + border when drawn, ruler + border.
+  const waterfallTopPx = traceHeight + 1 + (planSegments.length > 0 ? 17 : 0) + 21;
+
+  // Presets are widest first, so zooming IN moves forward through the list. The nearest
+  // preset is the current one: the radio clamps spans, so an exact match is not promised.
+  const spanIdx = SPAN_PRESETS.reduce(
+    (best, hz, i) =>
+      Math.abs(hz - spanHz) < Math.abs(SPAN_PRESETS[best]! - spanHz) ? i : best,
+    0,
+  );
+  const zoom = (delta: number) => {
+    const next = SPAN_PRESETS[spanIdx + delta];
+    if (next !== undefined) onSpan?.(next);
+  };
+
   return (
-    <div className="relative bg-bg border border-line rounded-sm overflow-hidden">
-      {/* Zoom. Above the display rather than below it, because it changes what the
-          display means and a control that changes the axis belongs with the axis.
-          OUTSIDE the spectrum stack below, which is what makes these clickable at all:
-          click-to-tune is an overlay filling its container, and while the buttons were
-          siblings inside that same container the overlay covered them. Every attempt to
-          zoom retuned the radio instead. */}
-      {onSpan && (
-        <div className="flex items-center gap-1 px-2 py-1 border-b border-line/60 bg-bg-raised/40">
-          <span className="text-[10px] uppercase tracking-wide text-fg-subtle mr-1">
-            Span
-          </span>
-          {/* Zoom in and out, one preset at a time.
-              The preset row alone made every span reachable but none of them adjacent —
-              narrowing from 200k meant reading seven labels and picking the next. Both
-              reference clients put a pair of magnifiers on the display for exactly this,
-              because zooming is something an operator does repeatedly while hunting, not
-              a setting they choose once. */}
-          {(() => {
-            // Presets are widest first, so zooming IN moves forward through the list.
-            const idx = SPAN_PRESETS.reduce(
-              (best, c, i) =>
-                Math.abs(c.hz - spanHz) < Math.abs(SPAN_PRESETS[best]!.hz - spanHz)
-                  ? i
-                  : best,
-              0,
-            );
-            const step = (delta: number) => {
-              const next = SPAN_PRESETS[idx + delta];
-              if (next) onSpan(next.hz);
-            };
-            const btn =
-              "px-1.5 py-0.5 text-[11px] rounded-sm border leading-none transition-colors " +
-              "border-line text-fg-muted hover:text-fg hover:border-fg-subtle " +
-              "disabled:opacity-30 disabled:hover:text-fg-muted disabled:hover:border-line";
-            return (
-              <>
-                <button
-                  type="button"
-                  onClick={() => step(1)}
-                  disabled={idx >= SPAN_PRESETS.length - 1}
-                  className={btn}
-                  title="Zoom in — show less band in more detail"
-                  aria-label="Zoom in"
-                >
-                  +
-                </button>
-                <button
-                  type="button"
-                  onClick={() => step(-1)}
-                  disabled={idx <= 0}
-                  className={btn}
-                  title="Zoom out — show more of the band"
-                  aria-label="Zoom out"
-                >
-                  &minus;
-                </button>
-                <span className="w-px h-3.5 bg-line mx-0.5" />
-              </>
-            );
-          })()}
-          {SPAN_PRESETS.map((p) => {
-            // Nearest preset wins the highlight: the radio clamps spans to what it
-            // supports, so an exact match is not guaranteed and none of them would
-            // light up after a clamp.
-            const active =
-              SPAN_PRESETS.reduce((best, c) =>
-                Math.abs(c.hz - spanHz) < Math.abs(best.hz - spanHz) ? c : best,
-              ).hz === p.hz;
-            return (
-              <button
-                key={p.hz}
-                type="button"
-                onClick={() => onSpan(p.hz)}
-                className={
-                  "px-1.5 py-0.5 text-[10px] rounded-sm border tnum transition-colors " +
-                  (active
-                    ? "border-accent text-accent-bright bg-accent/10"
-                    : "border-line text-fg-muted hover:text-fg hover:border-fg-subtle")
-                }
-                title={`Show ${(p.hz / 1000).toFixed(0)} kHz of band`}
+    <div className="relative bg-bg border border-line rounded-md overflow-hidden">
+      {/* The toolbar: zoom, and what the window is. Above the display because it changes
+          what the display means. OUTSIDE the spectrum stack below, which is what makes it
+          clickable at all: click-to-tune is an overlay filling that stack, and while the
+          span buttons were inside it every attempt to zoom retuned the radio instead. */}
+      {(onSpan || caption) && (
+        <div className="flex flex-wrap items-center gap-x-1 gap-y-1 border-b border-line bg-surface px-2 py-1">
+          {onSpan && (
+            <>
+              <span className="mr-1 text-xs text-fg-muted">Span</span>
+              {/* Adjacent steps, because zooming is something an operator does
+                  repeatedly while hunting, not a setting chosen once. */}
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => zoom(-1)}
+                disabled={spanIdx <= 0}
+                title="Zoom out — show more of the band"
+                aria-label="Zoom out"
+                className="w-7 px-0"
               >
-                {p.label}
-              </button>
-            );
-          })}
+                &minus;
+              </Button>
+              <span className="min-w-[4rem] text-center text-xs tnum text-fg sm:hidden">
+                {spanLabel(SPAN_PRESETS[spanIdx]!)}
+              </span>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => zoom(1)}
+                disabled={spanIdx >= SPAN_PRESETS.length - 1}
+                title="Zoom in — show less band in more detail"
+                aria-label="Zoom in"
+                className="w-7 px-0"
+              >
+                +
+              </Button>
+              <div
+                role="group"
+                aria-label="Span"
+                className="ml-1 hidden items-center gap-0.5 sm:flex"
+              >
+                {SPAN_PRESETS.map((hz, i) => (
+                  <Button
+                    key={hz}
+                    size="sm"
+                    variant={i === spanIdx ? "secondary" : "ghost"}
+                    aria-pressed={i === spanIdx}
+                    onClick={() => onSpan(hz)}
+                    title={`Show ${spanLabel(hz)} of band`}
+                    className="px-1.5 tnum"
+                  >
+                    {spanLabel(hz)}
+                  </Button>
+                ))}
+              </div>
+            </>
+          )}
+          {caption && (
+            <span className="ml-auto pl-2 text-xs text-fg-subtle tnum">{caption}</span>
+          )}
         </div>
       )}
 
       {/* The spectrum stack, and the positioning context for everything that spans it:
-          the gridlines, the centre mark, the dial cursor and click-to-tune. Its own
-          container rather than the outer one, so those overlays reach exactly the three
-          strips and nothing else. */}
-      <div className="relative">
+          the gridlines, the centre mark, the dial cursor and click-to-tune. */}
+      <div ref={stackRef} className="relative">
         {/* 1. The live trace. */}
-        <div className="border-b border-line/60">
+        <div className="border-b border-line">
           <SpectrumTrace
             row={row}
             height={traceHeight}
@@ -481,37 +497,34 @@ export function Panadapter({
           />
         </div>
 
-        {/* 1b. THE BAND PLAN — which part of the band this is, and who may use it.
-            Reported as "I don't see the labels as to what part of the band it is, phone,
-            cw etc", and it is the strip both Aether and RemoteHamRadio put here. It is
-            also the only thing on this display that prevents a mistake rather than
-            describing one: everything else says what the band is doing, this says whether
-            you may join in. Above the ruler so a frequency reads down through segment,
-            label and spectrum in one column. */}
+        {/* 1b. THE BAND PLAN — which part of the band this is, and who may use it. The one
+            strip that prevents a mistake rather than describing one. Above the ruler so a
+            frequency reads down through segment, label and spectrum in one column. */}
         {planSegments.length > 0 && (
-          <div className="relative h-4 border-b border-line/60 bg-bg select-none">
+          <div className="relative h-4 border-b border-line bg-bg select-none">
             {planSegments.map((s) => {
               const left = pct(s.startHz);
               const width = ((s.endHz - s.startHz) / spanHz) * 100;
+              const label = segmentLabel(s);
+              // Only when it fits: a clipped label hides the colour, which is itself the
+              // coarse answer.
+              const fits =
+                widthPx > 0
+                  ? (width / 100) * widthPx >= label.length * LABEL_PX_PER_CHAR + 8
+                  : width > 7;
               return (
                 <div
                   key={`${s.startHz}-${s.mode}`}
-                  className={
-                    "absolute inset-y-0 flex items-center overflow-hidden border-r border-black/40 " +
-                    (s.mode === "PHONE"
-                      ? "bg-accent/25"
-                      : s.mode === "CW"
-                        ? "bg-warn/25"
-                        : "bg-ok/25")
-                  }
+                  className={cn(
+                    "absolute inset-y-0 flex items-center overflow-hidden border-r border-bg/60",
+                    s.mode === "PHONE" ? "bg-accent/25" : s.mode === "CW" ? "bg-warn/25" : "bg-ok/25",
+                  )}
                   style={{ left: `${left}%`, width: `${width}%` }}
-                  title={`${segmentLabel(s)} — ${formatFreqMHz(s.startHz)} to ${formatFreqMHz(s.endHz)} MHz (US Part 97)`}
+                  title={`${label} — ${formatFreqMHz(s.startHz)} to ${formatFreqMHz(s.endHz)} MHz (US Part 97)`}
                 >
-                  {/* Only when it fits. A clipped label on a 2% sliver is unreadable and
-                      hides the colour, which is itself the coarse answer. */}
-                  {width > 7 && (
-                    <span className="px-1 text-[9px] leading-none uppercase tracking-wide text-fg whitespace-nowrap">
-                      {segmentLabel(s)}
+                  {fits && (
+                    <span className="px-1 text-[10px] leading-none text-fg whitespace-nowrap">
+                      {label}
                     </span>
                   )}
                 </div>
@@ -520,85 +533,78 @@ export function Panadapter({
           </div>
         )}
 
-        {/* 2. The ruler: labels on a solid strip, never over the pixels. */}
-        <div className="relative h-5 border-b border-line/60 bg-bg-raised/60 select-none">
-          {ticks.map((hz) => (
-            <span
-              key={hz}
-              className="absolute top-0.5 -translate-x-1/2 text-[10px] leading-none text-fg-muted tnum"
-              style={{ left: `${pct(hz)}%` }}
-            >
-              {/* Fixed decimals rather than formatFreqMHz, which trims trailing zeros —
-                a ruler reading 7.04, 7.06, 7.08, 7.1, 7.12 makes the 7.1 tick look
-                like a different quantity from its neighbours. */}
-              {(hz / 1e6).toFixed(spanHz < 50_000 ? 4 : 3)}
-            </span>
-          ))}
+        {/* 2. The ruler: labels on a solid strip, never over the pixels. Fixed decimals for
+            the step, so 7.100 never reads as a different quantity from 7.080. A label that
+            would be cut in half by the edge is left off; its gridline stays. */}
+        <div className="relative h-5 border-b border-line bg-surface select-none">
+          {ticks.map((hz) => {
+            const text = (hz / 1e6).toFixed(decimals);
+            const x = (pct(hz) / 100) * widthPx;
+            const half = (text.length * LABEL_PX_PER_CHAR) / 2;
+            if (widthPx > 0 && (x < half || x > widthPx - half)) return null;
+            return (
+              <span
+                key={hz}
+                className="absolute top-1 -translate-x-1/2 text-[11px] leading-none text-fg-muted tnum"
+                style={{ left: `${pct(hz)}%` }}
+              >
+                {text}
+              </span>
+            );
+          })}
         </div>
 
-        {/* 3. The waterfall.
-            The axis goes in rather than a wipe key, so re-centring MOVES the history to
-            where its frequencies now are instead of throwing it away. Clicking a signal
-            off to one side used to blank several minutes of waterfall in order to shift
-            the picture by a fifth of a screen. Only the newly-exposed edge is blank now,
-            and the display keeps scrolling. */}
-        <SpectrumCanvas
-          row={row}
-          height={height}
-          axis={{ lowHz, spanHz }}
-          frameless
-        >
-          <div className="absolute right-1 bottom-1 text-[10px] text-white/45 tnum">
+        {/* 3. The waterfall. The axis goes in rather than a wipe key, so re-centring MOVES
+            the history to where its frequencies now are instead of throwing it away. */}
+        <SpectrumCanvas row={row} height={height} axis={{ lowHz, spanHz }} frameless>
+          <div className="absolute right-1 bottom-1 rounded-sm bg-bg/70 px-1 text-[10px] text-fg-muted tnum">
             {binHz < 1000
               ? `${binHz.toFixed(1)} Hz/bin`
               : `${(binHz / 1000).toFixed(2)} kHz/bin`}
           </div>
 
-          {/* THE TIME AXIS. A waterfall's vertical dimension is history, and until now
-              nothing said how much: whether a trace two thirds up was ten seconds old or
-              two minutes was unanswerable. Both reference clients show this.
-              Left edge, because the right already carries the bin width, and counting up
-              from the bottom because that is where new rows land. */}
+          {/* THE TIME AXIS. A waterfall's vertical dimension is history; this says how
+              much. Left edge, counting up from the bottom where new rows land. */}
           {timeTicks.map((t) => (
             <div
               key={t.sec}
               className="absolute left-0 flex items-center gap-1 pointer-events-none"
               style={{ top: `${t.topPx}px` }}
             >
-              <div className="h-px w-1.5 bg-white/35" />
-              <span className="text-[9px] leading-none text-white/45 tnum">
-                {t.sec >= 60
-                  ? `${Math.round(t.sec / 60)}m`
-                  : `${t.sec}s`}
+              <div className="h-px w-1.5 bg-fg/40" />
+              <span className="rounded-sm bg-bg/60 px-0.5 text-[10px] leading-none text-fg-muted tnum">
+                {t.sec >= 60 ? `${Math.round(t.sec / 60)}m` : `${t.sec}s`}
               </span>
             </div>
           ))}
+
+          {stale && (
+            <div className="absolute left-8 top-2 rounded-sm bg-bg/85 px-2 py-1 text-xs text-warn">
+              No new frames from the radio — this picture is not live
+            </div>
+          )}
         </SpectrumCanvas>
 
         {/* Gridlines, centre and dial span the whole stack: a frequency means the same
-          thing on the trace, the ruler and the history. */}
+            thing on the trace, the ruler and the history. */}
         <div className="absolute inset-0 pointer-events-none">
           {ticks.map((hz) => (
             <div
               key={hz}
-              className="absolute top-0 bottom-0 border-l border-white/10"
+              className="absolute top-0 bottom-0 border-l border-fg/10"
               style={{ left: `${pct(hz)}%` }}
             />
           ))}
 
-          {/* Centre of the span. Dotted, so it is never mistaken for the dial. */}
+          {/* Centre of the span. Dashed, so it is never mistaken for the dial. */}
           <div
-            className="absolute top-0 bottom-0 border-l border-dashed border-white/25"
+            className="absolute top-0 bottom-0 border-l border-dashed border-fg/25"
             style={{ left: "50%" }}
           />
 
-          {/* THE PASSBAND — what you will actually hear.
-              A hairline said where the dial was and nothing said how wide the receiver
-              was listening, so an SSB signal 2 kHz off the dial looked identical to one
-              dead on it. Shading the filter is what every other SDR draws, and it is the
-              part that turns a picture of the band into something you can tune with.
-              Read from the radio when it reports a filter, and only derived from the
-              modulation when it does not; see passbandOf. */}
+          {/* THE PASSBAND — what you will actually hear. Read from the radio when it
+              reports a filter, and only derived from the modulation when it does not;
+              see passbandOf. */}
           {dialHz !== null && passband !== null && (
             <div
               className="absolute top-0 bottom-0 bg-accent/20 border-x border-accent/50"
@@ -610,17 +616,21 @@ export function Panadapter({
             />
           )}
 
-          {/* Where the receiver actually is. Usually the centre, but not while the
-            operator is tuning around inside a fixed span. */}
+          {/* Where the receiver actually is, with a labelled handle: on a display this
+              dense a two-pixel rule is lost among the signals it sits between. */}
           {dialHz !== null && dialHz > lowHz && dialHz < lowHz + spanHz && (
             <div
               className="absolute top-0 bottom-0 border-l-2 border-accent"
               style={{ left: `${pct(dialHz)}%` }}
               title={`Dial ${formatFreqMHz(dialHz)} MHz`}
             >
-              {/* A labelled handle, not just a line. On a display this dense a
-                  two-pixel rule is lost among the signals it is meant to sit between. */}
-              <span className="absolute -top-0.5 left-0 -translate-x-1/2 rounded-sm bg-accent px-1 text-[10px] font-medium text-black tnum whitespace-nowrap">
+              <span
+                className={cn(
+                  "absolute -top-0.5 rounded-sm bg-accent px-1 text-[11px] font-medium text-accent-fg tnum whitespace-nowrap",
+                  // Kept on the display at either edge rather than half cut off.
+                  pct(dialHz) < 8 ? "left-0" : pct(dialHz) > 92 ? "right-0" : "left-0 -translate-x-1/2",
+                )}
+              >
                 {formatFreqMHz(dialHz)}
               </span>
             </div>
@@ -629,16 +639,16 @@ export function Panadapter({
           {/* Where a click would land. The whole point: see it before committing. */}
           {hoverHz !== null && (
             <div
-              className="absolute top-0 bottom-0 border-l border-white/60 pointer-events-none"
+              className="absolute top-0 bottom-0 border-l border-fg/60"
               style={{ left: `${pct(hoverHz)}%` }}
             >
               <span
-                className={
-                  "absolute bottom-0 text-[10px] tnum whitespace-nowrap bg-black/80 px-1 rounded-sm text-white " +
-                  // Flip the label to the other side near the right edge so it cannot
-                  // run off the display exactly when you are tuning the top of the band.
-                  (pct(hoverHz) > 80 ? "right-0.5" : "left-0.5")
-                }
+                className={cn(
+                  "absolute bottom-0 rounded-sm bg-bg/90 px-1 text-[11px] text-fg tnum whitespace-nowrap",
+                  // Flipped near the right edge so it cannot run off the display exactly
+                  // when you are tuning the top of the band.
+                  pct(hoverHz) > 80 ? "right-0.5" : "left-0.5",
+                )}
               >
                 {formatFreqMHz(hoverHz)}
               </span>
@@ -646,14 +656,17 @@ export function Panadapter({
           )}
         </div>
 
-        {/* Click-to-tune covers the three spectrum strips — clicking a peak on the trace
-          should tune there exactly as clicking its stripe on the waterfall does — and
-          stops at the edge of that stack, so the Span buttons above stay reachable. */}
+        {/* Click-to-tune covers the three spectrum strips and stops at the edge of that
+            stack, so the toolbar above stays reachable. Out of the tab order: the arrow
+            keys are this page's keyboard tuning, and a keyboard "click" has no position
+            (clientX 0), which would tune below the window. */}
         {onTune && (
           <button
             type="button"
+            tabIndex={-1}
             className="absolute inset-0 w-full cursor-crosshair"
             onClick={(e) => {
+              if (e.detail === 0) return;
               const rect = e.currentTarget.getBoundingClientRect();
               const frac = (e.clientX - rect.left) / rect.width;
               onTune(snapHz(lowHz + frac * spanHz, radioMode));
@@ -662,9 +675,6 @@ export function Panadapter({
               const rect = e.currentTarget.getBoundingClientRect();
               const frac = (e.clientX - rect.left) / rect.width;
               // Snapped here too, so the readout is a PROMISE rather than an estimate.
-              // A cursor that says 7.502553 and a radio that lands on 7.5025 teaches an
-              // operator to distrust the readout, which is the one thing on this display
-              // that has to be believable.
               setHoverHz(snapHz(lowHz + frac * spanHz, radioMode));
             }}
             onMouseLeave={() => setHoverHz(null)}
@@ -677,17 +687,15 @@ export function Panadapter({
           />
         )}
 
-        {/* SPOTS — who is on the air, drawn over everything else.
-            AFTER the click-to-tune overlay in the DOM and on a raised layer, because that
-            overlay fills the stack: a label underneath it would be visible and dead, which
-            is the same trap the Span buttons fell into. */}
+        {/* SPOTS — who is on the air, drawn over everything else. After the click-to-tune
+            overlay and on a raised layer, because a label underneath it would be visible
+            and dead — the same trap the span buttons fell into. */}
         {visibleSpots.length > 0 && (
           <div className="absolute inset-0 z-10 pointer-events-none">
             {visibleSpots.map((s) => {
               const left = pct(s.freqHz);
               const showLabel = labelled.has(s.key);
-              // Flip near the right edge, exactly as the hover readout does, or the
-              // callsign runs off the display for the spots highest in the band.
+              // Flip near the right edge, as the hover readout does.
               const flip = left > 82;
               return (
                 <div
@@ -695,8 +703,7 @@ export function Panadapter({
                   className="absolute top-0 bottom-0"
                   style={{ left: `${left}%` }}
                 >
-                  {/* Every spot gets a marker even when its label was thinned out, so a
-                      crowded band still shows where the activity is. */}
+                  {/* Every spot gets a marker even when its label was thinned out. */}
                   <div className="absolute inset-y-0 w-px bg-warn/70" />
                   {showLabel && (
                     <button
@@ -705,13 +712,15 @@ export function Panadapter({
                         e.stopPropagation();
                         (onSpot ?? ((sp: PanadapterSpot) => onTune?.(sp.freqHz)))(s);
                       }}
-                      className={
-                        "absolute pointer-events-auto whitespace-nowrap rounded-sm px-1 " +
-                        "text-[10px] leading-tight font-medium tnum bg-warn text-black " +
-                        "hover:ring-1 hover:ring-white/80 cursor-pointer transition-shadow " +
-                        (flip ? "-translate-x-full" : "")
-                      }
-                      style={{ top: `${traceHeight + 22}px` }}
+                      // tap-inline: a 44 px touch target per callsign would bury the
+                      // waterfall it labels.
+                      className={cn(
+                        "tap-inline absolute pointer-events-auto whitespace-nowrap rounded-sm px-1",
+                        "text-[11px] leading-tight font-medium tnum bg-warn text-bg",
+                        "hover:ring-1 hover:ring-fg/80 cursor-pointer transition-shadow",
+                        flip && "-translate-x-full",
+                      )}
+                      style={{ top: `${waterfallTopPx + 2}px` }}
                       title={
                         `${s.callsign} on ${formatFreqMHz(s.freqHz)} MHz` +
                         (s.mode ? ` (${s.mode})` : "") +

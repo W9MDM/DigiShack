@@ -105,6 +105,8 @@ export interface SettingDef {
     /** What the operator is agreeing to. Written as a consequence, not a warning. */
     message: string;
   };
+  /** Rarely changed; shown under its group's "Advanced" disclosure. */
+  advanced?: boolean;
 }
 
 export interface SettingGroup {
@@ -171,14 +173,8 @@ export const SETTING_GROUPS: SettingGroup[] = [
     blurb:
       "Self-hosted logging software. Unlike the public services this needs no developer registration and imposes no rate limit — it is your own server. Wavelog is a fork of Cloudlog and speaks the same API, so either works here.",
   },
-  {
-    id: "hrdlog",
-    doc: "logbook-sync",
-    docLabel: "HRDLOG.net",
-    title: "HRDLOG.net",
-    blurb:
-      "Ham Radio Deluxe's online logbook. Needs the callsign the account logs under plus its upload code, which is not the website password.",
-  },
+  // `hrdlog` was a group here, for HRDLOG.net. Removed with its two settings — see the
+  // note where `hrdlog.callsign` used to be.
   {
     id: "ft8battle",
     doc: "ft8battle",
@@ -412,8 +408,23 @@ export const SETTING_GROUPS: SettingGroup[] = [
     blurb:
       "Everything the recipient sees is a template here, not a string in the code. A QSL card makes claims about how you operate — which services you upload to, whether you will answer a paper card — and those are yours to word. Use the Preview button on the QSL page to see a real card before sending anything.",
   },
+  {
+    id: "cluster",
+    title: "DX cluster",
+    blurb:
+      "Spots from a DX cluster node — DX Spider, AR-Cluster, CC Cluster or the Reverse Beacon Network — read over telnet by the bridge and shown on the Cluster page, with a band map and the entities, band slots and mode slots this log still needs. Receive-only: the bridge logs in and listens, and never posts a spot. Clicking a spot only tunes the receiver.",
+  },
 ];
 
+// VISIBLE OR ADVANCED. Every entry is one or the other, and the test is whether an operator
+// must set it or commonly does. Visible: credentials and addresses, the switch that turns a
+// feature on, and every protection — transmit gates, power, SWR and PA trips, the duplicate
+// rules, anything that keys the radio for the ATU, the sleep window, and the brakes on the
+// automatic modes. `advanced: true`: ports, thresholds, timers and batch sizes with a working
+// default; values a live control already moves and remembers; things written for the
+// operator (tokens, uploaded paths); and switches that default ON and exist only as a way
+// out. The page used to show all 223 at once, which drew "do we need them all?" — 82 of
+// them, as it turned out. `scripts/check-settings-docs.ts` refuses an advanced protection.
 export const SETTINGS: SettingDef[] = [
   // --- general ---
   {
@@ -438,19 +449,14 @@ export const SETTINGS: SettingDef[] = [
     label: "Session lifetime (days)",
     type: "number",
     group: "general",
+    advanced: true,
     help: "How long a login stays valid. Lowering it does not revoke existing sessions — do that from the Users page.",
     envFallback: "SESSION_TTL_DAYS",
     default: "30",
   },
-  {
-    key: "redis.url",
-    label: "Redis URL",
-    type: "string",
-    group: "general",
-    help: "Background job queue. Required from Phase 2 onward.",
-    placeholder: "redis://127.0.0.1:6379",
-    envFallback: "REDIS_URL",
-  },
+  // `redis.url` was here. Nothing ever read it: BullMQ and ioredis are installed and no
+  // queue was ever defined, so the field asked every operator for the address of a
+  // service the application does not use. Bring it back with the first real queue.
 
   // --- QRZ ---
   {
@@ -505,6 +511,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Download confirmations automatically",
     type: "boolean",
     group: "lotw",
+    advanced: true,
     help:
       "Fetch new LoTW confirmations on a timer instead of only when the Sync button is " +
       "pressed. Download only — uploading needs your TQSL certificate — so this is " +
@@ -516,6 +523,7 @@ export const SETTINGS: SettingDef[] = [
     label: "How often to check LoTW (minutes)",
     type: "number",
     group: "lotw",
+    advanced: true,
     help:
       "An incremental check is one small request. Hourly is what Cloudlog recommends " +
       "for the same service, and LoTW rate-limits heavy use. Minimum 15.",
@@ -532,6 +540,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Check that LoTW kept what we uploaded",
     type: "boolean",
     group: "lotw",
+    advanced: true,
     help:
       "An accepted LoTW upload only means the file was QUEUED — the records are validated " +
       "afterwards and the outcome arrives by email. So a batch marked sent here may not be " +
@@ -546,6 +555,7 @@ export const SETTINGS: SettingDef[] = [
     label: "How often to check (hours)",
     type: "number",
     group: "lotw",
+    advanced: true,
     help:
       "Daily is right. LoTW processes an upload within minutes to hours, so checking sooner " +
       "reports contacts as missing that are merely still in the queue — which would clear " +
@@ -570,6 +580,7 @@ export const SETTINGS: SettingDef[] = [
     label: "County (for LoTW)",
     type: "string",
     group: "lotw",
+    advanced: true,
     help:
       "The county name without the word \"County\", e.g. Kenosha. Only meaningful for US " +
       "stations, and only used for county awards.",
@@ -580,6 +591,7 @@ export const SETTINGS: SettingDef[] = [
     label: "The state field is a Canadian province",
     type: "boolean",
     group: "lotw",
+    advanced: true,
     help:
       "LoTW carries provinces in a different field from states, and it is not inferred " +
       "from the value — several two-letter codes are both. Leave off for the US.",
@@ -590,6 +602,7 @@ export const SETTINGS: SettingDef[] = [
     label: "CQ zone (for LoTW)",
     type: "number",
     group: "lotw",
+    advanced: true,
     help: "Optional. Sent on the station record and covered by the signature.",
     placeholder: "4",
   },
@@ -598,6 +611,7 @@ export const SETTINGS: SettingDef[] = [
     label: "ITU zone (for LoTW)",
     type: "number",
     group: "lotw",
+    advanced: true,
     help: "Optional. Sent on the station record and covered by the signature.",
     placeholder: "7",
   },
@@ -606,6 +620,7 @@ export const SETTINGS: SettingDef[] = [
     label: "IOTA reference (for LoTW)",
     type: "string",
     group: "lotw",
+    advanced: true,
     help: "Optional, e.g. NA-001. Only for island operations.",
     placeholder: "NA-001",
   },
@@ -625,6 +640,7 @@ export const SETTINGS: SettingDef[] = [
     label: "eQSL QTH nickname",
     type: "string",
     group: "eqsl",
+    advanced: true,
     help:
       "Required only when your eQSL login owns more than one QTH. With several, eQSL refuses " +
       "every request with 'Username/Password found more than 1 account' until told which to " +
@@ -643,6 +659,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Download eQSL confirmations automatically",
     type: "boolean",
     group: "eqsl",
+    advanced: true,
     help:
       "Pulls your eQSL inbox and matches it to the log, which is what earns award credit. " +
       "This is READ ONLY — it uploads nothing and posts no cards to anyone, so it is safe " +
@@ -656,6 +673,7 @@ export const SETTINGS: SettingDef[] = [
     label: "How often to check eQSL (minutes)",
     type: "number",
     group: "eqsl",
+    advanced: true,
     help: "Hourly is plenty — confirmations are not urgent. Minimum 15.",
     default: "60",
   },
@@ -693,6 +711,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Club Log station callsign",
     type: "string",
     group: "clublog",
+    advanced: true,
     help: "Which callsign's log to upload to. Leave blank to use the station on the QSO.",
   },
   {
@@ -700,6 +719,7 @@ export const SETTINGS: SettingDef[] = [
     label: "ClubLog application password",
     type: "secret",
     group: "clublog",
+    advanced: true,
     help: "Club Log's separate API credential, created under Settings -> Application Passwords on clublog.org. Uploads may require this rather than the account password; downloads work with either.",
   },
   {
@@ -707,6 +727,7 @@ export const SETTINGS: SettingDef[] = [
     label: "ClubLog API key",
     type: "secret",
     group: "clublog",
+    advanced: true,
     help: "Optional in Club Log's own documentation, and requested from their helpdesk rather than generated on the site. Sent as the `api` field when set, and omitted entirely when blank — an empty key is not the same as no key, and a service that reads one as an invalid credential would refuse a request that works without it. Worth setting if uploads are refused at the edge: measured from this station, getadif.php answers 200 while putlogs.php and realtime.php return a bare nginx 403 that never reaches the application, which no credential can affect but an allow-listed key might.",
   },
 
@@ -786,6 +807,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Battle Royale port",
     type: "number",
     group: "ft8battle",
+    advanced: true,
     help:
       "The port published alongside the address. 2237 is what ft8battle.com listed when " +
       "this was written; trust the site over this text.",
@@ -797,6 +819,7 @@ export const SETTINGS: SettingDef[] = [
     label: "ADIF program id",
     type: "string",
     group: "ft8battle",
+    advanced: true,
     help:
       "The PROGRAMID written inside the ADIF document. Battle Royale accepts a WSJT-X log, " +
       "which is why that is the default. The station id below is the protocol envelope and " +
@@ -810,6 +833,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Extra ADIF fields",
     type: "string",
     group: "ft8battle",
+    advanced: true,
     help:
       "Added to every record sent to Battle Royale, as NAME=value separated by commas or " +
       "newlines. Fields that come from the contact itself are refused, and the panel below " +
@@ -823,6 +847,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Comment sent with each contact",
     type: "string",
     group: "ft8battle",
+    advanced: true,
     help:
       "Goes in the ADIF COMMENT field, which is the one Battle Royale reads for its own " +
       "commands — a POTA reference or a /name request belongs here. Left empty, no comment " +
@@ -836,6 +861,7 @@ export const SETTINGS: SettingDef[] = [
     label: "UDP station id",
     type: "string",
     group: "ft8battle",
+    advanced: true,
     help:
       "The program name inside the datagram. Leave it as WSJT-X: the server matches on it " +
       "literally.",
@@ -888,6 +914,7 @@ export const SETTINGS: SettingDef[] = [
     label: "ADIF program id",
     type: "string",
     group: "udplog",
+    advanced: true,
     help:
       "The PROGRAMID written inside the ADIF document. Separate from the station id below: " +
       "that one is the protocol envelope, this one is a field in the record, and receivers " +
@@ -901,6 +928,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Extra ADIF fields",
     type: "string",
     group: "udplog",
+    advanced: true,
     help:
       "Added to every broadcast record, as NAME=value separated by commas or newlines. For " +
       "things that describe the STATION rather than the contact: MY_ANTENNA=EFHW, " +
@@ -916,6 +944,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Comment sent with each contact",
     type: "string",
     group: "udplog",
+    advanced: true,
     help:
       "Goes in the ADIF COMMENT field. Left empty, no comment is sent at all — which is the " +
       "right default, because DigiShack's own note about how the contact was made would " +
@@ -928,6 +957,7 @@ export const SETTINGS: SettingDef[] = [
     label: "UDP station id",
     type: "string",
     group: "udplog",
+    advanced: true,
     help:
       "The program name inside the datagram. Leave it as WSJT-X unless you know the " +
       "receiver cares: several match on it literally and ignore anything else, so a more " +
@@ -954,27 +984,15 @@ export const SETTINGS: SettingDef[] = [
     label: "N3FJP API port",
     type: "number",
     group: "n3fjp",
+    advanced: true,
     help: "The port shown in that API window. 1100 is the default and rarely changed.",
     default: "1100",
   },
-  {
-    key: "hrdlog.callsign",
-    label: "HRDLOG callsign",
-    type: "string",
-    group: "hrdlog",
-    help:
-      "The callsign your HRDLOG.net account logs under. Paired with the upload code below — both are needed.",
-    envFallback: "HRDLOG_CALLSIGN",
-  },
-  {
-    key: "hrdlog.code",
-    label: "HRDLOG upload code",
-    type: "secret",
-    group: "hrdlog",
-    help:
-      "HRDLOG.net's upload code, issued in your account settings there. Not your website password.",
-    envFallback: "HRDLOG_CODE",
-  },
+  // `hrdlog.callsign` and `hrdlog.code` were here, with a group of their own. There is no
+  // HRDLOG.net uploader and never was: the code was never read by anything, and the
+  // callsign only lit an Integrations card reading "Configured. Not verified." — a service
+  // shown as supported that nothing sends to. When an uploader exists, the credentials
+  // come back with it.
 
   // --- DXCC ---
   {
@@ -982,6 +1000,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Club Log cty API key",
     type: "secret",
     group: "dxcc",
+    advanced: true,
     help:
       "OPTIONAL, and most operators should leave it blank. DXCC data downloads from " +
       "country-files.com with no credential at all, which is the button the DXCC page " +
@@ -990,14 +1009,9 @@ export const SETTINGS: SettingDef[] = [
       "in only if you already have a key and prefer Club Log's cty.xml, which carries " +
       "dated exception records the CSV does not. Nothing to do with uploading contacts.",
   },
-  {
-    key: "dxcc.autoFill",
-    label: "Auto-fill DXCC on entry",
-    type: "boolean",
-    group: "dxcc",
-    help: "Resolve the entity as a callsign is typed on the QSO form.",
-    default: "true",
-  },
+  // `dxcc.autoFill` was here, a switch for resolving the entity as a callsign is typed.
+  // Nothing read it, so it switched nothing off: the QSO form's lookupDxcc() fills an
+  // empty DXCC field from the callsign whatever it said.
 
   // --- PSKReporter ---
   {
@@ -1022,6 +1036,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Antenna description",
     type: "string",
     group: "pskreporter",
+    advanced: true,
     help: "Shown alongside your spots on pskreporter.info. Optional.",
     placeholder: "80m OCF dipole at 12m",
   },
@@ -1052,6 +1067,7 @@ export const SETTINGS: SettingDef[] = [
     label: "RTTY tone centre (Hz)",
     type: "number",
     group: "rtty",
+    advanced: true,
     help: "Centre of the mark/space pair in the audio passband, Hz. 2210 is the classic 2125/2295 pair. The decodes page moves it live; this is where it starts.",
     default: "2210",
   },
@@ -1060,6 +1076,7 @@ export const SETTINGS: SettingDef[] = [
     label: "RTTY shift (Hz)",
     type: "number",
     group: "rtty",
+    advanced: true,
     help: "Distance between mark and space, Hz. 170 is the amateur standard; 850 the old commercial one.",
     default: "170",
   },
@@ -1068,6 +1085,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Figures case",
     type: "string",
     group: "rtty",
+    advanced: true,
     help: "us | ita2. Which characters the FIGURES case carries where the standards differ: US TTY ($ ! & # ; \") is what amateur software uses; ITA2 proper has ' WRU BELL + = there instead.",
     default: "us",
   },
@@ -1076,6 +1094,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Unshift on space",
     type: "boolean",
     group: "rtty",
+    advanced: true,
     help: "A received space returns the decoder to the letters case, the amateur convention. Leave on unless the station you are reading sends figures across spaces without re-shifting.",
     default: "true",
   },
@@ -1084,6 +1103,7 @@ export const SETTINGS: SettingDef[] = [
     label: "RTTY squelch",
     type: "number",
     group: "rtty",
+    advanced: true,
     help: "0 to 1. How sure the decoder must be of a character's bits before printing it. Band noise alone passes the frame check about twice a second; at 0.7 it passes a few characters a minute and a signal needs about 6 dB over the noise, which is where RTTY copy begins anyway. Lower it for a weak station you can hear but not read; 0 prints everything.",
     default: "0.7",
   },
@@ -1094,6 +1114,7 @@ export const SETTINGS: SettingDef[] = [
     label: "JTTY transmit offset (Hz audio)",
     type: "number",
     group: "digital",
+    advanced: true,
     help: "Where JTTY transmits: its lowest tone, Hz above the dial, as WSJT-X's Tx frequency. 1500 is WSJT-X's default. The receiver decodes every station in the passband whatever this is; a click on the waterfall or on a station's tag moves it for the session.",
     default: "1500",
   },
@@ -1103,6 +1124,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Feld Hell carrier (Hz audio)",
     type: "number",
     group: "digital",
+    advanced: true,
     help: "Where the Hell receiver paints and the transmitter keys when the HELL chip is pressed, Hz above the dial. 1000 puts a 14.062 dial on the Feld Hell Club calling frequency, 14.063. A click on the waterfall moves it for the session.",
     default: "1000",
   },
@@ -1112,6 +1134,7 @@ export const SETTINGS: SettingDef[] = [
     label: "PSK31 carrier (Hz audio)",
     type: "number",
     group: "psk31",
+    advanced: true,
     help: "Where the decoder listens and the transmitter sends when the PSK31 chip is pressed, Hz above the dial. 1000 is the convention: the 20 m watering hole at a 14.070 dial sits at 14.071. A click on the waterfall moves it for the session.",
     default: "1000",
   },
@@ -1120,6 +1143,7 @@ export const SETTINGS: SettingDef[] = [
     label: "PSK speed",
     type: "number",
     group: "psk31",
+    advanced: true,
     help: "31, 63 or 125: BPSK31 at 31.25 baud, BPSK63 at 62.5, BPSK125 at 125. The panel's picker changes it for the session.",
     default: "31",
   },
@@ -1128,6 +1152,7 @@ export const SETTINGS: SettingDef[] = [
     label: "PSK31 squelch (0 to 1)",
     type: "number",
     group: "psk31",
+    advanced: true,
     help: "The decoder's quality - how consistently the symbols read as a phase or its reverse - below which nothing prints. Noise sits near 0.2, a clean signal near 1, a weak one around 0.6. 0 prints everything, which on an empty channel is a stream of random characters.",
     default: "0.5",
   },
@@ -1154,6 +1179,7 @@ export const SETTINGS: SettingDef[] = [
     label: "JS8 INFO text",
     type: "string",
     group: "js8",
+    advanced: true,
     help: "What a station that sends INFO? gets back, after the INFO command, when automatic replies are set to all. Upper case on the air. Empty means INFO? is not answered.",
     default: "",
   },
@@ -1162,6 +1188,7 @@ export const SETTINGS: SettingDef[] = [
     label: "JS8 acknowledgement cooldown (minutes)",
     type: "number",
     group: "js8",
+    advanced: true,
     help: "How long after acknowledging a station's heartbeat its next ones are let go, so a station heartbeating every few minutes does not have this one keying every few minutes for it. JS8Call acknowledges every one; 15 keeps the duty cycle sane.",
     default: "15",
   },
@@ -1170,6 +1197,7 @@ export const SETTINGS: SettingDef[] = [
     label: "JS8 speed",
     type: "string",
     group: "js8",
+    advanced: true,
     help: "normal | fast | turbo | slow: JS8Call's speeds, 15, 10, 6 and 30 second windows on the same frequencies. Both ends must use the same one; Normal is what most stations run. The JS8 panel changes it for the session.",
     default: "normal",
   },
@@ -1179,6 +1207,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Olivia centre (Hz audio)",
     type: "number",
     group: "olivia",
+    advanced: true,
     help: "The centre of the tone set when the Olivia chip is pressed, Hz above the dial. 1500 is the convention: the published 20 m centre of 14.0725 is a 14.071 dial. A click on the waterfall moves it for the session.",
     default: "1500",
   },
@@ -1187,6 +1216,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Olivia tones",
     type: "number",
     group: "olivia",
+    advanced: true,
     help: "With the bandwidth, the size: 500/16 and 1000/32 are what the air mostly runs. Tones and bandwidth together must be one of 250/8, 500/8, 500/16, 1000/32, 1000/16, 2000/64; the panel's picker changes it for the session.",
     default: "16",
   },
@@ -1195,6 +1225,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Olivia bandwidth (Hz)",
     type: "number",
     group: "olivia",
+    advanced: true,
     help: "The tone set's width in Hz; with olivia.tones it names the size, and the pair must be one of those listed under olivia.tones.",
     default: "500",
   },
@@ -1203,6 +1234,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Olivia or Contestia",
     type: "string",
     group: "olivia",
+    advanced: true,
     help: "olivia | contestia. Contestia is the same engine with a 6-bit upper-case alphabet and blocks half the length, so it is faster and a little less robust; the panel's picker changes it for the session.",
     default: "olivia",
   },
@@ -1211,6 +1243,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Olivia sync threshold",
     type: "number",
     group: "olivia",
+    advanced: true,
     help: "The synchroniser's signal over noise below which a block is not printed. Noise alone reads about 3; a readable signal 6 and up. Lower prints weaker blocks and more junk.",
     default: "4",
   },
@@ -1220,6 +1253,7 @@ export const SETTINGS: SettingDef[] = [
     label: "CW pitch to assume (Hz)",
     type: "number",
     group: "cw",
+    advanced: true,
     help: "Where the decoder listens when the radio has not reported its CW pitch. A FlexRadio reports it in its transmit status and that always wins; this is for before it arrives.",
     default: "600",
   },
@@ -1228,6 +1262,7 @@ export const SETTINGS: SettingDef[] = [
     label: "CW sending speed (wpm)",
     type: "number",
     group: "cw",
+    advanced: true,
     help: "The speed a typed line goes out at through the radio's keyer (CWX). 5 to 60. The −2 / +2 buttons on the decodes page change it live; this is where it starts.",
     default: "20",
   },
@@ -1236,6 +1271,7 @@ export const SETTINGS: SettingDef[] = [
     label: "CW presence threshold (dB)",
     type: "number",
     group: "cw",
+    advanced: true,
     help: "How far a signal's peak must stand over the noise floor, in the decoder's narrow filter, before anything prints. Noise's own peaks reach about 13 dB over its floor; 16 keeps an empty channel silent and is roughly what a machine needs to read CW anyway. Lower it for a weak station you can hear but the page cannot.",
     default: "16",
   },
@@ -1255,6 +1291,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Time server",
     type: "string",
     group: "digital",
+    advanced: true,
     help: "Where to ask what time it is, over SNTP. FT8 tolerates about a second of clock error before decoding degrades and other stations stop decoding you — and DigiShack cannot set the system clock (that needs elevation, and in a container it is the host's clock anyway), so instead it measures the difference and compensates internally. Blank disables the check entirely, which leaves you relying on the decode-median estimate that needs eight decodes before it can say anything.",
     default: "pool.ntp.org",
   },
@@ -1263,6 +1300,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Compensate for a wrong clock",
     type: "boolean",
     group: "digital",
+    advanced: true,
     help: "Apply the measured offset to transmit timing, decode windows and logged contact times. Off measures and displays it without changing anything. Corrections above 5 seconds are always refused: that is not a clock needing a nudge, it is a machine whose time is wrong, and quietly compensating would hide it and produce a log nobody can reconcile.",
     default: "true",
   },
@@ -1271,6 +1309,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Re-check the clock every (minutes)",
     type: "number",
     group: "digital",
+    advanced: true,
     help: "How often to re-measure. Hourly is plenty for a machine that is roughly synchronised, and one exchange is 48 bytes. 0 measures once at startup and never again.",
     default: "60",
   },
@@ -1279,6 +1318,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Also write every decode to CSV in",
     type: "string",
     group: "digital",
+    advanced: true,
     help: "A directory on the server. One file per UTC day, `decodes-YYYY-MM-DD.csv`, holding every decode heard — including ones with no resolvable band, which never reach the database. Leave blank to write none. This is separate from the database copy, which is pruned after `digital.decodeRetentionDays`: the table is what the application queries, this is the raw feed kept for its own sake in a format that outlives the schema. A busy band produces around 42,000 rows a day, which is a few megabytes.",
     placeholder: "/var/lib/digishack/decodes",
   },
@@ -1287,6 +1327,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Passband to decode and display (Hz)",
     type: "number",
     group: "digital",
+    advanced: true,
     help: "Top of the audio passband: what the decoders search AND what the waterfall draws — one number, so the display cannot disagree with the decoder. 3000 is the conventional FT8 sub-band and the decoder library's own default. Raising it finds stations above 3 kHz that were being clipped: a busy band shows a hard stop at exactly 3000, which is a clipped distribution rather than a natural one. It costs decode time, so watch for the \"decode took Nms\" warning, and note that most radios will not TRANSMIT above about 2.9 kHz whatever the receiver hears — stations found up there can be decoded but not answered.",
     default: "3000",
   },
@@ -1300,20 +1341,17 @@ export const SETTINGS: SettingDef[] = [
     help: "Leave blank to discover the radio automatically on the LAN.",
     placeholder: "192.0.2.10",
   },
-  {
-    key: "flex.autoDiscover",
-    label: "Discover automatically",
-    type: "boolean",
-    group: "flex",
-    help: "Listen for the radio's UDP broadcast instead of using a fixed address.",
-    default: "true",
-  },
+  // `flex.autoDiscover` was here. It was the same decision as a blank address above, asked
+  // twice: a configured address always won over whatever discovery found, so the switch
+  // only decided whether to spend up to 8 s listening for a broadcast whose answer was then
+  // thrown away. Blank means discover; an address means use it.
   {
     key: "digital.mode",
     legacyKeys: ["flex.mode"],
     label: "Digital mode",
     type: "string",
     group: "digital",
+    advanced: true,
     help: "auto | ft8 | ft4 | ft2 | wspr | rtty | cw | js8 | psk31 | olivia | sstv | hell | jtty. Auto infers the mode from the dial frequency, which is the only reliable way — a DIGU slice does not say which mode it carries, and the three use different window lengths (15 / 7.5 / 3.75 s). FT2 has provisional calling frequencies so auto does find it, except on 60 m where it shares 5.357 MHz with FT4 and auto resolves to FT4; pin ft2 here to run it there or anywhere off-frequency.",
     default: "auto",
   },
@@ -1322,6 +1360,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Decoder depth",
     type: "number",
     group: "flex",
+    advanced: true,
     help:
       "1-4. Leave it at 2. MEASURED on a Xeon E5-2630 v3 with a 3 kHz passband: depth 1 " +
       "takes 1312-2021 ms and depth 2 takes 1435-1795 ms — the SAME, sometimes worse, so " +
@@ -1337,6 +1376,7 @@ export const SETTINGS: SettingDef[] = [
     label: "DAX IQ / audio channel",
     type: "number",
     group: "flex",
+    advanced: true,
     help: "Which DAX channel carries the audio to decode. Used by the native decode path.",
     default: "1",
   },
@@ -1345,6 +1385,7 @@ export const SETTINGS: SettingDef[] = [
     label: "RF panadapter",
     type: "boolean",
     group: "flex",
+    advanced: true,
     help: "Show tens of kHz of RF spectrum from the radio's own panadapter, alongside the audio waterfall rather than instead of it. The audio waterfall stays because the FT8 decoder searches a 3 kHz passband and the display has to show the same 3 kHz. Costs about 60 kB/s from the radio at the defaults below, comparable to the audio stream. FlexRadio only so far — see docs/panadapter.md for why the Icom's scope is not enabled yet.",
     default: "true",
   },
@@ -1353,6 +1394,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Panadapter span",
     type: "number",
     group: "flex",
+    advanced: true,
     help: "How much band to show, in kHz. The radio accepts 4.92 kHz to 7372.8 kHz (measured, not documented). Normally set from the Span buttons on the panadapter itself, which write back here — this is just where the choice is remembered across restarts. 200 kHz holds a digital sub-band plus the CW and SSB activity either side of it; 20 kHz is enough for one FT8 watering hole in context.",
     default: "200",
   },
@@ -1361,6 +1403,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Panadapter resolution",
     type: "number",
     group: "flex",
+    advanced: true,
     help: "Bins across the span. The radio's real ceiling is 4096 — measured: asking for 8192 silently returns 4096. More bins than screen pixels is not wasted, because the display takes the strongest bin per pixel, which is what keeps a narrow carrier visible instead of averaging it into the noise.",
     default: "2048",
   },
@@ -1369,6 +1412,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Panadapter frame rate",
     type: "number",
     group: "flex",
+    advanced: true,
     help: "Frames a second. The radio delivered 95 against a request of 100, so this is not the limit — bandwidth is: every frame is sent to every open page. Vertical resolution on a waterfall IS time, so this is a trade rather than a quality setting: at 10 rows a second a 220-pixel canvas holds 22 seconds of history.",
     default: "10",
   },
@@ -1377,6 +1421,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Radio-down reminder interval",
     type: "number",
     group: "alerts",
+    advanced: true,
     help: "How often to email again while the radio stays unreachable, in hours. A radio that is off needs somebody to go and switch it on, and the only thing that produces that is a message which keeps arriving — this used to alert once, four minutes in, and then go quiet. After a mains outage on 11 August 2026 the bridge retried 8,223 times over 94 hours having sent exactly one email on the first evening. These reminders ignore the general alert cooldown below, because repeating is the entire point. Set it to a large number to effectively disable the repeat; the first alert is always sent.",
     default: "12",
   },
@@ -1385,6 +1430,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Panadapter averaging",
     type: "number",
     group: "flex",
+    advanced: true,
     help: "How much the radio averages successive spectrum frames before sending them, 0-100. This is averaging in TIME, not across frequency: a steady carrier is present in every frame and averages to itself, while noise is different every frame and averages down — so unlike the resolution setting above, this does not smear a narrow signal into its neighbours. It was hardcoded off, and off is expensive: a single unaveraged FFT bin's noise spreads 12.65 dB from its 25th to its 99.5th percentile, and the display has to give all of that to the dark end of the colour ramp, leaving less of the palette for actual signals. Averaging four frames roughly halves that spread. 0 disables it; the display is correct either way, just grainier.",
     default: "20",
   },
@@ -1427,6 +1473,7 @@ export const SETTINGS: SettingDef[] = [
     label: "YouTube refresh token",
     type: "secret",
     group: "youtube",
+    advanced: true,
     help:
       "Written by Connect to YouTube — there is nothing to type here. It is a standing "
       + "grant to act as the channel until revoked, so it is stored encrypted and never "
@@ -1462,6 +1509,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Chat poll interval (seconds)",
     type: "limit",
     group: "youtube",
+    advanced: true,
     help:
       "How often to ask YouTube for new chat. The Data API charges units per call against a "
       + "daily quota, and following YouTube's own suggested interval would exhaust a default "
@@ -1474,6 +1522,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Broadcast title",
     type: "text",
     group: "youtube",
+    advanced: true,
     help:
       "Set on the broadcast each time the stream starts, if an account is connected. "
       + "Placeholders: {date} {callsign} {grid} {band} {mode} {qsos}. YouTube truncates a "
@@ -1485,6 +1534,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Broadcast description",
     type: "text",
     group: "youtube",
+    advanced: true,
     help:
       "Set alongside the title. The same placeholders work here. Left empty, whatever the "
       + "broadcast already carries is kept — an empty description overwriting a good one "
@@ -1495,6 +1545,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Stream video bitrate (kbps)",
     type: "limit",
     group: "youtube",
+    advanced: true,
     help:
       "4500 is YouTube's own figure for 1080p, which is what the stream now sends — at ten frames " +
       "a second, because a waterfall is a picture that scrolls, not a camera. Do not lower this to " +
@@ -1514,6 +1565,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Take control of the radio's active slice",
     type: "boolean",
     group: "flex",
+    advanced: true,
     help:
       "Tunes the slice you are looking at to the operating frequency, sets it to DIGU, and " +
       "makes it the transmit slice. Leave it on unless you deliberately want SmartSDR to own " +
@@ -1536,6 +1588,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Also call stations that just finished a contact",
     type: "boolean",
     group: "auto",
+    advanced: true,
     help:
       "A station sending RR73, RRR or 73 has just finished and is free — often the best "
       + "moment on the band to call, ahead of everyone waiting for their next CQ. Off by "
@@ -1560,6 +1613,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Hunt minimum SNR (dB)",
     type: "number",
     group: "auto",
+    advanced: true,
     help: "Do not call stations weaker than this; the QSO is unlikely to complete and the cycles are better spent elsewhere.",
     default: "-22",
   },
@@ -1586,6 +1640,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Leave a working band when another is this much busier",
     type: "number",
     group: "auto",
+    advanced: true,
     help:
       "Band-hopping otherwise only triggers when a band goes QUIET — a station happily " +
       "making contacts on 40m will stay there while 20m runs three times busier. This " +
@@ -1600,6 +1655,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Hop to the busiest band",
     type: "boolean",
     group: "auto",
+    advanced: true,
     help:
       "Instead of rotating through the hop list in order, jump to whichever band on it the " +
       "PSKReporter network currently sees the most stations on — the same SEEN figures the " +
@@ -1612,6 +1668,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Antenna port",
     type: "string",
     group: "flex",
+    advanced: true,
     help:
       "Which antenna socket to use, on a radio that has more than one. Every FLEX-6000 has " +
       "ANT1 and ANT2, and the larger models add receive-only BNCs and a transverter port — " +
@@ -1631,6 +1688,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Receive antenna port",
     type: "string",
     group: "flex",
+    advanced: true,
     help:
       "A separate socket to LISTEN on: a receive loop, a beverage, or the 6600's RX_A BNC. " +
       "Blank means listen on the antenna above, which is the normal case. The radio keeps two " +
@@ -1654,6 +1712,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Default frequency (Hz)",
     type: "number",
     group: "flex",
+    advanced: true,
     help: "Where the radio comes up when DigiShack has to create its own slice (no SmartSDR/AetherSDR running). Default 7074000 = 40m FT8.",
     default: "7074000",
   },
@@ -1709,6 +1768,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Restart the bridge if it stops decoding",
     type: "boolean",
     group: "watchdog",
+    advanced: true,
     help: "Exits the bridge when no decode window has arrived for a while, so PM2 restarts it. A hung event loop or a socket that stopped delivering cannot be repaired from inside the process that is hung — a fresh one is the only reliable cure. Off means a hang goes unnoticed until you look.",
     default: "true",
   },
@@ -1717,6 +1777,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Quiet periods before restarting",
     type: "number",
     group: "watchdog",
+    advanced: true,
     help: "How many T/R periods of no decode window count as dead. 8 is two minutes on FT8, and never fires on a working radio — a single late window is not a fault, so this must not be set to 1 or 2. There is a 60-second floor for the faster modes, and a mode with a longer period (WSPR: two minutes) gets three of its own periods instead, so the count means FT8-length periods.",
     default: "8",
   },
@@ -1749,6 +1810,7 @@ export const SETTINGS: SettingDef[] = [
     label: "CI-V address",
     type: "string",
     group: "icom",
+    advanced: true,
     help: "Hex, e.g. 94 for an IC-7300 or A4 for an IC-705. Leave blank to use the default for whichever model the radio reports at login, which is right unless you have changed it in the radio's CI-V menu.",
     placeholder: "94",
   },
@@ -1757,6 +1819,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Control port",
     type: "number",
     group: "icom",
+    advanced: true,
     help: "UDP port for the control stream. 50001 unless you have changed it in the radio. The serial and audio streams follow on 50002 and 50003.",
     default: "50001",
   },
@@ -1765,6 +1828,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Serial (CI-V) port",
     type: "number",
     group: "icom",
+    advanced: true,
     help: "UDP port carrying CI-V — frequency, mode, PTT and the meters.",
     default: "50002",
   },
@@ -1773,6 +1837,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Audio port",
     type: "number",
     group: "icom",
+    advanced: true,
     help: "UDP port carrying receive and transmit audio, at 48 kHz.",
     default: "50003",
   },
@@ -1781,6 +1846,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Decoder depth",
     type: "number",
     group: "icom",
+    advanced: true,
     help: "1-4. Depth 2 is the live default: about 0.6 s per window, comfortably inside the gap between FT8 cycles. Depth 3 fits with less margin; depth 4 takes around 11 s and cannot keep up with a 15 s cycle.",
     default: "2",
   },
@@ -1797,6 +1863,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Send silence on the audio stream",
     type: "boolean",
     group: "icom",
+    advanced: true,
     help: "The RS-BA1 audio socket is bidirectional and the radio appears to cut a receive-only client's audio after a minute or two. Sending silence while idle was meant to prevent that. Measured on the air, it does not: 95 keepalives went out during the 20 seconds before the audio was declared stalled, and the radio answers at roughly the rate we send, which is the shape of a radio reacting to us rather than ignoring us. Leave it on unless you are measuring; turning it off is how to find out whether it helps or harms.",
     default: "true",
   },
@@ -1821,6 +1888,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Silence threshold",
     type: "number",
     group: "icom",
+    advanced: true,
     help: "Windows quieter than this are skipped without decoding. Lower than the FlexRadio equivalent on purpose: Icom audio arrives at 48 kHz and needs two decimation passes to reach the decoders' 12 kHz, against the Flex's one from 24 kHz, and the filter has about 0.8 gain per pass — so the same signal is roughly 20% quieter here. Reusing the Flex value would silently skip marginal windows and look like an antenna fault.",
     default: "0.0008",
   },
@@ -1835,6 +1903,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Bridge HTTP/WS port",
     type: "number",
     group: "bridge",
+    advanced: true,
     help: "Where the bridge serves the live decode WebSocket and its control API. Not the Next.js port.",
     envFallback: "BRIDGE_PORT",
     legacyKeys: ["omega.bridgePort"],
@@ -1845,6 +1914,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Bridge listen address",
     type: "string",
     group: "bridge",
+    advanced: true,
     help: "Which address the radio service listens on. 127.0.0.1 (the default) means only this machine can reach it, which is why listening to receiver audio from a phone or another computer does not work out of the box. Set it to 0.0.0.0 to allow the rest of your network. Read this before you do: the control API is protected by a shared secret, but the decode and audio WebSockets are NOT — anything on your network could listen to your receiver. On a home LAN behind a router that is usually fine; on shared or public wifi it is not. The safer alternative is leaving this alone and proxying /ws/decodes and /ws/audio through NGINX on the app's own origin, then setting the public WebSocket URL below.",
     default: "127.0.0.1",
   },
@@ -1853,6 +1923,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Bridge shared secret",
     type: "secret",
     group: "bridge",
+    advanced: true,
     help: "Authenticates the web app to the bridge's control API. Self-provisioned on first run — there is nothing to decide here.",
     envFallback: "BRIDGE_TOKEN",
     legacyKeys: ["omega.bridgeToken"],
@@ -1862,6 +1933,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Public WebSocket URL",
     type: "string",
     group: "bridge",
+    advanced: true,
     help: "Where browsers reach the live decode feed. Leave blank for development (the bridge port on this host). Behind NGINX set wss://your-host/ws/decodes.",
     legacyKeys: ["omega.bridgeWsUrl"],
     placeholder: "wss://digishack.example.com/ws/decodes",
@@ -1873,6 +1945,7 @@ export const SETTINGS: SettingDef[] = [
     label: "UDP port",
     type: "number",
     group: "wsjtx",
+    advanced: true,
     help: "Port the decoder broadcasts the WSJT-X protocol on. WSJT-X defaults to 2237.",
     envFallback: "WSJTX_UDP_PORT",
     legacyKeys: ["omega.udpPort"],
@@ -1883,6 +1956,7 @@ export const SETTINGS: SettingDef[] = [
     label: "UDP bind address",
     type: "string",
     group: "wsjtx",
+    advanced: true,
     help:
       "Address DigiShack listens on for WSJT-X's UDP broadcasts. 0.0.0.0 accepts them from any machine on the network; 127.0.0.1 only from this one. Used only when the digital source is the external decoder.",
     envFallback: "WSJTX_UDP_HOST",
@@ -1913,6 +1987,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Send alerts to",
     type: "string",
     group: "alerts",
+    advanced: true,
     help: "Blank sends to the first active admin's address.",
     placeholder: "you@example.com",
   },
@@ -1921,6 +1996,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Quietest repeat for the same issue (minutes)",
     type: "number",
     group: "alerts",
+    advanced: true,
     help: "A fault that persists re-sends after this long; a fault that clears and returns emails again immediately. This is what keeps a flapping radio from burying the one email that mattered.",
     default: "360",
   },
@@ -1966,6 +2042,7 @@ export const SETTINGS: SettingDef[] = [
     label: "SMTP port",
     type: "number",
     group: "smtp",
+    advanced: true,
     help:
       "587 for STARTTLS, which is the usual choice. 465 for implicit TLS with the setting below turned on. 25 only on a local relay.",
     envFallback: "SMTP_PORT",
@@ -1976,6 +2053,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Implicit TLS (port 465)",
     type: "boolean",
     group: "smtp",
+    advanced: true,
     help: "On only for implicit TLS on port 465. Leave it OFF for STARTTLS on 587, which is the usual arrangement — the connection is still encrypted, just negotiated after connecting.",
     envFallback: "SMTP_SECURE",
     default: "false",
@@ -2018,6 +2096,7 @@ export const SETTINGS: SettingDef[] = [
     label: "QSL email subject",
     type: "string",
     group: "qsl",
+    advanced: true,
     help: `Tokens: ${TOKEN_HELP}`,
     default: "QSL Confirmation for {THEIR_CALL} / {MY_CALL} QSO",
   },
@@ -2042,6 +2121,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Contact data heading",
     type: "string",
     group: "qsl",
+    advanced: true,
     help: "Heading above the contact detail block. Blank to omit the block entirely.",
     default: "Contact Data",
   },
@@ -2050,6 +2130,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Contact data block",
     type: "text",
     group: "qsl",
+    advanced: true,
     help: `Fixed-width detail block. A line whose only token is empty is dropped, so optional fields disappear cleanly. Tokens: ${TOKEN_HELP}`,
     default: [
       "Call: {THEIR_CALL} DE {MY_CALL}",
@@ -2069,6 +2150,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Embedded card heading",
     type: "string",
     group: "qsl",
+    advanced: true,
     help: "Heading above the card shown inline in the email. Blank to omit the heading.",
     default: "Embedded QSL Card:",
   },
@@ -2077,6 +2159,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Show the card inline",
     type: "boolean",
     group: "qsl",
+    advanced: true,
     help: "Display the card in the message body. Most clients show it; a few show the attachment only.",
     default: "true",
   },
@@ -2085,6 +2168,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Attach the card as a file",
     type: "boolean",
     group: "qsl",
+    advanced: true,
     help: "Attach as well as embed, so the recipient can save it. Recommended: an inline-only image is awkward to keep.",
     default: "true",
   },
@@ -2093,6 +2177,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Transmit power for QSL cards",
     type: "string",
     group: "qsl",
+    advanced: true,
     help: "Fills {POWER}. A station constant rather than a per-QSO field — there is no per-QSO power column, and for digital work it rarely varies. Blank omits the line.",
     placeholder: "100",
     default: "",
@@ -2102,6 +2187,7 @@ export const SETTINGS: SettingDef[] = [
     label: "QTH text for QSL cards",
     type: "string",
     group: "qsl",
+    advanced: true,
     help: "Fills {MY_QTH}, e.g. \"Porter County, Indiana\". Blank omits it.",
     default: "",
   },
@@ -2162,6 +2248,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Give up after this many unanswered CQs",
     type: "limit",
     group: "auto",
+    advanced: true,
     help: "Treated as a quiet band, so band-hopping may move rather than stop.",
     default: "15",
   },
@@ -2178,6 +2265,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Give up on a station after this many calls",
     type: "limit",
     group: "auto",
+    advanced: true,
     help:
       "How many times an automatic mode calls one station before giving up and moving on. Each attempt is a full transmit cycle, so this is a time budget as much as a persistence setting — four is roughly two minutes on FT8.",
     default: "5",
@@ -2187,6 +2275,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Do not re-call a station for (minutes)",
     type: "limit",
     group: "auto",
+    advanced: true,
     help:
       "How long to leave a station alone after giving up on them. Stops you watching the same unanswered call repeat every few minutes while the rest of the band goes unworked.",
     default: "30",
@@ -2285,6 +2374,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Contacts per Cloudlog/Wavelog sweep",
     type: "number",
     group: "uploads",
+    advanced: true,
     help:
       "Cloudlog and Wavelog take one request per contact, like QRZ and eQSL — but unlike " +
       "those, the server is YOURS. The general per-run limit exists to be polite to other " +
@@ -2298,6 +2388,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Contacts per LoTW upload",
     type: "number",
     group: "uploads",
+    advanced: true,
     help:
       "LoTW takes one signed file per sweep however many contacts are in it, so the " +
       "general per-run limit means something different here. That limit exists because QRZ " +
@@ -2332,6 +2423,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Upload to Club Log",
     type: "boolean",
     group: "uploads",
+    advanced: true,
     help: "Off by default: uploads from this installation are refused with a bare nginx 403 that arrives before authentication, and the cause is outside this software. Downloads and log reconciliation work normally. Pointing Club Log at LoTW populates it without uploading from here at all.",
     default: "false",
   },
@@ -2348,6 +2440,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Most contacts to upload per run",
     type: "number",
     group: "uploads",
+    advanced: true,
     help: "A cap so a backlog is worked through gradually rather than in one burst against someone else's API.",
     default: "25",
   },
@@ -2356,6 +2449,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Sweep for un-uploaded contacts every (minutes)",
     type: "number",
     group: "uploads",
+    advanced: true,
     help: "Catches contacts entered by hand or imported, which the per-QSO trigger never sees. 0 disables the sweep, leaving only the per-QSO path.",
     default: "10",
   },
@@ -2364,6 +2458,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Keep decodes for (days)",
     type: "number",
     group: "digital",
+    advanced: true,
     help: "A busy band produces around 42,000 decodes a day — roughly 10 MB, or 3.7 GB a year — and nothing used to delete any of it. Decodes attached to a logged contact are NEVER pruned whatever this says; they are the evidence of the QSO. 0 keeps everything, which is fine if you have the disk and want the full history.",
     default: "30",
   },
@@ -2372,6 +2467,7 @@ export const SETTINGS: SettingDef[] = [
     label: "POTA session token (for importing your log)",
     type: "secret",
     group: "pota",
+    advanced: true,
     help: "Only needed to import your POTA hunter log — nothing else uses it. POTA's public API stops at 25 recent contacts, and the full log needs the session token from a browser signed in to pota.app. To get it: sign in at pota.app, open your browser's developer tools, go to the Network tab, click any request to api.pota.app, and copy the whole value of the Authorization request header. It is a short-lived AWS Cognito token and will expire in hours, which is why this is a one-time backfill rather than a live connection — once the history is in, DigiShack records park references itself from every contact it makes.",
     placeholder: "eyJhbGciOi…",
   },
@@ -2380,6 +2476,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Give up on an activator after (seconds)",
     type: "number",
     group: "pota",
+    advanced: true,
     help: "How long to sit on a park frequency without hearing the activator. Six FT8 cycles is 90 s. Too short and you miss someone working a pile-up; too long and one dead spot eats the session.",
     default: "90",
   },
@@ -2388,6 +2485,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Do not retry an activator for (minutes)",
     type: "number",
     group: "pota",
+    advanced: true,
     help: "After giving up on, or finishing with, an activator. They usually stay in a park for an hour or more, so a short value means chasing the same handful repeatedly.",
     default: "30",
   },
@@ -2396,6 +2494,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Also work POTA CQs heard on frequency",
     type: "boolean",
     group: "pota",
+    advanced: true,
     help: "While waiting for a spot worth chasing, work any station calling \"CQ POTA\" that is already audible. They are free contacts — no retune, no deaf period — and an activator is often heard before the spot feed catches up.",
     default: "true",
   },
@@ -2404,6 +2503,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Prefer parks and entities you have not worked",
     type: "boolean",
     group: "pota",
+    advanced: true,
     help: "Ranks spots by award value — a new DXCC entity or a callsign never worked before goes first — rather than purely by which spot is freshest.",
     default: "true",
   },
@@ -2412,6 +2512,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Return to the calling frequency when idle",
     type: "boolean",
     group: "pota",
+    advanced: true,
     help: "When there is nothing worth chasing, come back to the band's standard FT8/FT4 frequency instead of sitting on the last park. Without this the radio stays parked wherever the last activator was, hears nothing, and cannot fall back to ordinary hunting.",
     default: "true",
   },
@@ -2436,6 +2537,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Most QSL emails per day",
     type: "number",
     group: "qsl",
+    advanced: true,
     help: "Rolling 24-hour ceiling on messages actually sent, counted from the queue's own record. A sudden burst of mail from one address is how a server earns a spam reputation.",
     default: "25",
   },
@@ -2444,6 +2546,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Most per pass",
     type: "number",
     group: "qsl",
+    advanced: true,
     help: "How many one pass may send. Keeps a 26,000-QSO backlog from going out in an afternoon when the feature is first switched on.",
     default: "5",
   },
@@ -2452,6 +2555,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Wait this long after the QSO (minutes)",
     type: "number",
     group: "qsl",
+    advanced: true,
     help: "A mistyped callsign is usually spotted within a minute or two, and an emailed QSL cannot be taken back. This is the window in which a logging error is still free to fix.",
     default: "15",
   },
@@ -2460,6 +2564,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Ignore contacts older than (days)",
     type: "number",
     group: "qsl",
+    advanced: true,
     help: "Stops switching the feature on from mailing years of back-log. Raise it deliberately if you do want to work through older contacts.",
     default: "7",
   },
@@ -2468,6 +2573,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Check every (minutes)",
     type: "number",
     group: "qsl",
+    advanced: true,
     help: "How often the radio service looks for eligible contacts. Needs a restart to take effect.",
     default: "30",
   },
@@ -2484,6 +2590,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Card artwork path",
     type: "string",
     group: "qsl",
+    advanced: true,
     help: "Your card image, with no table or placeholder text on it — the QSO table is composited on top. Relative to the install directory. Never committed to git.",
     default: "data/qsl/card-base.png",
   },
@@ -2492,6 +2599,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Card table columns",
     type: "string",
     group: "qsl",
+    advanced: true,
     help: "Comma-separated, in order. Available: CALL DATE TIME BAND FREQ REPORT RST_RCVD MODE POWER GRID.",
     default: "CALL,DATE,TIME,BAND,REPORT,MODE",
   },
@@ -2508,6 +2616,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Card width for email (px)",
     type: "number",
     group: "qsl",
+    advanced: true,
     help: "Artwork is scaled to this before the table is drawn. 1600 is a good balance; full resolution artwork can be tens of MB and this goes out once per QSO.",
     default: "1600",
   },
@@ -2516,6 +2625,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Table width (fraction)",
     type: "number",
     group: "qsl",
+    advanced: true,
     help: "0.6 = 60% of the card width. Geometry is fractional so one setting fits any artwork size.",
     default: "0.6",
   },
@@ -2524,6 +2634,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Table inset from right (fraction)",
     type: "number",
     group: "qsl",
+    advanced: true,
     help:
       "How far the QSO table sits from the RIGHT edge, as a fraction of the card's width (0.05 = five per cent in). A fraction rather than pixels, so one setting works whether the artwork is 1500 px wide or 5000.",
     default: "0.012",
@@ -2533,6 +2644,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Table inset from bottom (fraction)",
     type: "number",
     group: "qsl",
+    advanced: true,
     help:
       "How far the table sits from the BOTTOM edge, as a fraction of the card's height. Same reasoning as the setting above.",
     default: "0.012",
@@ -2542,6 +2654,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Table font scale",
     type: "number",
     group: "qsl",
+    advanced: true,
     help: "1 = automatic size from the table width. Raise or lower to taste.",
     default: "1",
   },
@@ -2554,6 +2667,7 @@ export const SETTINGS: SettingDef[] = [
     // of step with what is actually installed.
     options: BUNDLED_FONTS.map((f) => ({ value: f.family, label: f.label })),
     group: "qsl",
+    advanced: true,
     help:
       "Typeface for the QSO table. DigiShack SHIPS these, so they render identically on " +
       "every machine: \"PT Sans Narrow\" (condensed, the classic QSL table and the " +
@@ -2570,6 +2684,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Table text colour",
     type: "string",
     group: "qsl",
+    advanced: true,
     help:
       "Colour of the table text, as a CSS colour such as #000000. Choose it against your artwork rather than against the cell fill, since a photographic card shows through a translucent cell.",
     default: "#000000",
@@ -2579,6 +2694,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Table heading background",
     type: "string",
     group: "qsl",
+    advanced: true,
     help:
       "Fill behind the column headings. Accepts a CSS colour including one with alpha — rgba(255,255,255,0.85) is usually what you want over a photograph.",
     default: "#ffffff",
@@ -2588,6 +2704,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Table cell background",
     type: "string",
     group: "qsl",
+    advanced: true,
     help:
       "Fill behind the QSO values, beneath the headings. Usually lighter or more transparent than the heading fill so the two rows read as one table.",
     default: "#ffffff",
@@ -2597,6 +2714,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Table border colour",
     type: "string",
     group: "qsl",
+    advanced: true,
     help:
       "Colour of the lines between cells. Match it to the text for a printed-form look, or make it translucent to let the artwork through.",
     default: "#000000",
@@ -2606,6 +2724,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Card JPEG quality",
     type: "number",
     group: "qsl",
+    advanced: true,
     help: "40-100. 88 keeps a photographic card around 200 kB.",
     default: "88",
   },
@@ -2618,6 +2737,51 @@ export const SETTINGS: SettingDef[] = [
       "The address messages appear to come from. Many providers refuse to send when this does not match the authenticated account, and the refusal usually names the mismatch.",
     placeholder: "DigiShack <noreply@example.com>",
     envFallback: "SMTP_FROM",
+  },
+
+  // --- DX cluster ---
+  {
+    key: "cluster.enabled",
+    label: "Connect to a DX cluster",
+    type: "boolean",
+    group: "cluster",
+    help:
+      "Log in to the node below and show its spots on the Cluster page. Nothing is sent to the node except the login callsign, an empty line every few minutes of silence to keep the link alive, and BYE when it stops — no spots, no commands. The bridge notices a change here within about 15 seconds; no restart needed.",
+    default: "false",
+  },
+  {
+    key: "cluster.host",
+    label: "Cluster node",
+    type: "string",
+    group: "cluster",
+    help:
+      "Hostname of the node. Any DX Spider, AR-Cluster or CC Cluster node works, and so does telnet.reversebeacon.net (port 7000) for skimmer spots only. The nodes are linked, so the spots are worldwide whichever you pick; a node near you adds local announcements.",
+    // dxc.hamserve.uk is the node the DX Spider project's own "How to connect" page tells new
+    // users to telnet to (wiki.dxcluster.org, run by G1FEF, the wiki's maintainer), on port
+    // 7300. Chosen over the better-known North American nodes because that is a published
+    // invitation to log in, from the software's own documentation, rather than a node that
+    // merely happens to appear in logging programs' lists — a public node is a volunteer's
+    // machine. Not verified from this code: no connection to it has been made in testing.
+    default: "dxc.hamserve.uk",
+    placeholder: "dxc.hamserve.uk",
+  },
+  {
+    key: "cluster.port",
+    label: "Cluster port",
+    type: "number",
+    group: "cluster",
+    help:
+      "The node's telnet port. There is no standard: many DX Spider nodes listen on 7300, CC Cluster nodes often on 23 or 7373, the RBN on 7000. The node's own web page says which.",
+    default: "7300",
+  },
+  {
+    key: "cluster.login",
+    label: "Cluster login callsign",
+    type: "string",
+    group: "cluster",
+    help:
+      "The callsign to log in with. Blank uses the station callsign. Add an SSID (N0CALL-2) when a logging program elsewhere is logged in to the same node with the plain call — two sessions with one call keep throwing each other off.",
+    placeholder: "N0CALL-2",
   },
 ];
 

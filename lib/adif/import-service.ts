@@ -1,4 +1,6 @@
-import { dupeKey, parseAdif, type RecordProblem } from "@/lib/adif/parse";
+import { randomBytes } from "node:crypto";
+
+import { dupeKey, parseAdif, type ParsedQso, type RecordProblem } from "@/lib/adif/parse";
 import { prisma } from "@/lib/db/prisma";
 
 // Shared ADIF ingest, used by both the app's /api/adif/import and the public
@@ -7,6 +9,54 @@ import { prisma } from "@/lib/db/prisma";
 
 const CHUNK = 500;
 const MAX_REPORTED_PROBLEMS = 100;
+
+/**
+ * Limits for one chunk's transaction: two multi-row INSERTs. Prisma's 5 s default is
+ * close enough to a slow disk's 500-row insert to be worth not betting on.
+ */
+const CHUNK_TX = { timeout: 60_000, maxWait: 30_000 } as const;
+
+let idCounter = 0;
+
+/**
+ * A Qso primary key chosen HERE, before the insert, so the reference rows can name it.
+ *
+ * `createMany` returns no ids on MySQL (`createManyAndReturn` is PostgreSQL/SQLite only),
+ * and rediscovering the rows afterwards is what R03 was. Shaped like Prisma's own
+ * `cuid()` — "c", base-36 milliseconds, a per-process counter, then 12 base-36 characters
+ * from the CSPRNG — so imported rows are indistinguishable from the rest and still sort
+ * roughly by creation. Nothing parses ids; a collision (about 62 random bits on top of the
+ * same millisecond and counter) would fail the insert with a duplicate key and roll the
+ * chunk back, never overwrite a row.
+ */
+function newQsoId(): string {
+  const time = Date.now().toString(36).padStart(8, "0").slice(-8);
+  idCounter = (idCounter + 1) % 36 ** 4;
+  const count = idCounter.toString(36).padStart(4, "0");
+  const random = (randomBytes(8).readBigUInt64BE() % 36n ** 12n).toString(36).padStart(12, "0");
+  return `c${time}${count}${random}`;
+}
+
+/** `dupeKey` inside one station's namespace. */
+function stationDupeKey(stationId: string, q: Parameters<typeof dupeKey>[0]): string {
+  return `${stationId}|${dupeKey(q)}`;
+}
+
+/**
+ * The reference rows for one contact. The primary is whatever SIG_INFO said, so a round
+ * trip through ADIF preserves which reference is the exported one.
+ */
+function referenceRows(
+  qsoId: string,
+  q: ParsedQso,
+): { qsoId: string; sig: string; sigInfo: string; primary: boolean }[] {
+  if (!q.sig) return [];
+  const sig = q.sig;
+  const refs = [
+    ...new Set([q.sigInfo, ...(q.sigRefs ?? [])].filter((r): r is string => Boolean(r))),
+  ];
+  return refs.map((sigInfo) => ({ qsoId, sig, sigInfo, primary: sigInfo === q.sigInfo }));
+}
 
 export interface ImportOptions {
   stationId: string;
@@ -110,15 +160,19 @@ export async function importAdifDocument(
     return true;
   });
 
+  // Against the log: THIS station's contacts only. A matching call/band/mode/minute at
+  // another station is that station's contact, not this one's, and used to suppress the
+  // import (R09). Note the consequence for an operator with several Station rows under one
+  // callsign (portable grids): each is its own dedupe namespace now.
   let existingKeys = new Set<string>();
   if (opts.dedupe && unique.length > 0) {
-    existingKeys = await loadExistingKeys([
+    existingKeys = await loadExistingKeys(station.id, [
       ...new Set(unique.map((q) => q.callsign)),
     ]);
   }
 
   const toInsert = opts.dedupe
-    ? unique.filter((q) => !existingKeys.has(dupeKey(q)))
+    ? unique.filter((q) => !existingKeys.has(stationDupeKey(station.id, q)))
     : unique;
 
   const alreadyInLog = unique.length - toInsert.length;
@@ -145,103 +199,87 @@ export async function importAdifDocument(
 
   if (!opts.dryRun && toInsert.length > 0) {
     for (let i = 0; i < toInsert.length; i += CHUNK) {
-      const chunk = toInsert.slice(i, i + CHUNK);
-      const { count } = await prisma.qso.createMany({
-        data: chunk.map((q) => ({
-          callsign: q.callsign,
-          band: q.band,
-          freqHz: BigInt(q.freqHz),
-          mode: q.mode,
-          startTime: q.startTime,
-          endTime: q.endTime,
-          rstSent: q.rstSent,
-          rstRcvd: q.rstRcvd,
-          gridSquare: q.gridSquare,
-          txPowerW: q.txPowerW,
-          name: q.name,
-          qth: q.qth,
-          dxcc: q.dxcc,
-          state: q.state,
-          county: q.county,
-          cqZone: q.cqZone,
-          ituZone: q.ituZone,
-          iota: q.iota,
-          continent: q.continent,
-          sig: q.sig,
-          sigInfo: q.sigInfo,
-          // OUR OWN activation, from MY_SIG / MY_SIG_INFO / MY_GRIDSQUARE.
-          //
-          // Stored on import as well as on export, or the round trip is a half-truth: a
-          // log exported from here and restored from that file — the backup path, and
-          // the one that gets exercised on the worst day — would come back with every
-          // activation reduced to an ordinary contact, and no way to tell which
-          // contacts had been an activation.
-          mySig: q.mySig,
-          mySigInfo: q.mySigInfo,
-          myGridSquare: q.myGridSquare,
-          radio: q.radio,
-          qslSent: q.qslSent,
-          qslRcvd: q.qslRcvd,
-          qslSentAt: q.qslSentAt,
-          qslRcvdAt: q.qslRcvdAt,
-          lotwSent: q.lotwSent,
-          lotwRcvd: q.lotwRcvd,
-          eqslSent: q.eqslSent,
-          eqslRcvd: q.eqslRcvd,
-          // MARKED AS ALREADY SENT unless the operator asked for the opposite. See
-          // ImportOptions.uploadImported: LoTW and eQSL come from the file because ADIF
-          // has fields for them; these four have no ADIF field at all, so without this
-          // they read as "never uploaded" and the sweep re-sends the entire history.
-          qrzSent: !opts.uploadImported,
-          clublogSent: !opts.uploadImported,
-          cloudlogSent: !opts.uploadImported,
-          n3fjpSent: !opts.uploadImported,
-          notes: q.notes,
-          stationId: station.id,
-          operatorId:
-            (q.operatorCallsign
-              ? operatorByCall.get(q.operatorCallsign)
-              : undefined) ??
-            opts.operatorId ??
-            null,
-        })),
-      });
-      imported += count;
+      const chunk = toInsert.slice(i, i + CHUNK).map((q) => ({ id: newQsoId(), q }));
 
-      // Special-activity references, as rows.
-      //
-      // `createMany` cannot return ids, so the QSOs just written are read back by
-      // (callsign, startTime) — the pair the dupe check already treats as
-      // identifying — and their references inserted. Only chunk rows that carry a
-      // reference at all are looked up, which for a typical log is none of them.
-      const withRefs = chunk.filter((q) => q.sig && (q.sigRefs?.length || q.sigInfo));
-      if (withRefs.length > 0) {
-        const written = await prisma.qso.findMany({
-          where: {
-            OR: withRefs.map((q) => ({ callsign: q.callsign, startTime: q.startTime })),
-          },
-          select: { id: true, callsign: true, startTime: true },
-        });
-        const idByKey = new Map(
-          written.map((w) => [`${w.callsign}|${w.startTime.getTime()}`, w.id]),
-        );
-        const refRows: { qsoId: string; sig: string; sigInfo: string; primary: boolean }[] = [];
-        for (const q of withRefs) {
-          const id = idByKey.get(`${q.callsign}|${q.startTime.getTime()}`);
-          if (!id || !q.sig) continue;
-          // The primary is whatever SIG_INFO said, so a round trip through ADIF
-          // preserves which reference is the exported one.
-          const refs = [
-            ...new Set([q.sigInfo, ...(q.sigRefs ?? [])].filter((r): r is string => Boolean(r))),
-          ];
-          for (const sigInfo of refs) {
-            refRows.push({ qsoId: id, sig: q.sig, sigInfo, primary: sigInfo === q.sigInfo });
-          }
-        }
+      // Special-activity references, as rows, keyed by the id each contact is about to be
+      // inserted under — not rediscovered afterwards. The old read-back by
+      // (callsign, startTime) kept the last match per pair, and another contact with the
+      // same call at the same minute (another band, another station) could win: a new
+      // 20 m contact's park was written onto an existing 40 m contact (R03).
+      const refRows = chunk.flatMap(({ id, q }) => referenceRows(id, q));
+
+      const qsoRows = chunk.map(({ id, q }) => ({
+        id,
+        callsign: q.callsign,
+        band: q.band,
+        freqHz: BigInt(q.freqHz),
+        mode: q.mode,
+        startTime: q.startTime,
+        endTime: q.endTime,
+        rstSent: q.rstSent,
+        rstRcvd: q.rstRcvd,
+        gridSquare: q.gridSquare,
+        txPowerW: q.txPowerW,
+        name: q.name,
+        qth: q.qth,
+        dxcc: q.dxcc,
+        state: q.state,
+        county: q.county,
+        cqZone: q.cqZone,
+        ituZone: q.ituZone,
+        iota: q.iota,
+        continent: q.continent,
+        sig: q.sig,
+        sigInfo: q.sigInfo,
+        // OUR OWN activation, from MY_SIG / MY_SIG_INFO / MY_GRIDSQUARE.
+        //
+        // Stored on import as well as on export, or the round trip is a half-truth: a
+        // log exported from here and restored from that file — the backup path, and
+        // the one that gets exercised on the worst day — would come back with every
+        // activation reduced to an ordinary contact, and no way to tell which
+        // contacts had been an activation.
+        mySig: q.mySig,
+        mySigInfo: q.mySigInfo,
+        myGridSquare: q.myGridSquare,
+        radio: q.radio,
+        qslSent: q.qslSent,
+        qslRcvd: q.qslRcvd,
+        qslSentAt: q.qslSentAt,
+        qslRcvdAt: q.qslRcvdAt,
+        lotwSent: q.lotwSent,
+        lotwRcvd: q.lotwRcvd,
+        eqslSent: q.eqslSent,
+        eqslRcvd: q.eqslRcvd,
+        // MARKED AS ALREADY SENT unless the operator asked for the opposite. See
+        // ImportOptions.uploadImported: LoTW and eQSL come from the file because ADIF
+        // has fields for them; these four have no ADIF field at all, so without this
+        // they read as "never uploaded" and the sweep re-sends the entire history.
+        qrzSent: !opts.uploadImported,
+        clublogSent: !opts.uploadImported,
+        cloudlogSent: !opts.uploadImported,
+        n3fjpSent: !opts.uploadImported,
+        notes: q.notes,
+        stationId: station.id,
+        operatorId:
+          (q.operatorCallsign
+            ? operatorByCall.get(q.operatorCallsign)
+            : undefined) ??
+          opts.operatorId ??
+          null,
+      }));
+
+      // The chunk and its references in ONE transaction. They used to be separate writes,
+      // so a failure between them left contacts carrying a `sigInfo` with no reference rows
+      // — the parent and the table that is the authority on "have I worked this park?"
+      // disagreeing. Now a chunk lands whole or not at all; chunks already committed stay,
+      // and a re-run with dedupe skips them.
+      imported += await prisma.$transaction(async (tx) => {
+        const { count } = await tx.qso.createMany({ data: qsoRows });
         if (refRows.length > 0) {
-          await prisma.qsoSigRef.createMany({ data: refRows, skipDuplicates: true });
+          await tx.qsoSigRef.createMany({ data: refRows, skipDuplicates: true });
         }
-      }
+        return count;
+      }, CHUNK_TX);
     }
   }
 
@@ -271,19 +309,20 @@ export async function importAdifDocument(
 }
 
 /**
- * Existing dupe keys for the callsigns in this file. Fetched by callsign rather
- * than by exact tuple because MySQL has no efficient way to match a large set of
- * composite tuples, and callsign is indexed.
+ * Existing dupe keys, at `stationId` only, for the callsigns in this file. Fetched by
+ * callsign rather than by exact tuple because MySQL has no efficient way to match a large
+ * set of composite tuples, and callsign is indexed. The station is in the key as well as
+ * the filter, so a row from another station could not match even if one came back.
  */
-async function loadExistingKeys(callsigns: string[]): Promise<Set<string>> {
+async function loadExistingKeys(stationId: string, callsigns: string[]): Promise<Set<string>> {
   const keys = new Set<string>();
 
   for (let i = 0; i < callsigns.length; i += CHUNK) {
     const rows = await prisma.qso.findMany({
-      where: { callsign: { in: callsigns.slice(i, i + CHUNK) } },
-      select: { callsign: true, band: true, mode: true, startTime: true },
+      where: { stationId, callsign: { in: callsigns.slice(i, i + CHUNK) } },
+      select: { stationId: true, callsign: true, band: true, mode: true, startTime: true },
     });
-    for (const row of rows) keys.add(dupeKey(row));
+    for (const row of rows) keys.add(stationDupeKey(row.stationId, row));
   }
 
   return keys;

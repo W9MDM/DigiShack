@@ -211,8 +211,22 @@ export class FlexClient extends EventEmitter<Events> {
       socket.setEncoding("utf8");
       socket.setKeepAlive(true, 30_000);
 
+      // Resolve on the handle line rather than on TCP connect: a socket that
+      // opens but never speaks (wrong port, or a radio mid-reboot) is not usable.
+      //
+      // ONLY LISTENS. The greeting handler in onLine() is the one place `connected` is
+      // emitted. This used to emit it again from inside its own once-listener, so every
+      // greeting reached outside listeners twice — and a failed attempt left its listener
+      // registered, so the next successful connect fired the stale one as well.
+      const onReady = () => {
+        clearTimeout(timer);
+        socket.off("error", failed);
+        resolve();
+      };
+
       const failed = (err: Error) => {
         clearTimeout(timer);
+        this.off("connected", onReady);
         socket.destroy();
         reject(err);
       };
@@ -223,16 +237,6 @@ export class FlexClient extends EventEmitter<Events> {
       );
 
       socket.once("error", failed);
-
-      // Resolve on the handle line rather than on TCP connect: a socket that
-      // opens but never speaks (wrong port, or a radio mid-reboot) is not usable.
-      const onReady = () => {
-        clearTimeout(timer);
-        socket.off("error", failed);
-        this.state.connected = true;
-        this.emit("connected");
-        resolve();
-      };
       this.once("connected", onReady);
 
       socket.on("data", (chunk: string) => this.onData(chunk));
@@ -345,7 +349,11 @@ export class FlexClient extends EventEmitter<Events> {
 
       case "H":
         this.state.handle = line.slice(1);
-        // The handle line is the last of the greeting; the link is usable now.
+        // The handle line is the last of the greeting; the link is usable now. Marked
+        // connected BEFORE the event, so a listener that sends a command from it is not
+        // refused as "Not connected". The one and only emit of `connected`: connect()'s
+        // pending promise is one of its listeners, not a second source of it.
+        this.state.connected = true;
         this.emit("connected");
         break;
 

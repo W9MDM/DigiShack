@@ -106,7 +106,7 @@ export function Waterfall({
 
   return (
     <div className="border border-line rounded-sm overflow-hidden bg-bg">
-      <div className="flex h-7 items-center border-b border-line bg-bg-raised text-[11px] text-fg-muted tnum">
+      <div className="flex h-7 items-center border-b border-line bg-surface-2 text-[10px] text-fg-muted tnum">
         <span className="w-14 shrink-0 pl-1">UTC</span>
         <div ref={rulerRef} className="relative h-full flex-1 min-w-0">
           <span className="absolute left-1 top-1">0 Hz</span>
@@ -128,13 +128,12 @@ export function Waterfall({
           {ticks.map((hz) => (
             <div
               key={hz}
-              className="absolute top-0 bottom-0 border-l border-white/10"
+              className="absolute top-0 bottom-0 border-l border-fg/10"
               style={{ left: `${(hz / maxHz) * 100}%` }}
-            >
-            </div>
+            />
           ))}
           {cycleTicks.map((tick) => (
-            <div key={tick.at} className="absolute left-0 right-0 border-t border-white/10" style={{ top: tick.y }} />
+            <div key={tick.at} className="absolute left-0 right-0 border-t border-fg/10" style={{ top: tick.y }} />
           ))}
 
           {txHz !== null && txHz > 0 && txHz < maxHz && (
@@ -180,7 +179,7 @@ export function Waterfall({
             <button
               key={`${t.hz}-${i}`}
               type="button"
-              className="absolute top-5 -translate-x-1/2 pointer-events-auto rounded-sm border border-accent bg-bg/80 px-1.5 py-0.5 text-[11px] text-accent-bright tnum hover:bg-accent hover:text-bg focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+              className="absolute top-5 -translate-x-1/2 pointer-events-auto rounded-sm border border-accent bg-bg/80 px-1.5 py-0.5 text-xs text-accent-bright tnum hover:bg-accent hover:text-accent-fg focus-visible:outline-2 focus-visible:outline-accent-bright"
               style={{ left: `${Math.min(97, Math.max(3, (t.hz / maxHz) * 100))}%` }}
               title={t.title}
               onClick={(e) => {
@@ -192,9 +191,6 @@ export function Waterfall({
             </button>
           ))}
 
-          <div className="absolute right-1 bottom-1 rounded-sm bg-bg/80 px-1 text-[11px] text-fg-muted tnum">
-            {binHz.toFixed(1)} Hz/bin · newest ↓
-          </div>
           {(!row || stale) && (
             <div className="absolute left-2 top-2 rounded-sm bg-bg/80 px-2 py-1 text-xs text-warn">
               {row ? "No new spectrum — check receiver audio" : "Waiting for receiver audio…"}
@@ -202,9 +198,13 @@ export function Waterfall({
           )}
         </AudioWaterfallCanvas>
       </div>
-      <div className="flex justify-between gap-2 border-t border-line px-2 py-1 text-[11px] text-fg-subtle tnum">
-        <span>Receive audio · {Math.round(maxHz)} Hz</span>
-        <span>{(height * rowIntervalMs / 1000).toFixed(0)}s history{periodMs !== null && <> · {(period / 1000).toFixed(1)}s cycle</>}</span>
+      {/* The resolution note lived over the plot, on top of the newest rows; it is chrome. */}
+      <div className="flex flex-wrap justify-between gap-x-3 border-t border-line px-2 py-1 text-xs text-fg-subtle tnum">
+        <span>Receive audio · newest at the bottom</span>
+        <span>
+          {(height * rowIntervalMs / 1000).toFixed(0)} s shown
+          {periodMs !== null && <> · {(period / 1000).toFixed(1)} s cycle</>} · {binHz.toFixed(1)} Hz/bin
+        </span>
       </div>
     </div>
   );

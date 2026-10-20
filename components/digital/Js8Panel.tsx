@@ -7,6 +7,9 @@
 
 import { useEffect, useRef, useState } from "react";
 
+import { NativeSelect } from "@/components/decodes/controls";
+import { Button, Input } from "@/components/ui/primitives";
+
 /** What the bridge reports about a message going out, from `status.js8`. */
 export interface Js8SendState {
   sending: boolean;
@@ -48,8 +51,6 @@ interface Props {
 
 const hhmmss = (ms: number) => `${new Date(ms).toISOString().slice(11, 19)}Z`;
 
-const BUTTON = "px-2 py-1 text-xs border border-line rounded-sm hover:text-fg disabled:opacity-50";
-
 const SPEEDS: { id: Js8Speed; label: string }[] = [
   { id: "normal", label: "Normal 15 s" },
   { id: "fast", label: "Fast 10 s" },
@@ -90,11 +91,10 @@ export function Js8Panel({
 
   return (
     <div className="mb-3">
-      <div className="flex items-center justify-between text-xs text-fg-muted mb-1">
+      <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-fg-muted mb-1">
         <span className="flex items-center gap-2">
           Messages, joined from their frames
-          <select
-            className="bg-bg-raised border border-line rounded-sm px-1 py-0.5 text-xs"
+          <NativeSelect
             value={speed}
             onChange={(e) => onSpeed(e.target.value as Js8Speed)}
             disabled={!canSend || sending}
@@ -106,13 +106,13 @@ export function Js8Panel({
                 {s.label}
               </option>
             ))}
-          </select>
+          </NativeSelect>
         </span>
-        <button type="button" className="hover:text-fg" onClick={onClear}>
+        <Button size="sm" variant="ghost" onClick={onClear} title="Clear the joined messages">
           Clear
-        </button>
+        </Button>
       </div>
-      <pre className="font-mono text-sm whitespace-pre-wrap break-words bg-bg-raised border border-line rounded-sm p-3 max-h-56 overflow-y-auto">
+      <pre className="font-mono text-sm whitespace-pre-wrap break-words bg-surface-2 border border-line rounded-sm p-3 max-h-56 overflow-y-auto">
         {text || "No complete message yet. Frames appear below as they decode; a message prints here when its last frame arrives."}
       </pre>
 
@@ -125,9 +125,10 @@ export function Js8Panel({
             setDraft("");
           }}
         >
+          {/* Raw, not the Input primitive: the prefill focuses it through a ref, which Input does not forward. */}
           <input
             ref={input}
-            className="flex-1 min-w-[12rem] bg-bg-raised border border-line rounded-sm px-2 py-1 text-sm font-mono"
+            className="flex-1 min-w-48 bg-surface-2 border border-line-strong rounded-sm px-2.5 py-1 text-sm font-mono text-fg placeholder:text-fg-subtle focus:border-accent-bright focus-visible:outline-2 focus-visible:outline-accent-bright disabled:opacity-50"
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             maxLength={240}
@@ -137,9 +138,9 @@ export function Js8Panel({
           />
           <label className="flex items-center gap-1 text-xs text-fg-muted">
             <span>at</span>
-            <input
+            <Input
               type="number"
-              className="w-20 bg-bg-raised border border-line rounded-sm px-2 py-1 text-sm font-mono tnum"
+              className="w-20 py-1 font-mono tnum"
               value={offsetHz}
               min={200}
               max={2800}
@@ -150,25 +151,23 @@ export function Js8Panel({
             />
             <span>Hz</span>
           </label>
-          <button type="submit" className={`px-3 py-1 ${BUTTON}`} disabled={!draft.trim() || sending || !myCall}>
+          <Button type="submit" size="sm" disabled={!draft.trim() || sending || !myCall}>
             Send
-          </button>
-          <button
-            type="button"
-            className={BUTTON}
+          </Button>
+          <Button
+            size="sm"
             disabled={sending || !myCall}
             onClick={() => send("@HB HEARTBEAT")}
             title="A heartbeat: your callsign and grid, one frame"
           >
             HB
-          </button>
+          </Button>
           {/* The usual first things to say to a station picked from the list. */}
           {draft.trim() && /^[A-Z0-9/]+$/i.test(draft.trim()) &&
             [" SNR?", " GRID?", " INFO?", " HELLO"].map((c) => (
-              <button
+              <Button
                 key={c}
-                type="button"
-                className={BUTTON}
+                size="sm"
                 disabled={sending || !myCall}
                 onClick={() => {
                   send(`${draft.trim()}${c}`);
@@ -177,21 +176,20 @@ export function Js8Panel({
                 title={`Send ${draft.trim()}${c}`}
               >
                 {c.trim()}
-              </button>
+              </Button>
             ))}
-          <button
-            type="button"
-            className={BUTTON}
+          <Button
+            size="sm"
             disabled={sending || !myCall}
             onClick={() => send("CQ CQ CQ")}
             title="CQ CQ CQ with your grid, one frame"
           >
             CQ
-          </button>
+          </Button>
           {sending && (
-            <button type="button" className={BUTTON} onClick={onCancel} title="Stop after the frame on the air">
+            <Button size="sm" variant="danger" onClick={onCancel} title="Stop after the frame on the air">
               Cancel
-            </button>
+            </Button>
           )}
         </form>
       )}
@@ -205,7 +203,7 @@ export function Js8Panel({
             : `Stopped: ${state.stopped}`}
         </p>
       )}
-      {error && <p className="mt-1 text-xs text-accent-bright">{error}</p>}
+      {error && <p className="mt-1 text-xs text-danger">{error}</p>}
     </div>
   );
 }

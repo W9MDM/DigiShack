@@ -10,6 +10,9 @@
 
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
 
+import { Nudge } from "@/components/decodes/controls";
+import { Badge, Button, Input } from "@/components/ui/primitives";
+
 export interface HellStats {
   mode: "HELL";
   seconds: number;
@@ -39,8 +42,6 @@ function decodeBase64(b64: string): Uint8Array {
   for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
   return out;
 }
-
-const BUTTON = "px-2 py-0.5 border border-line rounded-sm hover:text-fg tnum disabled:opacity-50";
 
 export const HellPanel = forwardRef<
   HellPanelHandle,
@@ -165,30 +166,33 @@ export const HellPanel = forwardRef<
         ) : (
           <span>Waiting for the bridge to report the carrier…</span>
         )}
-        {canTune && (
-          <span className="flex items-center gap-1">
-            <button type="button" className={BUTTON} onClick={() => hell && onTune(hell.centreHz - 10)} disabled={!hell} title="Move the carrier 10 Hz down">
-              −10
-            </button>
-            <button type="button" className={BUTTON} onClick={() => hell && onTune(hell.centreHz + 10)} disabled={!hell} title="Move the carrier 10 Hz up">
-              +10
-            </button>
-            <span className="text-fg-subtle">· click the signal on the waterfall to centre it</span>
-          </span>
-        )}
-        <button
-          type="button"
-          className="ml-auto hover:text-fg"
+        <Button
+          size="sm"
+          variant="ghost"
+          className="ml-auto"
+          title="Clear the page"
           onClick={() => {
             clear();
             onClear();
           }}
         >
           Clear
-        </button>
+        </Button>
       </div>
+      {canTune && (
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
+          <Nudge
+            step={10}
+            disabled={!hell}
+            onStep={(d) => hell && onTune(hell.centreHz + d)}
+            downTitle="Move the carrier 10 Hz down"
+            upTitle="Move the carrier 10 Hz up"
+          />
+          <span className="text-fg-subtle">or click the signal on the waterfall to centre it</span>
+        </div>
+      )}
 
-      <div className="relative bg-black border border-line rounded-sm overflow-hidden">
+      <div className="relative bg-bg border border-line rounded-sm overflow-hidden">
         <canvas
           ref={canvas}
           className="block w-full"
@@ -216,24 +220,28 @@ export const HellPanel = forwardRef<
             setDraft("");
           }}
         >
-          <input
-            className="flex-1 min-w-[12rem] bg-bg-raised border border-line rounded-sm px-2 py-1 text-sm font-mono"
+          <Input
+            className="flex-1 min-w-48 w-auto py-1 font-mono"
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             maxLength={96}
             placeholder="Type a line; Enter sends it (2.5 characters a second, sent in capitals)"
             aria-label="Hell text to send"
           />
-          <button type="submit" className="px-3 py-1 text-xs border border-line rounded-sm hover:text-fg disabled:opacity-50" disabled={!draft.trim() || transmitting}>
+          <Button type="submit" size="sm" disabled={!draft.trim() || transmitting}>
             Send
-          </button>
-          <button type="button" className="px-2 py-1 text-xs border border-line rounded-sm hover:text-fg disabled:opacity-50 tnum" disabled={transmitting || !myCall} onClick={() => send(cqLine)} title="Call CQ">
+          </Button>
+          <Button size="sm" className="tnum" disabled={transmitting || !myCall} onClick={() => send(cqLine)} title="Call CQ">
             CQ
-          </button>
-          <button type="button" className="px-2 py-1 text-xs border border-line rounded-sm hover:text-fg disabled:opacity-50 tnum" disabled={transmitting || !myCall} onClick={() => send(byeLine)} title="Sign off">
+          </Button>
+          <Button size="sm" className="tnum" disabled={transmitting || !myCall} onClick={() => send(byeLine)} title="Sign off">
             73
-          </button>
-          {transmitting && <span className="text-xs text-accent-bright">TX</span>}
+          </Button>
+          {transmitting && (
+            <Badge tone="danger" size="sm">
+              TX
+            </Badge>
+          )}
         </form>
       )}
       {txLines.length > 0 && <pre className="font-mono text-xs whitespace-pre-wrap break-words text-fg-muted">{txLines.join("\n")}</pre>}

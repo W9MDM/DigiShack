@@ -1,6 +1,6 @@
 import { useState } from "react";
 
-import { ToolTabs } from "@/components/settings/ToolTabs";
+import { SettingsLayout } from "@/components/settings/SettingsLayout";
 
 import {
   Badge,
@@ -52,9 +52,7 @@ export default function UsersPage() {
   }
 
   return (
-    <>
-      <ToolTabs />
-
+    <SettingsLayout>
       <PageHeader
         title="Users"
         subtitle="Login accounts and their roles"
@@ -212,7 +210,7 @@ export default function UsersPage() {
       <div className="mt-5">
         <ResetAttemptsCard />
       </div>
-    </>
+    </SettingsLayout>
   );
 }
 

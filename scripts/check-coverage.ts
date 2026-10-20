@@ -4,6 +4,7 @@
 // swapped argument produces a plot that looks like a plot, with every contact in the wrong
 // quarter of the sky. An operator would point an antenna on it.
 
+import { PLOT_SIZE, polarXY, radiusFor, ringsFor, wedgePath } from "@/lib/maps/polar";
 import { bearingDeg, distanceKm, gridToLatLon } from "@/lib/propagation";
 
 let pass = 0;
@@ -113,6 +114,32 @@ console.log("\ngrids that cannot be placed");
   ok(gridToLatLon("ZZ99") === null, "a field beyond R is null");
   ok(gridToLatLon("EN") === null, "a two-character field alone is null");
   ok(gridToLatLon("EN61XX") !== null, "and a six-character grid resolves");
+}
+
+console.log("\nthe plot puts each contact on its bearing");
+{
+  const c = PLOT_SIZE / 2;
+  const north = polarXY(0, 5_000);
+  ok(Math.abs(north.x - c) < 1e-9 && north.y < c, "bearing 0 is straight up");
+  const east = polarXY(90, 5_000);
+  ok(east.x > c && Math.abs(east.y - c) < 1e-9, "90 is to the right");
+  const south = polarXY(180, 5_000);
+  ok(south.y > c && Math.abs(south.x - c) < 1e-9, "180 is down");
+  ok(polarXY(270, 5_000).x < c, "270 is to the left");
+  near(radiusFor(20_000), c, 1e-9, "the outer ring is the plot's edge");
+  near(radiusFor(30_000), c, 1e-9, "and nothing is drawn past it");
+  near(radiusFor(5_000) / radiusFor(20_000), 0.5, 1e-9, "on a square-root scale: a quarter of the distance is half the radius");
+}
+
+console.log("\ndistance rings are round numbers in the operator's unit");
+{
+  const km = ringsFor("km");
+  const mi = ringsFor("mi");
+  ok(km.map((r) => r.label).join(",") === "2,500 km,5,000 km,10,000 km,20,000 km", "kilometres", km.map((r) => r.label).join(","));
+  ok(mi.map((r) => r.label).join(",") === "1,500 mi,3,000 mi,6,000 mi,12,000 mi", "miles", mi.map((r) => r.label).join(","));
+  near(mi[0]!.km, 2_414, 1, "and a mile ring sits at its distance in km");
+  ok(mi.every((r) => r.km <= 20_000), "every mile ring is inside the plot");
+  ok(/^M280,280L/.test(wedgePath(0, 22.5)), "a dead-sector wedge starts at home");
 }
 
 console.log(`\n${pass} passed, ${fail} failed\n`);

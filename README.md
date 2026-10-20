@@ -8,7 +8,8 @@ Digital modes run one of three ways, chosen by the `digital.source` setting:
 - **`flex`** — fully self-contained. DigiShack pulls DAX audio from a FlexRadio
   over VITA-49 and decodes FT8/FT4 in-process. No external decoder.
 - **`icom`** — the same, over the RS-BA1 network protocol to an IC-7300, IC-705,
-  IC-9700 or IC-7610. No virtual audio cable, no virtual COM port.
+  IC-9700 or IC-7610 (verified on air with an IC-7300 MK2; the others share the CI-V
+  tables but are untested). No virtual audio cable, no virtual COM port.
 - **`wsjtx`** — takes decodes from an external decoder (WSJT-X, JTDX,
   wsjtx-omega) over its UDP protocol, for setups that prefer one.
 
@@ -19,12 +20,15 @@ QSL side — rather than a logbook that talks to other programs.
 
 **Logging.** DXCC-aware logbook with ADIF import and export, duplicate checking
 against band and mode, a triage view for contacts missing data, and award progress for
-DXCC, WAS, WAZ, WAC, VUCC and POTA. Grid-square and worked-coverage maps drawn from
-vendored coastlines, so they work with the uplink down.
+DXCC, WAS, WAZ, WAC, grid squares and IOTA, with POTA hunting and activation progress on
+its own page. Grid-square and worked-coverage maps drawn from vendored coastlines, so
+they work with the uplink down.
 
 **Digital modes.** FT8, FT4 and FT2 decoded and transmitted in-process — no external
 decoder, no virtual audio cable, no virtual COM port. Live waterfall, per-decode award
-scoring, and click-to-call sequencing that runs the whole exchange and logs it.
+scoring, and click-to-call sequencing that runs the whole exchange and logs it. WSPR
+(reported to wsprnet), JS8, RTTY, CW, PSK31, Olivia, SSTV, Feld Hell and JTTY are decoded
+too, and all of them except WSPR can send; each has its own page in [docs/](docs/README.md).
 
 **Automatic operating.** Call CQ, hunt callable CQs, hunt POTA activators, or chase
 them across bands from the spot feed. An operating schedule decides what runs when,
@@ -66,7 +70,8 @@ been worked before, and the all-time totals.
 
 ## Documentation
 
-Full documentation is in **[docs/](docs/)**:
+Full documentation is in **[docs/](docs/)**, indexed by [docs/README.md](docs/README.md),
+which also lists a page per digital mode. The main ones:
 
 | | |
 |---|---|
@@ -87,7 +92,7 @@ Full documentation is in **[docs/](docs/)**:
 |---|---|
 | Framework | Next.js 16, **Pages Router** |
 | DB / ORM | MySQL + Prisma |
-| Jobs / queues | BullMQ + Redis |
+| Background work | Timers in the two processes, listed in `lib/schedule/jobs.ts`. BullMQ and Redis are installed but unused |
 | Process manager | PM2 (no Docker) |
 | Reverse proxy | NGINX |
 | Realtime | WebSocket (`ws`) for the live decode feed |
@@ -97,7 +102,8 @@ There is no `app/` directory and no App Router. Don't add one.
 
 ## Setup
 
-Requires Node 20+, MySQL 8+, and (from Phase 2 onward) Redis.
+Requires Node 20+ and MySQL 8+ (the Proxmox installer below uses MariaDB). Redis is not
+needed: nothing queues work.
 
 Create the database first:
 
@@ -192,6 +198,17 @@ pm2 save && pm2 startup
 
 NGINX config lives in [`deploy/nginx/digishack.conf`](deploy/nginx/digishack.conf).
 
+PM2 only checks that a process exists. [`scripts/healthcheck.sh`](scripts/healthcheck.sh)
+checks that each tier still answers, and restarts one that has stopped (three misses in a
+row, at most four restarts an hour). It assumes the container layout — the app in
+`/opt/digishack`, PM2 at `/usr/bin/pm2` — and runs every minute from root's crontab:
+
+```
+* * * * * /opt/digishack/scripts/healthcheck.sh
+```
+
+Neither installer adds that line; it has to be added by hand.
+
 ### Proxmox
 
 [`deploy/proxmox/digishack-lxc.sh`](deploy/proxmox/digishack-lxc.sh) builds a container
@@ -228,21 +245,27 @@ web tier is what allows the web tier to scale.
 ## Project layout
 
 ```
-pages/            routes + API (Pages Router)
-  api/qsos/       QSO CRUD, dupe check
-  api/stations/   station CRUD
-  api/operators/  operator CRUD
-  api/stats/      dashboard counters
-components/       ui primitives, layout shell, QSO form
+pages/              routes (Pages Router)
+  api/              the app's own API; api/v1/ is the stable public one
+components/         React components by area: ui primitives, layout shell, qso, digital, settings
+services/radio/     the bridge process (PM2: digishack-bridge) and its operating logic
+services/winlink/   Winlink: supervisor for a pinned Pat engine (in progress)
 lib/
-  api/respond.ts  BigInt-safe JSON, method routing, error translation
-  client/api.ts   fetch helpers + useApi hook
-  db/             Prisma client, QSO query builders
-  ham/            band plan + mode tables
-  validation/     zod schemas
-  time.ts         UTC <-> datetime-local conversion
-prisma/           schema
-deploy/nginx/     reverse proxy config
+  radio/            shared by both radios: decode pipeline and worker threads, timing,
+                    transmit gate, schedules, receiver controls
+  flex/ icom/       the two radio drivers (SmartSDR API + DAX; RS-BA1 + CI-V)
+  digital/ dsp/     modems and message codecs: FT8/FT4/FT2, WSPR, JS8, RTTY, CW, PSK31, ...
+  wsjtx/            the WSJT-X UDP protocol, for an external decoder
+  adif/ dxcc/ awards/ pota/ qsl/ qrz/ integrations/   the logbook side
+  settings/         the settings registry and encrypted storage
+  auth/ api/ validation/ db/ client/   sessions and keys, route helpers, zod schemas,
+                    Prisma and backups, browser-side fetch and socket hooks
+  time.ts           UTC display and datetime-local conversion (lib/time/ is clock correction)
+prisma/             schema, migrations, sample-data seed
+scripts/            check-*.ts suites (npm run check), install/update/health scripts,
+                    hardware probes
+deploy/             nginx config, Proxmox container installer
+docs/               documentation
 ```
 
 ## Configuration
@@ -255,7 +278,7 @@ deploy/nginx/     reverse proxy config
 | `SETTINGS_KEY` | The key that decrypts those settings can't itself be encrypted |
 | `PORT` | Needed before the app can query anything |
 
-Everything else — QRZ, LoTW, eQSL, ClubLog, HRDLOG, SMTP, PSKReporter, the
+Everything else — QRZ, LoTW, eQSL, ClubLog, SMTP, PSKReporter, the
 bridge — is managed at **/settings** (ADMIN only) and stored in the `Setting`
 table, with secrets encrypted using **AES-256-GCM**. GCM rather than CBC because
 it authenticates as well as encrypts: a tampered ciphertext fails to decrypt
@@ -292,8 +315,10 @@ visible what's left to move.
 
 **/update** (ADMIN) shows the running version, how many commits behind the branch
 is, and what would be deployed. One button runs
-`git merge --ff-only` → `npm ci` → `prisma migrate deploy` → `npm run build` →
-`npm run check` → `pm2 reload`, streaming each step's output.
+`git merge --ff-only` → `npm ci` → a backup bundle → `prisma migrate deploy` →
+`npm run build` → `npm run check` → `pm2 reload`, streaming each step's output. A backup
+that fails stops the update before the schema is touched; a failing `npm run check` is
+reported but does not block the reload of code that built.
 
 **This is remote code execution, so `update.allowFromUi` defaults to `false`.**
 Upgrading DigiShack never silently adds a deploy path to an existing install — an
@@ -363,7 +388,7 @@ half a table.
 self-contained decode/transmit paths for a FlexRadio (`digital.source = flex`) and
 a networked Icom (`digital.source = icom`). It can also take decodes from an
 external decoder over the WSJT-X UDP protocol (`digital.source = wsjtx`) for
-setups that prefer one. Run it with `npm run radio`, or under PM2 as
+setups that prefer one. Run it with `npm run bridge`, or under PM2 as
 `digishack-bridge`.
 
 It was called the "omega bridge" until 1.5.0, after wsjtx-omega. That is one
@@ -474,18 +499,26 @@ writes to a remote logbook, which is what makes it safe against live accounts.
 
 | Service | Implemented | Notes |
 |---|---|---|
-| QRZ Logbook | status, full import, single insert | `qrz.logbookApiKey` is per-logbook and **separate** from the XML login |
-| LoTW | confirmation download | upload needs TQSL to sign each QSO; there is no password path |
-| eQSL / ClubLog / HRDLOG | — | no read-only probe exists, so they are not probed |
+| QRZ Logbook | status, differential download, upload | `qrz.logbookApiKey` is per-logbook and **separate** from the XML login |
+| LoTW | status, confirmation download, upload | uploads are signed here from the callsign certificate — no TQSL; see [docs/lotw-upload.md](docs/lotw-upload.md) |
+| eQSL | inbox sync, upload | the status card reports the inbox sync's last run |
+| Club Log | upload, one contact at a time | needs an API key from Club Log's helpdesk as well as the login |
+| Cloudlog / Wavelog, N3FJP | status, upload | |
+
+HRDLOG is not supported: nothing ever uploaded there, and its settings were removed.
+
+What gets uploaded, when, and what Sent and Rcvd mean is in
+[docs/logbook-sync.md](docs/logbook-sync.md).
 
 **ClubLog authenticates by registered email address, not callsign**, and prefers an
 Application Password over the account password.
 
 ### Rules
 
-- **Nothing bulk-uploads to a remote logbook.** These are live public logs;
+- **Nothing bulk-uploads the back catalogue on its own.** These are live public logs;
   pushing local QSOs outward en masse is very hard to unpick, especially on LoTW.
-  `insertQrzQso` handles one explicitly chosen QSO — do not call it in a sweep.
+  Automatic upload skips contacts older than `uploads.since`; the back catalogue goes
+  through a separate, explicit request that shows the count first.
 - **Sync endpoints default to `dryRun`.** The first thing an operator should see is
   what *would* change.
 - **LoTW sync only ever sets `lotwRcvd` true.** A confirmation missing from an
@@ -544,8 +577,11 @@ the `/dxcc` backfill, because WAZ and WAC are otherwise unreachable.
 
 ## Authentication
 
-Every page and every API route requires a session. The only public endpoints are
-`/api/auth/{setup,login,logout,me}`.
+Every page and every API route requires a session, with these exceptions:
+`/api/auth/{setup,login,logout,me,forgot,reset}`, `/api/health` (liveness, no log data),
+and the two links a QSL recipient follows, `/api/qsl/card/[id]` and `/api/qsl/unsubscribe`,
+which need an HMAC token instead. [docs/exposure.md](docs/exposure.md) records how each was
+checked.
 
 **`User` is the login identity; `Operator` is the QSO-attribution record.** They
 are separate on purpose — an `Operator` is scoped to exactly one `Station`, so
@@ -623,8 +659,9 @@ match its frequency silently corrupts per-band award tracking.
 
 **Band and mode names are ADIF 3.x values**, not a contest-only set.
 This matters for ADIF import/export, LoTW, and award tracking. FT4 is stored as
-`FT4` even though ADIF encodes it as `MODE=MFSK` / `SUBMODE=FT4`; the Phase 2
-ADIF writer is responsible for that split. See [`lib/ham/`](lib/ham/).
+`FT4` even though ADIF encodes it as `MODE=MFSK` / `SUBMODE=FT4`; the ADIF writer
+makes that split on export ([`lib/adif/fields.ts`](lib/adif/fields.ts)). See
+[`lib/ham/`](lib/ham/).
 
 **Stations can't be deleted while they hold QSOs** (409). Operators can be —
 `Qso.operator` is `onDelete: SetNull`, so deleting an operator detaches them from
@@ -632,21 +669,23 @@ their contacts instead of destroying log rows.
 
 ## Build status
 
-Phases 1, 3, 4 and 5 are implemented. Phase 2 is most of the way there — what
-remains is listed below, and it is all logbook plumbing rather than radio work.
+Phases 1 to 5 are implemented, apart from the one open Phase 2 item below.
 
 - [x] Phase 1 — schema, QSO/station/operator/rig CRUD, dashboard, log view
-- [x] Authentication — users, roles, sessions, first-run setup (not a numbered
-      spec phase; added because DigiShack is web-facing)
+- [x] Authentication — users, roles, sessions, first-run setup, password reset by
+      email (not a numbered spec phase; added because DigiShack is web-facing)
 - [ ] Phase 2 — Cloudlog parity
   - [x] Manual QSO entry
   - [x] ADIF import/export
   - [x] DXCC entity resolution (Club Log cty.xml)
   - [x] DXCC / WAS / WAZ / WAC / grid / IOTA award tracking
   - [x] Public REST API (`/api/v1`) with API keys
-  - [x] QRZ logbook sync (status, full import) and LoTW confirmation download
-  - [ ] LoTW upload (needs TQSL), eQSL, ClubLog, HRDLOG
-  - [ ] QSO map, DX cluster
+  - [x] QRZ logbook sync (status, full import, differential download) and LoTW
+        confirmation download
+  - [x] Uploads to QRZ, LoTW (signed here, no TQSL), eQSL, Club Log,
+        Cloudlog/Wavelog and N3FJP
+  - [x] QSO maps — `/map` (bearing and distance from home) and `/gridmap`
+  - [ ] DX cluster
   - [x] CAT control panel (`/rig`)
   - [x] QSL card management (`/qsl/cards`)
 - [x] Phase 4a — WSJT-X UDP bridge (protocol, persistence, auto-log, WebSocket, control API)
@@ -659,16 +698,20 @@ remains is listed below, and it is all logbook plumbing rather than radio work.
   - [x] Auto Hunt — work callable CQs one at a time (dupe/cooldown guarded);
         live-verified: W4PSK and SP1ABC (DX) logged back-to-back autonomously
   - [x] Auto Hunt POTA — hunt restricted to stations calling CQ POTA
-  - [x] Auto Call POTA — click a POTA activator's decode (spot-feed retuning to
-        activators you can't hear yet is still to come)
+  - [x] Auto Call POTA — click a POTA activator's decode
   - [x] Award-aware hunting: ranks by new DXCC / band slot / CQ zone / continent
         / grid, with signal strength only as a tiebreaker
   - [x] Chase POTA — retunes to spotted activators from the POTA spot feed
-- [~] FT2 support. Parameters, Gaussian pulse, framing and the GFSK modulator are
-      ported from wsjt-x_improved `lib/ft2` and measured (52 assertions). Still
-      needed: 77-bit packing, CRC-13, the LDPC(128,90) encoder, and the decoder.
-      Note that the FT2 description circulating publicly is substantially wrong —
-      see the 0.29.0 changelog entry for the real parameters.
+- [x] FT2 — modulator, 77-bit packing, CRC-13, LDPC(128,90) and the decoder, ported
+      from wsjt-x_improved `lib/ft2` (finished in 0.41.0). Experimental: no FT2 signal
+      from another station has been decoded here yet — see
+      [docs/digital-modes.md](docs/digital-modes.md). Note that the FT2 description
+      circulating publicly is substantially wrong — see the 0.29.0 changelog entry for
+      the real parameters.
+- [x] More modes — WSPR (receive, reported to wsprnet), JS8, RTTY, CW, PSK31, Olivia,
+      SSTV, Feld Hell and JTTY, each with a page in [docs/](docs/README.md)
+- [x] YouTube Live streaming of the waterfall and receiver audio
+      ([docs/streaming.md](docs/streaming.md))
 - [x] Auto band-hop (`auto.bandHop`) — on a guard pause, retune to the next band
       on the list, listen two cycles, settle or hop on.
 - [x] ATU tune button and `flex.atuOnBandChange`.
@@ -690,21 +733,19 @@ remains is listed below, and it is all logbook plumbing rather than radio work.
 
 ### Not yet addressed
 
-- **No password reset by email.** Admins reset passwords from the Users page;
-  there is no self-service flow, which would need the Phase 3 SMTP work.
-
 - **BullMQ/Redis are installed but unused.** Nothing queues work yet; PSKReporter
   reporting batches in-process on a timer instead, which is sufficient for one
   station.
 - **QRZ and eQSL are verified against the live services.** QRZ uploads are
   round-trip checked; the eQSL inbox sync has been applied to the real log.
-- **Club Log is unverified for an environmental reason.** `putlogs.php` answers
-  **403 from nginx** even for an empty POST carrying no credentials, so the block
-  happens before authentication and is not a code or credential problem. Club Log
-  also publishes no working log-download API (`getadif.php` is 403 too), so a
-  local-vs-remote diff is impossible — it expects whole-log ADIF uploads and
-  de-duplicates server-side.
-- **HRDLOG is unconfigured** — no callsign or upload code set.
+- **Club Log needs an API key, and its absence looks like a block.** Without the `api`
+  field both write endpoints answer a bare **403 from nginx**, which was misread for a
+  month as Club Log refusing this installation. With the key, measured 2026-08-30:
+  `getadif.php`, `putlogs.php` and `realtime.php` all answer 200. Uploads go one
+  contact at a time through `realtime.php` (1.156.0).
+- **LoTW upload is measured**: 26 contacts signed here were accepted and then listed
+  back by LoTW's own report (1.94.2). LoTW only says a file is *queued*, so a daily
+  reconciliation clears the Sent flag on anything LoTW does not hold (1.102.0).
 - **LoTW's chunked full sync is unverified**: ARRL throttles with HTTP 503 and
   testing it properly means hammering them.
 - **DXCC runs on a fixture.** `cty.xml` needs a Club Log API key (or a manual
@@ -721,8 +762,9 @@ This is not an arbitrary choice. The native FT8/FT4 path depends on
 [`@e04/ft8ts`](https://github.com/e04/ft8ts), a TypeScript port of the WSJT-X
 2.7.0 codec, which is GPL-3.0 and is imported directly into application code:
 
-- `lib/flex/dax.ts` — `decodeFT8`, `decodeFT4` (the receive path)
-- `lib/flex/tx.ts` — `encodeFT8`, `encodeFT4` (the transmit path)
+- `lib/radio/decode-worker.mjs` — `decodeFT8`, `decodeFT4`, on a worker thread (the
+  receive path, both radios)
+- `lib/radio/waveform.ts` — `encodeFT8`, `encodeFT4` (the transmit path, both radios)
 
 That makes DigiShack a combined work, so GPL-3.0 is what the dependency already
 requires. It is the only copyleft dependency in the tree; everything else is

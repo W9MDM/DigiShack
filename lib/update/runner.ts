@@ -1,7 +1,15 @@
 import { execFileSync, spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import {
+  linkSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { hostname } from "node:os";
 import path from "node:path";
 
 import { getBooleanSetting, getSetting } from "@/lib/settings";
@@ -466,43 +474,275 @@ export async function checkForUpdate(): Promise<UpdateCheck> {
 // Run
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// The run lock
+// ---------------------------------------------------------------------------
+//
+// ONE UPDATE AT A TIME, across processes.
+//
+// THE FAULT (R15 in the 1.185.2 review). The route asked `isRunning()` — which read the state
+// file — then awaited `checkForUpdate()`, a git fetch that takes seconds, and `performUpdate()`
+// awaited ANOTHER check before it finally wrote "running". Two requests inside that window both
+// saw "not running" and both started: two `npm ci`s into one node_modules, two migrations, two
+// builds into one .next, interleaved writes to one state file. A double-click was enough.
+//
+// Admission is now a lock file created with O_EXCL (flag "wx"): the filesystem lets exactly one
+// creator win, whatever process it is in, and taking it is SYNCHRONOUS, so the route takes it
+// before its first await. The run holds it until it ends and releases it in a finally.
+//
+// A FILE, because what it protects is this checkout — its node_modules, its build output, its
+// git index — and what can collide over it is anything that can see the directory: the PM2 web
+// process, a `next dev` on the same tree, a second instance one day. A database lock would have
+// to stay held across `prisma migrate deploy` and the pre-migration backup, on a connection
+// nothing here controls.
+//
+// STALE LOCKS. A run ends with `pm2 reload`, and being OOM-killed mid-build is a known way for
+// one to die, so a lock can outlive its owner. It counts as abandoned when:
+//   - its process is gone (same host — `kill(pid, 0)`),
+//   - it names THIS process but this process never took it (a restart reused the pid),
+//   - it is older than LOCK_MAX_AGE_MS, which no run can reach, or
+//   - it is unreadable and more than a few seconds old (its writer died mid-write).
+// Clearing one renames it aside first and checks the file moved is the one judged stale, so two
+// processes recovering the same lock cannot both go on to hold a fresh one.
+//
+// This replaces the old 30-minute age-out of a "running" state: a crashed run is now noticed as
+// soon as its process is gone, instead of blocking updates for half an hour.
+
+const LOCK_FILE = path.join(STATE_DIR, "update.lock");
+
 /**
- * How long a "running" state may persist before it is treated as abandoned.
- *
- * An update that has genuinely been going for longer than this has lost its
- * process — the build is the long step and it runs inside a web process capped at
- * 512 MB, so being OOM-killed mid-build is a realistic way to get here.
+ * Older than any run can be. Every step that can take long has a timeout — 2 + 15 + 10 + 20 +
+ * 10 minutes for fetch, install, migrate, build and checks — so a lock twice that old belongs
+ * to nothing that is still working.
  */
-const STALE_AFTER_MS = 30 * 60_000;
+const LOCK_MAX_AGE_MS = 2 * 60 * 60_000;
 
+/** An unreadable lock younger than this may simply not have been written yet. */
+const LOCK_WRITE_GRACE_MS = 10_000;
+
+interface LockRecord {
+  token: string;
+  pid: number;
+  host: string;
+  acquiredAt: string;
+}
+
+/** A held run lock. `release()` is idempotent and only ever removes this holder's own file. */
+export interface UpdateLock {
+  readonly token: string;
+  release(): void;
+}
+
+// The token this process holds, if any. On globalThis so a dev-mode module reload does not
+// forget a run that is still going and then judge its own lock abandoned.
+const heldLock = globalThis as unknown as { __digishackUpdateLock?: string };
+
+function errorCode(err: unknown): string | undefined {
+  return (err as NodeJS.ErrnoException | null)?.code;
+}
+
+function parseLock(raw: string): LockRecord | null {
+  try {
+    const r = JSON.parse(raw) as Partial<LockRecord>;
+    return typeof r.token === "string" &&
+      typeof r.pid === "number" &&
+      typeof r.host === "string" &&
+      typeof r.acquiredAt === "string"
+      ? (r as LockRecord)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function processAlive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    // EPERM: it exists, it is just not ours to signal.
+    return errorCode(err) === "EPERM";
+  }
+}
+
+type LockView =
+  | { state: "absent" }
+  | { state: "held" }
+  | { state: "stale"; raw: string; why: string };
+
+function inspectLock(): LockView {
+  let raw: string;
+  let mtimeMs: number;
+  try {
+    raw = readFileSync(LOCK_FILE, "utf8");
+    mtimeMs = statSync(LOCK_FILE).mtimeMs;
+  } catch (err) {
+    if (errorCode(err) === "ENOENT") return { state: "absent" };
+    throw err;
+  }
+  const now = Date.now();
+  const record = parseLock(raw);
+  if (!record) {
+    return now - mtimeMs > LOCK_WRITE_GRACE_MS
+      ? { state: "stale", raw, why: "it is unreadable" }
+      : { state: "held" };
+  }
+  if (!(now - Date.parse(record.acquiredAt) < LOCK_MAX_AGE_MS)) {
+    return { state: "stale", raw, why: `it was taken at ${record.acquiredAt}` };
+  }
+  if (record.host === hostname()) {
+    if (record.pid === process.pid) {
+      if (heldLock.__digishackUpdateLock !== record.token) {
+        return { state: "stale", raw, why: "an earlier process with this pid left it" };
+      }
+    } else if (!processAlive(record.pid)) {
+      return { state: "stale", raw, why: `process ${record.pid} is gone` };
+    }
+  }
+  return { state: "held" };
+}
+
+/** Move a stale lock out of the way. False if what was there turned out to be live. */
+function discardStaleLock(judged: string): boolean {
+  const aside = `${LOCK_FILE}.${randomBytes(6).toString("hex")}.stale`;
+  try {
+    renameSync(LOCK_FILE, aside);
+  } catch (err) {
+    // Already gone: whoever cleared it is about to create theirs, and O_EXCL decides.
+    if (errorCode(err) === "ENOENT") return true;
+    throw err;
+  }
+  let moved: string | null = null;
+  try {
+    moved = readFileSync(aside, "utf8");
+  } catch {
+    /* treated as not the one judged */
+  }
+  if (moved === judged) {
+    try {
+      unlinkSync(aside);
+    } catch {
+      /* best effort */
+    }
+    return true;
+  }
+  // Another process cleared the stale lock and took a fresh one between our look and our
+  // rename, and that is what we moved. Put it back where its owner will look, and stand aside.
+  try {
+    linkSync(aside, LOCK_FILE);
+  } catch {
+    /* only if yet another lock has appeared since */
+  }
+  try {
+    unlinkSync(aside);
+  } catch {
+    /* best effort */
+  }
+  return false;
+}
+
+/**
+ * Take the run lock, or null if an update already holds it.
+ *
+ * SYNCHRONOUS on purpose: a caller must be able to take it before its first await. Throws only
+ * when the lock cannot be examined at all (an unwritable logs/ directory), which is not the
+ * same thing as "busy".
+ */
+export function acquireUpdateLock(): UpdateLock | null {
+  mkdirSync(STATE_DIR, { recursive: true });
+  const record: LockRecord = {
+    token: randomBytes(16).toString("hex"),
+    pid: process.pid,
+    host: hostname(),
+    acquiredAt: new Date().toISOString(),
+  };
+  // The first create, and up to two more after clearing an abandoned lock.
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      writeFileSync(LOCK_FILE, JSON.stringify(record), { flag: "wx" });
+      heldLock.__digishackUpdateLock = record.token;
+      const token = record.token;
+      return { token, release: () => releaseUpdateLock(token) };
+    } catch (err) {
+      if (errorCode(err) !== "EEXIST") throw err;
+    }
+    const current = inspectLock();
+    if (current.state === "held") return null;
+    if (current.state === "stale") {
+      console.warn(`[update] clearing an abandoned update lock: ${current.why}`);
+      if (!discardStaleLock(current.raw)) return null;
+    }
+    // "absent": it went between our create and our look. Try again.
+  }
+  return null;
+}
+
+function releaseUpdateLock(token: string): void {
+  if (heldLock.__digishackUpdateLock === token) heldLock.__digishackUpdateLock = undefined;
+  try {
+    if (parseLock(readFileSync(LOCK_FILE, "utf8"))?.token === token) unlinkSync(LOCK_FILE);
+  } catch {
+    /* already gone */
+  }
+}
+
+/**
+ * Is an update in progress? True exactly while a run holds the lock — from the moment the
+ * route admits it, through the seconds of `git fetch` before the state file says anything.
+ *
+ * The state file is no longer consulted, and two dead ends it caused cannot recur. "reloading"
+ * is written just before PM2 replaces this process and used to be read as in-flight by the
+ * replacement, 409ing every later update; the lock is released before then. And a "running"
+ * state whose process died used to block updates until it aged out; a dead owner's lock is now
+ * recognised as soon as the process is gone.
+ */
 export function isRunning(): boolean {
-  const s = readState();
-
-  // "reloading" is NEVER running from the perspective of a reader.
-  //
-  // It is written immediately before PM2 replaces this process, with finishedAt
-  // already set, so the only process that can ever READ it is the replacement.
-  // Treating it as in-flight meant that after the very first successful update the
-  // new process saw the persisted "reloading", isRunning() returned true, and every
-  // later update 409'd with the button disabled — permanently, with no way out but
-  // editing logs/update-state.json by hand.
-  if (s.phase === "reloading") return false;
-
-  if (s.phase !== "running") return false;
-
-  // A "running" state whose process died leaves the same dead end. Age it out.
-  const started = s.startedAt ? Date.parse(s.startedAt) : NaN;
-  if (Number.isFinite(started) && Date.now() - started > STALE_AFTER_MS) return false;
-
-  return true;
+  try {
+    return inspectLock().state === "held";
+  } catch {
+    return false;
+  }
 }
 
 /**
  * Perform the update. Resolves once the work is done or has failed; the PM2
  * reload is spawned detached at the very end so this process being replaced does
  * not abort it.
+ *
+ * Admission comes first and before any await. The route, which must take the lock before ITS
+ * first await, passes it in; any other caller gets it taken here. When an update already holds
+ * it, this returns a failed state WITHOUT writing it: the state file belongs to the run that
+ * holds the lock, and overwriting it would hide that run from the page polling it.
  */
-export async function performUpdate(triggeredBy: string): Promise<UpdateState> {
+export async function performUpdate(
+  triggeredBy: string,
+  opts: { lock?: UpdateLock } = {},
+): Promise<UpdateState> {
+  const lock = opts.lock ?? acquireUpdateLock();
+  if (!lock) {
+    const now = new Date().toISOString();
+    return {
+      ...emptyState(),
+      phase: "failed",
+      startedAt: now,
+      finishedAt: now,
+      triggeredBy,
+      error: "An update is already in progress.",
+    };
+  }
+  try {
+    return await runUpdate(triggeredBy);
+  } finally {
+    // Also after the reload has been spawned. If PM2 replaces this process the lock would be
+    // recognised as abandoned anyway; if it does not — a dev server answered this request —
+    // a lock left behind would refuse every update for two hours.
+    lock.release();
+  }
+}
+
+/** The run itself. Only ever called by performUpdate, holding the lock. */
+async function runUpdate(triggeredBy: string): Promise<UpdateState> {
   const check = await checkForUpdate();
 
   const state: UpdateState = {

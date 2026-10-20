@@ -1,14 +1,11 @@
 import type { GetServerSideProps } from "next";
-import Link from "next/link";
 import { useRouter } from "next/router";
 import { useState } from "react";
 
-import {
-  Button,
-  ErrorBanner,
-  Field,
-  Input,
-} from "@/components/ui/primitives";
+import { AuthLayout, AuthLink } from "@/components/auth/AuthLayout";
+import { authErrorMessage, focusField } from "@/components/auth/form";
+import { PasswordInput, TOUCH_TEXT } from "@/components/auth/PasswordInput";
+import { Button, ErrorBanner, Field, Input } from "@/components/ui/primitives";
 import { getAuth, needsSetup } from "@/lib/auth/session";
 import { ApiError, apiPost } from "@/lib/client/api";
 
@@ -21,7 +18,8 @@ export default function LoginPage({ dbError }: Props) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<ApiError | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [offerSetup, setOfferSetup] = useState(false);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -33,62 +31,51 @@ export default function LoginPage({ dbError }: Props) {
       // followed — an absolute URL here would be an open redirect.
       const next = typeof router.query.next === "string" ? router.query.next : "/";
       const safe = next.startsWith("/") && !next.startsWith("//") ? next : "/";
+      // `busy` stays on: the navigation is the rest of this sign-in.
       window.location.href = safe;
     } catch (err) {
-      setError(
-        err instanceof ApiError ? err : new ApiError(0, "Could not sign in"),
+      setError(authErrorMessage(err, "Could not sign in"));
+      setOfferSetup(
+        err instanceof ApiError && Boolean(err.details && "needsSetup" in err.details),
       );
       setBusy(false);
+      // Selected, so retyping replaces it.
+      focusField("password", true);
     }
   }
 
   return (
-    <div className="w-full max-w-sm">
-      <div className="flex items-baseline gap-1.5 justify-center mb-1">
-        <span className="font-display text-3xl uppercase tracking-wider">
-          Digi
-        </span>
-        <span className="font-display text-3xl uppercase tracking-wider text-accent-bright">
-          Shack
-        </span>
-      </div>
-      <p className="text-center text-sm text-fg-subtle mb-6">Sign in to continue</p>
-
-      {dbError && (
-        <div className="mb-4">
+    <AuthLayout
+      title="Sign in"
+      links={<AuthLink href="/forgot">Forgot password?</AuthLink>}
+    >
+      <form onSubmit={submit} className="flex flex-col gap-4">
+        {dbError && (
           <ErrorBanner>
-            Can&apos;t reach the database. Check <code>DATABASE_URL</code> and that
-            MySQL is running.
+            Can&apos;t reach the database. Check <code>DATABASE_URL</code> and that MySQL
+            is running.
           </ErrorBanner>
-        </div>
-      )}
+        )}
+        {error && <ErrorBanner>{error}</ErrorBanner>}
 
-      {error && (
-        <div className="mb-4">
-          <ErrorBanner>{error.message}</ErrorBanner>
-        </div>
-      )}
-
-      <form
-        onSubmit={submit}
-        className="flex flex-col gap-4 bg-surface border border-line rounded-md p-5"
-      >
-        <Field label="Email" htmlFor="email" required>
+        <Field label="Email" htmlFor="email">
           <Input
             id="email"
             type="email"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             autoComplete="username"
+            autoCapitalize="none"
+            spellCheck={false}
             autoFocus
             required
+            className={TOUCH_TEXT}
           />
         </Field>
 
-        <Field label="Password" htmlFor="password" required>
-          <Input
+        <Field label="Password" htmlFor="password">
+          <PasswordInput
             id="password"
-            type="password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             autoComplete="current-password"
@@ -96,25 +83,17 @@ export default function LoginPage({ dbError }: Props) {
           />
         </Field>
 
-        <Button type="submit" variant="primary" disabled={busy}>
-          {busy ? "Signing in…" : "Sign in"}
+        <Button type="submit" variant="primary" loading={busy} className="mt-1 w-full">
+          Sign in
         </Button>
 
-        <p className="text-center text-xs text-fg-subtle -mt-1">
-          <Link href="/forgot" className="hover:text-accent-bright underline">
-            Forgot password?
-          </Link>
-        </p>
+        {offerSetup && (
+          <p className="text-center text-sm">
+            <AuthLink href="/setup">Run first-time setup</AuthLink>
+          </p>
+        )}
       </form>
-
-      {error?.details && "needsSetup" in error.details && (
-        <p className="text-center text-sm text-fg-subtle mt-4">
-          <Link href="/setup" className="text-accent-bright underline">
-            Run first-time setup
-          </Link>
-        </p>
-      )}
-    </div>
+    </AuthLayout>
   );
 }
 

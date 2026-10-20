@@ -184,13 +184,83 @@ function refineQso<T extends z.ZodTypeAny>(schema: T) {
 
 export const createQsoSchema = refineQso(baseQso);
 
-// PATCH semantics: only the supplied keys change. `.partial()` drops the
-// defaults too, so an omitted `qslSent` means "leave alone" rather than "reset
-// to NONE" — which is what a partial update has to mean.
-export const updateQsoSchema = refineQso(baseQso.partial());
+// PATCH semantics: only the supplied keys change, so an omitted `qslSent` must mean
+// "leave alone", never "reset to NONE".
+//
+// `.partial()` alone does NOT give that. This comment used to say it dropped the
+// defaults; under zod 4 (4.4.3 measured) `.default()` still fires inside `.optional()`,
+// so `updateQsoSchema.parse({ notes: "x" })` came back with qslSent/qslRcvd "NONE" and
+// all seven upload/confirmation flags false — and the route wrote them. A notes-only edit
+// from an API client reset lotwSent, qrzSent and eqslSent (re-queuing the contact for
+// upload), wiped QSL status, and cleared emailQslSentAt. The edit form was spared only
+// because it always sends every flag. The flags are restated here without defaults;
+// scripts/check-qso-patch.ts asserts an empty body parses to an empty object, so a default
+// added to baseQso later cannot slip back in unnoticed.
+export const updateQsoSchema = refineQso(
+  baseQso
+    .extend({
+      qslSent: QSL_STATUS.optional(),
+      qslRcvd: QSL_STATUS.optional(),
+      lotwSent: z.boolean().optional(),
+      lotwRcvd: z.boolean().optional(),
+      qrzSent: z.boolean().optional(),
+      qrzRcvd: z.boolean().optional(),
+      eqslSent: z.boolean().optional(),
+      emailQslSent: z.boolean().optional(),
+      eqslRcvd: z.boolean().optional(),
+    })
+    .partial(),
+);
 
 export type CreateQsoInput = z.infer<typeof createQsoSchema>;
 export type UpdateQsoInput = z.infer<typeof updateQsoSchema>;
+
+// ---------------------------------------------------------------------------
+// Partial edits, checked as the row they will leave
+// ---------------------------------------------------------------------------
+//
+// `refineQso` can only compare fields that arrive together. A PATCH carrying one half of
+// a pair is merged over the stored row first, and the merged pair is what gets checked —
+// the same thing the update route already did for band and frequency. Without it an
+// end-time-only edit saved an end before the stored start, and a station-only edit kept
+// the old station's operator (code review R10, R11).
+
+/**
+ * Field errors for the start/end pair a partial edit would leave, or null when it is valid
+ * or the edit touches neither. `endTime: null` clears the end, which is always valid.
+ */
+export function effectiveTimeErrors(
+  stored: { startTime: Date; endTime: Date | null },
+  input: { startTime?: Date; endTime?: Date | null },
+): Record<string, string[]> | null {
+  if (input.startTime === undefined && input.endTime === undefined) return null;
+  const start = input.startTime ?? stored.startTime;
+  const end = input.endTime !== undefined ? input.endTime : stored.endTime;
+  if (!end || end >= start) return null;
+  // Name the field that moved: with only the start supplied, the stored end is not what
+  // the operator just typed.
+  return input.endTime === undefined
+    ? { startTime: [`Start time is after this contact's end time (${end.toISOString()})`] }
+    : { endTime: ["End time is before start time"] };
+}
+
+/**
+ * The station and operator a partial edit would leave. `changed` is true when the request
+ * names either, which is when the pair has to be re-checked; an explicit
+ * `operatorId: null` clears the operator.
+ */
+export function effectiveStationOperator(
+  stored: { stationId: string; operatorId: string | null },
+  input: { stationId?: string; operatorId?: string | null },
+): { stationId: string; operatorId: string | null; changed: boolean; operatorFromRequest: boolean } {
+  const operatorFromRequest = input.operatorId !== undefined;
+  return {
+    stationId: input.stationId ?? stored.stationId,
+    operatorId: operatorFromRequest ? (input.operatorId ?? null) : stored.operatorId,
+    changed: input.stationId !== undefined || operatorFromRequest,
+    operatorFromRequest,
+  };
+}
 
 /**
  * Fill in the band from the frequency when the caller didn't supply one.

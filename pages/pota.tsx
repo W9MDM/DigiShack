@@ -1,6 +1,11 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 
+import { CardTable } from "@/components/dashboard/CardTable";
+import { plural } from "@/components/dashboard/format";
+import { Loading, Notice } from "@/components/dashboard/Notice";
+import { Section } from "@/components/dashboard/Section";
+import { Segmented } from "@/components/dashboard/Segmented";
 import {
   Badge,
   Button,
@@ -9,7 +14,10 @@ import {
   ErrorBanner,
   Input,
   PageHeader,
+  Td,
+  Th,
 } from "@/components/ui/primitives";
+import { Stat } from "@/components/ui/Stat";
 import {
   type ActivationSession,
   readActivation,
@@ -28,6 +36,7 @@ import type { ListResponse, Qso } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 import { useVisibleInterval } from "@/lib/client/use-visible-interval";
+
 // Parks on the Air.
 //
 // The page is built around a distinction worth being explicit about, because
@@ -43,33 +52,9 @@ import { useVisibleInterval } from "@/lib/client/use-visible-interval";
 /** Refresh often enough to be a spot list, rarely enough to be polite. */
 const REFRESH_MS = 60_000;
 
-
-function Stat({
-  label,
-  value,
-  hint,
-  tone,
-}: {
-  label: string;
-  value: string | number;
-  hint?: string;
-  tone?: "accent" | "muted";
-}) {
-  return (
-    <div className="border border-line rounded-sm bg-surface-2 px-3 py-2" title={hint}>
-      <div className="text-[10px] uppercase tracking-wider text-fg-subtle">{label}</div>
-      <div
-        className={cn(
-          "font-display text-xl tnum leading-tight",
-          tone === "accent" && "text-accent-bright",
-          tone === "muted" && "text-fg-muted",
-        )}
-      >
-        {value}
-      </div>
-      {hint && <div className="text-[10px] text-fg-subtle mt-0.5">{hint}</div>}
-    </div>
-  );
+/** The small right-hand label naming where a panel's figures come from. */
+function Source({ children }: { children: string }) {
+  return <span className="text-xs text-fg-subtle">{children}</span>;
 }
 
 /**
@@ -124,8 +109,7 @@ function ActivationInProgress() {
   return (
     <Card
       title="Activation in progress"
-      className="mb-4"
-      actions={<span className="text-[10px] text-fg-subtle">from your log</span>}
+      actions={<Source>from your log</Source>}
     >
       <div className="flex flex-wrap items-center gap-3">
         <Badge tone={progress.qualifies ? "ok" : "accent"}>
@@ -241,16 +225,14 @@ function ImportPanel({ onDone }: { onDone: () => void }) {
   return (
     <Card
       title="Import your POTA hunter log"
-      className="mt-4"
       actions={
-        <div className="flex items-center gap-2">
-          <Button onClick={() => void run(true)} disabled={busy}>
-            {busy ? "Working…" : "Preview"}
+        <div className="flex flex-wrap items-center gap-2">
+          <Button onClick={() => void run(true)} loading={busy}>
+            Preview
           </Button>
           {report?.dryRun && report.updates > 0 && (
             <Button variant="primary" onClick={() => void run(false)} disabled={busy}>
-              Apply {report.referencesToAdd.toLocaleString()} reference
-              {report.referencesToAdd === 1 ? "" : "s"}
+              Apply {plural(report.referencesToAdd, "reference")}
             </Button>
           )}
         </div>
@@ -260,9 +242,9 @@ function ImportPanel({ onDone }: { onDone: () => void }) {
         POTA knows every park you have ever hunted; this log only knows the ones recorded
         since park references were added. This fills in the rest by matching POTA&apos;s
         logbook against contacts already here — it never creates QSOs, and it never
-        adds a reference to a contact whose parks have nothing in common with POTA's
+        adds a reference to a contact whose parks have nothing in common with POTA&apos;s.
       </p>
-      <p className="mt-2 text-xs text-fg-subtle">
+      <p className="mt-2 text-sm text-fg-subtle">
         Needs a POTA session token in Settings → POTA chasing. It expires within hours,
         so this is a one-time backfill: from now on references are recorded as contacts
         are made.
@@ -314,46 +296,52 @@ function ImportPanel({ onDone }: { onDone: () => void }) {
               </>
             ) : (
               <span className="text-ok">
-                Applied — {report.referencesWritten.toLocaleString()} reference
-                {report.referencesWritten === 1 ? "" : "s"} written across{" "}
-                {report.applied.toLocaleString()} contact
-                {report.applied === 1 ? "" : "s"}.
+                Applied — {plural(report.referencesWritten, "reference")} written across{" "}
+                {plural(report.applied, "contact")}.
               </span>
             )}
           </p>
 
-          <div className="mt-2 flex flex-wrap gap-1.5">
+          {/* The meanings were hover tooltips, which a phone never shows. */}
+          <ul className="mt-2 flex flex-col gap-1">
             {Object.entries(report.counts)
               .filter(([, n]) => n > 0)
               .map(([outcome, n]) => (
-                <span key={outcome} title={OUTCOME_MEANING[outcome]}>
+                <li key={outcome} className="flex flex-wrap items-center gap-2 text-sm">
                   <Badge tone={OUTCOME_TONE[outcome] ?? "neutral"}>
                     {outcome} {n.toLocaleString()}
                   </Badge>
-                </span>
+                  {OUTCOME_MEANING[outcome] && (
+                    <span className="text-fg-subtle">{OUTCOME_MEANING[outcome]}</span>
+                  )}
+                </li>
               ))}
-          </div>
+          </ul>
 
           {report.sample.length > 0 && (
-            <div className="mt-3 max-h-80 overflow-y-auto overflow-x-auto border border-line rounded-sm">
-              <table className="w-full text-xs">
+            <div className="mt-3 max-h-80 overflow-auto rounded-sm border border-line">
+              <table className="w-full border-collapse text-xs">
                 <thead className="sticky top-0 bg-surface-2">
-                  <tr className="text-left uppercase tracking-wide text-fg-muted">
-                    <th className="px-2 py-1 font-medium">Outcome</th>
-                    <th className="px-2 py-1 font-medium">Callsign</th>
-                    <th className="px-2 py-1 font-medium">Park</th>
-                    <th className="px-2 py-1 font-medium">POTA time</th>
-                    <th className="px-2 py-1 font-medium">Why</th>
+                  <tr className="text-left">
+                    <Th size="sm">Outcome</Th>
+                    <Th size="sm">Callsign</Th>
+                    <Th size="sm">Park</Th>
+                    <Th size="sm">POTA time</Th>
+                    <Th size="sm">Why</Th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-line">
                   {report.sample.map((s, i) => (
                     <tr key={`${s.callsign}-${s.references.join()}-${i}`}>
-                      <td className="px-2 py-1">
-                        <Badge tone={OUTCOME_TONE[s.outcome] ?? "neutral"}>{s.outcome}</Badge>
-                      </td>
-                      <td className="px-2 py-1 font-display tracking-wide">{s.callsign}</td>
-                      <td className="px-2 py-1 tnum">
+                      <Td size="sm">
+                        <Badge size="sm" tone={OUTCOME_TONE[s.outcome] ?? "neutral"}>
+                          {s.outcome}
+                        </Badge>
+                      </Td>
+                      <Td size="sm" className="font-display tracking-wide">
+                        {s.callsign}
+                      </Td>
+                      <Td size="sm" className="tnum">
                         {s.qsoId ? (
                           <Link href={`/qsos/${s.qsoId}`} className="hover:text-accent-bright">
                             {s.references.join(", ")}
@@ -367,17 +355,17 @@ function ImportPanel({ onDone }: { onDone: () => void }) {
                           </span>
                         )}
                         {s.band && <span className="text-fg-subtle"> · {s.band}</span>}
-                      </td>
-                      <td className="px-2 py-1 tnum text-fg-subtle whitespace-nowrap">
+                      </Td>
+                      <Td size="sm" className="whitespace-nowrap tnum text-fg-subtle">
                         {s.at ? formatUtc(s.at) : "—"}
-                      </td>
-                      <td className="px-2 py-1 text-fg-subtle">
+                      </Td>
+                      <Td size="sm" className="text-fg-subtle">
                         {s.outcome === "conflict"
                           ? `log says ${s.existing.join(", ")}`
                           : s.adding.length > 0 && s.adding.length < s.references.length
                             ? `adding ${s.adding.join(", ")}`
                             : (s.detail ?? "")}
-                      </td>
+                      </Td>
                     </tr>
                   ))}
                 </tbody>
@@ -413,19 +401,18 @@ export default function PotaPage() {
     );
   }, [data?.spots, modeFilter, newOnly]);
 
-  if (error) {
-    return (
-      <>
-        <PageHeader title="POTA" />
-        <ErrorBanner>{error.message}</ErrorBanner>
-      </>
-    );
-  }
+  // An error with nothing loaded is the whole page. An error on a REFRESH is not: this
+  // polls every minute, and one failed poll used to replace a perfectly good spot list
+  // with a red box until the next one succeeded.
   if (!data) {
     return (
       <>
-        <PageHeader title="POTA" />
-        <p className="text-sm text-fg-muted">Loading…</p>
+        <PageHeader title="POTA" subtitle="Parks on the Air" />
+        {error ? (
+          <ErrorBanner>{error.message} Retrying on its own.</ErrorBanner>
+        ) : (
+          <Loading>Asking pota.app and the log…</Loading>
+        )}
       </>
     );
   }
@@ -442,317 +429,309 @@ export default function PotaPage() {
             : "Parks on the Air — set up a station to see your profile"
         }
         actions={
-          <span className="text-xs text-fg-subtle tnum">updated {formatAgo(data.fetchedAt)} ago</span>
+          <span className="text-xs text-fg-subtle tnum">
+            updated {formatAgo(data.fetchedAt)} ago
+          </span>
         }
       />
 
-      {data.profileError && (
-        <div className="mb-4 text-sm text-fg-muted border border-line rounded-sm bg-surface-2 px-3 py-2">
-          {data.profileError}. Spots and your own park contacts below still work — POTA
-          only has a profile once you have logged something with them.
-        </div>
-      )}
+      <div className="flex flex-col gap-6">
+        {error && (
+          <ErrorBanner>
+            The last refresh failed ({error.message}) — showing what loaded{" "}
+            {formatAgo(data.fetchedAt)} ago.
+          </ErrorBanner>
+        )}
 
-      {/* First on the page, above POTA's own totals, because it is the only thing here
-          the operator can still act on. */}
-      <ActivationInProgress />
+        {data.profileError && (
+          <Notice>
+            {data.profileError}. Spots and your own park contacts below still work — POTA
+            only has a profile once you have logged something with them.
+          </Notice>
+        )}
 
-      {p && (
-        <div className="grid gap-4 lg:grid-cols-2 mb-4">
-          <Card
-            title="Hunter"
-            actions={<span className="text-[10px] text-fg-subtle">from pota.app</span>}
+        {/* First, above POTA's own totals, because it is the only thing here the
+            operator can still act on. Renders nothing without an activation running. */}
+        <ActivationInProgress />
+
+        {p && (
+          <Section
+            title="Your POTA record"
+            description="From pota.app — every park you have ever worked, including before this log existed."
           >
-            <div className="grid grid-cols-2 gap-2">
-              <Stat label="Parks" value={p.hunter.parks.toLocaleString()} tone="accent" />
-              <Stat label="QSOs" value={p.hunter.qsos.toLocaleString()} />
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+              <Stat label="Parks hunted" value={p.hunter.parks} tone="accent" />
+              <Stat label="Hunter QSOs" value={p.hunter.qsos} />
+              <Stat
+                label="Activations"
+                value={p.activator.activations}
+                tone="accent"
+                hint={
+                  p.attempts.activations > p.activator.activations
+                    ? `of ${plural(p.attempts.activations, "attempt")}`
+                    : undefined
+                }
+              />
+              <Stat label="Parks activated" value={p.activator.parks} />
+              <Stat label="Activator QSOs" value={p.activator.qsos} />
             </div>
             {/* The local figure is separate and smaller on purpose. It is not a
                 correction of POTA's number — it is a different, narrower fact. */}
-            <p className="mt-3 text-xs text-fg-subtle">
-              This log has {data.local.parkQsos.toLocaleString()} park contact
-              {data.local.parkQsos === 1 ? "" : "s"} across {data.local.parks} reference
-              {data.local.parks === 1 ? "" : "s"} — park references are only recorded from
-              the version that added the column, so POTA&apos;s totals above are the
-              history.
+            <p className="text-sm text-fg-subtle">
+              This log has {plural(data.local.parkQsos, "park contact")} across{" "}
+              {plural(data.local.parks, "reference")}. Park references are only recorded from
+              the version that added them, so POTA&apos;s totals are the history.
+              {p.attempts.activations > p.activator.activations &&
+                " An activation needs ten contacts; attempts that fell short are not counted as activations."}
             </p>
-          </Card>
+          </Section>
+        )}
 
-          <Card
-            title="Activator"
-            actions={<span className="text-[10px] text-fg-subtle">from pota.app</span>}
-          >
-            <div className="grid grid-cols-3 gap-2">
-              <Stat label="Activations" value={p.activator.activations} tone="accent" />
-              <Stat label="Parks" value={p.activator.parks} />
-              <Stat label="QSOs" value={p.activator.qsos} />
-            </div>
-            {p.attempts.activations > p.activator.activations && (
-              <p className="mt-3 text-xs text-fg-subtle">
-                {p.attempts.activations} attempt
-                {p.attempts.activations === 1 ? "" : "s"} in total — an activation needs ten
-                contacts, and the difference is the ones that fell short.
-              </p>
-            )}
-          </Card>
-        </div>
-      )}
-
-      <Card
-        title={`Live spots${data.spotsError ? "" : ` (${spots.length})`}`}
-        className="mb-4"
-        actions={
-          <div className="flex items-center gap-2 text-xs">
-            {(["all", "FT8", "FT4"] as const).map((m) => (
-              <button
-                key={m}
-                type="button"
-                onClick={() => setModeFilter(m)}
-                className={cn(
-                  "px-1.5 py-0.5 rounded-sm border",
-                  modeFilter === m
-                    ? "border-accent text-accent-bright bg-accent/10"
-                    : "border-line text-fg-muted hover:text-fg",
-                )}
-              >
-                {m === "all" ? "All" : m}
-              </button>
-            ))}
-            <label className="flex items-center gap-1 text-fg-muted cursor-pointer ml-1">
-              <input
-                type="checkbox"
-                checked={newOnly}
-                onChange={(e) => setNewOnly(e.target.checked)}
-                className="accent-accent"
+        <Card
+          title={`Live spots${data.spotsError ? "" : ` (${spots.length})`}`}
+          actions={
+            <div className="flex flex-wrap items-center gap-3">
+              <Segmented
+                value={modeFilter}
+                onChange={setModeFilter}
+                label="Spot mode"
+                options={[
+                  { value: "all", label: "All" },
+                  { value: "FT8", label: "FT8" },
+                  { value: "FT4", label: "FT4" },
+                ]}
               />
-              New only
-            </label>
-          </div>
-        }
-      >
-        {data.spotsError ? (
-          <ErrorBanner>POTA spots unavailable: {data.spotsError}</ErrorBanner>
-        ) : spots.length === 0 ? (
-          <EmptyState title="Nothing to chase">
-            {newOnly
-              ? "Every digital activator on the air right now is already in the log."
-              : "No FT8 or FT4 activators spotted at the moment."}
-          </EmptyState>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm border-collapse">
+              <label className="flex cursor-pointer items-center gap-1.5 text-sm text-fg-muted">
+                <input
+                  type="checkbox"
+                  checked={newOnly}
+                  onChange={(e) => setNewOnly(e.target.checked)}
+                  className="accent-accent"
+                />
+                New only
+              </label>
+            </div>
+          }
+        >
+          {data.spotsError ? (
+            <ErrorBanner>POTA spots unavailable: {data.spotsError}</ErrorBanner>
+          ) : spots.length === 0 ? (
+            <EmptyState title="Nothing to chase" className="py-8">
+              {newOnly
+                ? "Every digital activator on the air right now is already in the log."
+                : modeFilter === "all"
+                  ? "No FT8 or FT4 activators spotted at the moment."
+                  : `No ${modeFilter} activators spotted at the moment.`}
+            </EmptyState>
+          ) : (
+            <CardTable label="POTA activators spotted on FT8 and FT4">
               <thead>
-                <tr className="text-left text-xs uppercase tracking-wide text-fg-muted">
-                  <th className="px-2 py-1.5 font-medium">Activator</th>
-                  <th className="px-2 py-1.5 font-medium">Park</th>
-                  <th className="px-2 py-1.5 font-medium">Freq</th>
-                  <th className="px-2 py-1.5 font-medium">Mode</th>
-                  <th className="px-2 py-1.5 font-medium">Where</th>
-                  <th className="px-2 py-1.5 font-medium">Spotted</th>
-                  <th className="px-2 py-1.5 font-medium">In the log</th>
+                <tr className="bg-surface-2 text-left">
+                  <Th>Activator</Th>
+                  <Th>Park</Th>
+                  <Th className="text-right">Freq</Th>
+                  <Th>Mode</Th>
+                  <Th className="hidden md:table-cell">Where</Th>
+                  <Th>Spotted</Th>
+                  <Th>In the log</Th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-line">
                 {spots.map((s) => (
                   <tr key={s.spotId} className="hover:bg-surface-2">
-                    <td className="px-2 py-1.5">
+                    <Td>
                       <Link
                         href={`/qsos?q=${encodeURIComponent(s.activator)}`}
-                        className="font-display tracking-wide hover:text-accent-bright"
+                        className="font-display text-base tracking-wide hover:text-accent-bright"
                       >
                         {s.activator}
                       </Link>
-                    </td>
-                    <td className="px-2 py-1.5">
+                    </Td>
+                    <Td>
                       <span className="tnum text-fg-muted">{s.reference}</span>
                       {s.parkName && (
-                        <span className="text-fg-subtle text-xs"> · {s.parkName}</span>
+                        <span className="block max-w-56 truncate text-xs text-fg-subtle">
+                          {s.parkName}
+                        </span>
                       )}
-                    </td>
-                    <td className="px-2 py-1.5 tnum whitespace-nowrap">
+                    </Td>
+                    <Td className="whitespace-nowrap text-right tnum">
                       {(s.freqHz / 1e6).toFixed(3)}
-                    </td>
-                    <td className="px-2 py-1.5">
-                      <Badge tone={s.mode === "FT8" ? "accent" : "info"}>{s.mode}</Badge>
+                    </Td>
+                    <Td className="whitespace-nowrap">
+                      {/* Neutral: the mode is a label on every row, not news. */}
+                      <Badge size="sm">{s.mode}</Badge>
                       {s.band && <span className="ml-1 text-xs text-fg-subtle">{s.band}</span>}
-                    </td>
-                    <td className="px-2 py-1.5 text-fg-muted text-xs">{s.location ?? "—"}</td>
-                    <td className="px-2 py-1.5 tnum text-fg-subtle text-xs whitespace-nowrap">
+                    </Td>
+                    <Td className="hidden text-xs text-fg-muted md:table-cell">
+                      {s.location ?? "—"}
+                    </Td>
+                    <Td className="whitespace-nowrap text-xs tnum text-fg-subtle">
                       {formatAgo(s.spottedAt)} ago
-                    </td>
-                    <td className="px-2 py-1.5">
+                    </Td>
+                    <Td>
                       {/* Three different answers, and they matter differently. Worked
                           TODAY almost certainly means this same activation — a dupe.
                           The park being in the log is an award fact. The activator
                           being known is neither, just context. */}
                       {s.workedToday ? (
-                        <Badge tone="warn">Today</Badge>
+                        <Badge size="sm" tone="warn">Today</Badge>
                       ) : s.workedPark ? (
-                        <Badge tone="neutral">Park worked</Badge>
+                        <Badge size="sm">Park worked</Badge>
                       ) : s.workedActivator ? (
-                        <Badge tone="neutral">Call worked</Badge>
+                        <Badge size="sm">Call worked</Badge>
                       ) : (
-                        <Badge tone="ok">New</Badge>
+                        <Badge size="sm" tone="ok">New</Badge>
                       )}
-                    </td>
+                    </Td>
                   </tr>
                 ))}
               </tbody>
-            </table>
-          </div>
-        )}
-      </Card>
-
-      {p && p.awards.length > 0 && (
-        <Card
-          title={`Awards (${p.awardCount})`}
-          className="mb-4"
-          actions={
-            <span className="text-[10px] text-fg-subtle">
-              {p.endorsementCount} endorsements
-            </span>
-          }
-        >
-          {/* Endorsements are most of what a POTA award says. "Bronze Hunter" alone is
-              one line; "Bronze Hunter, endorsed on eleven bands and three modes" is the
-              actual achievement, so they are all shown rather than counted. */}
-          <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
-            {p.awards.map((a) => (
-              <div key={a.name} className="border border-line rounded-sm bg-surface-2 p-2.5">
-                <div className="flex items-baseline justify-between gap-2">
-                  <span className="font-display text-sm tracking-wide">{a.name}</span>
-                  {a.granted && (
-                    <span className="text-[10px] text-fg-subtle tnum whitespace-nowrap">
-                      {formatUtcDate(a.granted)}
-                    </span>
-                  )}
-                </div>
-                {a.endorsements.length > 0 && (
-                  <div className="mt-1.5 flex flex-wrap gap-1">
-                    {a.endorsements.map((e) => (
-                      <span
-                        key={e}
-                        className="text-[10px] uppercase tracking-wide text-fg-subtle border border-line-strong rounded-sm px-1"
-                      >
-                        {e}
-                      </span>
-                    ))}
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
+            </CardTable>
+          )}
         </Card>
-      )}
 
-      <div className="grid gap-4 lg:grid-cols-2">
-        {p && p.recentActivations.length > 0 && (
-          <Card title="Your recent activations">
-            <div className="overflow-x-auto">
-              <table className="w-full min-w-[22rem] text-sm">
-              <thead>
-                <tr className="text-left text-xs uppercase tracking-wide text-fg-muted">
-                  <th className="py-1 font-medium">Date</th>
-                  <th className="py-1 font-medium">Park</th>
-                  <th className="py-1 font-medium text-right">CW</th>
-                  <th className="py-1 font-medium text-right">Data</th>
-                  <th className="py-1 font-medium text-right">Phone</th>
-                  <th className="py-1 font-medium text-right">Total</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-line">
-                {p.recentActivations.map((a) => (
-                  <tr key={`${a.date}-${a.reference}`}>
-                    <td className="py-1 tnum text-fg-muted whitespace-nowrap">{a.date}</td>
-                    <td className="py-1">
-                      <span className="tnum">{a.reference}</span>
-                      {a.park && <span className="text-fg-subtle text-xs"> · {a.park}</span>}
-                    </td>
-                    <td className="py-1 tnum text-right text-fg-subtle">{a.cw || "—"}</td>
-                    <td className="py-1 tnum text-right text-fg-subtle">{a.data || "—"}</td>
-                    <td className="py-1 tnum text-right text-fg-subtle">{a.phone || "—"}</td>
-                    <td
-                      className={cn(
-                        "py-1 tnum text-right",
-                        // Ten is the threshold for a valid activation.
-                        a.total >= 10 ? "text-ok" : "text-warn",
-                      )}
-                    >
-                      {a.total}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+        {p && p.awards.length > 0 && (
+          <Card
+            title={`POTA awards (${p.awardCount})`}
+            actions={<Source>{plural(p.endorsementCount, "endorsement")}</Source>}
+          >
+            {/* Endorsements are most of what a POTA award says. "Bronze Hunter" alone is
+                one line; "Bronze Hunter, endorsed on eleven bands and three modes" is the
+                actual achievement, so they are all shown rather than counted. */}
+            <ul className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+              {p.awards.map((a) => (
+                <li key={a.name} className="rounded-sm border border-line bg-surface-2 p-3">
+                  <div className="flex items-baseline justify-between gap-2">
+                    <span className="font-display text-base tracking-wide">{a.name}</span>
+                    {a.granted && (
+                      <span className="whitespace-nowrap text-xs tnum text-fg-subtle">
+                        {formatUtcDate(a.granted)}
+                      </span>
+                    )}
+                  </div>
+                  {a.endorsements.length > 0 && (
+                    <div className="mt-2 flex flex-wrap gap-1">
+                      {a.endorsements.map((e) => (
+                        <Badge key={e} size="sm">
+                          {e}
+                        </Badge>
+                      ))}
+                    </div>
+                  )}
+                </li>
+              ))}
+            </ul>
           </Card>
         )}
 
-        <Card
-          title="Park contacts in this log"
-          actions={<span className="text-[10px] text-fg-subtle">from your log</span>}
-        >
-          {data.local.recent.length === 0 ? (
-            <EmptyState title="None yet">
-              Park references are recorded on contacts made from now on — by the POTA
-              chase and hunt modes automatically, and by hand on any QSO. Your history
-              before that lives in POTA&apos;s own totals above.
-            </EmptyState>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full min-w-[22rem] text-sm">
-              <thead>
-                <tr className="text-left text-xs uppercase tracking-wide text-fg-muted">
-                  <th className="py-1 font-medium">Time (UTC)</th>
-                  <th className="py-1 font-medium">Callsign</th>
-                  <th className="py-1 font-medium">Park</th>
-                  <th className="py-1 font-medium">Band</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-line">
-                {data.local.recent.map((q) => (
-                  <tr key={q.id} className="hover:bg-surface-2">
-                    <td className="py-1 tnum text-fg-muted whitespace-nowrap">
-                      {formatUtc(q.startTime)}
-                    </td>
-                    <td className="py-1">
-                      <Link
-                        href={`/qsos/${q.id}`}
-                        className="font-display tracking-wide hover:text-accent-bright"
-                      >
-                        {q.callsign}
-                      </Link>
-                    </td>
-                    <td className="py-1 tnum text-fg-muted">
-                      {/* Every park, not just the first. A two-fer showing one park
-                          would read as a complete record and quietly under-count. */}
-                      {q.references.length > 0 ? (
-                        q.references.join(", ")
-                      ) : (
-                        <span className="text-fg-subtle">unknown</span>
-                      )}
-                    </td>
-                    <td className="py-1 text-fg-subtle text-xs">
-                      {q.band} {q.mode}
-                    </td>
+        <div className="grid gap-4 lg:grid-cols-2">
+          {p && p.recentActivations.length > 0 && (
+            <Card title="Your recent activations" actions={<Source>from pota.app</Source>}>
+              <CardTable>
+                <thead>
+                  <tr className="bg-surface-2 text-left">
+                    <Th>Date</Th>
+                    <Th>Park</Th>
+                    <Th className="text-right">CW</Th>
+                    <Th className="text-right">Data</Th>
+                    <Th className="text-right">Phone</Th>
+                    <Th className="text-right">Total</Th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody className="divide-y divide-line">
+                  {p.recentActivations.map((a) => (
+                    <tr key={`${a.date}-${a.reference}`}>
+                      <Td className="whitespace-nowrap tnum text-fg-muted">{a.date}</Td>
+                      <Td>
+                        <span className="tnum">{a.reference}</span>
+                        {a.park && (
+                          <span className="block max-w-48 truncate text-xs text-fg-subtle">
+                            {a.park}
+                          </span>
+                        )}
+                      </Td>
+                      <Td className="text-right tnum text-fg-subtle">{a.cw || "—"}</Td>
+                      <Td className="text-right tnum text-fg-subtle">{a.data || "—"}</Td>
+                      <Td className="text-right tnum text-fg-subtle">{a.phone || "—"}</Td>
+                      {/* Ten is the threshold for a valid activation. */}
+                      <Td
+                        className={cn(
+                          "text-right tnum",
+                          a.total >= ACTIVATION_MINIMUM ? "text-ok" : "text-warn",
+                        )}
+                      >
+                        {a.total}
+                      </Td>
+                    </tr>
+                  ))}
+                </tbody>
+              </CardTable>
+            </Card>
           )}
-        </Card>
+
+          <Card title="Park contacts in this log" actions={<Source>from your log</Source>}>
+            {data.local.recent.length === 0 ? (
+              <EmptyState title="None yet" className="py-8">
+                Park references are recorded on contacts made from now on — by the POTA
+                chase and hunt modes automatically, and by hand on any QSO. Your history
+                before that lives in POTA&apos;s own totals.
+              </EmptyState>
+            ) : (
+              <CardTable>
+                <thead>
+                  <tr className="bg-surface-2 text-left">
+                    <Th>Time (UTC)</Th>
+                    <Th>Callsign</Th>
+                    <Th>Park</Th>
+                    <Th>Band</Th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-line">
+                  {data.local.recent.map((q) => (
+                    <tr key={q.id} className="hover:bg-surface-2">
+                      <Td className="whitespace-nowrap tnum text-fg-muted">
+                        {formatUtc(q.startTime)}
+                      </Td>
+                      <Td>
+                        <Link
+                          href={`/qsos/${q.id}`}
+                          className="font-display text-base tracking-wide hover:text-accent-bright"
+                        >
+                          {q.callsign}
+                        </Link>
+                      </Td>
+                      <Td className="tnum text-fg-muted">
+                        {/* Every park, not just the first. A two-fer showing one park
+                            would read as a complete record and quietly under-count. */}
+                        {q.references.length > 0 ? (
+                          q.references.join(", ")
+                        ) : (
+                          <span className="text-fg-subtle">unknown</span>
+                        )}
+                      </Td>
+                      <Td className="whitespace-nowrap text-xs text-fg-subtle">
+                        {q.band} {q.mode}
+                      </Td>
+                    </tr>
+                  ))}
+                </tbody>
+              </CardTable>
+            )}
+          </Card>
+        </div>
+
+        <ImportPanel onDone={() => void reload()} />
+
+        {p && (p.name || p.qth || p.grid) && (
+          <p className="text-xs text-fg-subtle">
+            POTA profile: {[p.name, p.qth, p.grid].filter(Boolean).join(" · ")}
+          </p>
+        )}
       </div>
-
-      <ImportPanel onDone={() => void reload()} />
-
-      {p && (p.name || p.qth || p.grid) && (
-        <p className="mt-4 text-xs text-fg-subtle">
-          POTA profile: {[p.name, p.qth, p.grid].filter(Boolean).join(" · ")}
-        </p>
-      )}
     </>
   );
 }
+
 
 export const getServerSideProps = withPageAuth({ role: "VIEWER" });

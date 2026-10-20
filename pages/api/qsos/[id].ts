@@ -6,7 +6,11 @@ import { prisma } from "@/lib/db/prisma";
 import { QSO_INCLUDE } from "@/lib/db/qso";
 import { setSigRefs } from "@/lib/pota/refs";
 import { freqInBand, freqToBand } from "@/lib/ham/bands";
-import { updateQsoSchema } from "@/lib/validation/qso";
+import {
+  effectiveStationOperator,
+  effectiveTimeErrors,
+  updateQsoSchema,
+} from "@/lib/validation/qso";
 
 function idOf(req: NextApiRequest): string | undefined {
   return queryParam(req, "id");
@@ -68,7 +72,15 @@ async function patch(req: NextApiRequest, res: NextApiResponse) {
 
   const existing = await prisma.qso.findUnique({
     where: { id },
-    select: { id: true, freqHz: true, band: true, stationId: true },
+    select: {
+      id: true,
+      freqHz: true,
+      band: true,
+      stationId: true,
+      operatorId: true,
+      startTime: true,
+      endTime: true,
+    },
   });
   if (!existing) {
     sendError(res, 404, `No QSO with id ${id}`);
@@ -104,20 +116,36 @@ async function patch(req: NextApiRequest, res: NextApiResponse) {
     return;
   }
 
-  // Re-run the operator/station consistency check when either side moves.
-  const targetStationId = input.stationId ?? existing.stationId;
-  if (input.operatorId) {
+  // Start and end, merged over the stored row. The schema only compares them when both
+  // arrive together; an end-only edit used to save an end before the stored start.
+  const timeErrors = effectiveTimeErrors(existing, input);
+  if (timeErrors) {
+    sendError(res, 400, "Validation failed", timeErrors);
+    return;
+  }
+
+  // Station and operator, as the row will hold them AFTER this edit, checked whenever the
+  // request names either. This used to run only for a truthy operatorId, so moving a
+  // contact to another station kept the old station's operator.
+  const pair = effectiveStationOperator(existing, input);
+  if (pair.changed && pair.operatorId !== null) {
     const operator = await prisma.operator.findUnique({
-      where: { id: input.operatorId },
+      where: { id: pair.operatorId },
       select: { id: true, stationId: true },
     });
-    if (!operator) {
-      sendError(res, 404, `No operator with id ${input.operatorId}`);
+    if (!operator && pair.operatorFromRequest) {
+      sendError(res, 404, `No operator with id ${pair.operatorId}`);
       return;
     }
-    if (operator.stationId !== targetStationId) {
+    // A stored operator that has vanished since the read was deleted, and the foreign key
+    // (ON DELETE SET NULL) has already cleared it from this row: nothing left to check.
+    if (operator && operator.stationId !== pair.stationId) {
       sendError(res, 400, "That operator belongs to a different station", {
-        operatorId: ["Operator is not registered to this station"],
+        operatorId: [
+          pair.operatorFromRequest
+            ? "Operator is not registered to this station"
+            : "This contact's operator is registered to its old station — choose one of the new station's operators, or clear it (operatorId: null)",
+        ],
       });
       return;
     }

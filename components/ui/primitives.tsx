@@ -18,6 +18,26 @@ import { cn } from "@/lib/utils";
 // adding it back should wait until a real popover/dialog requirement appears.
 
 // ---------------------------------------------------------------------------
+// Focus
+// ---------------------------------------------------------------------------
+
+/**
+ * The keyboard focus ring, spelled once.
+ *
+ * globals.css already draws exactly this on every `:focus-visible` element, but from the
+ * base layer — so any utility touching `outline` on a call site (`outline-none` is the
+ * usual habit) silently removed the only focus indicator a control had. Stating it as
+ * utilities on each primitive puts the ring in the same layer as the call-site classes,
+ * where `cn`'s merge makes an override deliberate and visible rather than accidental.
+ *
+ * Same values as the base rule — 2px accent-bright, 1px offset — so a primitive and a
+ * hand-rolled link focus identically. accent-bright clears 3:1 on every surface in both
+ * themes (`check:contrast` asserts it), which is what makes it an indicator at all.
+ */
+export const FOCUS_RING =
+  "focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent-bright";
+
+// ---------------------------------------------------------------------------
 // Button
 // ---------------------------------------------------------------------------
 
@@ -185,6 +205,7 @@ export function Button({
       className={cn(
         "inline-flex items-center justify-center gap-2 border rounded-sm",
         "font-medium transition-colors",
+        FOCUS_RING,
         /* `opacity-75`, not `opacity-45`.
          *
          * Opacity dims the label AND the fill underneath it, so it does not make a
@@ -249,8 +270,8 @@ const CONTROL_BASE =
   "w-full bg-surface-2 border border-line-strong rounded-sm px-2.5 py-1.5 text-sm text-fg " +
   "placeholder:text-fg-subtle transition-colors " +
   "hover:border-line-strong focus:border-accent-bright " +
-  "focus-visible:outline-2 focus-visible:outline-accent-bright focus-visible:outline-offset-1 " +
-  "disabled:opacity-50 disabled:cursor-not-allowed " +
+  FOCUS_RING +
+  " disabled:opacity-50 disabled:cursor-not-allowed " +
   "aria-[invalid=true]:border-danger";
 
 export function Input({ className, ...props }: InputHTMLAttributes<HTMLInputElement>) {
@@ -266,15 +287,90 @@ export function Textarea({
   );
 }
 
+/* Utilities that PLACE a box in its container rather than style it: sizing, flex/grid item
+ * behaviour, margins, visibility. On a Select these belong on the wrapper — see below.
+ * Variant prefixes (`sm:`, `hover:`) and `!` pass through, so `sm:w-40` routes like `w-40`. */
+const PLACEMENT =
+  /^(?:[^:\s]+:)*!?-?(?:(?:min-|max-)?w-|flex-|grow|shrink|basis-|self-|justify-self-|place-self-|order-|col-|row-|m[trblxyse]?-|hidden$)/;
+
+/** Split a className into the wrapper's share (placement) and the control's (everything else). */
+function splitPlacement(className: string | undefined): [string, string] {
+  const outer: string[] = [];
+  const inner: string[] = [];
+  for (const c of (className ?? "").split(/\s+/)) {
+    if (c) (PLACEMENT.test(c) ? outer : inner).push(c);
+  }
+  return [outer.join(" "), inner.join(" ")];
+}
+
+/**
+ * A native select with a drawn chevron.
+ *
+ * It had `appearance-none` — which removes the browser's arrow — and nothing in its place,
+ * so every dropdown in the application looked exactly like a text field. The only cue that
+ * it opens was the cursor, which a touch screen does not have.
+ *
+ * The chevron is an inline SVG in `currentColor`, not a background-image, because a data
+ * URI cannot read a CSS variable: it would have hardcoded one theme's grey into a control
+ * that has to be red at night. It follows the control through `peer-*` variants — dimmed
+ * with it when disabled, `danger` when the field is invalid (Field sets `aria-invalid`),
+ * brighter on hover — and `pointer-events-none` so a click on it still opens the select.
+ * A `multiple` or `size > 1` select is a list box, not a dropdown, and gets no chevron.
+ *
+ * THE WRAPPER, and where `className` goes. An SVG cannot sit inside a <select>, so the two
+ * share an inline-block wrapper, and a class meant to place the control in its row
+ * (`w-28`, `flex-1`, `ml-auto`) has to land on the wrapper or the chevron is drawn at the
+ * edge of a box the select no longer fills. So `className` is split: placement utilities
+ * (sizing, flex/grid item, margins, `hidden`) go to the wrapper, everything else (`text-xs`,
+ * `py-1`, `font-mono`) to the select. Every call site at the time of writing — 12 of 40
+ * pass a class — passes only widths and `flex-1`.
+ *
+ * `inline-block`, not `block`: the select was inline-block, so one sitting beside text or
+ * another inline control stays on that line. The select inside is `block` so no line box
+ * forms round it and the wrapper is exactly the control's height — the chevron's
+ * `top-1/2` is then the control's middle, including at the 44px coarse-pointer height.
+ */
 export function Select({
   className,
   children,
   ...props
 }: SelectHTMLAttributes<HTMLSelectElement>) {
+  const [outer, inner] = splitPlacement(className);
+  const listBox = Boolean(props.multiple) || Number(props.size ?? 1) > 1;
+  if (listBox) {
+    return (
+      <select className={cn(CONTROL_BASE, className)} {...props}>
+        {children}
+      </select>
+    );
+  }
   return (
-    <select className={cn(CONTROL_BASE, "appearance-none pr-8", className)} {...props}>
-      {children}
-    </select>
+    <span className={cn("relative inline-block w-full", outer)}>
+      <select
+        className={cn(CONTROL_BASE, "peer block appearance-none pr-8", inner)}
+        {...props}
+      >
+        {children}
+      </select>
+      <svg
+        aria-hidden="true"
+        viewBox="0 0 16 16"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        className={cn(
+          "pointer-events-none absolute right-2.5 top-1/2 size-4 -translate-y-1/2",
+          "text-fg-muted transition-colors",
+          "peer-hover:peer-enabled:text-fg",
+          "peer-disabled:opacity-50",
+          "peer-aria-[invalid=true]:text-danger",
+        )}
+      >
+        <path d="M4 6l4 4 4-4" />
+      </svg>
+    </span>
   );
 }
 
@@ -658,7 +754,8 @@ export function Th<F extends string>({
           type="button"
           onClick={() => onSort(field)}
           className={cn(
-            "flex items-center gap-1",
+            "flex items-center gap-1 rounded-sm",
+            FOCUS_RING,
             active ? "text-accent-bright" : "text-fg-muted hover:text-fg",
           )}
         >

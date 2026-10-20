@@ -292,14 +292,16 @@ export function SpectrumTrace({
       {labels.map((l) => (
         <span
           key={l.db}
-          className="absolute left-1 -translate-y-1/2 text-[9px] leading-none text-white/35 tnum pointer-events-none"
+          className="absolute left-1 -translate-y-1/2 text-[10px] leading-none text-fg/60 tnum pointer-events-none"
           style={{ top: `${l.pct}%` }}
         >
           {l.db}
         </span>
       ))}
       {labels.length > 0 && (
-        <span className="absolute right-1 top-0.5 text-[9px] leading-none text-white/30 pointer-events-none">
+        <span
+          className="absolute right-1 top-0.5 text-[10px] leading-none text-fg/50 pointer-events-none"
+        >
           dBm
         </span>
       )}

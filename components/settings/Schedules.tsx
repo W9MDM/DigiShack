@@ -1,8 +1,19 @@
+import Link from "next/link";
 import { useEffect, useState } from "react";
 
 import { HelpTip } from "@/components/ui/HelpTip";
 import { Td, Th } from "@/components/ui/primitives";
 import type { JobHost } from "@/lib/schedule/jobs";
+import { settingsHref } from "@/lib/settings/tabs";
+
+/** A setting key, as a jump to the setting itself. */
+function KeyLink({ k }: { k: string }) {
+  return (
+    <Link href={settingsHref({ setting: k })} replace shallow scroll={false} className="hover:text-accent-bright hover:underline">
+      {k}
+    </Link>
+  );
+}
 
 // The crontab: everything that runs on a timer, and how often it really runs.
 //
@@ -124,9 +135,9 @@ export function Schedules() {
                     {j.enabled ? every(j.effectiveMs) : "—"}
                   </Td>
                   <Td size="lg" className="font-mono text-xs text-fg-subtle">
-                    {j.intervalSetting ?? <span className="italic">not adjustable</span>}
+                    {j.intervalSetting ? <KeyLink k={j.intervalSetting} /> : <span className="italic">not adjustable</span>}
                     {j.enabledSetting ? (
-                      <div className="text-fg-subtle/70">{j.enabledSetting}</div>
+                      <div className="text-fg-subtle/70"><KeyLink k={j.enabledSetting} /></div>
                     ) : null}
                   </Td>
                   <Td size="lg" className="text-xs text-fg-subtle whitespace-nowrap">

@@ -10,7 +10,7 @@ operator is running with BR mode on.
 
 ## BR mode
 
-One switch — on the decodes page next to **UDP**, or under Settings → Logbooks → FT8 Battle
+One switch — on the decodes page next to **UDP**, or under Settings → Spotting & broadcast → FT8 Battle
 Royale. Operators switch it; everyone sees it. While it is on:
 
 - **The decode list is ranked by points** — what each station on the waterfall would be
@@ -63,7 +63,7 @@ holdings derived from the whole UTC day.
 
 ## The broadcast
 
-Settings → Logbooks → FT8 Battle Royale holds the server address and port they publish and
+Settings → Spotting & broadcast → FT8 Battle Royale holds the server address and port they publish and
 the identity of the ADIF document. The preview panel under it shows exactly what leaves the
 station, field by field, built through the same code that sends it. It is separate from
 **Broadcast logged contacts (UDP)**, which feeds GridTracker, Log4OM, JTAlert or N1MM on

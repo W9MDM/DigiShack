@@ -108,7 +108,6 @@ async function get(_req: NextApiRequest, res: NextApiResponse) {
     lotwCert,
     eqslUser,
     clublogEmail,
-    hrdlogCall,
   ] = await Promise.all([
     getSetting("qrz.logbookApiKey"),
     getSetting("qrz.username"),
@@ -116,7 +115,6 @@ async function get(_req: NextApiRequest, res: NextApiResponse) {
     lotwCertInfo(),
     getSetting("eqsl.username"),
     getSetting("clublog.email"),
-    getSetting("hrdlog.callsign"),
   ]);
 
   // Cloudlog/Wavelog and N3FJP were BOTH missing from this page while being two of the
@@ -259,15 +257,10 @@ async function get(_req: NextApiRequest, res: NextApiResponse) {
     });
   }
 
-  // --- HRDLOG ---
-  services.push({
-    id: "hrdlog",
-    label: "HRDLOG.net",
-    configured: Boolean(hrdlogCall),
-    ok: null,
-    detail: hrdlogCall ? "Configured. Not verified." : "Not configured",
-    capabilities: [],
-  });
+  // HRDLOG.net used to have a card here, reading "Configured. Not verified." once its
+  // callsign was set. Nothing uploads to HRDLOG, so that card listed an integration that
+  // does not exist — the inverse of the omission described above, and as misleading. It
+  // went with the settings that fed it.
 
   sendJson(res, 200, {
     services,

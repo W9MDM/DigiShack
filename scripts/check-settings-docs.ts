@@ -117,6 +117,58 @@ function main(): void {
     ok(selects.length > 0, `${selects.length} setting(s) offer a list rather than free text`);
   }
 
+  console.log("\nprotections are never tucked away");
+  {
+    // `advanced` puts a setting behind its group's disclosure. Right for a port or a
+    // threshold; wrong for anything that stops the station doing harm, because an operator
+    // has to be able to SEE whether the radio is armed, what power a picture goes out at and
+    // where the guards trip without knowing to open anything first. Listed by key rather than
+    // inferred: "protects something" is a judgement, and writing it down is the point.
+    const PROTECTIONS = [
+      // Power and the PA.
+      "sstv.powerPct",
+      "icom.rfPowerPercent",
+      "schedule.paAfterMinutes",
+      "schedule.paRestMinutes",
+      // Guard trips, and the brakes that bound an unattended run.
+      "auto.maxSwr",
+      "auto.maxPaTempC",
+      "auto.maxRunMinutes",
+      "auto.maxQsosPerRun",
+      "auto.maxConsecutiveTx",
+      "auto.deafWindowLimit",
+      // Duplicate protection.
+      "auto.dupeWindowHours",
+      "auto.skipWorkedOnBandMode",
+      "auto.skipWorkedOnBand",
+      // Things that key the radio on their own.
+      "flex.atuOnBandChange",
+      "icom.atuOnBandChange",
+      "js8.autoreply",
+      // Nothing transmits during these hours.
+      "schedule.sleep",
+    ];
+    const byKey = new Map(SETTINGS.map((s) => [s.key, s]));
+    const gone = PROTECTIONS.filter((k) => !byKey.has(k));
+    ok(gone.length === 0, "every listed protection is still a setting", gone.join(", "));
+    const hidden = PROTECTIONS.filter((k) => byKey.get(k)?.advanced);
+    ok(hidden.length === 0, "no listed protection is advanced", hidden.join(", "));
+
+    // Two rules that need no list. Every per-radio transmit gate, including one for a radio
+    // added later; and every setting with a `confirm`, which is the registry's own
+    // definition of a value that removes a protection.
+    const gates = SETTINGS.filter((s) => s.key.endsWith(".allowTransmit"));
+    ok(gates.length >= 2, `${gates.length} transmit gates found`);
+    const hiddenGates = gates.filter((s) => s.advanced);
+    ok(hiddenGates.length === 0, "no transmit gate is advanced", hiddenGates.map((s) => s.key).join(", "));
+    const hiddenConfirm = SETTINGS.filter((s) => s.confirm && s.advanced);
+    ok(
+      hiddenConfirm.length === 0,
+      "no setting with a confirmation is advanced",
+      hiddenConfirm.map((s) => s.key).join(", "),
+    );
+  }
+
 
   console.log(`\n${pass} passed, ${fail} failed\n`);
   if (fail > 0) process.exit(1);

@@ -106,9 +106,9 @@ writes them.
 
 ## What is not built
 
-LoTW upload (TQSL is required and not wired), eQSL upload, HRDLOG, and Club Log, which is
-blocked outside this codebase: their server returns 403 before authentication is even
-attempted. See the [roadmap](roadmap.md).
+HRDLOG. LoTW upload (signed here, no TQSL — see [lotw-upload.md](lotw-upload.md)), eQSL
+upload and Club Log upload are all built now; Club Log's 403 turned out to be a missing API
+key, not a block (1.156.0). See the [roadmap](roadmap.md).
 
 ## N3FJP Amateur Contact Log
 

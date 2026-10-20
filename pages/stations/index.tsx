@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ToolTabs } from "@/components/settings/ToolTabs";
+import { SettingsLayout } from "@/components/settings/SettingsLayout";
 
 import {
   Badge,
@@ -35,8 +35,7 @@ export default function StationsPage() {
   }
 
   return (
-    <>
-      <ToolTabs />
+    <SettingsLayout>
       <PageHeader
         title="Stations"
         subtitle="Licensed stations and their operators"
@@ -103,7 +102,7 @@ export default function StationsPage() {
           )}
         </div>
       </div>
-    </>
+    </SettingsLayout>
   );
 }
 

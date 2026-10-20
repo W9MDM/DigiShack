@@ -72,7 +72,7 @@ Settings → **Icom (network)**:
 | Control / Serial / Audio port | Leave at 50001 / 50002 / 50003 |
 | Silence threshold | Leave at the default |
 
-Then Settings → **Digital** → **Decode source** → `icom`, and restart the bridge.
+Then Settings → **Modes** → **Digital modes** → **Decode source** → `icom`, and restart the bridge.
 
 Leave the **CI-V address** blank unless you have changed it in the radio's own CI-V menu.
 Blank means "use whatever the model that logs in implies", which is 0x94 for an IC-7300

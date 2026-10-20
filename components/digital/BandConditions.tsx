@@ -129,15 +129,15 @@ export function BandConditions({
               }
             >
               <div className="flex items-center justify-between gap-1">
-                <span className="font-display text-[11px] tracking-wide leading-none">
+                <span className="font-display text-xs tracking-wide leading-none">
                   {b.band}
                 </span>
-                <span className={cn("text-[9px] font-bold leading-none", u.text)}>{u.letter}</span>
+                <span className={cn("text-[10px] font-bold leading-none", u.text)}>{u.letter}</span>
               </div>
               <div className="flex items-baseline gap-1">
                 <span className="text-sm tnum leading-none">{seen ?? "–"}</span>
                 {b.psk && b.psk.entities > 0 && (
-                  <span className="text-[9px] text-fg-subtle tnum leading-none">
+                  <span className="text-[10px] text-fg-subtle tnum leading-none">
                     /{b.psk.entities}
                   </span>
                 )}
@@ -155,17 +155,17 @@ export function BandConditions({
           numbers are the part that can be dropped on a narrow screen; the key to
           reading them is not. */}
       <div className="flex flex-col leading-tight shrink-0">
-        <span className="text-[9px] uppercase tracking-wider text-fg-subtle">
+        <span className="text-[10px] uppercase tracking-wider text-fg-subtle">
           {data.mode} seen / DXCC · {data.pskWindowMinutes}m
         </span>
         {/* G/F/P is meaningless until something spells it out, and the letters exist
             precisely so the strip does not depend on colour alone. */}
-        <span className="text-[9px] text-fg-subtle">
+        <span className="text-[10px] text-fg-subtle">
           <span className="text-ok">G</span>ood · <span className="text-warn">F</span>air
           · <span className="text-danger">P</span>oor
         </span>
         {s && (
-          <span className="text-[9px] text-fg-subtle tnum" title={`Source: ${s.sources.join(", ")}`}>
+          <span className="text-[10px] text-fg-subtle tnum" title={`Source: ${s.sources.join(", ")}`}>
             SFI {s.sfi ?? "–"} · SSN {s.ssn ?? "–"} · Kp {s.kp ?? "–"}
           </span>
         )}

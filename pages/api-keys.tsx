@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ToolTabs } from "@/components/settings/ToolTabs";
+import { SettingsLayout } from "@/components/settings/SettingsLayout";
 
 import {
   Badge,
@@ -49,8 +49,7 @@ export default function ApiKeysPage() {
   const keys = data?.rows ?? [];
 
   return (
-    <>
-      <ToolTabs />
+    <SettingsLayout>
       <PageHeader
         title="API keys"
         subtitle="Bearer tokens for the public /api/v1 surface"
@@ -244,7 +243,7 @@ curl -X POST \\
           </Card>
         </div>
       </div>
-    </>
+    </SettingsLayout>
   );
 }
 

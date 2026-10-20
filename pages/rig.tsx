@@ -1,95 +1,52 @@
 import type { GetServerSidePropsContext } from "next";
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { SourcePicker } from "@/components/radio/SourcePicker";
-import { MODULATIONS, modulationForFrequency } from "@/lib/radio/modes";
+import { modulationForFrequency } from "@/lib/radio/modes";
 import { Panadapter, snapHz, tuneStepFor } from "@/components/digital/Panadapter";
 import { Waterfall } from "@/components/digital/Waterfall";
+import { ReceiverCard } from "@/components/rig/ReceiverCard";
+import { RigDial } from "@/components/rig/RigDial";
+import { StationActions } from "@/components/rig/StationActions";
+import { TransmitterCard } from "@/components/rig/TransmitterCard";
+import { TuneCard } from "@/components/rig/TuneCard";
+import type { RigArea, RigSend, RigStatus, Telemetry } from "@/components/rig/types";
+import { HelpTip } from "@/components/ui/HelpTip";
 import {
-  Badge,
   Button,
+  Card,
+  EmptyState,
   ErrorBanner,
-  Field,
-  Input,
   PageHeader,
-  Select,
 } from "@/components/ui/primitives";
 import { withPageAuth } from "@/lib/auth/guard";
 import { bridgeWsUrl } from "@/lib/bridge/ws-url";
 import { ApiError, apiPost, useApi } from "@/lib/client/api";
 import { useReceiverAudio } from "@/lib/client/use-receiver-audio";
 import { useBridgeSocket } from "@/lib/client/use-bridge-socket";
-import { formatFreqDial, formatFreqMHz, parseFreqToHz } from "@/lib/ham/bands";
-import { bandsFor, canTune, radioCapabilities } from "@/lib/radio/capabilities";
-import { DIGITAL_FREQUENCIES } from "@/lib/ham/digital-freqs";
-import {
-  filterEdgesFor,
-  filterMatches,
-  type ReceiverControls,
-} from "@/lib/radio/receiver-controls";
-import { HelpTip } from "@/components/ui/HelpTip";
-import { cn } from "@/lib/utils";
-
+import { formatFreqMHz } from "@/lib/ham/bands";
+import { radioCapabilities } from "@/lib/radio/capabilities";
 import { useVisibleInterval } from "@/lib/client/use-visible-interval";
+
 // CAT control for the radio DigiShack is already connected to.
 //
-// This is deliberately not a general-purpose rig-control app: it exposes the
-// controls that matter for digital operating and reads back what the radio
-// actually reports, rather than assuming a command took effect. Anything that
-// keys the transmitter is gated on `flex.allowTransmit` in the radio service —
-// the UI does not get to decide that.
+// Deliberately not a general-purpose rig-control app: it exposes the controls that matter
+// for digital operating and reads back what the radio actually reports, rather than
+// assuming a command took effect. Anything that keys the transmitter is gated in the radio
+// service — the UI does not get to decide that.
+//
+// One surface, in the order an operator reads a radio: the dial, the band, then the
+// receiver and the transmitter. Every control asks the connected radio's capability profile
+// (lib/radio/capabilities.ts) and is not drawn where the radio cannot do it.
 
-interface VoiceState {
-  active: boolean;
-  mode: string | null;
-  since: number | null;
-}
+/** Names the decoder reports, as opposed to modulations. */
+const DIGITAL_MODES = new Set([
+  "FT8", "FT4", "FT2", "WSPR", "RTTY", "CW", "JS8", "PSK31", "OLIVIA", "SSTV", "HELL", "JTTY",
+]);
 
-interface Telemetry {
-  paTempC: number | null;
-  swr: number | null;
-  voltsPa: number | null;
-  fanRpm: number | null;
-  reflectedDbm: number | null;
-  at: number;
-}
+/** No panadapter frame for this long and the picture is called stalled, not live. */
+const PAN_STALE_MS = 5_000;
 
-interface RigStatus {
-  connected: boolean;
-  dialFrequency: number | null;
-  band: string | null;
-  mode: string | null;
-  subMode: string | null;
-  deCall: string | null;
-  deGrid: string | null;
-  transmitting: boolean;
-  rfPower: number | null;
-  commandChannel: boolean;
-  /**
-   * Conditions the radio reports that make transmitting impossible or wrong.
-   *
-   * The bridge has computed these since the transmit path was written and NOTHING has
-   * ever displayed them. On 2026-08-30 that cost an evening: the radio was reporting
-   * "DAX is not selected as the transmit source" and a transmit slice on the wrong band,
-   * the station keyed for hours at 0.0 W, and the only place either fact appeared was a
-   * log file on the server.
-   */
-  txBlockers?: string[];
-  txWarnings?: string[];
-  /** Which radio the bridge is driving, for the picker below the Radio card. */
-  source: "flex" | "icom" | "wsjtx" | null;
-  /**
-   * The radio's MODULATION — USB, LSB-D, CW.
-   *
-   * `mode` above is the digital mode on the Icom path and the slice's modulation on the
-   * FlexRadio, which is why the modulation picker reads this instead.
-   */
-  radioMode: string | null;
-  /** AGC / NB / NR / filter as the RADIO reports them. Null means not read yet, not "off". */
-  receiver?: ReceiverControls;
-  /** Voice mode: digital closed, radio in a microphone mode. */
-  voice?: VoiceState;
-}
+const SOURCE_NAMES = { flex: "FlexRadio", icom: "Icom", wsjtx: "External decoder" } as const;
 
 interface Props extends Record<string, unknown> {
   wsUrl: string;
@@ -105,26 +62,12 @@ export default function RigPage({ wsUrl }: Props) {
     stream: { running: boolean; since?: number | null; frames?: number; lastError?: string | null } | null;
   }>("/api/bridge/status");
 
-  const [restarting, setRestarting] = useState(false);
-
   const [busy, setBusy] = useState<string | null>(null);
-  const [actionError, setActionError] = useState<string | null>(null);
-  const [freqInput, setFreqInput] = useState("");
+  const [actionError, setActionError] = useState<{ area: RigArea; text: string } | null>(null);
+  const [atuNote, setAtuNote] = useState<string | null>(null);
+  const errorIn = (area: RigArea): string | null =>
+    actionError?.area === area ? actionError.text : null;
 
-  // ONE spectrum display on this page: the RF panadapter, tens of kHz of band with every
-  // station on it, from the radio's own FFT.
-  //
-  // There used to be two. The second was the AUDIO passband — 0-3 kHz of what the
-  // receiver is demodulating, which is ONE signal — and it was drawn here with an empty
-  // markers array, so it was the same component doing none of its useful work. That
-  // display earns its place on the Decodes page, where each decode's offset is marked on
-  // it and it shows exactly the span the decoder searches. Here it was a second
-  // waterfall of the same audio, above the fold, pushing the RF spectrum down the page.
-  //
-  // The two are not views of one thing and no setting bridges them: see
-  // docs/panadapter.md. Nothing was merged — the audio waterfall was simply moved off a
-  // page that had no use for it.
-  //
   // Listening to the receiver.
   //
   // The player and its socket live in refs, not state: the scheduling cursor inside the
@@ -146,13 +89,14 @@ export default function RigPage({ wsUrl }: Props) {
     centerHz: number;
     spanHz: number;
     binHz: number;
-    // The dB window the bytes span. On the wire from the start; unused until the trace
-    // grew a vertical scale, and a panadapter without one cannot tell a local station
-    // from a marginal one.
+    // The dB window the bytes span, for the trace's vertical scale.
     floorDb: number;
     ceilingDb: number;
     radio: string;
   } | null>(null);
+  // When the last panadapter frame ARRIVED, by this browser's clock — the frame's own `at`
+  // is the bridge's, and the two clocks are not comparable.
+  const [panReceivedAt, setPanReceivedAt] = useState<number | null>(null);
   // The audio spectrum — the same stream the Decodes page draws — so a source without an
   // RF panadapter (the Icom today) still shows a live waterfall here instead of a bare note.
   const [audioSpec, setAudioSpec] = useState<{ bins: Uint8Array; at: number } | null>(null);
@@ -170,6 +114,7 @@ export default function RigPage({ wsUrl }: Props) {
         radio: string;
       };
       setPan({ bins: decodeSpectrumBins(m.bins), at: m.at });
+      setPanReceivedAt(Date.now());
       setPanScale({
         centerHz: m.centerHz,
         spanHz: m.spanHz,
@@ -180,7 +125,7 @@ export default function RigPage({ wsUrl }: Props) {
       });
     } else if (msg.kind === "spectrum") {
       // The audio spectrum (receiver passband), broadcast by every source including the
-      // Icom. The RF panadapter above is FlexRadio-only today; this is the fallback.
+      // Icom. The RF panadapter is FlexRadio-only today; this is the fallback.
       const s = msg as unknown as { bins: string; binHz: number; maxHz: number; at: number; periodMs: number };
       setAudioSpec({ bins: decodeSpectrumBins(s.bins), at: s.at });
       setAudioScale({ binHz: s.binHz, maxHz: s.maxHz, periodMs: s.periodMs });
@@ -189,93 +134,62 @@ export default function RigPage({ wsUrl }: Props) {
 
   const status = data?.status ?? null;
   const telemetry = data?.telemetry ?? null;
-  const voice = status?.voice ?? null;
-  const voiceOn = voice?.active === true;
+  const voiceOn = status?.voice?.active === true;
   const stream = data?.stream ?? null;
   const streaming = stream?.running === true;
+  const source = status?.source ?? null;
 
-  // What this radio actually has. Every control below asks rather than assuming —
-  // see lib/radio/capabilities.ts for the three defects that made that necessary.
-  const caps = radioCapabilities(status?.source ?? null);
+  // What this radio actually has. Every control below asks rather than assuming.
+  const caps = radioCapabilities(source);
+  // An external decoder is not a radio DigiShack drives: nothing here could reach it.
+  const controllable = source === "flex" || source === "icom";
+  // The command channel is what changes the rig; with it down every control would only fail.
+  const canControl = controllable && status?.commandChannel === true;
 
-  // The antenna ports, when the radio has a choice to offer.
-  //
-  // Not a capability in lib/radio/capabilities.ts, deliberately: the ports differ between
-  // a 6300 and a 6600, and again with a transverter fitted, so a table there would be a
-  // second opinion about hardware — and the radio states this itself in every slice
-  // status (`ant_list`, `tx_ant_list`). Null when there is nothing to choose between,
-  // which is a single-socket radio, an external decoder, or a radio that has not spoken
-  // yet, and all three want the same thing: no picker.
-  const antennas = useMemo(() => {
-    const ports = status?.receiver?.antennas;
-    if (!ports) return null;
-    return ports.rx.length > 1 || ports.tx.length > 1 ? ports : null;
-  }, [status?.receiver?.antennas]);
+  // A display left over from the OTHER radio is a frozen picture of the wrong band: the
+  // FlexRadio's last panadapter frame stayed on screen after switching to the Icom.
+  useEffect(() => {
+    setPan(null);
+    setPanScale(null);
+    setPanReceivedAt(null);
+    setAudioSpec(null);
+    setAudioScale(null);
+  }, [source]);
 
-  // Where a band button lands. Two behaviours that used to be two separate rows of
-  // identical-looking buttons, with the explanation at the bottom of the second one.
-  const [bandTarget, setBandTarget] = useState<"calling" | "centre">("calling");
-
-  // One entry per band, deduplicated.
-  //
-  // FT8 has TWO 6 m frequencies (50.313 and 50.323), and the row rendered `f.band`
-  // only — so two identical `6M` buttons appeared with no way to tell them apart.
-  // React never complained because the key included the frequency. The primary
-  // (lowest) frequency wins and the exact number goes in the tooltip.
-  const callingBands = useMemo(() => {
-    const byBand = new Map<string, number>();
-    for (const f of DIGITAL_FREQUENCIES) {
-      if (f.mode !== "FT8") continue;
-      if (!canTune(caps, f.hz)) continue;
-      const seen = byBand.get(f.band);
-      if (seen === undefined || f.hz < seen) byBand.set(f.band, f.hz);
-    }
-    return [...byBand].map(([band, hz]) => ({ band, hz }));
-  }, [caps]);
-
-  const centreBands = useMemo(
-    () =>
-      bandsFor(caps).map((b) => ({
-        band: b.name,
-        hz: Math.round((b.lowHz + b.highHz) / 2),
-      })),
-    [caps],
-  );
-
-  const bandButtons = bandTarget === "calling" ? callingBands : centreBands;
-
-  // Poll: the radio can be changed from its own front panel or SmartSDR, and a
-  // control panel showing stale values is worse than one showing none.
-  //
-  // Suspended while the tab is hidden — a control panel nobody is looking at is not
-  // showing stale values, it is showing nothing, and two requests a second against a
-  // locked phone is the most expensive thing this page does. The catch-up on return is
-  // what makes the "stale is worse" argument still hold: the first thing a returning
-  // operator sees is current.
+  // Poll: the radio can be changed from its own front panel or SmartSDR, and a control
+  // panel showing stale values is worse than one showing none. Suspended while the tab is
+  // hidden, with a catch-up on return, so the first thing a returning operator sees is
+  // current.
   useVisibleInterval(() => reload(), 2_000);
 
-  async function send(body: Record<string, unknown>, label: string) {
+  /** One control command. Only the control that sent it waits on it. */
+  async function run(
+    body: Record<string, unknown>,
+    label: string,
+    area: RigArea,
+  ): Promise<unknown | undefined> {
     setBusy(label);
     setActionError(null);
     try {
-      await apiPost("/api/bridge/control", { action: "rig", ...body });
+      const reply = await apiPost<unknown>("/api/bridge/control", body);
       reload();
+      return reply ?? true;
     } catch (err) {
-      setActionError(err instanceof ApiError ? err.message : "Command failed");
+      setActionError({ area, text: err instanceof ApiError ? err.message : "Command failed" });
+      return undefined;
     } finally {
-      setBusy(null);
+      setBusy((b) => (b === label ? null : b));
     }
   }
 
+  const send: RigSend = async (body, label, area) =>
+    (await run({ action: "rig", ...body }, label, area)) !== undefined;
+
   // ---- Who is on the air, for the panadapter overlay ----
   //
-  // POTA rather than the reception reports in `PskSpot`: those record who heard US, which
-  // is the wrong direction entirely for a display asking "who can I work". POTA spots are
-  // activators announcing a frequency, which is exactly the question.
-  //
-  // `modes=all` because this page is not only digital when the operator is on voice — an
-  // SSB operator looking at 40 m wants the phone and CW activators, and the endpoint's
-  // FT8/FT4 default is right for the chase list and wrong here.
+  // POTA rather than PskSpot reception reports: those record who heard US, the wrong
+  // direction for "who can I work". `modes=all` because an SSB operator on 40 m wants the
+  // phone and CW activators too.
   const spotsPath = status?.band
     ? `/api/pota/spots?modes=all&bands=${encodeURIComponent(status.band)}`
     : null;
@@ -283,8 +197,7 @@ export default function RigPage({ wsUrl }: Props) {
     spots: { spotId: number; activator: string; freqHz: number; mode: string; reference: string; parkName: string | null }[];
   }>(spotsPath);
 
-  // POTA is a volunteer service and the endpoint caches for 60 s, so asking more often
-  // than that buys nothing but load.
+  // POTA is a volunteer service and the endpoint caches for 60 s.
   useVisibleInterval(() => void reloadSpots(), 60_000, { enabled: Boolean(spotsPath) });
 
   const panSpots = useMemo(
@@ -301,36 +214,28 @@ export default function RigPage({ wsUrl }: Props) {
 
   // ---- Nudging the dial with the arrow keys ----
   //
-  // Deliberately NOT routed through send(). That helper sets `busy`, which disables every
-  // control on the page, and calls reload() for a fresh status — fine for a button press,
-  // wrong for a key an operator holds down. Browser auto-repeat delivers keydown every few
-  // tens of milliseconds, so the direct route would grey out the page and put a POST and a
-  // full status reload on the wire for each one.
-  //
-  // Instead the target moves instantly in local state and the radio is told once the keys
-  // stop, which is how a tuning knob behaves: the display leads and the hardware follows.
+  // Deliberately NOT routed through send(): browser auto-repeat delivers keydown every few
+  // tens of milliseconds, and a POST plus a status reload for each one is wrong for a key
+  // an operator holds down. The target moves instantly in local state and the radio is
+  // told once the keys stop, which is how a tuning knob behaves.
   const nudgeTargetRef = useRef<number | null>(null);
   const nudgeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [nudgeHz, setNudgeHz] = useState<number | null>(null);
 
   // The dial the PAGE draws: the pending nudge if there is one, otherwise the radio's own
-  // reading. Everything showing a frequency uses this, so the readout, the panadapter
-  // cursor and the passband all move together on the first keypress.
+  // reading, so the readout, the panadapter cursor and the passband move together.
   const shownDialHz = nudgeHz ?? status?.dialFrequency ?? null;
 
-  // Latest values for the keydown handler, which is registered once and would otherwise
-  // close over the first render's status forever.
+  // Latest values for the keydown handler, which is registered once.
   const liveRef = useRef({ dialHz: null as number | null, mode: null as string | null });
   liveRef.current = {
-    dialHz: status?.dialFrequency ?? null,
+    dialHz: canControl ? (status?.dialFrequency ?? null) : null,
     mode: status?.radioMode ?? null,
   };
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      // Never steal a keystroke from something being typed into. The Tune box is on this
-      // page and arrow keys move a text cursor; a page that hijacks them while someone is
-      // editing a frequency is worse than one with no shortcut at all.
+      // Never steal a keystroke from something being typed into.
       const t = e.target as HTMLElement | null;
       const tag = t?.tagName;
       if (
@@ -353,15 +258,12 @@ export default function RigPage({ wsUrl }: Props) {
       if (dialHz === null) return;
       e.preventDefault(); // or the page scrolls under the operator
 
-      // Shift is ten steps. The same mode-derived step the spectrum click uses, so the
-      // keyboard and the mouse never disagree about what a "step" is on this band.
+      // The same mode-derived step the spectrum click uses, so the keyboard and the mouse
+      // never disagree about what a "step" is on this band.
       const step = tuneStepFor(mode) * (e.shiftKey ? 10 : 1);
-      // From the pending target when one exists, so held keys accumulate rather than each
-      // one starting again from the radio's last reported dial.
+      // From the pending target, so held keys accumulate.
       const base = nudgeTargetRef.current ?? dialHz;
-      // Snapped, because the radio may be sitting off-step — from a memory, or from
-      // somebody else's client — and the first nudge should land ON the grid rather than
-      // carry the offset forward forever.
+      // Snapped, so the first nudge from an off-step dial lands ON the grid.
       const next = snapHz(base + direction * step, mode);
       nudgeTargetRef.current = next;
       setNudgeHz(next);
@@ -371,12 +273,12 @@ export default function RigPage({ wsUrl }: Props) {
         const target = nudgeTargetRef.current;
         nudgeTargetRef.current = null;
         if (target === null) return;
-        // Straight to the control API rather than through send(): no `busy`, so the page
-        // stays usable, and no reload storm. The status poll brings the radio's own
-        // reading along shortly and `nudgeHz` is cleared when it agrees.
         void apiPost("/api/bridge/control", { action: "rig", freqHz: target }).catch(
           (err) => {
-            setActionError(err instanceof ApiError ? err.message : "Tuning failed");
+            setActionError({
+              area: "dial",
+              text: err instanceof ApiError ? err.message : "Tuning failed",
+            });
             setNudgeHz(null);
           },
         );
@@ -390,982 +292,365 @@ export default function RigPage({ wsUrl }: Props) {
     };
   }, []);
 
-  // Drop the optimistic reading once the radio reports the frequency we asked for. Without
-  // this the page would show its own guess forever if a command were refused — and a dial
-  // that disagrees with the radio is the one thing worse than a dial that lags it.
+  // Drop the optimistic reading once the radio reports the frequency we asked for, so a
+  // refused command never leaves the page showing its own guess.
   useEffect(() => {
     if (nudgeHz === null) return;
     if (nudgeTargetRef.current !== null) return; // still mid-nudge
     if (status?.dialFrequency === nudgeHz) setNudgeHz(null);
   }, [status?.dialFrequency, nudgeHz]);
 
-  async function tuneTyped() {
-    const hz = parseFreqToHz(freqInput);
-    if (hz === null) {
-      setActionError(`"${freqInput}" is not a frequency I can read`);
+  async function setVoice(active: boolean) {
+    // Confirmed on the way IN, because it stops an unattended station: an auto operator
+    // part way through a contact is turned OFF by this, not paused.
+    if (
+      active &&
+      !window.confirm(
+        "Switch to voice? This turns off automatic operation and closes digital " +
+          "transmit until you switch back.",
+      )
+    ) {
       return;
     }
-    // Set the modulation along with the dial.
-    //
-    // Moving to 7.200 and staying in USB-D is a radio that hears nothing an operator wants
-    // and cannot transmit what they say; moving to 14.074 and staying in LSB is the same in
-    // reverse. The band follows on its own — the radio reports its dial and the band comes
-    // from that — but the modulation does not, so it is sent here. Null means a frequency in
-    // no amateur band, and then only the dial moves: a typo should not also change the mode.
-    const modulation = modulationForFrequency(hz);
-    await send(
-      modulation ? { freqHz: hz, mode: modulation } : { freqHz: hz },
-      "freq",
-    );
-    setFreqInput("");
+    await run({ action: "voice", active }, "voice", "transmitter");
   }
+
+  async function tuneAtu() {
+    setAtuNote(null);
+    const reply = (await run({ action: "atu" }, "atu", "transmitter")) as
+      | { state?: string; detail?: string }
+      | true
+      | undefined;
+    if (reply === undefined) return;
+    const said = reply === true ? undefined : (reply.state ?? reply.detail);
+    setAtuNote(said ? `Tuner: ${said}` : "Tuner started");
+  }
+
+  // What the decoder is listening for. The FlexRadio carries it in `subMode` and the Icom
+  // in `mode`; it was shown only on the Icom because only `mode` was read.
+  const decodingMode =
+    voiceOn
+      ? null
+      : ([status?.subMode, status?.mode].find(
+          (m): m is string => typeof m === "string" && DIGITAL_MODES.has(m.toUpperCase()),
+        ) ?? null);
+
+  const radioName =
+    status?.radio?.model ?? (source ? SOURCE_NAMES[source] : null);
+  const subtitle = [
+    radioName,
+    status && !status.connected && controllable ? "not connected" : null,
+    status?.deCall,
+    status?.deGrid,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
+  const panStale = panReceivedAt !== null && Date.now() - panReceivedAt > PAN_STALE_MS;
 
   return (
     <>
       <PageHeader
         title="Rig control"
-        subtitle={
-          status?.connected
-            ? `${status.dialFrequency ? formatFreqMHz(status.dialFrequency) + " MHz" : "—"} · ${status.mode ?? "?"}`
-            : "CAT control for the connected FlexRadio"
+        subtitle={subtitle || undefined}
+        actions={
+          status ? (
+            <StationActions
+              source={source}
+              streaming={streaming}
+              onError={(text) => setActionError(text ? { area: "top", text } : null)}
+              onChanged={reload}
+            />
+          ) : undefined
         }
       />
 
-      {/* PERSISTENT, and not dismissible.
-          This page is the least finished part of DigiShack and the banner says so in the
-          same words the setting that reveals it uses. A dismissible warning is a warning
-          that is dismissed once and never seen again by the person who most needs it — the
-          one who comes back a month later having forgotten which parts were measured.
-
-          The specifics are named rather than gestured at, because "experimental" alone
-          tells an operator nothing they can act on: knowing the dB scale is uncalibrated is
-          what stops somebody reporting a signal report from it. */}
-      <div className="mb-4 rounded-sm border border-warn/50 bg-warn/10 px-3 py-2">
-        <p className="text-xs text-fg">
+      <div className="flex flex-col gap-4">
+        {/* PERSISTENT, and not dismissible: a dismissed warning is never seen again by the
+            operator who most needs it, the one back a month later. The specifics are named
+            because "experimental" alone tells nobody what to distrust. */}
+        <p className="rounded-sm border border-warn/40 bg-warn/10 px-3 py-2 text-xs text-fg-muted">
           <span className="font-medium uppercase tracking-wide text-warn">Experimental</span>{" "}
-          — this page is a work in progress. It is genuinely useful and genuinely unfinished:
-          the panadapter&apos;s dB window is <strong>not calibrated</strong>, the FlexRadio
-          accepts display settings it never reports back, and some controls are reasoned from
-          documentation rather than measured against hardware. Treat readings here as
-          relative, not absolute.
+          — useful and unfinished. The panadapter&apos;s dB window is{" "}
+          <strong className="text-fg">not calibrated</strong>, the FlexRadio accepts display
+          settings it never reports back, and some controls are reasoned from documentation
+          rather than measured against hardware. Treat readings as relative.
         </p>
-      </div>
 
-      {error && <ErrorBanner>{error.message}</ErrorBanner>}
-      {data && !data.running && (
-        <div className="mb-4">
+        {error && <ErrorBanner>{error.message}</ErrorBanner>}
+        {data && !data.running && (
+          <ErrorBanner>{data.reason ?? "The radio service is not running."}</ErrorBanner>
+        )}
+        {status && controllable && !status.connected && (
           <ErrorBanner>
-            {data.reason ?? "The radio service is not running."}
+            {`Not connected to ${caps.label}${status.connectionError ? `: ${status.connectionError}` : ""}. The radio service retries automatically.`}
           </ErrorBanner>
-        </div>
-      )}
-      {status && !status.commandChannel && (
-        <div className="mb-4">
+        )}
+        {status && controllable && status.connected && !status.commandChannel && (
           <ErrorBanner>
-            The radio&apos;s command channel is down, so nothing here can change
-            the rig. Decodes may still be arriving — DAX audio is a separate UDP
-            stream. The radio service retries automatically.
+            The radio&apos;s command channel is down, so nothing here can change the rig.
+            Decodes may still be arriving — DAX audio is a separate UDP stream. The radio
+            service retries automatically.
           </ErrorBanner>
-        </div>
-      )}
-      {actionError && (
-        <div className="mb-4">
-          <ErrorBanner>{actionError}</ErrorBanner>
-        </div>
-      )}
-
-      {/*
-        WHY THE STREAM STOPPED, rather than just that it did.
-
-        A rejected stream key kills ffmpeg about a second after it connects, so the button
-        goes back to "Go live" on its own and the operator is left with a control that
-        appears to do nothing. Reported here so the reason is on the page instead of in a
-        log file on the server.
-      */}
-      {!streaming && stream?.lastError && (
-        <div className="mb-4">
+        )}
+        {errorIn("top") && <ErrorBanner>{errorIn("top")}</ErrorBanner>}
+        {/* WHY THE STREAM STOPPED: a rejected key kills ffmpeg a second after it connects,
+            so "Go live" flips back on its own and needs the reason beside it. */}
+        {!streaming && stream?.lastError && (
           <ErrorBanner>
             {`The YouTube stream stopped: ${stream.lastError}. If YouTube rejected it, check the stream key in Settings → YouTube Live — a key is per-channel and YouTube rotates it when you reset it in Studio.`}
           </ErrorBanner>
-        </div>
-      )}
-      {/*
-        WHAT THE RADIO SAYS IS WRONG WITH TRANSMITTING.
-
-        Blockers mean keying produces nothing — no DAX source, no transmit slice, an
-        interlock that refuses, a transmit slice on another band. Warnings mean it will
-        transmit but not as intended. Both come from the radio's own status, and both were
-        invisible until now.
-      */}
-      {status && (status.txBlockers?.length ?? 0) > 0 && (
-        <div className="mb-4">
+        )}
+        {/* Keying produces nothing while any of these stand: no DAX source, no transmit
+            slice, an interlock, a transmit slice on another band. From the radio's own
+            status. Warnings live with the transmitter. */}
+        {status && (status.txBlockers?.length ?? 0) > 0 && (
           <ErrorBanner>
-            <span className="font-display">The radio will not transmit:</span>{" "}
+            <span className="font-medium">The radio will not transmit:</span>{" "}
             {status.txBlockers!.join(" · ")}
           </ErrorBanner>
-        </div>
-      )}
-      {status && (status.txWarnings?.length ?? 0) > 0 && (
-        <div className="mb-4 rounded-sm border border-warn/40 bg-warn/10 px-3 py-2 text-sm text-fg">
-          <span className="font-display">Transmit warnings:</span>{" "}
-          {status.txWarnings!.join(" · ")}
-        </div>
-      )}
+        )}
 
-      {/* THE CONSOLE.
-          One screen, not a column of cards. This used to be six stacked Card panels,
-          each with a header, its own padding and an explanatory paragraph — "our page is
-          like a mile long and clunky", and it was. Worse, the spectrum, which is the
-          reason to be on this page at all, shared the first screenful with a second
-          waterfall of the same audio the Decodes page already draws.
-          Laid out the way an SDR console is: the dial and the meters on one line, the
-          spectrum given the room it deserves, every control in one compact deck
-          underneath. The explanations that were paragraphs are tooltips now — still
-          there when wanted, no longer occupying a screenful each. */}
-      <div className="flex flex-col gap-3">
-        {/* THE DIAL LINE. Frequency, what the radio is doing, and its health, read left
-            to right without scrolling. */}
-        <div className="flex flex-wrap items-center gap-x-5 gap-y-2 px-3 py-2 bg-bg-raised border border-line rounded-sm">
-          <div className="flex items-baseline gap-1.5">
-            {/* The nudged reading while the arrow keys are moving it, so the big number
-                leads the radio instead of lagging a round trip behind it. Dimmed while
-                pending, which is the honest signal that the radio has not confirmed yet. */}
-            <span
-              className={cn(
-                "font-display text-3xl leading-none tnum",
-                nudgeHz !== null && "text-accent-bright",
-              )}
-              title={
-                nudgeHz !== null
-                  ? "Tuning — the radio has not confirmed this yet"
-                  : undefined
-              }
-            >
-              {shownDialHz ? formatFreqDial(shownDialHz) : "—"}
-            </span>
-            <span className="text-[11px] text-fg-subtle">MHz</span>
-            {/* The step the arrows and a spectrum click both move by. RemoteHamRadio puts
-                the same thing on its display as "df: 200 Hz", and it answers the question
-                an operator actually has, which is not "can I tune" but "by how much". */}
-            {status?.radioMode && (
-              <span className="text-[10px] text-fg-subtle tnum ml-1">
-                &Delta;f{" "}
-                {tuneStepFor(status.radioMode) >= 1000
-                  ? `${tuneStepFor(status.radioMode) / 1000} kHz`
-                  : `${tuneStepFor(status.radioMode)} Hz`}
-                <span className="text-fg-subtle/70"> · &larr;&rarr; to tune</span>
-              </span>
-            )}
-          </div>
-          {status?.band && <Badge tone="neutral">{status.band}</Badge>}
-          {status?.transmitting && <Badge tone="danger">TX</Badge>}
-          {voiceOn && <Badge tone="warn">VOICE</Badge>}
-          <span className="text-xs text-fg-muted tnum">
-            {status?.radioMode ?? "—"}
-          </span>
-          {/* The digital mode only when it IS one: on the FlexRadio this field holds the
-              slice's modulation, so showing it unconditionally printed "DIGU" an inch
-              from a Modulation picker reading "USB-D" — one fact, twice, in two
-              vocabularies, which reads as one of them being wrong. */}
-          {/^FT\d/i.test(status?.mode ?? "") && (
-            <span className="text-xs text-accent-bright tnum">{status?.mode}</span>
-          )}
-
-          {/* The meters, inline: a six-row table for six numbers was most of a card.
-              Each appears only once the radio has actually reported it. */}
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
-            <Meter
-              label="PWR"
-              value={
-                status?.rfPower !== null && status?.rfPower !== undefined
-                  ? `${status.rfPower}%`
-                  : null
-              }
-            />
-            <Meter
-              label="SWR"
-              value={
-                telemetry?.swr !== null &&
-                telemetry?.swr !== undefined &&
-                telemetry.swr > 0
-                  ? `${telemetry.swr.toFixed(1)}:1`
-                  : null
-              }
-              tone={
-                telemetry?.swr !== null && telemetry?.swr !== undefined
-                  ? telemetry.swr > 3
-                    ? "text-danger"
-                    : telemetry.swr > 2
-                      ? "text-warn"
-                      : "text-ok"
-                  : undefined
-              }
-            />
-            <Meter
-              label="PA"
-              value={
-                telemetry?.paTempC !== null && telemetry?.paTempC !== undefined
-                  ? `${telemetry.paTempC.toFixed(0)}°C`
-                  : null
-              }
-              tone={
-                telemetry?.paTempC !== null && telemetry?.paTempC !== undefined
-                  ? telemetry.paTempC > 75
-                    ? "text-danger"
-                    : telemetry.paTempC > 60
-                      ? "text-warn"
-                      : undefined
-                  : undefined
-              }
-            />
-            <Meter
-              label="VOLTS"
-              value={
-                telemetry?.voltsPa !== null && telemetry?.voltsPa !== undefined
-                  ? `${telemetry.voltsPa.toFixed(1)} V`
-                  : null
-              }
-            />
-            <Meter
-              label="FAN"
-              value={
-                telemetry?.fanRpm !== null &&
-                telemetry?.fanRpm !== undefined &&
-                telemetry.fanRpm > 0
-                  ? `${telemetry.fanRpm}`
-                  : null
-              }
-            />
-          </div>
-
-          {/* The three actions that are about the station rather than the dial. */}
-          <div className="ml-auto flex items-center gap-2">
-            <button
-              type="button"
-              disabled={busy !== null}
-              onClick={() =>
-                void apiPost("/api/bridge/control", { action: "atu" }).catch(
-                  () => {},
-                )
-              }
-              title="Run the antenna tuner. Keys a brief low-power carrier, so it is gated on Allow transmit like anything else that keys."
-              className="px-2 py-1 text-xs rounded-sm border border-line text-fg-muted hover:text-fg hover:border-fg-muted"
-            >
-              ATU
-            </button>
-            {/*
-              RESTART THE RADIO SERVICE.
-
-              The bridge owns the radio, the decoders and the transmit path, so restarting
-              it is a real diagnostic step — and until now every one of them needed a
-              shell. Asked for after an evening where it was the remedy half a dozen times.
-
-              Confirmed, because it drops any contact in flight and takes the station off
-              the air for about twenty seconds. Not `danger` styling: this is a recovery
-              action somebody reaches for when things are already wrong, and dressing it in
-              red invites hesitating at exactly the wrong moment.
-            */}
-            <button
-              type="button"
-              disabled={busy !== null || restarting}
-              onClick={() => {
-                if (
-                  !window.confirm(
-                    "Restart the radio service? Any contact in progress is dropped and the " +
-                      "station is off the air for about 20 seconds while it reconnects. " +
-                      "The web page itself keeps running.",
-                  )
-                ) {
-                  return;
-                }
-                setRestarting(true);
-                void apiPost("/api/bridge/control", { action: "restart" })
-                  .catch(() => {})
-                  // The bridge is gone for ~20 s; the socket reconnects on its own.
-                  .finally(() => setTimeout(() => setRestarting(false), 25_000));
-              }}
-              title="Restart the radio service (the bridge). Drops any contact in progress and reconnects to the radio, about 20 seconds. Use it when the radio link is stuck or decoding has stopped."
-              className="px-2 py-1 text-xs rounded-sm border border-line text-fg-muted hover:text-fg hover:border-fg-muted"
-            >
-              {restarting ? "Restarting…" : "Restart service"}
-            </button>
-            {/*
-              YOUTUBE LIVE.
-
-              The waterfall and the receiver audio, pushed to the operator's channel. The
-              AUDIO is what makes it worth watching — a silent screen recording is neither
-              interesting nor, as far as YouTube is concerned, a healthy stream.
-
-              Confirmed on the way ON and not on the way off, which is the opposite of the
-              usual rule and deliberate: going live is the irreversible half. Stopping a
-              stream is always safe.
-
-              No key, no button state to guess at: the bridge holds the key, this only says
-              start or stop.
-            */}
-            <button
-              type="button"
-              disabled={busy === "stream" || restarting}
-              onClick={() => {
-                if (
-                  !streaming &&
-                  !window.confirm(
-                    "Go live on YouTube? The waterfall and the receiver audio start " +
-                      "broadcasting to your channel, and anything heard on the air goes out " +
-                      "with them. YouTube takes about 20 seconds to show it.",
-                  )
-                ) {
-                  return;
-                }
-                setBusy("stream");
-                setActionError(null);
-                void apiPost("/api/bridge/control", { action: "stream", enable: !streaming })
-                  .catch((e: Error) => setActionError(e.message))
-                  .finally(() => {
-                    setBusy(null);
-                    reload();
-                  });
-              }}
-              title={
-                streaming
-                  ? "Stop the YouTube stream."
-                  : "Stream the waterfall and the receiver audio to YouTube Live. Needs a stream key in Settings → YouTube Live."
-              }
-              className={cn(
-                "px-2 py-1 text-xs rounded-sm border",
-                streaming
-                  ? "border-danger text-danger"
-                  : "border-line text-fg-muted hover:text-fg hover:border-fg-muted",
-              )}
-            >
-              {busy === "stream" ? "…" : streaming ? "Live ●" : "Go live"}
-            </button>
-            <button
-              type="button"
+        <RigDial
+          dialHz={shownDialHz}
+          pending={nudgeHz !== null}
+          radioMode={status?.radioMode ?? null}
+          decodingMode={decodingMode !== status?.radioMode ? decodingMode : null}
+          transmitting={status?.transmitting === true}
+          voiceOn={voiceOn}
+          canSetMode={controllable}
+          modeBusy={!canControl || busy === "mode"}
+          onMode={(m) => void send({ mode: m }, "mode", "dial")}
+          error={errorIn("dial")}
+          actions={
+            <Button
+              size="sm"
+              variant="secondary"
+              aria-pressed={listening}
               onClick={() =>
                 void (listening ? stopListening() : startListening())
               }
               title={
                 listening
                   ? "Stop monitoring the receiver"
-                  : "Listen to the receiver in this browser. The audio waterfall this page used to draw lives on the Decodes page, where decode offsets are marked on it."
+                  : "Listen to the receiver in this browser."
               }
-              className={cn(
-                "px-2 py-1 text-xs rounded-sm border",
+              className={
                 listening
-                  ? "border-accent text-accent-bright"
-                  : "border-line text-fg-muted hover:text-fg hover:border-fg-muted",
-              )}
+                  ? "border-accent bg-accent/12 text-accent-bright hover:bg-accent/20"
+                  : undefined
+              }
             >
               {listening ? "Listening" : "Listen"}
-            </button>
-            <button
-              type="button"
-              disabled={busy === "voice"}
-              onClick={async () => {
-                // Confirmed on the way IN, because it stops an unattended station: an
-                // auto operator part way through a contact is turned OFF by this, not
-                // paused.
-                if (
-                  !voiceOn &&
-                  !window.confirm(
-                    "Switch to voice? This turns off automatic operation and closes digital " +
-                      "transmit until you switch back.",
-                  )
-                ) {
-                  return;
-                }
-                setBusy("voice");
-                setActionError(null);
-                try {
-                  await apiPost("/api/bridge/control", {
-                    action: "voice",
-                    active: !voiceOn,
-                  });
-                  reload();
-                } catch (err) {
-                  setActionError(
-                    err instanceof ApiError
-                      ? err.message
-                      : "Could not switch mode",
-                  );
-                } finally {
-                  setBusy(null);
-                }
-              }}
-              title={
-                voiceOn
-                  ? "Back to digital operating"
-                  : "Switch to voice: moves the radio out of the data mode that ignores the microphone, and stops anything digital from keying over you."
-              }
-              className={cn(
-                "px-2 py-1 text-xs rounded-sm border",
-                voiceOn
-                  ? "border-warn text-warn"
-                  : "border-line text-fg-muted hover:text-fg hover:border-fg-muted",
+            </Button>
+          }
+        >
+          {/* Listening diagnostics. A suspended audio context schedules everything and
+              plays none of it, which is indistinguishable from a dead radio unless it is
+              said out loud. The ERROR half is deliberately NOT gated on `listening`: every
+              way this fails leaves `listening` false, and an error rendered by nothing was
+              the whole of "the Listen button doesn't work". */}
+          {(audioError || (listening && audioInfo)) && (
+            <div className="flex flex-wrap items-center gap-x-1 border-t border-line px-4 py-2 text-xs text-fg-subtle tnum">
+              {listening && audioInfo && (
+                <>
+                  {(audioInfo.rate / 1000).toFixed(0)} kHz &middot;{" "}
+                  {audioInfo.packets.toLocaleString()} packets
+                  {audioInfo.context !== "running" && (
+                    <span className="text-warn">
+                      {" "}
+                      &middot; audio {audioInfo.context}
+                    </span>
+                  )}
+                  {audioInfo.packets === 0 && (
+                    <span className="text-warn">
+                      {" "}
+                      &middot; no packets arriving
+                    </span>
+                  )}
+                  {audioInfo.bufferedMs > 0 && (
+                    <> &middot; {audioInfo.bufferedMs} ms buffered</>
+                  )}
+                  {audioInfo.underruns > 0 && (
+                    <span className="text-warn">
+                      {" "}
+                      &middot; {audioInfo.underruns} underruns
+                    </span>
+                  )}
+                  <label className="ml-3 inline-flex items-center gap-1.5">
+                    <span>Volume</span>
+                    <input
+                      type="range"
+                      min={0}
+                      max={1}
+                      step={0.05}
+                      value={volume}
+                      onChange={(e) => {
+                        setVolume(Number(e.target.value));
+                      }}
+                      className="w-24 accent-accent"
+                    />
+                  </label>
+                </>
               )}
-            >
-              {voiceOn ? "Digital" : "Voice"}
-            </button>
-          </div>
-        </div>
-
-        {/* Listening diagnostics. A suspended audio context schedules everything and
-            plays none of it, which is indistinguishable from a dead radio unless it is
-            said out loud.
-
-            The ERROR half is deliberately NOT gated on `listening`, and that gate was the
-            whole of "the Listen button doesn't work". `listening` is only ever set true in
-            `ws.onopen`, so every way this can fail — the browser refusing to start audio,
-            the socket never reaching the bridge, the bridge answering with no audio source
-            and closing — leaves it false. The message was being set correctly in all three
-            cases and then rendered by nothing, so the button flicked back to "Listen" and
-            the page stayed silent about why. An error nobody can see is the same as no
-            error handling at all. */}
-        {(audioError || (listening && audioInfo)) && (
-          <div className="text-[11px] text-fg-subtle tnum -mt-1 px-1">
-            {listening && audioInfo && (
-              <>
-                {(audioInfo.rate / 1000).toFixed(0)} kHz &middot;{" "}
-                {audioInfo.packets.toLocaleString()} packets
-                {audioInfo.context !== "running" && (
-                  <span className="text-warn">
-                    {" "}
-                    &middot; audio {audioInfo.context}
-                  </span>
-                )}
-                {audioInfo.packets === 0 && (
-                  <span className="text-warn">
-                    {" "}
-                    &middot; no packets arriving
-                  </span>
-                )}
-                {audioInfo.bufferedMs > 0 && (
-                  <> &middot; {audioInfo.bufferedMs} ms buffered</>
-                )}
-                {audioInfo.underruns > 0 && (
-                  <span className="text-warn">
-                    {" "}
-                    &middot; {audioInfo.underruns} underruns
-                  </span>
-                )}
-                <label className="inline-flex items-center gap-1.5 ml-3 align-middle">
-                  <span>vol</span>
-                  <input
-                    type="range"
-                    min={0}
-                    max={1}
-                    step={0.05}
-                    value={volume}
-                    onChange={(e) => {
-                      setVolume(Number(e.target.value));
-                    }}
-                    className="accent-accent w-24 align-middle"
-                  />
-                </label>
-              </>
-            )}
-            {audioError && <span className="text-danger"> {audioError}</span>}
-          </div>
-        )}
+              {audioError && <span className="text-danger"> {audioError}</span>}
+            </div>
+          )}
+        </RigDial>
 
         {/* THE BAND. The reason to be on this page: tens of kHz of RF with every station
-            on it. Given the height it deserves now it is not sharing the screen. */}
+            on it. */}
         {pan && panScale ? (
-          <div>
-            <Panadapter
-              row={pan}
-              centerHz={panScale.centerHz}
-              spanHz={panScale.spanHz}
-              binHz={panScale.binHz}
-              floorDb={panScale.floorDb}
-              ceilingDb={panScale.ceilingDb}
-              dialHz={shownDialHz}
-              radioMode={status?.radioMode ?? null}
-              // The radio's real filter, so the shaded passband is the slice's actual
-              // width rather than the width its modulation conventionally implies.
-              filterLoHz={status?.receiver?.filterLo ?? null}
-              filterHiHz={status?.receiver?.filterHi ?? null}
-              spots={panSpots}
-              // Clicking a spot goes to the EXACT spotted frequency, unsnapped, and takes
-              // the modulation with it. Both differ from a click on bare spectrum, and
-              // deliberately: a spot is a stated frequency rather than a pointed-at one,
-              // so rounding it to the tuning step would move off the very signal being
-              // aimed at — and arriving on a POTA activator's SSB frequency still in a
-              // data mode is a receiver that hears nothing the operator wants.
-              onSpot={(s) => {
-                const modulation =
-                  modulationForFrequency(s.freqHz) ?? status?.radioMode ?? null;
-                void send(
-                  modulation
-                    ? { freqHz: s.freqHz, mode: modulation }
-                    : { freqHz: s.freqHz },
-                  "freq",
-                );
-              }}
-              height={260}
-              traceHeight={96}
-              onTune={(hz) => void send({ freqHz: hz }, "freq")}
-              // Zoom does not go through send(): that posts action "rig" and reloads the
-              // whole status. The span comes back on the next panadapter frame by
-              // itself, so there is nothing to reload.
-              onSpan={(hz) => {
-                void apiPost("/api/bridge/control", {
-                  action: "pan-span",
-                  spanHz: hz,
-                }).catch((err) =>
-                  setActionError(
-                    err instanceof ApiError ? err.message : "Zoom failed",
-                  ),
-                );
-              }}
-            />
-            <p className="text-[11px] text-fg-subtle mt-1 tnum">
-              {formatFreqMHz(panScale.centerHz - panScale.spanHz / 2)}&ndash;
-              {formatFreqMHz(panScale.centerHz + panScale.spanHz / 2)} MHz from{" "}
-              {panScale.radio} &middot; click the spectrum to tune
-            </p>
-          </div>
+          <Panadapter
+            row={pan}
+            centerHz={panScale.centerHz}
+            spanHz={panScale.spanHz}
+            binHz={panScale.binHz}
+            floorDb={panScale.floorDb}
+            ceilingDb={panScale.ceilingDb}
+            dialHz={shownDialHz}
+            radioMode={status?.radioMode ?? null}
+            // The radio's real filter, so the shaded passband is the slice's actual width.
+            filterLoHz={status?.receiver?.filterLo ?? null}
+            filterHiHz={status?.receiver?.filterHi ?? null}
+            spots={panSpots}
+            // A spot goes to the EXACT spotted frequency, unsnapped, and takes the
+            // modulation with it: rounding a stated frequency to the step moves off the
+            // very signal aimed at, and arriving on a POTA SSB frequency in a data mode is a
+            // receiver that hears nothing the operator wants.
+            onSpot={(s) => {
+              if (!canControl) return;
+              const modulation =
+                modulationForFrequency(s.freqHz) ?? status?.radioMode ?? null;
+              void send(
+                modulation ? { freqHz: s.freqHz, mode: modulation } : { freqHz: s.freqHz },
+                "freq",
+                "dial",
+              );
+            }}
+            height={260}
+            traceHeight={96}
+            onTune={canControl ? (hz) => void send({ freqHz: hz }, "freq", "dial") : undefined}
+            // Zoom does not go through send(): the span comes back on the next panadapter
+            // frame by itself, so there is nothing to reload.
+            onSpan={(hz) => {
+              void apiPost("/api/bridge/control", {
+                action: "pan-span",
+                spanHz: hz,
+              }).catch((err) =>
+                setActionError({
+                  area: "dial",
+                  text: err instanceof ApiError ? err.message : "Zoom failed",
+                }),
+              );
+            }}
+            caption={`${formatFreqMHz(panScale.centerHz - panScale.spanHz / 2)}–${formatFreqMHz(panScale.centerHz + panScale.spanHz / 2)} MHz · ${panScale.radio}`}
+            stale={panStale}
+          />
         ) : !caps.panadapter && audioSpec && audioScale ? (
-          // No RF scope on this source (the Icom today), so fall back to the AUDIO
-          // waterfall — the same receiver spectrum the Decodes page draws — rather than a
-          // bare "scope unavailable" note. It is the passband the radio hears, not tens of
-          // kHz of band, but it is a live picture and it is what this page used to show.
-          <div>
+          // No RF scope on this source (the Icom today): the AUDIO waterfall, the receiver
+          // spectrum the Decodes page draws, rather than a bare "scope unavailable" note.
+          <div className="flex flex-col gap-1.5">
+            <div className="flex items-center gap-1.5 text-xs text-fg-subtle">
+              <span>Receiver audio — {caps.label} has no RF panadapter here</span>
+              <HelpTip label="About this display">
+                {caps.panadapterNote ?? "This source sends no RF spectrum."} This is the
+                passband the radio is demodulating, not tens of kHz of band; the Decodes
+                page marks decode offsets on the same spectrum.
+              </HelpTip>
+            </div>
             <Waterfall
               row={audioSpec}
               binHz={audioScale.binHz}
               maxHz={audioScale.maxHz}
-              periodMs={status?.voice?.active ? null : audioScale.periodMs}
-              rowIntervalMs={status?.voice?.active ? 50 : 250}
+              periodMs={voiceOn ? null : audioScale.periodMs}
+              rowIntervalMs={voiceOn ? 50 : 250}
               markers={[]}
               height={260}
             />
-            <p className="text-[11px] text-fg-subtle mt-1 tnum">
-              Audio waterfall — {caps.label}&apos;s receiver passband (
-              {Math.round(audioScale.maxHz)} Hz). No RF panadapter on this source; the
-              Decodes page marks decode offsets on the same spectrum.
-            </p>
           </div>
         ) : (
-          <p className="text-sm text-fg-subtle px-3 py-6 bg-bg-raised border border-line rounded-sm">
-            {caps.panadapter
-              ? "Waiting for the radio's panadapter. If nothing appears, turn on “RF panadapter” in Settings → FlexRadio."
-              : status?.connected
-                ? "Waiting for receiver audio…"
-                : (caps.panadapterNote ??
-                  "No RF spectrum is available from this source.")}
-          </p>
+          <div className="rounded-md border border-line bg-bg">
+            <EmptyState
+              className="py-10"
+              title={
+                !wsConnected
+                  ? "Connecting to the live stream…"
+                  : caps.panadapter
+                    ? "Waiting for the radio's panadapter"
+                    : status?.connected
+                      ? "Waiting for receiver audio"
+                      : "No spectrum"
+              }
+            >
+              {!wsConnected
+                ? "The spectrum comes from the radio service over a WebSocket, which is not connected yet."
+                : caps.panadapter
+                  ? "If nothing appears, turn on “RF panadapter” in Settings → FlexRadio."
+                  : status?.connected
+                    ? null
+                    : (caps.panadapterNote ?? "No RF spectrum is available from this source.")}
+            </EmptyState>
+          </div>
         )}
 
-        {/* THE CONTROL DECK. What used to be four cards, in one strip of groups. */}
-        <div className="grid gap-x-6 gap-y-4 px-3 py-3 bg-bg-raised border border-line rounded-sm md:grid-cols-2 xl:grid-cols-4">
-          {/* Tune, and the bands. Two columns wide, because eleven band buttons on one
-              line beats two rows of six. */}
-          <div className="md:col-span-2">
-            <Legend>Tune</Legend>
-            <form
-              className="flex gap-2 mb-2"
-              onSubmit={(e) => {
-                e.preventDefault();
-                void tuneTyped();
-              }}
-            >
-              <Input
-                id="freq"
-                value={freqInput}
-                onChange={(e) => setFreqInput(e.target.value)}
-                placeholder="14.074 or 14074000"
-                autoComplete="off"
-                className="flex-1"
+        {controllable ? (
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+            <div className="md:col-span-2 xl:col-span-1">
+              <TuneCard
+                caps={caps}
+                grid={status?.deGrid ?? null}
+                band={status?.band ?? null}
+                radioMode={status?.radioMode ?? null}
+                canControl={canControl}
+                busy={busy}
+                send={send}
+                error={errorIn("tune")}
               />
-              <Button type="submit" variant="primary" disabled={busy !== null}>
-                {busy === "freq" ? "…" : "Go"}
-              </Button>
-            </form>
-
-            {/* ONE band row. There used to be two — "FT8 calling frequencies" and a
-                separate "Bands" card — with identical-looking buttons, different
-                behaviour, and the sentence explaining the difference at the bottom of the
-                second one. The behaviour is a choice now, not a second row. */}
-            <div className="flex items-center gap-2 mb-1.5">
-              <div className="flex rounded-sm border border-line overflow-hidden">
-                {(
-                  [
-                    ["calling", "FT8 calling"],
-                    ["centre", "Band centre"],
-                  ] as const
-                ).map(([value, label]) => (
-                  <button
-                    key={value}
-                    type="button"
-                    onClick={() => setBandTarget(value)}
-                    title={
-                      value === "calling"
-                        ? "Band buttons go to the FT8 calling frequency. Only bands with one are listed."
-                        : "Band buttons go to the middle of the band."
-                    }
-                    className={cn(
-                      "px-2 py-0.5 text-[11px] transition-colors",
-                      bandTarget === value
-                        ? "bg-accent/15 text-accent-bright"
-                        : "text-fg-muted hover:text-fg",
-                    )}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
-              <span className="text-[10px] text-fg-subtle">{caps.label}</span>
             </div>
-            <div className="flex flex-wrap gap-1">
-              {bandButtons.map((b) => (
-                <button
-                  key={b.band}
-                  type="button"
-                  disabled={busy !== null}
-                  onClick={() => void send({ freqHz: b.hz }, `band-${b.band}`)}
-                  title={`${b.band} — ${formatFreqMHz(b.hz)} MHz`}
-                  className={cn(
-                    "px-2 py-1 text-xs rounded-sm border tnum transition-colors",
-                    status?.band === b.band
-                      ? "border-accent bg-accent/15 text-accent-bright"
-                      : "border-line text-fg-muted hover:text-fg hover:border-fg-muted",
-                  )}
-                >
-                  {b.band}
-                </button>
-              ))}
-            </div>
+            <ReceiverCard
+              caps={caps}
+              receiver={status?.receiver}
+              radioMode={status?.radioMode ?? null}
+              canControl={canControl}
+              busy={busy}
+              send={send}
+              error={errorIn("receiver")}
+            />
+            <TransmitterCard
+              connected={status?.connected === true}
+              rfPower={status?.rfPower ?? null}
+              telemetry={telemetry}
+              transmitting={status?.transmitting === true}
+              voiceOn={voiceOn}
+              allowTransmit={status?.allowTransmit}
+              transmitOffReason={status?.transmitOffReason ?? null}
+              txWarnings={status?.txWarnings ?? []}
+              canControl={canControl}
+              busy={busy}
+              onVoice={(active) => void setVoice(active)}
+              onAtu={() => void tuneAtu()}
+              onPower={async (percent) =>
+                (await run({ action: "power", percent }, "power", "transmitter")) !== undefined
+              }
+              atuNote={atuNote}
+              error={errorIn("transmitter")}
+            />
           </div>
-
-          {/* Modulation and AGC. */}
-          <div className="flex flex-col gap-3">
-            <div>
-              <Legend>Modulation</Legend>
-              <Select
-                id="mode"
-                /* radioMode, not mode: the latter holds the DIGITAL mode on the Icom
-                   path, so this picker used to display "FT8" — a value in no list of
-                   modulations, which made it look broken and made every selection spring
-                   back. */
-                value={status?.radioMode ?? ""}
-                disabled={busy !== null}
-                onChange={(e) => void send({ mode: e.target.value }, "mode")}
-              >
-                <option value="" disabled>
-                  {status?.radioMode ?? "unknown"}
-                </option>
-                {MODULATIONS.map((m) => (
-                  <option key={m} value={m}>
-                    {m}
-                  </option>
-                ))}
-              </Select>
-            </div>
-            {/* The antenna port, on a radio that has more than one.
-                
-                Drawn from the list THE RADIO reported and only when there is a choice in
-                it, which is the rule the rest of this page follows: a FLEX-6400 answers
-                ANT1, ANT2, RX_A, XVTA, an IC-7300 has one socket and gets no picker, and
-                nothing here keeps a table of models. Two lists because the radio keeps
-                two — RX_A is a receive-only BNC and appears in one and not the other, so
-                a transmit picker that offered it would be offering a port that cannot
-                transmit. */}
-            {antennas && (
-              <div>
-                <Legend>
-                  Antenna
-                  <HelpTip label="About the antenna ports">
-                    The sockets this radio says it has, and the one it says it is using.
-                    DigiShack used to write ANT1 into every slice it created and never read
-                    the antenna back, so a station with the wire on ANT2 got a bridge
-                    listening to an empty socket. Changing the receive port moves the RF
-                    panadapter with it — a panadapter carries its own antenna, and one left
-                    behind draws a spectrum of the wrong aerial with correct axis labels.
-                  </HelpTip>
-                </Legend>
-                <div className="flex gap-2">
-                  {(
-                    [
-                      ["RX", "rxAnt", antennas.rx, status?.receiver?.rxAnt ?? null],
-                      ["TX", "txAnt", antennas.tx, status?.receiver?.txAnt ?? null],
-                    ] as const
-                  )
-                    // A list of one is not a choice. On a radio where only the receive
-                    // list is longer — a receive-only BNC and one transmit socket — this
-                    // draws the RX picker alone rather than a TX picker with nothing in it.
-                    .filter(([, , list]) => list.length > 1)
-                    .map(([label, field, list, current]) => (
-                      <label key={field} className="flex-1 min-w-0">
-                        <span className="sr-only">{label} antenna</span>
-                        <Select
-                          id={field}
-                          /* The radio's own answer, like the AGC picker beside it —
-                             never the last click. The antenna can be changed in
-                             SmartSDR or on the radio's own screen. */
-                          value={current ?? ""}
-                          disabled={busy !== null}
-                          onChange={(e) => void send({ [field]: e.target.value }, field)}
-                          title={`${label} antenna${current ? ` — on ${current}` : ""}`}
-                        >
-                          <option value="" disabled>
-                            {current ? `${label} ${current}` : `${label} not reported yet`}
-                          </option>
-                          {list.map((a) => (
-                            <option key={a} value={a}>
-                              {label} {a}
-                            </option>
-                          ))}
-                        </Select>
-                      </label>
-                    ))}
-                </div>
-              </div>
-            )}
-            <div>
-              <Legend>
-                AGC
-                <HelpTip label="About AGC">
-                  As the radio reports it. Blank means it has not said yet, which is not
-                  the same as off - the two look identical on a panel that guesses.
-                </HelpTip>
-              </Legend>
-              <Select
-                id="agc"
-                /* The radio's own answer, polled — not `defaultValue=""`, which showed
-                   "select" forever because nothing was read back and the control could
-                   only remember what had been clicked. */
-                value={status?.receiver?.agc ?? ""}
-                disabled={busy !== null || caps.agc.length === 0}
-                onChange={(e) => void send({ agc: e.target.value }, "agc")}
-              >
-                <option value="" disabled>
-                  {/* Three states, named. "reading…" forever is what an unanswered poll
-                      looked like, and it reads as a broken page rather than as a radio
-                      that has not said. */}
-                  {status?.receiver?.agc ??
-                    (caps.agc.length === 0
-                      ? "not available"
-                      : "not reported yet")}
-                </option>
-                {/* Per radio: these Icoms have no AGC-OFF in this command set, and
-                    offering it meant offering a setting certain to be refused. */}
-                {caps.agc.map((a) => (
-                  <option key={a} value={a}>
-                    {a}
-                  </option>
-                ))}
-              </Select>
-            </div>
-          </div>
-
-          {/* Filters and noise. */}
-          <div className="flex flex-col gap-3">
-            <div>
-              <Legend>
-                Filter
-                <HelpTip label="About the filter buttons">
-                  These light from what the RADIO reports, not from your last click, so a
-                  change made on the front panel or by another client shows here. The
-                  edges are signed and asymmetric: on lower sideband the receiver listens
-                  BELOW the dial, so the same preset reads negative.
-                </HelpTip>
-              </Legend>
-              {/* Only when the radio actually takes a passband in Hz. The Icom selects
-                  FIL1/2/3, whose widths live in its own menu, so the endpoint refuses
-                  these BY NAME — four buttons that could only ever produce an error. A
-                  control that cannot work should not be drawn. */}
-              {caps.filterEdgesHz ? (
-                <>
-                  <div className="flex flex-wrap gap-1">
-                    {[
-                      {
-                        label: "DIG",
-                        lo: 0,
-                        hi: 3000,
-                        hint: "Digital 0–3000 Hz",
-                      },
-                      {
-                        label: "SSB",
-                        lo: 100,
-                        hi: 2800,
-                        hint: "SSB 100–2800 Hz",
-                      },
-                      {
-                        label: "NAR",
-                        lo: 300,
-                        hi: 2400,
-                        hint: "Narrow 300–2400 Hz",
-                      },
-                      { label: "CW", lo: -250, hi: 250, hint: "CW 500 Hz" },
-                    ].map((f) => {
-                      // Against what the RADIO reports, not against the last button
-                      // pressed. The distinction is the whole point: the filter can be
-                      // changed on the radio's own front panel, by a mode change, or by
-                      // another client, and a row of buttons tracking our own clicks
-                      // would confidently show the wrong one in all three cases.
-                      const active = filterMatches(
-                        status?.receiver,
-                        status?.radioMode,
-                        f.lo,
-                        f.hi,
-                      );
-                      // Signed for the modulation in force: these presets are written
-                      // the way filters are spoken about, which is the USB convention,
-                      // and on LSB the receiver listens below the dial. See
-                      // filterEdgesFor — sending them unsigned pointed the filter at the
-                      // wrong sideband entirely.
-                      const edges = filterEdgesFor(status?.radioMode, f.lo, f.hi);
-                      return (
-                        <button
-                          key={f.label}
-                          type="button"
-                          disabled={busy !== null}
-                          onClick={() =>
-                            void send(
-                              { filterLo: edges.lo, filterHi: edges.hi },
-                              "filt",
-                            )
-                          }
-                          title={
-                            active
-                              ? `${f.hint} — in force now`
-                              : f.hint
-                          }
-                          className={cn(
-                            "px-2 py-1 text-xs rounded-sm border tnum",
-                            active
-                              ? "border-accent text-accent-bright"
-                              : "border-line text-fg-muted hover:text-fg hover:border-fg-muted",
-                          )}
-                        >
-                          {f.label}
-                        </button>
-                      );
-                    })}
-                  </div>
-                  {/* The measured passband, always. A preset that matches lights up
-                      above, but a radio sitting on any other width — set on its own
-                      front panel, or by a mode change — would otherwise light nothing
-                      and look identical to a radio that had not been read yet. */}
-                  <p className="mt-1 text-[11px] text-fg-subtle tnum">
-                    {status?.receiver?.filterLo != null &&
-                    status?.receiver?.filterHi != null ? (
-                      <>
-                        Radio: {status.receiver.filterLo}–{status.receiver.filterHi} Hz
-                        <span className="text-fg-muted">
-                          {" "}
-                          ({Math.abs(
-                            status.receiver.filterHi - status.receiver.filterLo,
-                          )}{" "}
-                          Hz wide)
-                        </span>
-                      </>
-                    ) : (
-                      "The radio has not reported its filter yet"
-                    )}
-                  </p>
-                </>
-              ) : (
-                <p className="text-xs text-fg-subtle">{caps.filterNote}</p>
-              )}
-            </div>
-
-            {/* One control each, showing the radio's state, rather than an on and an off
-                button that looked identical whatever the radio was doing — four buttons
-                that could not show which was in force, because nothing read it back. */}
-            <div>
-              <Legend>
-                Noise
-                <HelpTip label="About the noise controls">
-                  A FlexRadio never broadcasts a change to its noise blanker, so this is
-                  the one place the panel keeps its own record of a command the radio
-                  accepted. It is re-read from the radio whenever the bridge reconnects.
-                </HelpTip>
-              </Legend>
-              <div className="flex gap-1">
-                {(
-                  [
-                    ["NB", "nb", status?.receiver?.nb ?? null],
-                    ["NR", "nr", status?.receiver?.nr ?? null],
-                  ] as const
-                ).map(([label, key, on]) => (
-                  <button
-                    key={key}
-                    type="button"
-                    disabled={busy !== null}
-                    onClick={() => void send({ [key]: !on }, key)}
-                    className={cn(
-                      "px-2 py-1 text-xs rounded-sm border tnum",
-                      on === true
-                        ? "border-accent text-accent-bright"
-                        : "border-line text-fg-muted hover:text-fg hover:border-fg-muted",
-                    )}
-                    title={
-                      on === null
-                        ? `The radio has not reported ${label} yet — which is a different thing from it being off`
-                        : on
-                          ? `${label} is on — click to turn it off`
-                          : `${label} is off — click to turn it on`
-                    }
-                  >
-                    {label} {on === null ? "?" : on ? "on" : "off"}
-                  </button>
-                ))}
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Which radio this page is driving, and who it says we are. Last, because it
-            changes least often. */}
-        <div className="flex flex-wrap items-center gap-x-6 gap-y-2 px-3 py-2 bg-bg-raised border border-line rounded-sm">
-          <span className="text-xs text-fg-muted">
-            <span className="text-fg-subtle">Station</span>{" "}
-            <span className="text-fg tnum">{status?.deCall ?? "—"}</span>
-            {status?.deGrid ? (
-              <span className="text-fg-muted"> · {status.deGrid}</span>
-            ) : null}
-          </span>
-          <div className="ml-auto">
-            <SourcePicker source={status?.source ?? null} />
-          </div>
-        </div>
+        ) : (
+          status && (
+            <Card>
+              <EmptyState className="py-8" title="No rig control on this source">
+                {caps.filterNote ??
+                  "DigiShack does not control this radio."}{" "}
+                Choose a radio with the Radio picker above to tune, filter and transmit from
+                here.
+              </EmptyState>
+            </Card>
+          )
+        )}
       </div>
     </>
-  );
-}
-
-/** One inline meter. Renders nothing at all when the radio has not reported the value. */
-function Meter({
-  label,
-  value,
-  tone,
-}: {
-  label: string;
-  value: string | null;
-  tone?: string;
-}) {
-  if (value === null) return null;
-  return (
-    <span className="flex items-baseline gap-1">
-      <span className="text-[9px] uppercase tracking-wide text-fg-subtle">
-        {label}
-      </span>
-      <span className={cn("text-xs tnum", tone ?? "text-fg")}>{value}</span>
-    </span>
-  );
-}
-
-/** The small-caps label above a group in the control deck. */
-function Legend({ children }: { children: React.ReactNode }) {
-  // flex + gap so a HelpTip sits beside the label rather than inheriting the uppercase
-  // tracking, which is unreadable for the sentence inside the tip.
-  return (
-    <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wide text-fg-muted mb-1.5">
-      {children}
-    </div>
   );
 }
 
@@ -1378,11 +663,8 @@ export const getServerSideProps = withPageAuth<Props>({
 });
 
 /**
- * Spectrum bins arrive base64-encoded, one byte per bin.
- *
- * Base64 rather than an array of numbers because a 512-bin row every 250 ms is 4 kB/s of
- * JSON digits against 700 bytes of text, and this runs over a WebSocket a browser holds
- * open all day.
+ * Spectrum bins arrive base64-encoded, one byte per bin: a 512-bin row every 250 ms is
+ * 4 kB/s of JSON digits against 700 bytes of text, over a socket held open all day.
  */
 function decodeSpectrumBins(b64: string): Uint8Array {
   const raw = atob(b64);

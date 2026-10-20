@@ -27,6 +27,16 @@ const CAPACITY = 48000 * 4;
 const TARGET_SECONDS = 0.15;
 const MAX_SECONDS = 0.6;
 
+/**
+ * How often the diagnostics go to the page, in seconds of audio clock.
+ *
+ * On a cadence of their own, whatever playback is doing. They used to be posted only from
+ * the end of a block that PLAYED, so the pre-roll's early return skipped them: a stream that
+ * stalled kept showing its last buffered-ms reading, as if audio were still queued, for as
+ * long as the silence lasted.
+ */
+const REPORT_SECONDS = 0.5;
+
 class PcmPlayer extends AudioWorkletProcessor {
   constructor() {
     super();
@@ -35,11 +45,30 @@ class PcmPlayer extends AudioWorkletProcessor {
     this.write = 0;
     this.filled = 0;
     this.started = false;
+    /** True once this stream has played at all: the first pre-roll is not a dropout. */
+    this.played = false;
+    /**
+     * Times playback RAN DRY — transitions into starvation, not missing samples. It used to
+     * be incremented per silent sample, so one empty 128-frame block read as 128 underruns.
+     */
     this.underruns = 0;
+    /** Silent samples those dropouts cost, refill included: the size, where underruns is the count. */
+    this.missing = 0;
     this.dropped = 0;
+    this.nextReport = 0;
 
     this.port.onmessage = (event) => {
       const chunk = event.data;
+      // A new stream — the bridge switched radios. Its queue belongs to the old one, and
+      // the pre-roll that follows is a deliberate restart, not a dropout.
+      if (chunk && chunk.type === "flush") {
+        this.read = 0;
+        this.write = 0;
+        this.filled = 0;
+        this.started = false;
+        this.played = false;
+        return;
+      }
       if (!(chunk instanceof Float32Array)) return;
 
       // Overflow means the network delivered faster than the hardware consumed, which happens
@@ -72,9 +101,13 @@ class PcmPlayer extends AudioWorkletProcessor {
     if (!this.started) {
       if (this.filled < target) {
         out.fill(0);
+        // Refilling after a dropout is still silence where audio should be.
+        if (this.played) this.missing += out.length;
+        this.report();
         return true;
       }
       this.started = true;
+      this.played = true;
     }
 
     // Too far behind: skip forward rather than play late for ever. Done here rather than by
@@ -90,10 +123,15 @@ class PcmPlayer extends AudioWorkletProcessor {
     for (let i = 0; i < out.length; i++) {
       if (this.filled === 0) {
         out[i] = 0;
-        this.underruns++;
-        // Re-arm the pre-roll: having run dry once, playing the next single packet
-        // immediately would run dry again on the next frame.
-        this.started = false;
+        this.missing++;
+        // ONE underrun per time the ring runs dry, at the transition. The rest of this block
+        // and the refill that follows are the same event.
+        if (this.started) {
+          this.underruns++;
+          // Re-arm the pre-roll: having run dry once, playing the next single packet
+          // immediately would run dry again on the next frame.
+          this.started = false;
+        }
         continue;
       }
       out[i] = this.buf[this.read];
@@ -101,17 +139,25 @@ class PcmPlayer extends AudioWorkletProcessor {
       this.filled--;
     }
 
-    // Cheap enough for the audio thread and the only window into whether this is working:
-    // "no sound" and "sound arriving late" and "buffer starving" look identical otherwise.
-    if (currentFrame % (sampleRate | 0) < out.length) {
-      this.port.postMessage({
-        bufferedMs: Math.round((this.filled / sampleRate) * 1000),
-        underruns: this.underruns,
-        dropped: this.dropped,
-      });
-    }
-
+    this.report();
     return true;
+  }
+
+  /**
+   * Cheap enough for the audio thread and the only window into whether this is working:
+   * "no sound" and "sound arriving late" and "buffer starving" look identical otherwise.
+   * Called from every block, played or not; it posts once per REPORT_SECONDS.
+   */
+  report() {
+    if (currentFrame < this.nextReport) return;
+    this.nextReport = currentFrame + Math.round(REPORT_SECONDS * sampleRate);
+    this.port.postMessage({
+      bufferedMs: Math.round((this.filled / sampleRate) * 1000),
+      underruns: this.underruns,
+      starvedMs: Math.round((this.missing / sampleRate) * 1000),
+      dropped: this.dropped,
+      waiting: !this.started,
+    });
   }
 }
 

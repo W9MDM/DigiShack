@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 
+import { Nudge, NativeSelect, ToggleButton } from "@/components/decodes/controls";
+import { Badge, Button, Input } from "@/components/ui/primitives";
 import { cn } from "@/lib/utils";
 
 /** The bridge's once-a-second heartbeat for a stream mode, with what its decoder measures. */
@@ -226,6 +228,8 @@ export function StreamPanel({
 
   return (
     <div className="flex flex-col gap-2">
+      {/* What the decoder is set to, then how to move it: two lines rather than one that
+          wrapped into four. */}
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-fg-muted">
         {isCw ? (
           cw ? (
@@ -301,209 +305,148 @@ export function StreamPanel({
         ) : (
           <span>Waiting for the bridge to report the tones…</span>
         )}
-        {canTune && isJtty && (
-          <span className="flex items-center gap-1">
-            <button
-              type="button"
-              className="px-2 py-0.5 border border-line rounded-sm hover:text-fg tnum"
-              onClick={() => jtty && onJttyTune?.(jtty.txHz - 10)}
-              disabled={!jtty}
-              title="Transmit 10 Hz lower"
-            >
-              −10
-            </button>
-            <button
-              type="button"
-              className="px-2 py-0.5 border border-line rounded-sm hover:text-fg tnum"
-              onClick={() => jtty && onJttyTune?.(jtty.txHz + 10)}
-              disabled={!jtty}
-              title="Transmit 10 Hz higher"
-            >
-              +10
-            </button>
-            <span className="text-fg-subtle">· click the waterfall or a station's tag to transmit there</span>
-          </span>
-        )}
-        {canTune && isOlivia && (
-          <span className="flex items-center gap-1">
-            <button
-              type="button"
-              className="px-2 py-0.5 border border-line rounded-sm hover:text-fg tnum"
-              onClick={() => olivia && onOliviaTune(olivia.centreHz - 10)}
-              disabled={!olivia}
-              title="Move the tone set 10 Hz down"
-            >
-              −10
-            </button>
-            <button
-              type="button"
-              className="px-2 py-0.5 border border-line rounded-sm hover:text-fg tnum"
-              onClick={() => olivia && onOliviaTune(olivia.centreHz + 10)}
-              disabled={!olivia}
-              title="Move the tone set 10 Hz up"
-            >
-              +10
-            </button>
-            <select
-              className="bg-bg-raised border border-line rounded-sm px-1 py-0.5 text-xs"
-              value={olivia ? `${olivia.bandwidth}/${olivia.tones}` : "500/16"}
-              onChange={(e) => {
-                const [bw, t] = e.target.value.split("/").map(Number);
-                if (bw && t) onOliviaTune(undefined, { tones: t, bandwidth: bw });
-              }}
-              disabled={!olivia}
-              aria-label="Olivia size"
-            >
-              {OLIVIA_SIZES.map((s) => (
-                <option key={`${s.bandwidth}/${s.tones}`} value={`${s.bandwidth}/${s.tones}`}>
-                  {s.bandwidth}/{s.tones}
-                </option>
-              ))}
-            </select>
-            <select
-              className="bg-bg-raised border border-line rounded-sm px-1 py-0.5 text-xs"
-              value={olivia?.code ?? "olivia"}
-              onChange={(e) => onOliviaTune(undefined, undefined, e.target.value === "contestia" ? "contestia" : "olivia")}
-              disabled={!olivia}
-              aria-label="Olivia or Contestia"
-            >
-              <option value="olivia">Olivia</option>
-              <option value="contestia">Contestia</option>
-            </select>
-            <span className="text-fg-subtle">· click the waterfall to set the centre</span>
-          </span>
-        )}
-        {canTune && isPsk && (
-          <span className="flex items-center gap-1">
-            <button
-              type="button"
-              className="px-2 py-0.5 border border-line rounded-sm hover:text-fg tnum"
-              onClick={() => psk && onPskTune(psk.centreHz - 10)}
-              disabled={!psk}
-              title="Move the carrier 10 Hz down"
-            >
-              −10
-            </button>
-            <button
-              type="button"
-              className="px-2 py-0.5 border border-line rounded-sm hover:text-fg tnum"
-              onClick={() => psk && onPskTune(psk.centreHz + 10)}
-              disabled={!psk}
-              title="Move the carrier 10 Hz up"
-            >
-              +10
-            </button>
-            <select
-              className="bg-bg-raised border border-line rounded-sm px-1 py-0.5 text-xs"
-              value={psk?.speed ?? 31}
-              onChange={(e) => onPskTune(undefined, Number(e.target.value) as 31 | 63 | 125)}
-              disabled={!psk}
-              aria-label="PSK speed"
-            >
-              <option value={31}>BPSK31</option>
-              <option value={63}>BPSK63</option>
-              <option value={125}>BPSK125</option>
-            </select>
-            <span className="text-fg-subtle">· click the waterfall to set the carrier</span>
-          </span>
-        )}
-        {canTune && isCw && (
-          <span className="flex items-center gap-1">
-            <button
-              type="button"
-              className="px-2 py-0.5 border border-line rounded-sm hover:text-fg tnum"
-              onClick={() => cw && onCwWpm(cw.wpm - 2)}
-              disabled={!cw || cw.wpm <= 5}
-              title="Send 2 wpm slower"
-            >
-              −2
-            </button>
-            <button
-              type="button"
-              className="px-2 py-0.5 border border-line rounded-sm hover:text-fg tnum"
-              onClick={() => cw && onCwWpm(cw.wpm + 2)}
-              disabled={!cw || cw.wpm >= 60}
-              title="Send 2 wpm faster"
-            >
-              +2
-            </button>
-          </span>
-        )}
-        {canTune && !isCw && !isPsk && !isOlivia && !isJtty && (
-          <span className="flex items-center gap-1">
-            <button
-              type="button"
-              className="px-2 py-0.5 border border-line rounded-sm hover:text-fg tnum"
-              onClick={() => rtty && onTune(rtty.centreHz - 10)}
-              disabled={!rtty}
-              title="Move the tone pair 10 Hz down"
-            >
-              −10
-            </button>
-            <button
-              type="button"
-              className="px-2 py-0.5 border border-line rounded-sm hover:text-fg tnum"
-              onClick={() => rtty && onTune(rtty.centreHz + 10)}
-              disabled={!rtty}
-              title="Move the tone pair 10 Hz up"
-            >
-              +10
-            </button>
-            <select
-              className="bg-bg-raised border border-line rounded-sm px-1 py-0.5 text-xs"
-              value={rtty?.shiftHz ?? 170}
-              onChange={(e) => onTune(undefined, Number(e.target.value))}
-              disabled={!rtty}
-              aria-label="RTTY shift"
-            >
-              {SHIFTS.map((s) => (
-                <option key={s} value={s}>
-                  shift {s}
-                </option>
-              ))}
-            </select>
-            <select
-              className="bg-bg-raised border border-line rounded-sm px-1 py-0.5 text-xs"
-              value={rtty?.baud ?? 45.45}
-              onChange={(e) => onTune(undefined, undefined, { baud: Number(e.target.value) })}
-              disabled={!rtty}
-              aria-label="RTTY speed"
-            >
-              {BAUDS.map((b) => (
-                <option key={b} value={b}>
-                  {b} bd
-                </option>
-              ))}
-            </select>
-            <button
-              type="button"
-              className={cn(
-                "px-2 py-0.5 border rounded-sm tnum",
-                rtty?.reverse ? "border-accent text-accent-bright" : "border-line hover:text-fg",
-              )}
-              onClick={() => rtty && onTune(undefined, undefined, { reverse: !rtty.reverse })}
-              disabled={!rtty}
-              aria-pressed={rtty?.reverse ?? false}
-              title="Swap mark and space, for a station sending the other way round"
-            >
-              Rev
-            </button>
-            <span className="text-fg-subtle">· click the waterfall to set the centre</span>
-          </span>
-        )}
-        <button type="button" className="ml-auto hover:text-fg" onClick={onClear}>
+        <Button size="sm" variant="ghost" className="ml-auto" onClick={onClear} title="Clear the received text">
           Clear
-        </button>
+        </Button>
       </div>
+
+      {canTune && (
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
+          {isJtty ? (
+            <>
+              <Nudge
+                step={10}
+                disabled={!jtty}
+                onStep={(d) => jtty && onJttyTune?.(jtty.txHz + d)}
+                downTitle="Transmit 10 Hz lower"
+                upTitle="Transmit 10 Hz higher"
+              />
+              <span className="text-fg-subtle">click the waterfall or a station's tag to transmit there</span>
+            </>
+          ) : isOlivia ? (
+            <>
+              <Nudge
+                step={10}
+                disabled={!olivia}
+                onStep={(d) => olivia && onOliviaTune(olivia.centreHz + d)}
+                downTitle="Move the tone set 10 Hz down"
+                upTitle="Move the tone set 10 Hz up"
+              />
+              <NativeSelect
+                value={olivia ? `${olivia.bandwidth}/${olivia.tones}` : "500/16"}
+                onChange={(e) => {
+                  const [bw, t] = e.target.value.split("/").map(Number);
+                  if (bw && t) onOliviaTune(undefined, { tones: t, bandwidth: bw });
+                }}
+                disabled={!olivia}
+                aria-label="Olivia size"
+              >
+                {OLIVIA_SIZES.map((s) => (
+                  <option key={`${s.bandwidth}/${s.tones}`} value={`${s.bandwidth}/${s.tones}`}>
+                    {s.bandwidth}/{s.tones}
+                  </option>
+                ))}
+              </NativeSelect>
+              <NativeSelect
+                value={olivia?.code ?? "olivia"}
+                onChange={(e) => onOliviaTune(undefined, undefined, e.target.value === "contestia" ? "contestia" : "olivia")}
+                disabled={!olivia}
+                aria-label="Olivia or Contestia"
+              >
+                <option value="olivia">Olivia</option>
+                <option value="contestia">Contestia</option>
+              </NativeSelect>
+              <span className="text-fg-subtle">or click the waterfall to set the centre</span>
+            </>
+          ) : isPsk ? (
+            <>
+              <Nudge
+                step={10}
+                disabled={!psk}
+                onStep={(d) => psk && onPskTune(psk.centreHz + d)}
+                downTitle="Move the carrier 10 Hz down"
+                upTitle="Move the carrier 10 Hz up"
+              />
+              <NativeSelect
+                value={psk?.speed ?? 31}
+                onChange={(e) => onPskTune(undefined, Number(e.target.value) as 31 | 63 | 125)}
+                disabled={!psk}
+                aria-label="PSK speed"
+              >
+                <option value={31}>BPSK31</option>
+                <option value={63}>BPSK63</option>
+                <option value={125}>BPSK125</option>
+              </NativeSelect>
+              <span className="text-fg-subtle">or click the waterfall to set the carrier</span>
+            </>
+          ) : isCw ? (
+            <>
+              <span className="text-fg-muted">Speed</span>
+              <Nudge
+                step={2}
+                disabled={!cw}
+                downDisabled={(cw?.wpm ?? 0) <= 5}
+                upDisabled={(cw?.wpm ?? 0) >= 60}
+                onStep={(d) => cw && onCwWpm(cw.wpm + d)}
+                downTitle="Send 2 wpm slower"
+                upTitle="Send 2 wpm faster"
+              />
+            </>
+          ) : (
+            <>
+              <Nudge
+                step={10}
+                disabled={!rtty}
+                onStep={(d) => rtty && onTune(rtty.centreHz + d)}
+                downTitle="Move the tone pair 10 Hz down"
+                upTitle="Move the tone pair 10 Hz up"
+              />
+              <NativeSelect
+                value={rtty?.shiftHz ?? 170}
+                onChange={(e) => onTune(undefined, Number(e.target.value))}
+                disabled={!rtty}
+                aria-label="RTTY shift"
+              >
+                {SHIFTS.map((s) => (
+                  <option key={s} value={s}>
+                    shift {s}
+                  </option>
+                ))}
+              </NativeSelect>
+              <NativeSelect
+                value={rtty?.baud ?? 45.45}
+                onChange={(e) => onTune(undefined, undefined, { baud: Number(e.target.value) })}
+                disabled={!rtty}
+                aria-label="RTTY speed"
+              >
+                {BAUDS.map((b) => (
+                  <option key={b} value={b}>
+                    {b} bd
+                  </option>
+                ))}
+              </NativeSelect>
+              <ToggleButton
+                pressed={rtty?.reverse ?? false}
+                onClick={() => rtty && onTune(undefined, undefined, { reverse: !rtty.reverse })}
+                disabled={!rtty}
+                title="Swap mark and space, for a station sending the other way round"
+              >
+                Rev
+              </ToggleButton>
+              <span className="text-fg-subtle">or click the waterfall to set the centre</span>
+            </>
+          )}
+        </div>
+      )}
 
       <div className="grid grid-cols-[3rem_1fr_7rem] items-center gap-x-2 text-xs tnum">
         <span className="text-fg-muted">{isCw ? "peak" : isPsk ? "quality" : isOlivia || isJtty ? "S/N" : "mark"}</span>
-        <div className="h-1.5 bg-bg-raised rounded-sm overflow-hidden">
+        <div className="h-1.5 bg-surface-2 rounded-sm overflow-hidden">
           <div className={cn("h-full", idle ? "bg-accent" : "bg-ok/70")} style={{ width: `${barA}%` }} />
         </div>
         <span className="text-fg-subtle text-right">{stats ? ("chars" in stats ? `${stats.chars} chars` : `${stats.frames} frames`) : ""}</span>
         <span className="text-fg-muted">{isCw ? "floor" : isPsk ? "level" : isOlivia ? "sync" : isJtty ? "copy" : "space"}</span>
-        <div className="h-1.5 bg-bg-raised rounded-sm overflow-hidden">
+        <div className="h-1.5 bg-surface-2 rounded-sm overflow-hidden">
           <div className="h-full bg-ok/70" style={{ width: `${barB}%` }} />
         </div>
         <span
@@ -540,9 +483,8 @@ export function StreamPanel({
             This signal looks like {rttyStats.suggest.baud} baud
             {rttyStats.suggest.swap ? (rtty.reverse ? ", not reversed" : ", reversed") : ""}, by its timing ({rttyStats.suggest.runs} tone runs).
           </span>
-          <button
-            type="button"
-            className="px-2 py-0.5 border border-accent text-accent-bright rounded-sm hover:bg-accent hover:text-bg"
+          <Button
+            size="sm"
             onClick={() =>
               onTune(undefined, undefined, {
                 baud: rttyStats.suggest!.baud,
@@ -551,7 +493,7 @@ export function StreamPanel({
             }
           >
             Apply
-          </button>
+          </Button>
         </p>
       )}
       {error && <p className="text-xs text-danger">{error}</p>}
@@ -567,8 +509,8 @@ export function StreamPanel({
             setDraft("");
           }}
         >
-          <input
-            className="flex-1 min-w-[12rem] bg-bg-raised border border-line rounded-sm px-2 py-1 text-sm font-mono"
+          <Input
+            className="flex-1 min-w-48 w-auto py-1 font-mono"
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             maxLength={240}
@@ -585,38 +527,26 @@ export function StreamPanel({
             }
             aria-label={`${mode} text to send`}
           />
-          <button
-            type="submit"
-            className="px-3 py-1 text-xs border border-line rounded-sm hover:text-fg disabled:opacity-50"
-            disabled={!draft.trim() || transmitting}
-          >
+          <Button type="submit" size="sm" disabled={!draft.trim() || transmitting}>
             Send
-          </button>
-          <button
-            type="button"
-            className="px-2 py-1 text-xs border border-line rounded-sm hover:text-fg disabled:opacity-50 tnum"
-            disabled={transmitting || !myCall}
-            onClick={() => send(cqLine)}
-            title="Call CQ"
-          >
+          </Button>
+          <Button size="sm" className="tnum" disabled={transmitting || !myCall} onClick={() => send(cqLine)} title="Call CQ">
             CQ
-          </button>
-          <button
-            type="button"
-            className="px-2 py-1 text-xs border border-line rounded-sm hover:text-fg disabled:opacity-50 tnum"
-            disabled={transmitting || !myCall}
-            onClick={() => send(byeLine)}
-            title="Sign off"
-          >
+          </Button>
+          <Button size="sm" className="tnum" disabled={transmitting || !myCall} onClick={() => send(byeLine)} title="Sign off">
             73
-          </button>
-          {transmitting && <span className="text-xs text-accent-bright">TX</span>}
+          </Button>
+          {transmitting && (
+            <Badge tone="danger" size="sm">
+              TX
+            </Badge>
+          )}
         </form>
       )}
 
       <pre
         ref={scroller}
-        className="font-mono text-sm whitespace-pre-wrap break-words bg-bg-raised border border-line rounded-sm p-3 h-72 overflow-y-auto"
+        className="font-mono text-sm whitespace-pre-wrap break-words bg-surface-2 border border-line rounded-sm p-3 h-72 overflow-y-auto"
         aria-live="polite"
       >
         {text ||

@@ -3,80 +3,21 @@ import { InstallButton } from "@/components/layout/InstallButton";
 import { Ft0Button } from "@/components/layout/Ft0Button";
 import { TxArmButton } from "@/components/layout/TxArmButton";
 import { UtcClock } from "@/components/layout/UtcClock";
+import { ThemeToggle } from "@/components/ui/ThemeToggle";
 import { useRouter } from "next/router";
 import type { UiFlags } from "@/lib/auth/guard";
 import { useEffect, useState, type ReactNode } from "react";
 
+import { CommandPalette } from "@/components/layout/CommandPalette";
+import { destinationsFor, visibleNav } from "@/components/layout/NavConfig";
+import { NavDrawer } from "@/components/layout/NavDrawer";
+import { NavMenus } from "@/components/layout/NavMenus";
 import { Badge } from "@/components/ui/primitives";
 import { apiPost } from "@/lib/client/api";
 import { useUser } from "@/lib/client/session";
 import { cn } from "@/lib/utils";
 
-interface NavItem {
-  href: string;
-  label: string;
-  /** Hidden below this role. Server-side enforcement is independent. */
-  minRole?: "OPERATOR" | "ADMIN";
-  /**
-   * Hidden AT or above this role, because that role reaches it another way.
-   *
-   * Exactly one use: Stations and ADIF now live as tabs on the settings page, which is
-   * admin-only. Dropping them from the nav outright would take them away from the
-   * operators who use them most, so admins get the tidier menu and everyone else keeps
-   * the link. A nav that differs by role is a small oddity; an operator who can no
-   * longer reach the ADIF importer is a broken install.
-   */
-  hiddenAtRole?: "ADMIN";
-  /**
-   * Hidden until an operator switches it on in Settings.
-   *
-   * For surfaces honest enough to admit they are unfinished. A fresh install should not
-   * meet the most experimental page in the product first, and hiding it is kinder than a
-   * banner alone — a link that is there invites a click.
-   */
-  experimental?: keyof UiFlags;
-}
-
-// Sixteen entries did not fit a phone and did not read well on a desktop either. The
-// configuration tools — Stations, ADIF, DXCC data, API keys, Backup, Updates and Users —
-// are tabs in the settings section, which is where someone looks for them anyway.
-//
-// Users was the last of those still holding a top-level slot: "users should live in
-// settings". Settings itself stays in the nav, because the tab bar has to be reachable
-// from somewhere.
-const NAV: NavItem[] = [
-  { href: "/", label: "Dashboard" },
-  { href: "/qsos", label: "Log" },
-  { href: "/qsos/new", label: "New QSO", minRole: "OPERATOR" },
-  { href: "/decodes", label: "Digital" },
-  { href: "/rig", label: "Rig", minRole: "OPERATOR", experimental: "rig" },
-  { href: "/gridmap", label: "Map" },
-  { href: "/map", label: "Coverage" },
-  { href: "/awards", label: "Awards" },
-  { href: "/stats", label: "Stats" },
-  { href: "/pota", label: "POTA" },
-  { href: "/qsl", label: "QSL", minRole: "OPERATOR" },
-  // Kept for operators and viewers, who have no settings page to find them on.
-  { href: "/stations", label: "Stations", hiddenAtRole: "ADMIN" },
-  { href: "/adif", label: "ADIF", hiddenAtRole: "ADMIN" },
-  { href: "/settings", label: "Settings", minRole: "ADMIN" },
-  // Last on purpose. Help that sits first in a menu implies the product needs explaining
-  // before it can be used; help that sits last is where people look once something has
-  // surprised them, which is when they actually read it.
-  { href: "/help", label: "Help" },
-];
-
-const RANK = { VIEWER: 0, OPERATOR: 1, ADMIN: 2 } as const;
-
-function isActive(pathname: string, href: string): boolean {
-  if (href === "/") return pathname === "/";
-  if (href === "/qsos") {
-    if (pathname === "/qsos") return true;
-    // A QSO detail page counts as "Log"; the dedicated /qsos/new page does not.
-    return pathname !== "/qsos/new" && /^\/qsos\/[^/]+$/.test(pathname);
-  }
-  return pathname === href || pathname.startsWith(`${href}/`);
-}
+// What the navigation contains, and who sees which part of it, is NavConfig.ts.
 
 export function Shell({
   children,
@@ -86,7 +27,8 @@ export function Shell({
   /** Absent on the bare routes, which render no navigation at all. */
   uiFlags?: UiFlags;
 }) {
-  const { pathname } = useRouter();
+  const router = useRouter();
+  const { pathname } = router;
   const user = useUser();
   const [signingOut, setSigningOut] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -98,31 +40,7 @@ export function Shell({
     setMenuOpen(false);
   }, [pathname]);
 
-  useEffect(() => {
-    if (!menuOpen) return;
-    function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") setMenuOpen(false);
-    }
-    // Scrolling the page behind a full-height drawer loses your place in it.
-    const prev = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    window.addEventListener("keydown", onKey);
-    return () => {
-      document.body.style.overflow = prev;
-      window.removeEventListener("keydown", onKey);
-    };
-  }, [menuOpen]);
-
-  const visible = NAV.filter(
-    (item) =>
-      // An experimental entry appears only when its flag is on. Defaults to hidden when
-      // the flags have not arrived, so a page that forgets to pass them fails closed.
-      (!item.experimental || uiFlags?.[item.experimental] === true) &&
-      (!item.minRole || (user && RANK[user.role] >= RANK[item.minRole])) &&
-      // hiddenAtRole is the inverse test: hide from this role and above, because they
-      // reach it via the settings tabs instead.
-      !(item.hiddenAtRole && user && RANK[user.role] >= RANK[item.hiddenAtRole]),
-  );
+  const visible = visibleNav(user, uiFlags);
 
   async function signOut() {
     setSigningOut(true);
@@ -138,9 +56,9 @@ export function Shell({
 
   return (
     <div className="min-h-screen flex flex-col bg-bg text-fg">
-      {/* Visible only when focused. Sixteen nav links stand between the top of every
-          page and its content; without this a keyboard user tabs through all of them
-          every time. */}
+      {/* Visible only when focused. Every header control stands between the top of
+          every page and its content; without this a keyboard user tabs through all of
+          them every time. */}
       <a
         href="#main"
         className={cn(
@@ -216,38 +134,20 @@ export function Shell({
             </span>
           </Link>
 
-          {/* Desktop only. Below md the same links are in the drawer, so this row no
-              longer has to survive a 360px viewport — which is why it can go on being
-              this dense. */}
-          <nav
-            aria-label="Main"
-            className="hidden md:flex items-center gap-0.5 overflow-x-auto no-scrollbar min-w-0"
-          >
-            {visible.map((item) => {
-              const active = isActive(pathname, item.href);
-              return (
-                <Link
-                  key={item.href}
-                  href={item.href}
-                  aria-current={active ? "page" : undefined}
-                  className={cn(
-                    "nav-target inline-flex items-center",
-                    "px-3 py-1.5 text-sm rounded-sm transition-colors border-b-2",
-                    active
-                      ? "text-fg border-accent"
-                      : "text-fg-muted border-transparent hover:text-fg hover:bg-surface-2",
-                  )}
-                >
-                  {item.label}
-                </Link>
-              );
-            })}
-          </nav>
+          {/* Desktop only; below md the same groups are in the drawer. It takes whatever
+              width the right-hand cluster leaves and changes shape to fit it. */}
+          <NavMenus
+            entries={visible}
+            pathname={pathname}
+            drawerOpen={menuOpen}
+            onOpenDrawer={() => setMenuOpen(true)}
+          />
 
           <div className="ml-auto flex items-center gap-2 md:gap-3">
             <UtcClock />
             <TxArmButton />
             <Ft0Button />
+            <ThemeToggle />
             {user && (
               <>
                 {/* The identity is the door to the account page — where any role,
@@ -287,87 +187,15 @@ export function Shell({
         </div>
       </header>
 
-      {/* Backdrop. Rendered only while open so it cannot swallow taps when closed. */}
-      {menuOpen && (
-        <div
-          className="md:hidden fixed inset-0 z-30 bg-black/60"
-          onClick={() => setMenuOpen(false)}
-          aria-hidden="true"
-        />
-      )}
-
-      {/*
-       * The drawer.
-       *
-       * Kept mounted so the slide has something to animate, and hidden with
-       * `invisible` + `pointer-events-none` rather than unmounted so an offscreen
-       * panel can never intercept a tap. The links drop out of the tab order when it
-       * is closed, which `invisible` alone does not do.
-       */}
-      <nav
-        id="mobile-nav"
-        aria-label="Main"
-        aria-hidden={!menuOpen}
-        className={cn(
-          "md:hidden fixed z-40 top-0 left-0 h-full w-72 max-w-[85vw]",
-          "flex flex-col overflow-y-auto",
-          "border-r border-line bg-surface",
-          "pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]",
-          "transition-transform duration-200 ease-out",
-          menuOpen
-            ? "translate-x-0"
-            : "-translate-x-full pointer-events-none invisible",
-        )}
-      >
-        <div className="flex items-center justify-between px-4 h-12 border-b border-line">
-          <span className="font-display text-lg uppercase tracking-wider">
-            Menu
-          </span>
-          <button
-            type="button"
-            onClick={() => setMenuOpen(false)}
-            aria-label="Close menu"
-            className="-mr-2 px-2 text-fg-muted hover:text-fg"
-          >
-            <svg
-              width="20"
-              height="20"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              aria-hidden="true"
-            >
-              <path d="M6 6l12 12" />
-              <path d="M18 6L6 18" />
-            </svg>
-          </button>
-        </div>
-
-        <div className="flex flex-col py-2">
-          {visible.map((item) => {
-            const active = isActive(pathname, item.href);
-            return (
-              <Link
-                key={item.href}
-                href={item.href}
-                aria-current={active ? "page" : undefined}
-                tabIndex={menuOpen ? undefined : -1}
-                className={cn(
-                  "nav-target flex items-center px-4 py-3 text-base border-l-2",
-                  active
-                    ? "text-fg border-accent bg-surface-2"
-                    : "text-fg-muted border-transparent hover:text-fg hover:bg-surface-2",
-                )}
-              >
-                {item.label}
-              </Link>
-            );
-          })}
-        </div>
-
-        {user && (
+      {/* The drawer: the phone menu, and the desktop bar's fallback when it is too
+          narrow. The account footer stays here with the rest of the account controls. */}
+      <NavDrawer
+        open={menuOpen}
+        onClose={() => setMenuOpen(false)}
+        entries={visible}
+        pathname={pathname}
+        footer={
+          user && (
           <div className="mt-auto border-t border-line px-4 py-3 flex flex-col gap-2">
             <Link
               href="/account"
@@ -393,8 +221,16 @@ export function Shell({
               {signingOut ? "Signing out…" : "Sign out"}
             </button>
           </div>
-        )}
-      </nav>
+          )
+        }
+      />
+
+      <CommandPalette
+        destinations={destinationsFor(user, uiFlags)}
+        pathname={pathname}
+        onNavigate={(href) => void router.push(href)}
+        onOpen={() => setMenuOpen(false)}
+      />
 
       <main
         id="main"

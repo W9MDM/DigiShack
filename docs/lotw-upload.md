@@ -110,12 +110,17 @@ public key. That last one is INTERNAL CONSISTENCY only — it proves the signatu
 bytes in `SIGNDATA`, not that LoTW agrees those are the right bytes. The golden strings are
 transcribed from working software; only a real upload settles it.
 
-Two things are reasoned and NOT measured:
+One thing is reasoned and NOT measured:
 
 - the `-legacy` retry when openssl refuses a TQSL-written PKCS#12. OpenSSL 3 moved 40-bit RC2
   into the legacy provider, so a stock `openssl pkcs12` fails on a file TQSL just produced.
   This could not be tested here because writing such a file needs the legacy provider too.
-- the upload itself. Nothing has been POSTed to lotw.arrl.org from this code.
+
+The upload itself has been measured since (1.94.1 and 1.94.2, 2026-08-23): 26 contacts
+signed here were accepted by lotw.arrl.org and then listed back by LoTW's own
+`lotwreport.adi` query. LoTW's reply only says the file was *queued for processing*, so
+marking a batch sent on acceptance is optimistic; `lib/integrations/lotw-reconcile.ts`
+(1.102.0) asks LoTW daily what it holds and clears the Sent flag on anything missing.
 
 ## What Node provides
 

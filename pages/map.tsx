@@ -1,22 +1,24 @@
 // Where this station's contacts are, drawn as bearing and distance from home.
 //
-// NOT a world map, deliberately. A basemap means either a tile service — a cloud
-// dependency in an application whose whole point is not having one — or vendoring a
-// coastline dataset, and neither answers the question an operator actually has. "Which
-// way does my antenna work, and how far?" is a bearing and a distance, and a polar plot
-// shows it in one glance: a dead sector is a wedge with nothing in it.
-//
-// Coastlines would make it prettier and would not make it say more. If the day comes that
-// somebody wants the pretty version, this page is the data source for it.
+// NOT a world map, deliberately — /gridmap is that. "Which way does my antenna work, and how
+// far?" is a bearing and a distance, and a polar plot shows it in one glance: a dead sector
+// is a wedge with nothing in it, and here it is shaded.
 
-import { useRouter } from "next/router";
-import { useCallback, useMemo, useRef, useState } from "react";
+import Link from "next/link";
+import { useCallback, useMemo, useState } from "react";
 
-import { Card, PageHeader, Select } from "@/components/ui/primitives";
+import { CoveragePlot, type PlotDot } from "@/components/maps/CoveragePlot";
+import { BandKey } from "@/components/maps/Legend";
+import { Card, EmptyState, ErrorBanner, Field, PageHeader, Select } from "@/components/ui/primitives";
 import { withPageAuth } from "@/lib/auth/guard";
 import { useApi } from "@/lib/client/api";
+import { useDistanceUnit } from "@/lib/client/use-distance-unit";
 import { colourFor } from "@/lib/ham/band-colours";
 import { BAND_NAMES } from "@/lib/ham/bands";
+import { LOGGABLE_MODES } from "@/lib/ham/modes";
+import { formatBearing, formatDistance } from "@/lib/maps/geodesy";
+import { bandsPresent } from "@/lib/maps/legend";
+import { polarXY } from "@/lib/maps/polar";
 
 interface Point {
   bearing: number;
@@ -39,21 +41,13 @@ interface MapResponse {
   truncated: boolean;
 }
 
-/** Distance rings, km. The outermost is a little over half the Earth's circumference. */
-const RINGS = [2_500, 5_000, 10_000, 20_000];
-const MAX_KM = 20_000;
-
-
-/** Radius on a square-root scale, so the near-in contacts are not a single blob. */
-function radiusFor(km: number, size: number): number {
-  const capped = Math.min(km, MAX_KM);
-  return (Math.sqrt(capped / MAX_KM) * size) / 2;
-}
-
 export default function MapPage() {
   const [band, setBand] = useState("");
   const [mode, setMode] = useState("");
   const [days, setDays] = useState("0");
+  const [selected, setSelected] = useState<string | null>(null);
+  const [hovered, setHovered] = useState<string | null>(null);
+  const [unit] = useDistanceUnit();
 
   const params = new URLSearchParams();
   if (band) params.set("band", band);
@@ -61,76 +55,25 @@ export default function MapPage() {
   if (days !== "0") params.set("days", days);
   const { data, error, loading } = useApi<MapResponse>(`/api/qso-map?${params}`);
 
-  const size = 560;
-  const centre = size / 2;
-
-  // Zoom (wheel) and pan (drag) over the SVG viewBox, plus double-click to reset. Dots stay
-  // clickable: a click without a drag still fires their onClick, a drag pans instead.
-  const router = useRouter();
-  const [view, setView] = useState({ x: 0, y: 0, w: size, h: size });
-  const svgRef = useRef<SVGSVGElement>(null);
-  const drag = useRef<{ px: number; py: number; vx: number; vy: number } | null>(null);
-  const onWheel = useCallback(
-    (e: React.WheelEvent<SVGSVGElement>) => {
-      e.preventDefault();
-      const rect = svgRef.current?.getBoundingClientRect();
-      if (!rect) return;
-      const fx = (e.clientX - rect.left) / rect.width;
-      const fy = (e.clientY - rect.top) / rect.height;
-      setView((v) => {
-        const factor = e.deltaY > 0 ? 1.25 : 0.8;
-        const w = Math.max(size * 0.12, Math.min(size, v.w * factor));
-        return { x: v.x + fx * (v.w - w), y: v.y + fy * (v.h - w), w, h: w };
-      });
-    },
-    [size],
+  const keyed = useMemo(
+    () => (data?.points ?? []).map((p, i) => ({ ...p, key: `${p.callsign}-${p.at}-${i}` })),
+    [data],
   );
-  const onPointerDown = (e: React.PointerEvent<SVGSVGElement>) => {
-    drag.current = { px: e.clientX, py: e.clientY, vx: view.x, vy: view.y };
-    (e.target as Element).setPointerCapture?.(e.pointerId);
-  };
-  const onPointerMove = (e: React.PointerEvent<SVGSVGElement>) => {
-    // Read the ref into a local value BEFORE the updater — releasing the pointer mid-update
-    // must not pull the anchor out from under it (the gridmap null-crash).
-    const anchor = drag.current;
-    const rect = svgRef.current?.getBoundingClientRect();
-    if (!anchor || !rect) return;
-    const dx = (e.clientX - anchor.px) / rect.width;
-    const dy = (e.clientY - anchor.py) / rect.height;
-    setView((v) => ({ ...v, x: anchor.vx - dx * v.w, y: anchor.vy - dy * v.h }));
-  };
-  const onPointerUp = () => {
-    drag.current = null;
-  };
+  const dots: PlotDot[] = useMemo(
+    () => keyed.map((p) => ({ key: p.key, ...polarXY(p.bearing, p.km), colour: colourFor(p.band) })),
+    [keyed],
+  );
+  const deadSectors = useMemo(
+    () => (data && data.total > 0 ? data.bySector.filter((s) => s.count === 0).map((s) => s.from) : []),
+    [data],
+  );
+  const bands = useMemo(() => bandsPresent(keyed), [keyed]);
+  const onPick = useCallback((k: string | null) => setSelected(k), []);
+  const onHover = useCallback((k: string | null) => setHovered(k), []);
 
-  const dots = useMemo(() => {
-    if (!data) return [];
-    return data.points.map((p, i) => {
-      // Screen coordinates: bearing 0 is north, which is UP, and bearings increase
-      // clockwise. Straight trigonometry puts 0 to the right and increases the other way.
-      const rad = ((p.bearing - 90) * Math.PI) / 180;
-      const r = radiusFor(p.km, size);
-      return {
-        key: `${p.callsign}-${p.at}-${i}`,
-        callsign: p.callsign,
-        x: centre + r * Math.cos(rad),
-        y: centre + r * Math.sin(rad),
-        colour: colourFor(p.band),
-        title: `${p.callsign} · ${p.band} ${p.mode} · ${p.km.toLocaleString()} km at ${p.bearing}° — click for this station's log`,
-      };
-    });
-  }, [data, centre]);
-
-  const bandsPresent = useMemo(() => {
-    const seen = new Set(data?.points.map((p) => p.band.toUpperCase()) ?? []);
-    // Ordered as BAND_NAMES has them — wavelength order, which is how an operator reads
-    // a band list. An unknown band sorts last rather than first.
-    return [...seen].sort((a, b) => {
-      const ia = BAND_NAMES.indexOf(a);
-      const ib = BAND_NAMES.indexOf(b);
-      return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib);
-    });
-  }, [data]);
+  const focusKey = hovered ?? selected;
+  const focus = focusKey ? keyed.find((p) => p.key === focusKey) : undefined;
+  const noGrid = error?.status === 409;
 
   return (
     <>
@@ -140,159 +83,95 @@ export default function MapPage() {
       />
 
       <div className="flex flex-wrap items-end gap-3 mb-4">
-        <label className="flex items-center gap-2 text-sm">
-          <span className="text-fg-subtle">Band</span>
-          <Select value={band} onChange={(e) => setBand(e.target.value)} className="w-28">
-            <option value="">All</option>
+        <Field label="Band" htmlFor="cov-band" className="w-32">
+          <Select id="cov-band" value={band} onChange={(e) => setBand(e.target.value)}>
+            <option value="">All bands</option>
             {BAND_NAMES.map((b) => (
               <option key={b} value={b}>
                 {b}
               </option>
             ))}
           </Select>
-        </label>
-        <label className="flex items-center gap-2 text-sm">
-          <span className="text-fg-subtle">Mode</span>
-          <Select value={mode} onChange={(e) => setMode(e.target.value)} className="w-28">
-            <option value="">All</option>
-            <option value="FT8">FT8</option>
-            <option value="FT4">FT4</option>
-            <option value="SSB">SSB</option>
-            <option value="CW">CW</option>
+        </Field>
+        <Field label="Mode" htmlFor="cov-mode" className="w-32">
+          <Select id="cov-mode" value={mode} onChange={(e) => setMode(e.target.value)}>
+            <option value="">All modes</option>
+            {LOGGABLE_MODES.map((m) => (
+              <option key={m} value={m}>
+                {m}
+              </option>
+            ))}
           </Select>
-        </label>
-        <label className="flex items-center gap-2 text-sm">
-          <span className="text-fg-subtle">Period</span>
-          <Select value={days} onChange={(e) => setDays(e.target.value)} className="w-36">
-            <option value="0">The whole log</option>
+        </Field>
+        <Field label="Period" htmlFor="cov-days" className="w-36">
+          <Select id="cov-days" value={days} onChange={(e) => setDays(e.target.value)}>
+            <option value="0">Whole log</option>
             <option value="1">Last 24 hours</option>
             <option value="7">Last 7 days</option>
             <option value="30">Last 30 days</option>
             <option value="365">Last year</option>
           </Select>
-        </label>
+        </Field>
       </div>
 
-      {error && (
-        <Card title="Coverage">
-          <p className="text-sm text-danger">{error.message}</p>
+      {noGrid ? (
+        <Card>
+          <EmptyState
+            title="No station grid square yet"
+            action={
+              <Link href="/stations" className="text-sm text-accent-bright hover:underline">
+                Set it on Stations →
+              </Link>
+            }
+          >
+            Every bearing and distance here is measured from the station, so the plot needs its grid
+            square first.
+          </EmptyState>
         </Card>
-      )}
-
-      {!error && (
+      ) : error ? (
+        <ErrorBanner>{error.message}</ErrorBanner>
+      ) : (
         <div className="grid gap-6 lg:grid-cols-3">
-          <Card title="Bearing and distance" className="lg:col-span-2">
-            <div className="flex justify-center">
-              <svg
-                ref={svgRef}
-                width="100%"
-                viewBox={`${view.x} ${view.y} ${view.w} ${view.h}`}
-                className="max-w-[560px] touch-none cursor-grab active:cursor-grabbing"
-                role="img"
-                aria-label="Contacts by bearing and distance — scroll to zoom, drag to pan, double-click to reset"
-                onWheel={onWheel}
-                onPointerDown={onPointerDown}
-                onPointerMove={onPointerMove}
-                onPointerUp={onPointerUp}
-                onPointerCancel={onPointerUp}
-                onDoubleClick={() => setView({ x: 0, y: 0, w: size, h: size })}
-              >
-                {/* Distance rings, labelled on the north axis. */}
-                {RINGS.map((km) => (
-                  <g key={km}>
-                    <circle
-                      cx={centre}
-                      cy={centre}
-                      r={radiusFor(km, size)}
-                      fill="none"
-                      stroke="currentColor"
-                      className="text-line"
-                      strokeWidth="1"
-                    />
-                    <text
-                      x={centre + 4}
-                      y={centre - radiusFor(km, size) + 12}
-                      className="fill-fg-subtle"
-                      fontSize="10"
-                    >
-                      {km.toLocaleString()} km
-                    </text>
-                  </g>
-                ))}
-
-                {/* Compass spokes every 45°, labelled at the cardinals. */}
-                {[0, 45, 90, 135, 180, 225, 270, 315].map((deg) => {
-                  const rad = ((deg - 90) * Math.PI) / 180;
-                  const r = size / 2;
-                  return (
-                    <line
-                      key={deg}
-                      x1={centre}
-                      y1={centre}
-                      x2={centre + r * Math.cos(rad)}
-                      y2={centre + r * Math.sin(rad)}
-                      stroke="currentColor"
-                      className="text-line"
-                      strokeWidth="1"
-                    />
-                  );
-                })}
-                {[
-                  ["N", 0],
-                  ["E", 90],
-                  ["S", 180],
-                  ["W", 270],
-                ].map(([label, deg]) => {
-                  const rad = ((Number(deg) - 90) * Math.PI) / 180;
-                  const r = size / 2 - 10;
-                  return (
-                    <text
-                      key={label as string}
-                      x={centre + r * Math.cos(rad)}
-                      y={centre + r * Math.sin(rad) + 4}
-                      textAnchor="middle"
-                      className="fill-fg-muted font-display"
-                      fontSize="12"
-                    >
-                      {label as string}
-                    </text>
-                  );
-                })}
-
-                {dots.map((d) => (
-                  <circle
-                    key={d.key}
-                    cx={d.x}
-                    cy={d.y}
-                    r="2.5"
-                    fill={d.colour}
-                    opacity="0.75"
-                    className="cursor-pointer"
-                    onClick={() => void router.push(`/qsos?q=${encodeURIComponent(d.callsign)}`)}
-                  >
-                    <title>{d.title}</title>
-                  </circle>
-                ))}
-
-                {/* Home. Drawn last so it is never hidden under a contact. */}
-                <circle cx={centre} cy={centre} r="3" className="fill-accent-bright" />
-              </svg>
-            </div>
-
-            {bandsPresent.length > 1 && (
-              <div className="flex flex-wrap gap-3 mt-3 text-xs">
-                {bandsPresent.map((b) => (
-                  <span key={b} className="flex items-center gap-1.5">
-                    <span
-                      className="inline-block w-2.5 h-2.5 rounded-full"
-                      style={{ background: colourFor(b) }}
-                    />
-                    {b}
+          <section className="lg:col-span-2 bg-surface border border-line rounded-md shadow-panel overflow-hidden">
+            <CoveragePlot
+              dots={dots}
+              unit={unit}
+              deadSectors={deadSectors}
+              highlight={focusKey}
+              onPick={onPick}
+              onHover={onHover}
+            />
+            <div className="px-3 py-2 border-t border-line text-sm min-h-10 flex flex-wrap items-center gap-x-3 gap-y-1" aria-live="polite">
+              {focus ? (
+                <>
+                  <span className="font-display tracking-wide">{focus.callsign}</span>
+                  <span className="text-fg-subtle">
+                    {focus.band} {focus.mode}
                   </span>
-                ))}
+                  <span className="tnum">{formatDistance(focus.km, unit)}</span>
+                  <span className="tnum">{formatBearing(focus.bearing)}</span>
+                  <span className="tnum text-fg-subtle">{focus.at.slice(0, 10)}</span>
+                  <Link
+                    href={`/qsos?q=${encodeURIComponent(focus.callsign)}`}
+                    className="ml-auto text-accent-bright hover:underline"
+                  >
+                    View log →
+                  </Link>
+                </>
+              ) : (
+                <span className="text-fg-subtle">
+                  {loading && !data
+                    ? "Reading the log…"
+                    : "Hover or tap a dot for the contact. Shaded wedges are directions never worked."}
+                </span>
+              )}
+            </div>
+            {bands.length > 0 && (
+              <div className="px-3 pb-3">
+                <BandKey bands={bands} />
               </div>
             )}
-          </Card>
+          </section>
 
           <div className="flex flex-col gap-6">
             <Card title="What it reaches">
@@ -306,18 +185,15 @@ export default function MapPage() {
                     label="Furthest"
                     value={
                       data.furthest
-                        ? `${data.furthest.callsign} · ${data.furthest.km.toLocaleString()} km at ${data.furthest.bearing}°`
+                        ? `${data.furthest.callsign} · ${formatDistance(data.furthest.km, unit)} at ${formatBearing(data.furthest.bearing)}`
                         : "—"
                     }
                   />
                   {data.unplaceable > 0 && (
-                    <Row
-                      label="No grid"
-                      value={`${data.unplaceable.toLocaleString()} not shown`}
-                    />
+                    <Row label="No grid" value={`${data.unplaceable.toLocaleString()} not shown`} />
                   )}
                   {data.truncated && (
-                    <Row label="Plotted" value={`${data.points.length.toLocaleString()} of them`} />
+                    <Row label="Plotted" value={`Most recent ${data.points.length.toLocaleString()}`} />
                   )}
                 </dl>
               )}
@@ -334,9 +210,7 @@ export default function MapPage() {
                   {data.byContinent.map((c) => (
                     <li key={c.continent} className="flex px-4 py-1 text-sm">
                       <span>{c.continent}</span>
-                      <span className="tnum ml-auto text-fg-muted">
-                        {c.count.toLocaleString()}
-                      </span>
+                      <span className="tnum ml-auto text-fg-muted">{c.count.toLocaleString()}</span>
                     </li>
                   ))}
                 </ul>
@@ -346,7 +220,7 @@ export default function MapPage() {
             <Card title="Dead sectors">
               {!data ? null : (
                 <>
-                  <p className="text-xs text-fg-subtle mb-2">
+                  <p className="text-sm text-fg-subtle mb-2">
                     Sixteen sectors of 22.5°. An empty one is a direction this station has
                     never worked — which is either the antenna, the terrain, or nobody
                     being there.
@@ -363,9 +237,7 @@ export default function MapPage() {
                         </li>
                       ))}
                     {data.bySector.every((s) => s.count > 0) && (
-                      <li className="px-4 py-1 text-sm text-ok">
-                        Every direction worked at least once.
-                      </li>
+                      <li className="px-4 py-1 text-sm text-ok">Every direction worked at least once.</li>
                     )}
                   </ul>
                 </>
@@ -381,7 +253,7 @@ export default function MapPage() {
 function Row({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex gap-3">
-      <dt className="text-fg-subtle">{label}</dt>
+      <dt className="text-fg-subtle shrink-0">{label}</dt>
       <dd className="ml-auto text-right">{value}</dd>
     </div>
   );

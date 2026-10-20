@@ -40,7 +40,6 @@ yarn-error.log*
 .DS_Store
 *.pem
 psk*.tmp.xml
-bridge.log
 
 # QSL card artwork is the operator's own asset and can be tens of MB.
 # Kept out of git; the path is set by qsl.card.baseImage in Settings.
@@ -65,3 +64,12 @@ data/decodes/
 # Accumulated GitHub traffic figures. GitHub keeps 14 days; this file is the only
 # copy of anything older, and it is this station's record rather than source.
 /data/traffic-history.json
+
+# The rest of what the application writes under data/ at runtime. data/lotw/ holds the LoTW
+# certificate and its private key (encrypted under SETTINGS_KEY, but a licence all the same);
+# data/sstv/ holds received SSTV pictures for the gallery. Neither was ignored, so both were
+# one `git add -A` from a commit. They also make scripts/update.sh refuse to run: it treats
+# every `git status --porcelain` line as a dirty tree, untracked ones included (reasoned from
+# the script, not observed on a box; lib/update/runner.ts already skips untracked files).
+data/lotw/
+data/sstv/

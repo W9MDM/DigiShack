@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { ToolTabs } from "@/components/settings/ToolTabs";
+import { SettingsLayout } from "@/components/settings/SettingsLayout";
 import { useState } from "react";
 
 import {
@@ -227,13 +227,12 @@ export default function IntegrationsPage() {
   const eqsl = data?.eqsl;
 
   return (
-    <>
-      <ToolTabs />
+    <SettingsLayout>
       <PageHeader
         title="Integrations"
         subtitle="Logbook services, and whether they are working"
         actions={
-          <Link href="/settings" className="text-sm text-accent-bright hover:underline">
+          <Link href="/settings?tab=logbooks" className="text-sm text-accent-bright hover:underline">
             Credentials →
           </Link>
         }
@@ -441,8 +440,8 @@ export default function IntegrationsPage() {
               {!uploads.enabled && (
                 <p className="text-sm text-warn">
                   Automatic uploading is off — nothing is sent on a sweep.{" "}
-                  <Link href="/settings" className="text-accent-bright underline">
-                    Settings → Uploads
+                  <Link href="/settings?tab=logbooks&group=uploads" className="text-accent-bright underline">
+                    Settings → Automatic uploading
                   </Link>
                   . “Upload now” still works.
                 </p>
@@ -563,7 +562,7 @@ export default function IntegrationsPage() {
           </p>
         </Card>
       </div>
-    </>
+    </SettingsLayout>
   );
 }
 

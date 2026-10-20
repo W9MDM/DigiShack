@@ -1,8 +1,10 @@
-import Link from "next/link";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
+import { AuthLayout, AuthLink } from "@/components/auth/AuthLayout";
+import { authErrorMessage } from "@/components/auth/form";
+import { TOUCH_TEXT } from "@/components/auth/PasswordInput";
 import { Button, ErrorBanner, Field, Input } from "@/components/ui/primitives";
-import { ApiError, apiPost } from "@/lib/client/api";
+import { apiPost } from "@/lib/client/api";
 
 /**
  * "Forgot password" — ask for a reset link by email.
@@ -14,7 +16,12 @@ export default function ForgotPage() {
   const [email, setEmail] = useState("");
   const [busy, setBusy] = useState(false);
   const [sent, setSent] = useState<string | null>(null);
-  const [error, setError] = useState<ApiError | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  // The form, and the button that had focus, are gone once this appears.
+  useEffect(() => {
+    if (sent) document.getElementById("forgot-sent")?.focus();
+  }, [sent]);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -24,62 +31,55 @@ export default function ForgotPage() {
       const r = await apiPost<{ detail: string }>("/api/auth/forgot", { email });
       setSent(r.detail);
     } catch (err) {
-      setError(err instanceof ApiError ? err : new ApiError(0, "Request failed"));
+      setError(authErrorMessage(err, "The request failed. Try again."));
+    } finally {
       setBusy(false);
     }
   }
 
   return (
-    <div className="w-full max-w-sm">
-      <div className="flex items-baseline gap-1.5 justify-center mb-1">
-        <span className="font-display text-3xl uppercase tracking-wider">Digi</span>
-        <span className="font-display text-3xl uppercase tracking-wider text-accent-bright">
-          Shack
-        </span>
-      </div>
-      <p className="text-center text-sm text-fg-subtle mb-6">Reset your password</p>
-
-      {error && (
-        <div className="mb-4">
-          <ErrorBanner>{error.message}</ErrorBanner>
-        </div>
-      )}
-
+    <AuthLayout
+      title="Reset your password"
+      description={
+        sent ? undefined : "Enter the address you sign in with and a reset link will be emailed to it."
+      }
+      links={<AuthLink href="/login">Back to sign in</AuthLink>}
+    >
       {sent ? (
-        <div className="bg-surface border border-line rounded-md p-5 text-sm">
+        <div
+          id="forgot-sent"
+          tabIndex={-1}
+          role="status"
+          className="flex flex-col gap-3 text-sm focus:outline-none"
+        >
           <p>{sent}</p>
-          <p className="mt-3 text-fg-subtle">
-            No email after a few minutes? Check spam, or ask an admin to reset it from
-            the Users page.
+          <p className="text-fg-muted">
+            No email after a few minutes? Check spam, or ask an admin to reset it from the
+            Users page.
           </p>
         </div>
       ) : (
-        <form
-          onSubmit={submit}
-          className="flex flex-col gap-4 bg-surface border border-line rounded-md p-5"
-        >
-          <Field label="Email" htmlFor="email" required>
+        <form onSubmit={submit} className="flex flex-col gap-4">
+          {error && <ErrorBanner>{error}</ErrorBanner>}
+          <Field label="Email" htmlFor="email">
             <Input
               id="email"
               type="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               autoComplete="username"
+              autoCapitalize="none"
+              spellCheck={false}
               autoFocus
               required
+              className={TOUCH_TEXT}
             />
           </Field>
-          <Button type="submit" variant="primary" disabled={busy}>
-            {busy ? "Sending…" : "Email me a reset link"}
+          <Button type="submit" variant="primary" loading={busy} className="mt-1 w-full">
+            Email me a reset link
           </Button>
         </form>
       )}
-
-      <p className="text-center text-sm text-fg-subtle mt-4">
-        <Link href="/login" className="text-accent-bright underline">
-          Back to sign in
-        </Link>
-      </p>
-    </div>
+    </AuthLayout>
   );
 }

@@ -1,10 +1,13 @@
 @import "tailwindcss";
 
-/* DigiShack theme — permanent dark mode, red accent, Oswald.
+/* DigiShack theme — dark by default, red accent, Oswald.
  *
- * There is no light mode and no theme toggle: the spec calls for permanent
- * dark. Don't add a `dark:` variant anywhere; the base tokens ARE the dark
- * tokens. */
+ * There is no light mode. There are two themes, both dark: the base tokens in @theme
+ * below ARE the default dark theme, and `:root[data-theme="night"]` further down
+ * re-points the same tokens at a red-on-black night-vision palette. Don't add a
+ * `dark:` variant anywhere, and don't write a `night:` one either — a component that
+ * uses the tokens is already correct in both themes, and one that hardcodes a colour
+ * is wrong in both. */
 
 @theme {
   /* --- accent ---
@@ -127,11 +130,65 @@
   --color-danger: #ff655d;
   --color-info: #58a6ff;
 
+  /* --- elevation colours ---
+   *
+   * The light-from-above highlight and the modal hairline, pulled out of the shadow
+   * values below so a theme can re-colour them. Tailwind INLINES a shadow token's value
+   * into the utility rather than referencing `var(--shadow-panel)`, so overriding the
+   * shadow token itself under a theme selector does nothing at all; a var() inside the
+   * value survives compilation and is the only handle a theme has. Measured with
+   * Tailwind 4.3's compiler: `shadow-panel` emits
+   * `inset 0 1px 0 0 var(--tw-shadow-color, var(--color-highlight))`. */
+  --color-highlight: rgb(255 255 255 / 0.05);
+  --color-highlight-strong: rgb(255 255 255 / 0.07);
+  --color-pop-ring: rgb(0 0 0 / 0.4);
+
   /* --- typography --- */
   --font-display: var(--font-oswald), "Oswald", ui-sans-serif, system-ui,
     sans-serif;
   --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   --font-mono: ui-monospace, "Cascadia Mono", "Consolas", monospace;
+
+  /* --- instrument text: the sizes below `text-xs` ---
+   *
+   * The app writes 9, 10 and 11px as arbitrary values — 12, 52 and 29 times when these
+   * were added — on stat labels, slider scale ticks, decode-row chips and panadapter
+   * readouts. An arbitrary `text-[10px]` is a size no token change can ever reach, and
+   * it sets font-size ONLY: the line-height is inherited, so the same class renders at
+   * a different height depending on what it sits inside.
+   *
+   *     text-2xs   11px / 16px   captions, hints under a control, dense table chips
+   *     text-3xs   10px / 14px   uppercase instrument labels (STAT LABEL, MODE)
+   *     text-4xs    9px / 12px   scale ticks under a meter or slider — nothing else
+   *
+   * The line-heights are on a 2px grid and close to the ~1.4–1.5 the arbitrary sizes
+   * inherit from body text today, so swapping `text-[10px]` for `text-3xs` moves a line
+   * by a pixel at most. Use `leading-none` alongside for a single-line chip.
+   *
+   * These are a floor, not an invitation. Prose belongs at `text-xs` or above: the
+   * operator these sizes are hardest on is the one the rest of this file was tuned for,
+   * and `text-4xs` exists so scale ticks stop being hardcoded, not so labels can shrink
+   * into it. */
+  --text-2xs: 0.6875rem;
+  --text-2xs--line-height: calc(1 / 0.6875);
+  --text-3xs: 0.625rem;
+  --text-3xs--line-height: calc(0.875 / 0.625);
+  --text-4xs: 0.5625rem;
+  --text-4xs--line-height: calc(0.75 / 0.5625);
+
+  /* Toast entry. Applied through `motion-safe:` so it is never registered under
+   * reduced motion, and the reduced-motion block below would cut it to 0.01ms anyway. */
+  --animate-toast-in: toast-in 160ms ease-out;
+  @keyframes toast-in {
+    from {
+      opacity: 0;
+      transform: translateY(0.5rem);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
 
   /* Square-ish, instrument-panel feel rather than pill-shaped. */
   --radius-sm: 2px;
@@ -155,10 +212,96 @@
    *   raised — popovers, menus, the HelpTip panel: things that float over content.
    *   pop    — modals and anything that must sit above everything, with a hairline
    *            ring standing in for a border so it still has an edge on any surface. */
-  --shadow-panel: inset 0 1px 0 0 rgb(255 255 255 / 0.05), 0 1px 2px rgb(0 0 0 / 0.5);
-  --shadow-raised: inset 0 1px 0 0 rgb(255 255 255 / 0.07),
+  --shadow-panel: inset 0 1px 0 0 var(--color-highlight), 0 1px 2px rgb(0 0 0 / 0.5);
+  --shadow-raised: inset 0 1px 0 0 var(--color-highlight-strong),
     0 10px 28px -10px rgb(0 0 0 / 0.75);
-  --shadow-pop: 0 20px 48px -12px rgb(0 0 0 / 0.85), 0 0 0 1px rgb(0 0 0 / 0.4);
+  --shadow-pop: 0 20px 48px -12px rgb(0 0 0 / 0.85), 0 0 0 1px var(--color-pop-ring);
+}
+
+/* NIGHT — a red "night vision" palette for operating in the dark.
+ *
+ * Set by `data-theme="night"` on <html>: an inline script in pages/_document.tsx applies
+ * the saved choice before first paint, and components/ui/ThemeToggle.tsx flips it. Every
+ * colour token in @theme is re-pointed here — `check:contrast` fails if one is missing,
+ * because a token left out keeps its dark-theme value, and in this file that means the
+ * blue `info` or the green `ok` turning up on a page that is meant to have none.
+ *
+ * THE RULE IS RED AND GREEN CHANNELS ONLY. Dark adaptation lives in the rods, which are
+ * nearly blind to long-wavelength red and very sensitive to green and blue. Per unit of
+ * PHOTOPIC luminance — the thing WCAG contrast measures — the red primary costs the rods
+ * least, green a few times more, and blue roughly ten times more than green. So contrast
+ * is bought with red first and green second, and blue stays at zero: every token here
+ * has R >= G >= B, i.e. a hue between red and amber, and `check:contrast` asserts it.
+ *
+ * What that costs, said out loud: with blue at zero every colour sits on one red-to-amber
+ * curve, and the only way to make text brighter is to add green, which makes it more
+ * orange. So the text ladder runs red-orange (subtle) -> orange (fg), and the hierarchy is
+ * flatter than the dark theme's — 1.31:1 and 1.27:1 between tiers against 1.72 and 1.50.
+ * And there is no room for four semantic hues that are as far apart as green, amber, red
+ * and blue. The four below were chosen by searching the whole permitted region for the
+ * set with the largest minimum OKLab distance (0.117, against a just-noticeable ~0.02):
+ *
+ *     danger  #ff1200  pure red              — the stop colour, as everywhere
+ *     warn    #d8a000  bright amber          — the caution colour, as everywhere
+ *     info    #ff7000  orange                — rare (13 uses); closest to body text
+ *     ok      #a87c00  dim gold              — calm, the least insistent of the four
+ *
+ * They are distinguishable side by side; alone, a badge's LABEL is what says which it is,
+ * and red-green colour-blind operators — roughly one man in twelve — will lean on the
+ * labels entirely. That is the existing non-colour cue doing its job, not a new one.
+ * `danger` and `accent-bright` are near-identical, exactly as they are in the dark theme.
+ *
+ * LOW LUMINANCE: the surfaces are near-black with a red cast (L* 0 / 2.0 / 3.2 / 4.9,
+ * against the dark theme's 2.8 / 7.9 / 13.5 / 19.3) — they cover most of the screen, so
+ * they are where the light budget goes. Text cannot go lower than it is: 4.5:1 on
+ * surface-3 is a luminance floor of ~0.21, and pure red tops out at 0.2126.
+ *
+ * NOT COVERED: canvases (waterfalls, spectrum, SSTV) draw with their own palettes, and the
+ * grid map and panadapter overlays hardcode hex and white. Those stay as they are in this
+ * theme until each grows a night palette of its own. */
+:root[data-theme="night"] {
+  --color-accent: #7a1000;
+  --color-accent-bright: #ff2c10;
+  --color-accent-hover: #861400;
+  --color-accent-muted: #4a0a00;
+  --color-accent-fg: #ffa01c;
+
+  --color-bg: #000000;
+  --color-bg-subtle: #0a0201;
+  --color-surface: #120402;
+  --color-surface-2: #1a0603;
+  --color-surface-3: #230804;
+  --color-bg-raised: #1a0603;
+
+  --color-line: #4a1206;
+  --color-line-strong: #cc1e00;
+
+  --color-fg: #ff8c1c;
+  --color-fg-muted: #ff5e14;
+  --color-fg-subtle: #f23c00;
+
+  --color-ok: #a87c00;
+  --color-warn: #d8a000;
+  --color-danger: #ff1200;
+  --color-info: #ff7000;
+
+  /* A red edge-light instead of a white one, and a visible red hairline round anything
+     that pops: on pure black a black ring is no edge at all. */
+  --color-highlight: rgb(255 44 16 / 0.07);
+  --color-highlight-strong: rgb(255 44 16 / 0.1);
+  --color-pop-ring: rgb(204 30 0 / 0.55);
+
+  /* Native checkboxes, radios, range sliders and progress bars take the browser's own
+     accent — a light blue under `color-scheme: dark`. */
+  accent-color: var(--color-accent-bright);
+}
+
+/* The native <select> popup draws its options with system colours unless told otherwise.
+   Chromium honours this; Safari draws its own popup and ignores it. */
+:root[data-theme="night"] option,
+:root[data-theme="night"] optgroup {
+  background-color: var(--color-surface-2);
+  color: var(--color-fg);
 }
 
 @layer base {

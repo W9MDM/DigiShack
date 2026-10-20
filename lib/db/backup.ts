@@ -22,6 +22,8 @@ import { mkdir, stat, unlink } from "node:fs/promises";
 import path from "node:path";
 import { createGunzip, createGzip } from "node:zlib";
 
+import { Prisma } from "@prisma/client";
+
 import { prisma } from "@/lib/db/prisma";
 
 /** Where dumps are written. */
@@ -29,6 +31,25 @@ export const BACKUP_DIR = path.join(process.cwd(), "backups");
 
 /** Rows per SELECT, and per INSERT statement. */
 const CHUNK = 500;
+
+/**
+ * How long the dump's read transaction may stay open. A CEILING, not an estimate.
+ *
+ * Sized for the largest log this has to carry, not the typical one: about 40,000 contacts
+ * plus the decode history, which grows by roughly 42,000 rows a day (lib/db/retention.ts)
+ * and is kept forever when retention is 0. Each page is an index range scan, so even a
+ * multi-million-row decode table is minutes of reading; two hours leaves a slow disk and a
+ * slow gzip a very wide margin. Running out is LOUD — Prisma closes the transaction and
+ * the next page throws, which deletes the partial file — never a short dump that claims
+ * to be complete. A long read-only REPEATABLE READ transaction blocks no writer.
+ */
+const DUMP_TIMEOUT_MS = 2 * 60 * 60_000;
+
+/** How long to wait for a pooled connection to start the dump on. */
+const DUMP_MAX_WAIT_MS = 60_000;
+
+/** What the dump needs from a client: raw reads, all on the one pinned connection. */
+type RawReader = Pick<Prisma.TransactionClient, "$queryRawUnsafe">;
 
 /**
  * Tables never included in a backup.
@@ -92,8 +113,8 @@ function ident(name: string): string {
   return `\`${name}\``;
 }
 
-async function listTables(): Promise<string[]> {
-  const rows = await prisma.$queryRawUnsafe<Record<string, string>[]>("SHOW FULL TABLES");
+async function listTables(db: RawReader): Promise<string[]> {
+  const rows = await db.$queryRawUnsafe<Record<string, string>[]>("SHOW FULL TABLES");
   return rows
     .map((r) => {
       const vals = Object.values(r);
@@ -103,6 +124,65 @@ async function listTables(): Promise<string[]> {
     .filter((t) => t.name && t.type === "BASE TABLE" && !SKIP_TABLES.has(t.name))
     .map((t) => t.name)
     .sort();
+}
+
+/**
+ * The primary-key columns of `table`, in key order. Empty when it has none.
+ *
+ * Every Prisma model has a single-column key today, but the dump reads every table in the
+ * database, and a composite key paged by only its first column would repeat or drop rows
+ * at every page boundary that falls inside a run of equal first values.
+ */
+async function primaryKey(db: RawReader, table: string): Promise<string[]> {
+  const rows = await db.$queryRawUnsafe<Record<string, unknown>[]>(
+    `SHOW KEYS FROM ${ident(table)} WHERE Key_name = 'PRIMARY'`,
+  );
+  return rows
+    .map((r) => ({ seq: Number(r.Seq_in_index), column: String(r.Column_name ?? "") }))
+    .sort((a, b) => a.seq - b.seq)
+    .map((k) => k.column);
+}
+
+/**
+ * The next page of `table` in primary-key order: the rows after `after`, the previous
+ * page's last key, or the first page when there is none.
+ *
+ * Keyset rather than OFFSET. Inside the snapshot OFFSET would be correct again, but this
+ * does not lean on the snapshot to be right — no deletion can shift an unread row behind
+ * the cursor — and each page is an index range scan instead of re-reading and discarding
+ * everything before it, which made a large table quadratic.
+ *
+ * A composite key is compared as a tuple, spelled out as
+ *   `a` > ? OR (`a` = ? AND `b` > ?) OR (`a` = ? AND `b` = ? AND `c` > ?)
+ * rather than `(a, b) > (?, ?)`, because the expanded form is the one both MySQL's and
+ * MariaDB's range optimisers turn into an index range. Values are bound, not inlined: a
+ * literal would depend on the server's backslash-escaping mode.
+ */
+function pageQuery(
+  table: string,
+  key: string[],
+  after: unknown[] | null,
+): { sql: string; params: unknown[] } {
+  const orderBy = key.map(ident).join(", ");
+  if (!after) {
+    return { sql: `SELECT * FROM ${ident(table)} ORDER BY ${orderBy} LIMIT ${CHUNK}`, params: [] };
+  }
+  const groups: string[] = [];
+  const params: unknown[] = [];
+  key.forEach((col, i) => {
+    const terms: string[] = [];
+    for (let j = 0; j < i; j++) {
+      terms.push(`${ident(key[j]!)} = ?`);
+      params.push(after[j]);
+    }
+    terms.push(`${ident(col)} > ?`);
+    params.push(after[i]);
+    groups.push(`(${terms.join(" AND ")})`);
+  });
+  return {
+    sql: `SELECT * FROM ${ident(table)} WHERE ${groups.join(" OR ")} ORDER BY ${orderBy} LIMIT ${CHUNK}`,
+    params,
+  };
 }
 
 export interface BackupResult {
@@ -191,70 +271,164 @@ export async function backupDatabase(): Promise<BackupResult> {
  *
  * Callback-based rather than returning a string: the raw SQL for this log is tens of
  * megabytes, and the plain-file path streams it straight into gzip without ever
- * holding it. The bundle path collects it, which it has to anyway.
+ * holding it. The bundle path collects it, which it has to anyway. Both — and the
+ * pre-update backup in lib/update/runner.ts, which is a bundle — come through here.
+ *
+ * ONE SNAPSHOT, READ IN KEY ORDER. This used to page every table with
+ * `LIMIT 500 OFFSET n`, no ORDER BY, through the general connection pool. A row deleted
+ * before the next page shifted every unread row back by one and the dump skipped one:
+ * the 2026-10-14 code review started with 501 rows, deleted the first between pages, and
+ * got a successful 500-row backup — which the bundle's checksum then certified. And
+ * because every page was read at its own instant, a dump could hold a contact's park
+ * reference rows without the contact, or a child without its parent: a database that
+ * never existed. Now the whole dump is one REPEATABLE READ transaction, pinned to one
+ * connection, and every table is paged by primary key.
+ *
+ * WHAT PRISMA ACTUALLY SENDS. Prisma 6.19's engine (quaint's MySQL connector) opens this
+ * transaction as `SET TRANSACTION ISOLATION LEVEL REPEATABLE READ` followed by `BEGIN`.
+ * There is no way to ask it for mysqldump's `START TRANSACTION WITH CONSISTENT SNAPSHOT`
+ * — the engine binary contains no such statement — and sending one from in here would
+ * implicitly COMMIT Prisma's transaction and open a new one at the SESSION's isolation
+ * level, which on a server configured for READ COMMITTED takes no snapshot at all. It is
+ * also unnecessary: under REPEATABLE READ, InnoDB creates a transaction's read view at
+ * its FIRST consistent read, and every later consistent read in that transaction, on any
+ * table, sees that same view. The first page of the first table pins the snapshot, one
+ * statement later than WITH CONSISTENT SNAPSHOT would, and from there the dump is one
+ * instant of the database. The SHOW statements before it read the data dictionary, not
+ * rows; DDL against a table mid-dump makes MySQL refuse the read ("Table definition has
+ * changed") rather than return something inconsistent. MariaDB's InnoDB behaves the same.
+ *
+ * UNVERIFIED against a real server: scripts/check-backup-snapshot.ts proves the dump
+ * against a fake client that models the snapshot rule above, with writers deleting,
+ * inserting and updating mid-dump. A backup and restore on the real MySQL/MariaDB with
+ * the bridge writing decodes throughout is still owed. Non-InnoDB tables (MyISAM) have
+ * no snapshot at all; Prisma creates none.
  */
 export async function writeSqlDump(
   write: (s: string) => Promise<void>,
 ): Promise<{ tables: number; rows: number }> {
+  return prisma.$transaction((tx) => dumpSnapshot(tx, write), {
+    isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead,
+    timeout: DUMP_TIMEOUT_MS,
+    maxWait: DUMP_MAX_WAIT_MS,
+  });
+}
+
+async function dumpSnapshot(
+  db: RawReader,
+  write: (s: string) => Promise<void>,
+): Promise<{ tables: number; rows: number }> {
   let totalRows = 0;
   let tableCount = 0;
-  {
-    const tables = await listTables();
+  const tables = await listTables(db);
 
-    await write(
-      [
-        `-- DigiShack backup`,
-        `-- Created: ${new Date().toISOString()}`,
-        `-- Tables: ${tables.length}`,
-        `--`,
-        `-- Restore with the Backup page, or: gunzip -c FILE | mysql -u USER -p DBNAME`,
-        `--`,
-        `-- The settings in here include encrypted secrets. The key that decrypts them`,
-        `-- is SETTINGS_KEY in .env and is NOT part of this file — copy that across too`,
-        `-- or every service credential restores as unreadable ciphertext.`,
-        ``,
-        `SET FOREIGN_KEY_CHECKS=0;`,
-        `SET NAMES utf8mb4;`,
-        `SET SQL_MODE='NO_AUTO_VALUE_ON_ZERO';`,
-        ``,
-      ].join("\n"),
+  await write(
+    [
+      `-- DigiShack backup`,
+      `-- Created: ${new Date().toISOString()}`,
+      `-- Tables: ${tables.length}`,
+      `-- One consistent snapshot (a single REPEATABLE READ transaction), rows in primary-key order.`,
+      `--`,
+      `-- Restore with the Backup page, or: gunzip -c FILE | mysql -u USER -p DBNAME`,
+      `--`,
+      `-- The settings in here include encrypted secrets. The key that decrypts them`,
+      `-- is SETTINGS_KEY in .env and is NOT part of this file — copy that across too`,
+      `-- or every service credential restores as unreadable ciphertext.`,
+      ``,
+      `SET FOREIGN_KEY_CHECKS=0;`,
+      `SET NAMES utf8mb4;`,
+      `SET SQL_MODE='NO_AUTO_VALUE_ON_ZERO';`,
+      ``,
+    ].join("\n"),
+  );
+
+  for (const table of tables) {
+    const created = await db.$queryRawUnsafe<Record<string, string>[]>(
+      `SHOW CREATE TABLE ${ident(table)}`,
     );
+    const ddl = Object.values(created[0] ?? {})[1];
+    if (typeof ddl !== "string") throw new Error(`Could not read the schema for ${table}`);
 
-    for (const table of tables) {
-      const created = await prisma.$queryRawUnsafe<Record<string, string>[]>(
-        `SHOW CREATE TABLE ${ident(table)}`,
-      );
-      const ddl = Object.values(created[0] ?? {})[1];
-      if (typeof ddl !== "string") throw new Error(`Could not read the schema for ${table}`);
+    await write(`\n--\n-- ${table}\n--\n\n`);
+    await write(`DROP TABLE IF EXISTS ${ident(table)};\n${ddl};\n\n`);
+    tableCount++;
 
-      await write(`\n--\n-- ${table}\n--\n\n`);
-      await write(`DROP TABLE IF EXISTS ${ident(table)};\n${ddl};\n\n`);
-      tableCount++;
-
-      // Paged with LIMIT/OFFSET rather than loading the table. 26,000 QSOs with
-      // their text columns is not something to hold in memory all at once.
-      for (let offset = 0; ; offset += CHUNK) {
-        const rows = await prisma.$queryRawUnsafe<Record<string, unknown>[]>(
-          `SELECT * FROM ${ident(table)} LIMIT ${CHUNK} OFFSET ${offset}`,
-        );
-        if (rows.length === 0) break;
-
-        const cols = Object.keys(rows[0]!);
-        const colList = cols.map(ident).join(", ");
-        const values = rows
-          .map((r) => `(${cols.map((c) => sqlLiteral(r[c])).join(", ")})`)
-          .join(",\n  ");
-        await write(`INSERT INTO ${ident(table)} (${colList}) VALUES\n  ${values};\n`);
-
-        totalRows += rows.length;
-        if (rows.length < CHUNK) break;
-      }
-    }
-
-    await write(`\nSET FOREIGN_KEY_CHECKS=1;\n`);
+    // Paged rather than loaded whole: 40,000 QSOs with their text columns is not something
+    // to hold in memory all at once.
+    const key = await primaryKey(db, table);
+    totalRows +=
+      key.length > 0
+        ? await dumpByKey(db, table, key, write)
+        : await dumpWithoutKey(db, table, write);
   }
 
+  await write(`\nSET FOREIGN_KEY_CHECKS=1;\n`);
   return { tables: tableCount, rows: totalRows };
+}
+
+/** One INSERT for a batch of rows, columns in the order the server returned them. */
+function insertStatement(table: string, rows: Record<string, unknown>[]): string {
+  const cols = Object.keys(rows[0]!);
+  const colList = cols.map(ident).join(", ");
+  const values = rows
+    .map((r) => `(${cols.map((c) => sqlLiteral(r[c])).join(", ")})`)
+    .join(",\n  ");
+  return `INSERT INTO ${ident(table)} (${colList}) VALUES\n  ${values};\n`;
+}
+
+async function dumpByKey(
+  db: RawReader,
+  table: string,
+  key: string[],
+  write: (s: string) => Promise<void>,
+): Promise<number> {
+  let rows = 0;
+  let after: unknown[] | null = null;
+  for (;;) {
+    const { sql, params } = pageQuery(table, key, after);
+    const page = await db.$queryRawUnsafe<Record<string, unknown>[]>(sql, ...params);
+    if (page.length === 0) break;
+
+    await write(insertStatement(table, page));
+    rows += page.length;
+    if (page.length < CHUNK) break;
+
+    const last = page[page.length - 1]!;
+    after = key.map((col) => {
+      const v = last[col];
+      // A key column that did not come back would bind as nothing and restart or end the
+      // walk in the wrong place. Refuse rather than write a dump that is quietly short.
+      if (v === undefined || v === null) {
+        throw new Error(
+          `Could not page ${table}: its primary-key column ${col} came back ${v === null ? "NULL" : "missing"}`,
+        );
+      }
+      return v;
+    });
+  }
+  return rows;
+}
+
+/**
+ * A table with no primary key, read in one statement (still inside the snapshot).
+ *
+ * There is nothing to page it by that is both unique and ordered, and OFFSET over a sort
+ * of every column is deterministic only up to max_sort_length on long text. Every Prisma
+ * model has a key, so this is for tables something else created; it trades memory for an
+ * exact copy.
+ */
+async function dumpWithoutKey(
+  db: RawReader,
+  table: string,
+  write: (s: string) => Promise<void>,
+): Promise<number> {
+  const all = await db.$queryRawUnsafe<Record<string, unknown>[]>(
+    `SELECT * FROM ${ident(table)}`,
+  );
+  for (let i = 0; i < all.length; i += CHUNK) {
+    await write(insertStatement(table, all.slice(i, i + CHUNK)));
+  }
+  return all.length;
 }
 
 export interface RestoreResult {

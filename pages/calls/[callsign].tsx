@@ -1,12 +1,17 @@
 import Link from "next/link";
 import { useRouter } from "next/router";
+import type { MouseEvent, ReactNode } from "react";
 
+import { BandModeGrid } from "@/components/log/BandModeGrid";
+import { LinkButton, TextLink, qrzUrl } from "@/components/log/links";
+import { Notice } from "@/components/log/Notice";
+import { QslBadges } from "@/components/log/QslBadges";
 import { HelpTip } from "@/components/ui/HelpTip";
-import { Badge, Button, Card, ErrorBanner, PageHeader, Td, Th } from "@/components/ui/primitives";
+import { Badge, Card, EmptyState, ErrorBanner, PageHeader, Td, Th } from "@/components/ui/primitives";
 import { withPageAuth } from "@/lib/auth/guard";
 import { useApi } from "@/lib/client/api";
 import { formatFreqMHz } from "@/lib/ham/bands";
-import { formatUtc } from "@/lib/time";
+import { formatUtc, formatUtcDate } from "@/lib/time";
 
 // One station's history with us.
 //
@@ -62,6 +67,25 @@ export default function CallsignPage() {
     call ? `/api/callsign/${encodeURIComponent(call)}` : null,
   );
 
+  // The row opens the contact; its own link keeps its click.
+  function openRow(e: MouseEvent<HTMLTableRowElement>, id: string) {
+    if ((e.target as HTMLElement).closest("a, button")) return;
+    if (window.getSelection()?.toString()) return;
+    void router.push(`/qsos/${id}`);
+  }
+
+  const details: [string, string][] = [];
+  if (data) {
+    const all: [string, string | null][] = [
+      ["Name", data.name],
+      ["QTH", data.qth],
+      ["Grid", data.gridSquare],
+      ["State", data.state],
+      ["DXCC", data.dxcc !== null ? String(data.dxcc) : null],
+    ];
+    for (const [label, value] of all) if (value) details.push([label, value]);
+  }
+
   return (
     <>
       <PageHeader
@@ -69,184 +93,215 @@ export default function CallsignPage() {
         subtitle={
           data
             ? data.worked
-              ? `${data.qsos} contact${data.qsos === 1 ? "" : "s"}, ${data.confirmedQsos} confirmed`
+              ? `${data.qsos.toLocaleString()} contact${data.qsos === 1 ? "" : "s"}, ${data.confirmedQsos.toLocaleString()} confirmed`
               : "Never worked"
             : undefined
         }
         actions={
           <>
-            <Link href={`/qsos?q=${encodeURIComponent(call)}`}>
-              <Button>Open in log</Button>
-            </Link>
-            <Link href="/stats">
-              <Button>Statistics</Button>
-            </Link>
+            <LinkButton href={`/qsos?q=${encodeURIComponent(call)}`}>Open in log</LinkButton>
+            {call && (
+              <LinkButton href={qrzUrl(call)} kind="external" variant="ghost">
+                QRZ
+              </LinkButton>
+            )}
+            <LinkButton href="/stats" variant="ghost">
+              Statistics
+            </LinkButton>
           </>
         }
       />
 
       {error && <ErrorBanner>{error.message}</ErrorBanner>}
-      {!data && !error && <p className="text-sm text-fg-subtle">Reading the log…</p>}
+      {!data && !error && (
+        <p role="status" className="text-sm text-fg-subtle">
+          Reading the log…
+        </p>
+      )}
 
       {data && (
         <div className="flex flex-col gap-6">
           {/* The two flags that change what an operator should DO, above everything else.
-              Buried further down they would be read after the decision was made. */}
+              Further down they would be read after the decision was made. */}
           {data.doNotCall && (
-            <div className="border border-danger/40 bg-danger/10 text-danger text-sm px-3 py-2 rounded-sm">
-              <strong>On the do-not-call list.</strong> Automatic operating will not call them,
-              and neither should you without a reason to think the entry is wrong.
-            </div>
+            <Notice tone="danger">
+              <span>
+                <strong>On the do-not-call list.</strong> Automatic operating will not call
+                them, and neither should you without a reason to think the entry is wrong.
+              </span>
+            </Notice>
           )}
           {data.qslOptOut && (
-            <div className="border border-warn/40 bg-warn/10 text-warn text-sm px-3 py-2 rounded-sm">
-              <strong>Has asked not to receive QSL email.</strong> Contacts are fine; cards are
-              not.
-            </div>
+            <Notice tone="warn">
+              <span>
+                <strong>Has asked not to receive QSL email.</strong> Contacts are fine; cards
+                are not.
+              </span>
+            </Notice>
           )}
 
           {!data.worked ? (
-            <Card title="Not in the log">
-              <p className="text-sm text-fg-muted">
-                No contact with {data.callsign} has ever been logged here. That is the answer
-                the decodes page needs before calling someone, so it is reported rather than
-                treated as a missing page.
-              </p>
+            <Card>
+              <EmptyState title="Not in the log">
+                No contact with {data.callsign} has ever been logged here — the answer the
+                decodes page needs before calling someone.
+              </EmptyState>
             </Card>
           ) : (
             <>
-              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                <Card title="First worked">
-                  <div className="text-sm tnum">{formatUtc(data.firstWorked!)}</div>
-                </Card>
-                <Card title="Last worked">
-                  <div className="text-sm tnum">{formatUtc(data.lastWorked!)}</div>
-                </Card>
-                <Card title="Bands">
-                  <div className="text-sm font-mono">{data.bands.join(", ")}</div>
-                </Card>
-                <Card title="Modes">
-                  <div className="text-sm font-mono">{data.modes.join(", ")}</div>
-                </Card>
-              </div>
-
-              {(data.name || data.qth || data.gridSquare || data.state) && (
-                <Card title="From the log">
-                  <div className="flex flex-wrap gap-x-6 gap-y-1 text-sm">
-                    {data.name && (
-                      <span>
-                        <span className="text-fg-subtle">Name</span> {data.name}
-                      </span>
-                    )}
-                    {data.qth && (
-                      <span>
-                        <span className="text-fg-subtle">QTH</span> {data.qth}
-                      </span>
-                    )}
-                    {data.gridSquare && (
-                      <span>
-                        <span className="text-fg-subtle">Grid</span>{" "}
-                        <span className="font-mono">{data.gridSquare}</span>
-                      </span>
-                    )}
-                    {data.state && (
-                      <span>
-                        <span className="text-fg-subtle">State</span> {data.state}
-                      </span>
-                    )}
+              <Card>
+                <dl className="grid grid-cols-2 gap-x-6 gap-y-4 sm:grid-cols-4">
+                  <SummaryItem label="Contacts">
+                    <span className="font-display text-2xl">{data.qsos.toLocaleString()}</span>
+                  </SummaryItem>
+                  <SummaryItem label="Confirmed">
+                    <span className="font-display text-2xl">
+                      {data.confirmedQsos.toLocaleString()}
+                    </span>
+                    <span className="text-sm text-fg-muted"> of {data.qsos.toLocaleString()}</span>
+                  </SummaryItem>
+                  <SummaryItem label="First worked">{formatUtc(data.firstWorked)}</SummaryItem>
+                  <SummaryItem label="Last worked">{formatUtc(data.lastWorked)}</SummaryItem>
+                </dl>
+                {details.length > 0 && (
+                  <div className="mt-4 border-t border-line pt-3">
+                    <dl className="flex flex-wrap gap-x-6 gap-y-1 text-sm">
+                      {details.map(([label, value]) => (
+                        <div key={label} className="flex gap-1.5">
+                          <dt className="text-fg-subtle">{label}</dt>
+                          <dd className="text-fg tnum">{value}</dd>
+                        </div>
+                      ))}
+                    </dl>
+                    <p className="mt-2 text-xs text-fg-subtle">
+                      From the most recent contact that recorded each field. A blank on a
+                      newer contact does not erase what an older one knew.
+                    </p>
                   </div>
-                  <p className="text-xs text-fg-subtle mt-2">
-                    The most recent contact that recorded each field. A blank on a newer
-                    contact does not erase what an older one knew.
-                  </p>
-                </Card>
-              )}
-              <Card title="Band and mode">
-                <div className="flex items-center gap-2 mb-3">
-                  <span className="text-xs text-fg-subtle">
-                    Every band and mode this station has been worked on, and whether it is
-                    confirmed.
-                  </span>
-                  <HelpTip label="About band and mode">
+                )}
+              </Card>
+
+              <Card
+                title="Band and mode"
+                actions={
+                  <HelpTip label="About band and mode" align="right">
                     This is the unit that matters. A station confirmed on 20 m FT8 and merely
                     worked on 40 m FT8 is two different situations, and a single
-                    &quot;confirmed&quot; flag on the callsign hides that — which is exactly why
-                    filtering the log to a callsign answers the question badly.
+                    &quot;confirmed&quot; flag on the callsign hides that.
                     <br />
                     <br />
                     Any confirmed contact confirms the slice. A later unconfirmed contact on the
                     same band and mode does not undo an earlier credit.
                   </HelpTip>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  {data.slices.map((s) => (
-                    <div
-                      key={`${s.band}|${s.mode}`}
-                      className={`rounded border px-2 py-1 text-xs ${
-                        s.confirmed
-                          ? "border-ok/50 bg-ok/10"
-                          : "border-line bg-bg-subtle/40"
-                      }`}
-                      title={`Last worked ${formatUtc(s.lastWorked)}`}
-                    >
-                      <div className="font-mono font-medium">
-                        {s.band} {s.mode}
-                      </div>
-                      <div className="text-fg-subtle tnum">
-                        {s.qsos}×{s.confirmed ? " · confirmed" : " · unconfirmed"}
-                      </div>
-                    </div>
-                  ))}
-                </div>
+                }
+              >
+                <BandModeGrid slices={data.slices} />
+                <p className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-fg-subtle">
+                  <span className="inline-flex items-center gap-1.5">
+                    <Badge size="sm" tone="ok">
+                      ✓ 2
+                    </Badge>
+                    confirmed
+                  </span>
+                  <span className="inline-flex items-center gap-1.5">
+                    <Badge size="sm">2</Badge>
+                    worked, not confirmed
+                  </span>
+                  <span>Numbers are contacts.</span>
+                </p>
               </Card>
 
-              <Card title={`Contacts (${data.recent.length} of ${data.qsos})`}>
+              <Card
+                title="Contacts"
+                actions={
+                  <span className="text-xs text-fg-subtle tnum">
+                    {data.recent.length < data.qsos
+                      ? `Latest ${data.recent.length} of ${data.qsos.toLocaleString()}`
+                      : `All ${data.qsos.toLocaleString()}`}
+                  </span>
+                }
+              >
                 <div className="overflow-x-auto">
-                  <table className="w-full text-sm border-collapse">
+                  <table className="w-full border-collapse text-sm">
                     <thead>
                       <tr className="text-left">
-                        {["When", "Band", "Mode", "Frequency", "Sent", "Rcvd", "QSL"].map((h) => (
-                          <Th key={h}>{h}</Th>
-                        ))}
+                        <Th size="sm">When (UTC)</Th>
+                        <Th size="sm">Band</Th>
+                        <Th size="sm">Mode</Th>
+                        <Th size="sm" className="hidden sm:table-cell">
+                          Frequency
+                        </Th>
+                        <Th size="sm" className="hidden sm:table-cell">
+                          Sent
+                        </Th>
+                        <Th size="sm" className="hidden sm:table-cell">
+                          Rcvd
+                        </Th>
+                        <Th size="sm">QSL</Th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-line">
                       {data.recent.map((q) => (
-                        <tr key={q.id}>
-                          <Td className="tnum whitespace-nowrap">
+                        <tr
+                          key={q.id}
+                          className="cursor-pointer hover:bg-surface-2 focus-within:bg-surface-2"
+                          onClick={(e) => openRow(e, q.id)}
+                        >
+                          <Td size="sm" className="tnum">
                             <Link
                               href={`/qsos/${q.id}`}
-                              className="hover:text-accent-bright"
+                              className="text-fg underline-offset-2 hover:underline"
                             >
-                              {formatUtc(q.startTime)}
+                              {/* The date alone on a phone; the column is the narrowest there. */}
+                              <span className="sm:hidden">{formatUtcDate(q.startTime)}</span>
+                              <span className="hidden sm:inline">{formatUtc(q.startTime)}</span>
                             </Link>
                           </Td>
-                          <Td className="font-mono">{q.band}</Td>
-                          <Td className="font-mono">{q.mode}</Td>
-                          <Td className="tnum text-fg-muted">
+                          <Td size="sm">
+                            <Badge size="sm">{q.band}</Badge>
+                          </Td>
+                          <Td size="sm">
+                            <Badge size="sm">{q.mode}</Badge>
+                          </Td>
+                          <Td size="sm" className="hidden tnum text-fg-muted sm:table-cell">
                             {q.freqHz ? formatFreqMHz(q.freqHz) : "—"}
                           </Td>
-                          <Td className="tnum text-fg-muted">{q.rstSent ?? "—"}</Td>
-                          <Td className="tnum text-fg-muted">{q.rstRcvd ?? "—"}</Td>
-                          <Td>
-                            <div className="flex gap-1">
-                              {q.lotwRcvd && <Badge tone="ok">L</Badge>}
-                              {q.eqslRcvd && <Badge tone="ok">e</Badge>}
-                              {q.qslRcvd === "CONFIRMED" && <Badge tone="ok">Card</Badge>}
-                              {!q.confirmed && <span className="text-fg-subtle">—</span>}
-                            </div>
+                          <Td size="sm" className="hidden tnum text-fg-muted sm:table-cell">
+                            {q.rstSent ?? "—"}
+                          </Td>
+                          <Td size="sm" className="hidden tnum text-fg-muted sm:table-cell">
+                            {q.rstRcvd ?? "—"}
+                          </Td>
+                          <Td size="sm">
+                            <QslBadges qso={q} />
                           </Td>
                         </tr>
                       ))}
                     </tbody>
                   </table>
                 </div>
+                {data.recent.length < data.qsos && (
+                  <div className="mt-3">
+                    <TextLink href={`/qsos?q=${encodeURIComponent(data.callsign)}`} className="text-sm">
+                      See all {data.qsos.toLocaleString()} in the log
+                    </TextLink>
+                  </div>
+                )}
               </Card>
             </>
           )}
         </div>
       )}
     </>
+  );
+}
+
+function SummaryItem({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="min-w-0">
+      <dt className="text-xs text-fg-subtle">{label}</dt>
+      <dd className="mt-0.5 text-sm text-fg tnum">{children}</dd>
+    </div>
   );
 }
 
