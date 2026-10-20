@@ -10,6 +10,10 @@
 // for the two processes, so nothing process-local can be what makes it pass — against the
 // in-memory database model in scripts/fake-db.ts. SMTP is a fake nodemailer transport; the
 // configured host is under .invalid, so even a failed patch could not deliver anything.
+//
+// Also: a THROW between the claim and SMTP (the opt-out lookup, a settings read, the card)
+// releases the claim to FAILED instead of stranding the row SENT — only a crash after SMTP
+// accepted the message may leave an unconfirmed send.
 
 import nodemailer from "nodemailer";
 
@@ -176,6 +180,79 @@ async function main() {
       "and the row reads as an unconfirmed send (SENT, claim still in error)",
       JSON.stringify({ status: r?.status, error: r?.error }),
     );
+  }
+
+  // Anything that THROWS between the claim and SMTP has sent nothing, and used to strand the
+  // row anyway: SENT, `sending since …`, the QSO never flagged and never offered again.
+  const notStranded = (id: string) => {
+    const r = row(id);
+    return !!r && !web.isUnconfirmedSend({ status: String(r.status), error: (r.error as string | null) ?? null });
+  };
+  const qsoFlagged = (call: string) => db.rows("qso").find((q) => q.id === `qso-${call}`)?.emailQslSent === true;
+
+  console.log("\nthe opt-out lookup fails after the claim (a database error, not an opt-out)");
+  {
+    seed(["K8HHH"]);
+    let fired = 0;
+    db.beforeStatement = (op, table) => {
+      if (op === "SELECT" && table === "qslOptOut") {
+        fired++;
+        throw new Error("simulated: opt-out lookup failed");
+      }
+    };
+    const r = await web.sendApprovedQsls({ limit: 10 });
+    db.beforeStatement = null;
+    ok(fired === 1, "the lookup really was reached and failed", String(fired));
+    ok(timesMailed("K8HHH") === 0, "nothing is mailed when the opt-out list cannot be read", `${timesMailed("K8HHH")} messages`);
+    ok(row("q-K8HHH")?.status === "FAILED", "the claim is released to FAILED, not left SENT", String(row("q-K8HHH")?.status));
+    ok(notStranded("q-K8HHH"), "so it does not read as an unconfirmed send", String(row("q-K8HHH")?.error));
+    ok(String(row("q-K8HHH")?.error ?? "").includes("opt-out lookup failed"), "and the reason is on the row for the Failed tab");
+    ok(!qsoFlagged("K8HHH"), "the QSO is not flagged as emailed");
+    ok(r.failed === 1 && r.attempted === r.sent + r.failed, "reported as one failure, attempted = sent + failed", JSON.stringify(r));
+  }
+
+  console.log("\nthe SMTP settings read fails after the claim (inside sendQslEmail, before its try)");
+  {
+    seed(["K9III"]);
+    let armed = false;
+    let fired = 0;
+    db.beforeStatement = (op, table) => {
+      if (op === "UPDATE" && table === "qslEmail" && !armed && fired === 0) {
+        // The claim just happened. Expire the settings cache so the next read goes to the
+        // database, and make that read fail.
+        armed = true;
+        delete (globalThis as { __digishackSettings?: unknown }).__digishackSettings;
+        return;
+      }
+      if (armed && op === "SELECT" && table === "setting") {
+        armed = false;
+        fired++;
+        throw new Error("simulated: settings unreadable");
+      }
+    };
+    await web.sendApprovedQsls({ limit: 10 });
+    db.beforeStatement = null;
+    ok(fired === 1, "a settings read after the claim really failed", String(fired));
+    ok(timesMailed("K9III") === 0, "nothing is mailed");
+    ok(row("q-K9III")?.status === "FAILED" && notStranded("q-K9III"), "and the row is FAILED, not stranded SENT", JSON.stringify({ status: row("q-K9III")?.status, error: row("q-K9III")?.error }));
+  }
+
+  console.log("\nthe card's reads fail (they now run before the claim, and cannot throw at all)");
+  {
+    seed(["K0JJJ"]);
+    let fired = 0;
+    db.beforeStatement = (op, table) => {
+      if (op === "SELECT" && table === "qso" && fired === 0) {
+        fired++;
+        throw new Error("simulated: QSO lookup for the card failed");
+      }
+    };
+    await web.sendApprovedQsls({ limit: 10 });
+    db.beforeStatement = null;
+    ok(fired === 1, "the card's QSO lookup really failed", String(fired));
+    ok(timesMailed("K0JJJ") === 1, "the QSL still goes, without its card", `${timesMailed("K0JJJ")} messages`);
+    ok(row("q-K0JJJ")?.status === "SENT" && row("q-K0JJJ")?.error === null, "recorded as sent, claim cleared");
+    ok(qsoFlagged("K0JJJ"), "and the QSO is flagged");
   }
 
   console.log(`\n${pass} passed, ${fail} failed\n`);

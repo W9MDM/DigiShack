@@ -1,4 +1,5 @@
 import type { GetServerSidePropsContext } from "next";
+import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { modulationForFrequency } from "@/lib/radio/modes";
@@ -23,9 +24,15 @@ import { bridgeWsUrl } from "@/lib/bridge/ws-url";
 import { ApiError, apiPost, useApi } from "@/lib/client/api";
 import { useReceiverAudio } from "@/lib/client/use-receiver-audio";
 import { useBridgeSocket } from "@/lib/client/use-bridge-socket";
+import type { ClusterApiResponse, ClusterSpot } from "@/lib/cluster/types";
+import { filterSpots, isClusterSpot, toPanadapterSpots, upsertSpot } from "@/lib/cluster/view";
 import { formatFreqMHz } from "@/lib/ham/bands";
 import { radioCapabilities } from "@/lib/radio/capabilities";
+import { decodeBase64Bins } from "@/lib/spectrum/wire";
 import { useVisibleInterval } from "@/lib/client/use-visible-interval";
+
+/** DX cluster spots older than this (by their latest repeat) are left off the panadapter. */
+const DX_SPOT_MAX_AGE_MIN = 30;
 
 // CAT control for the radio DigiShack is already connected to.
 //
@@ -101,6 +108,8 @@ export default function RigPage({ wsUrl }: Props) {
   // RF panadapter (the Icom today) still shows a live waterfall here instead of a bare note.
   const [audioSpec, setAudioSpec] = useState<{ bins: Uint8Array; at: number } | null>(null);
   const [audioScale, setAudioScale] = useState<{ binHz: number; maxHz: number; periodMs: number } | null>(null);
+  // DX cluster spots: the bridge's list once, then each new spot off the same socket.
+  const [clusterSpots, setClusterSpots] = useState<ClusterSpot[]>([]);
   const { connected: wsConnected } = useBridgeSocket(wsUrl, (msg) => {
     if (msg.kind === "panadapter") {
       const m = msg as unknown as {
@@ -113,7 +122,7 @@ export default function RigPage({ wsUrl }: Props) {
         at: number;
         radio: string;
       };
-      setPan({ bins: decodeSpectrumBins(m.bins), at: m.at });
+      setPan({ bins: decodeBase64Bins(m.bins), at: m.at });
       setPanReceivedAt(Date.now());
       setPanScale({
         centerHz: m.centerHz,
@@ -127,8 +136,11 @@ export default function RigPage({ wsUrl }: Props) {
       // The audio spectrum (receiver passband), broadcast by every source including the
       // Icom. The RF panadapter is FlexRadio-only today; this is the fallback.
       const s = msg as unknown as { bins: string; binHz: number; maxHz: number; at: number; periodMs: number };
-      setAudioSpec({ bins: decodeSpectrumBins(s.bins), at: s.at });
+      setAudioSpec({ bins: decodeBase64Bins(s.bins), at: s.at });
       setAudioScale({ binHz: s.binHz, maxHz: s.maxHz, periodMs: s.periodMs });
+    } else if (msg.kind === "spot" && isClusterSpot(msg.spot)) {
+      const spot = msg.spot;
+      setClusterSpots((p) => upsertSpot(p, spot));
     }
   });
 
@@ -212,6 +224,29 @@ export default function RigPage({ wsUrl }: Props) {
     [spotData],
   );
 
+  // DX cluster spots on the same overlay, only while the cluster is switched on. The list is
+  // re-read now and then for spots missed while the socket was down, and for the setting.
+  const { data: clusterData, reload: reloadCluster } = useApi<ClusterApiResponse>("/api/cluster/spots");
+  const clusterOn = clusterData?.settingEnabled === true && clusterData.cluster?.enabled === true;
+  useEffect(() => {
+    setClusterSpots(clusterData?.cluster?.spots ?? []);
+  }, [clusterData]);
+  useVisibleInterval(() => void reloadCluster(), 60_000);
+  const [clusterNow, setClusterNow] = useState(() => Date.now());
+  useVisibleInterval(() => setClusterNow(Date.now()), 60_000);
+
+  const allSpots = useMemo(() => {
+    const band = status?.band?.toUpperCase();
+    if (!clusterOn || !band) return panSpots;
+    const dx = filterSpots(
+      clusterSpots,
+      { band, category: "ALL", neededOnly: false, maxAgeMin: DX_SPOT_MAX_AGE_MIN },
+      clusterNow,
+    );
+    // The Panadapter draws every spot alike, so the label says which list it came from.
+    return [...panSpots, ...toPanadapterSpots(dx).map((s) => ({ ...s, callsign: `DX ${s.callsign}` }))];
+  }, [panSpots, clusterOn, clusterSpots, clusterNow, status?.band]);
+
   // ---- Nudging the dial with the arrow keys ----
   //
   // Deliberately NOT routed through send(): browser auto-repeat delivers keydown every few
@@ -246,6 +281,9 @@ export default function RigPage({ wsUrl }: Props) {
       ) {
         return;
       }
+      // Nor from a menu, the nav drawer or a dialog: arrows move through those, and an
+      // ArrowDown through the drawer's links used to retune the radio behind it.
+      if (t?.closest?.('nav, [role="dialog"], [role="menu"], [aria-modal="true"]')) return;
       // Leave browser and OS shortcuts alone. Shift is ours — it means a coarser step.
       if (e.ctrlKey || e.metaKey || e.altKey) return;
 
@@ -513,7 +551,7 @@ export default function RigPage({ wsUrl }: Props) {
             // The radio's real filter, so the shaded passband is the slice's actual width.
             filterLoHz={status?.receiver?.filterLo ?? null}
             filterHiHz={status?.receiver?.filterHi ?? null}
-            spots={panSpots}
+            spots={allSpots}
             // A spot goes to the EXACT spotted frequency, unsnapped, and takes the
             // modulation with it: rounding a stated frequency to the step moves off the
             // very signal aimed at, and arriving on a POTA SSB frequency in a data mode is a
@@ -544,7 +582,19 @@ export default function RigPage({ wsUrl }: Props) {
                 }),
               );
             }}
-            caption={`${formatFreqMHz(panScale.centerHz - panScale.spanHz / 2)}–${formatFreqMHz(panScale.centerHz + panScale.spanHz / 2)} MHz · ${panScale.radio}`}
+            caption={
+              <>
+                {`${formatFreqMHz(panScale.centerHz - panScale.spanHz / 2)}–${formatFreqMHz(panScale.centerHz + panScale.spanHz / 2)} MHz · ${panScale.radio}`}
+                {" · "}
+                <Link
+                  href="/spectrum?source=rf&view=3d"
+                  className="text-accent-bright hover:underline"
+                  title="This band as a spectrogram and 3D waterfall"
+                >
+                  Open spectrum
+                </Link>
+              </>
+            }
             stale={panStale}
           />
         ) : !caps.panadapter && audioSpec && audioScale ? (
@@ -558,6 +608,13 @@ export default function RigPage({ wsUrl }: Props) {
                 passband the radio is demodulating, not tens of kHz of band; the Decodes
                 page marks decode offsets on the same spectrum.
               </HelpTip>
+              <Link
+                href="/spectrum?source=audio"
+                className="ml-auto text-accent-bright hover:underline"
+                title="The receiver audio as a spectrogram and 3D waterfall"
+              >
+                Open spectrum
+              </Link>
             </div>
             <Waterfall
               row={audioSpec}
@@ -661,14 +718,3 @@ export const getServerSideProps = withPageAuth<Props>({
     return { props: { wsUrl } };
   },
 });
-
-/**
- * Spectrum bins arrive base64-encoded, one byte per bin: a 512-bin row every 250 ms is
- * 4 kB/s of JSON digits against 700 bytes of text, over a socket held open all day.
- */
-function decodeSpectrumBins(b64: string): Uint8Array {
-  const raw = atob(b64);
-  const out = new Uint8Array(raw.length);
-  for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
-  return out;
-}

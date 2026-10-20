@@ -4,8 +4,10 @@ import { useState, type ReactNode } from "react";
 import { GatewayBadge } from "@/components/qsl/GatewayBadge";
 import { QslPreviewDialog } from "@/components/qsl/QslPreviewDialog";
 import { QslSectionNav, StatusTabs, tabId, tabPanelId } from "@/components/qsl/QslNav";
+import { ResendQslButton } from "@/components/qsl/ResendQslButton";
 import { callList, Notice, plural, TickBox } from "@/components/qsl/controls";
 import type { QslQueueEntry, QslQueueStatus } from "@/components/qsl/queue-types";
+import { describeSendResult } from "@/components/qsl/send-summary";
 import { HelpTip } from "@/components/ui/HelpTip";
 import {
   Button,
@@ -15,8 +17,9 @@ import {
   PageHeader,
 } from "@/components/ui/primitives";
 import { withPageAuth } from "@/lib/auth/guard";
-import { ApiError, apiPost, isNetworkFailure, useApi } from "@/lib/client/api";
+import { ApiError, apiGet, apiPost, isNetworkFailure, useApi } from "@/lib/client/api";
 import { useCan } from "@/lib/client/session";
+import { isUnconfirmedSend, unconfirmedSendState } from "@/lib/qsl/unconfirmed";
 import { formatUtc, formatUtcDate } from "@/lib/time";
 import { cn } from "@/lib/utils";
 
@@ -32,9 +35,11 @@ import { cn } from "@/lib/utils";
 // like a queue waiting for a person — same rows, same badges, same counts. `sender` on the
 // queue response is the missing half; see QslSenderCheck in pages/api/qsl/queue.ts.
 //
-// Each tab fetches its own status (`?status=`). The unfiltered GET returns the 200 OLDEST
-// non-skipped rows, so on a station with a long sent history the pending and approved rows
-// — the newest — were not in the response at all, while the counts said they existed.
+// Each tab fetches its own status (`?status=`), a page at a time with "Load more". The
+// unfiltered GET returned the 200 OLDEST non-skipped rows, so on a station with a long sent
+// history the pending and approved rows — the newest — were not in the response at all, while
+// the counts said they existed. Sent is listed newest first (it is history); Pending is oldest
+// first and Approved in send order, as the work is done.
 
 interface Candidate {
   qsoId: string;
@@ -59,9 +64,19 @@ interface QslSenderStatus {
 
 interface QueueResponse {
   queue: QslQueueEntry[];
+  /** Pass back as `?cursor=` for the next page; null on the last one. */
+  nextCursor?: string | null;
   counts: Record<string, number>;
+  /** SENT rows whose sender died before recording the outcome. */
+  interrupted?: number;
   candidates: Candidate[];
   sender?: QslSenderStatus;
+}
+
+/** What a `?cursor=` request returns: the next rows and nothing else. */
+interface QueuePage {
+  queue: QslQueueEntry[];
+  nextCursor: string | null;
 }
 
 interface EnqueueResult {
@@ -127,25 +142,8 @@ function num(v: unknown): number {
   return typeof v === "number" && Number.isFinite(v) ? v : 0;
 }
 
-function describeSend(r: Record<string, unknown>): NoticeState {
-  const attempted = num(r.attempted);
-  const sent = num(r.sent);
-  const failed = num(r.failed);
-  if (attempted === 0) {
-    return {
-      tone: "warn",
-      text: "Nothing was sent: no approved messages were waiting. The radio service may have sent them already.",
-    };
-  }
-  if (failed === 0) return { tone: "ok", text: `Sent ${sent} of ${attempted}.` };
-  const failures = Array.isArray(r.failures)
-    ? (r.failures as { callsign?: string }[]).map((f) => f.callsign ?? "?")
-    : [];
-  return {
-    tone: "warn",
-    text: `Sent ${sent} of ${attempted}. ${failed} failed${failures.length ? ` (${callList(failures, 5)})` : ""} — the reasons are on the Failed tab.`,
-  };
-}
+/** Sent / failed / skipped / taken by another sender — see components/qsl/send-summary.ts. */
+const describeSend = (r: Record<string, unknown>): NoticeState => describeSendResult(r);
 
 /**
  * Whether anything is sending, said before the queue rather than deduced from it.
@@ -418,6 +416,8 @@ function QueueRow({
   selected,
   onToggle,
   onPreview,
+  canAct,
+  onResent,
 }: {
   entry: QslQueueEntry;
   tab: TabId;
@@ -425,10 +425,16 @@ function QueueRow({
   selected: boolean;
   onToggle: () => void;
   onPreview: () => void;
+  canAct: boolean;
+  onResent: () => void;
 }) {
+  // A SENT row still carrying its sender's claim: the mail server may or may not have taken
+  // it. At-most-once (lib/qsl/queue.ts) means nothing automatic sends it again, so the page
+  // is the only place anybody learns of it.
+  const unconfirmed = tab === "sent" ? unconfirmedSendState(entry) : null;
   const meta =
     tab === "sent" && entry.sentAt
-      ? `Sent ${formatUtc(entry.sentAt)}`
+      ? `${unconfirmed ? "Claimed" : "Sent"} ${formatUtc(entry.sentAt)}`
       : tab === "approved"
         ? entry.approvedBy
           ? `Approved by ${entry.approvedBy.name}`
@@ -447,6 +453,14 @@ function QueueRow({
       <div className="flex min-w-0 flex-1 flex-col gap-0.5">
         <div className="flex flex-wrap items-baseline gap-x-2">
           <span className="font-mono text-sm text-fg">{entry.callsign}</span>
+          {unconfirmed === "interrupted" && (
+            <span className="rounded-sm border border-warn/50 px-1 text-xs text-warn">
+              Sent? — interrupted
+            </span>
+          )}
+          {unconfirmed === "in-flight" && (
+            <span className="rounded-sm border border-line px-1 text-xs text-fg-muted">Sending…</span>
+          )}
           {entry.qso && (
             <span className="tnum text-xs text-fg-subtle">
               {entry.qso.band} · {entry.qso.mode} · {formatUtc(entry.qso.startTime)}
@@ -461,6 +475,31 @@ function QueueRow({
         {meta && <p className="tnum text-xs text-fg-subtle sm:hidden">{meta}</p>}
         {tab === "failed" && entry.error && (
           <p className="text-xs text-danger break-words">{entry.error}</p>
+        )}
+        {unconfirmed === "interrupted" && (
+          <div className="mt-1 flex flex-col gap-1.5">
+            <p className="text-xs text-warn">
+              The sender stopped after taking this message and before recording what happened, so
+              nobody knows whether the mail server accepted it. It will not be retried on its own —
+              a duplicate to a stranger is worse than a missing QSL.
+              {canAct ? " Resend queues it again for review." : ""}
+            </p>
+            {canAct && (
+              <ResendQslButton
+                qsoId={entry.qsoId}
+                callsign={entry.callsign}
+                variant="button"
+                label="Resend"
+                onQueued={onResent}
+              />
+            )}
+          </div>
+        )}
+        {unconfirmed === "in-flight" && (
+          <p className="text-xs text-fg-muted">
+            A sender has it now. If this is still here in a quarter of an hour, that send was
+            interrupted.
+          </p>
         )}
       </div>
       {meta && <span className="tnum hidden shrink-0 pt-0.5 text-xs text-fg-subtle sm:block">{meta}</span>}
@@ -482,9 +521,11 @@ export default function QslPage() {
   const tab = parseTab(router.query.tab);
   const tabDef = TABS.find((t) => t.id === tab) ?? TABS[0]!;
 
-  const { data, error, loading, reload } = useApi<QueueResponse>(
-    `/api/qsl/queue?status=${tabDef.status}`,
-  );
+  // Sent tab only: just the sends whose outcome was never recorded.
+  const [onlyInterrupted, setOnlyInterrupted] = useState(false);
+  const interruptedFilter = tab === "sent" && onlyInterrupted;
+  const path = `/api/qsl/queue?status=${tabDef.status}${interruptedFilter ? "&unconfirmed=1" : ""}`;
+  const { data, error, loading, reload } = useApi<QueueResponse>(path);
   const canAct = useCan("ADMIN");
 
   const [busy, setBusy] = useState<string | null>(null);
@@ -494,21 +535,58 @@ export default function QslPage() {
   const [approveArmedFor, setApproveArmedFor] = useState<number | null>(null);
   const [preview, setPreview] = useState<QslQueueEntry | null>(null);
 
+  // Pages after the first, from "Load more". Keyed by the list they continue, so switching
+  // tab or filter drops them without an effect; `firstPage` pins them to the response they
+  // were fetched after, so a reload of the first page drops them too rather than splicing a
+  // fresh head onto a stale tail.
+  const [more, setMore] = useState<{
+    path: string;
+    firstPage: QueueResponse;
+    rows: QslQueueEntry[];
+    cursor: string | null;
+  } | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [moreError, setMoreError] = useState<string | null>(null);
+  const extra = more && more.path === path && more.firstPage === data ? more : null;
+
   const counts = data?.counts ?? {};
   const candidates = data?.candidates ?? [];
   const sender = data?.sender;
   const autoSends = sender ? sender.sending : null;
   const approvedWaiting = counts.APPROVED ?? 0;
+  const interrupted = data?.interrupted ?? 0;
+  const nextCursor = extra ? extra.cursor : (data?.nextCursor ?? null);
 
   // Rows of THIS tab only: while a tab switch is in flight `data` still holds the last
-  // tab's rows, and showing them under the new heading would be a lie.
-  const rows = (data?.queue ?? []).filter((q) => q.status === tabDef.status);
-  if (tab === "approved") {
-    rows.sort((a, b) => (a.approvedAt ?? a.createdAt).localeCompare(b.approvedAt ?? b.createdAt));
-  } else if (tab === "sent") {
-    rows.sort((a, b) => (b.sentAt ?? "").localeCompare(a.sentAt ?? ""));
-  }
+  // tab's rows, and showing them under the new heading would be a lie. The server orders
+  // them (Sent newest first, Approved in send order, the rest oldest first); a row that
+  // moved between pages while they were being read appears once.
+  const seen = new Set<string>();
+  const rows = [...(data?.queue ?? []), ...(extra?.rows ?? [])].filter((q) => {
+    if (q.status !== tabDef.status || seen.has(q.id)) return false;
+    if (interruptedFilter && !isUnconfirmedSend(q)) return false;
+    seen.add(q.id);
+    return true;
+  });
   const total = counts[tabDef.status] ?? rows.length;
+
+  async function loadMore() {
+    if (!data || !nextCursor) return;
+    const firstPage = data;
+    setLoadingMore(true);
+    setMoreError(null);
+    try {
+      const page = await apiGet<QueuePage>(`${path}&cursor=${encodeURIComponent(nextCursor)}`);
+      setMore((m) => {
+        const base = m && m.path === path && m.firstPage === firstPage ? m.rows : [];
+        return { path, firstPage, rows: [...base, ...page.queue], cursor: page.nextCursor };
+      });
+    } catch (err) {
+      setMoreError(err instanceof ApiError ? err.message : "Could not load more");
+    } finally {
+      setLoadingMore(false);
+    }
+  }
   const waiting = rows.length === 0 && (loading || data === null) && !error;
 
   const selectable = canAct && (tab === "pending" || tab === "failed" || tab === "skipped");
@@ -523,6 +601,8 @@ export default function QslPage() {
     }
     setSelected(new Set());
     setApproveArmedFor(null);
+    setOnlyInterrupted(false);
+    setMoreError(null);
     void router.replace(
       { pathname: router.pathname, query: id === "pending" ? {} : { tab: id } },
       undefined,
@@ -669,6 +749,25 @@ export default function QslPage() {
               />
             )}
 
+            {tab === "sent" && (interrupted > 0 || onlyInterrupted) && (
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-sm border border-warn/50 bg-warn/5 px-3 py-2 text-sm">
+                <span>
+                  {interrupted > 0 ? (
+                    <>
+                      <strong className="tnum">{interrupted}</strong>{" "}
+                      {interrupted === 1 ? "send was" : "sends were"} interrupted — delivery
+                      unknown. Marked <span className="text-warn">Sent? — interrupted</span> below.
+                    </>
+                  ) : (
+                    "No interrupted sends."
+                  )}
+                </span>
+                <Button size="sm" onClick={() => setOnlyInterrupted((v) => !v)}>
+                  {onlyInterrupted ? "Show all sent" : "Show only these"}
+                </Button>
+              </div>
+            )}
+
             {tab === "pending" && approvedWaiting > 0 && (
               <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-sm border border-line bg-surface-2 px-3 py-2 text-sm">
                 <span>
@@ -787,14 +886,27 @@ export default function QslPage() {
                       selected={selected.has(e.id)}
                       onToggle={() => toggle(e.id)}
                       onPreview={() => setPreview(e)}
+                      canAct={canAct}
+                      onResent={() => void reload()}
                     />
                   ))}
                 </ul>
-                {total > rows.length && (
-                  <p className="mt-3 text-xs text-fg-subtle">
-                    Showing {rows.length} of {total.toLocaleString("en-US")}. The queue returns the
-                    oldest {rows.length} of each kind; the rest appear as these are dealt with.
-                  </p>
+                {(nextCursor || moreError || (!interruptedFilter && total > rows.length)) && (
+                  <div className="mt-3 flex flex-wrap items-center gap-3 text-xs text-fg-subtle">
+                    {!interruptedFilter && (
+                      <span className="tnum">
+                        Showing {rows.length.toLocaleString("en-US")} of{" "}
+                        {Math.max(total, rows.length).toLocaleString("en-US")}
+                        {tab === "sent" ? ", newest first" : ""}.
+                      </span>
+                    )}
+                    {nextCursor && (
+                      <Button size="sm" loading={loadingMore} onClick={() => void loadMore()}>
+                        Load more
+                      </Button>
+                    )}
+                    {moreError && <span className="text-danger">{moreError}</span>}
+                  </div>
                 )}
               </>
             ) : waiting ? (

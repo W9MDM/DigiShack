@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
 
+import type { Prisma, QslEmailStatus } from "@prisma/client";
+
 import { prisma } from "@/lib/db/prisma";
 import { hasOptedOut, optOut, qrzMarkerIn, unsubscribeUrl } from "@/lib/qsl/opt-out";
 import { cardUrl } from "@/lib/qsl/card-link";
@@ -13,6 +15,15 @@ import {
 } from "@/lib/qsl/email";
 import { getBooleanSetting, getNumberSetting, getSetting } from "@/lib/settings";
 import { detectGateway, isPlaceholderAddress, prepareForGateway } from "@/lib/qsl/gateways";
+import {
+  isUnconfirmedSend,
+  SEND_STALE_AFTER_MS,
+  UNCONFIRMED_SEND_PREFIX,
+} from "@/lib/qsl/unconfirmed";
+
+// Defined in a dependency-free module so the QSL page can use them too; exported from here
+// as well because this is where the server side has always found them.
+export { isUnconfirmedSend, SEND_STALE_AFTER_MS, UNCONFIRMED_SEND_PREFIX };
 
 // The QSL email review queue.
 //
@@ -43,11 +54,14 @@ export interface EnqueueOutcome {
   detail?: string;
 }
 
+/** Queue states that take a QSO out of the candidate list. */
+const LIVE_OR_DECIDED: QslEmailStatus[] = ["PENDING", "APPROVED", "SENT", "SKIPPED"];
+
 /**
  * Find QSOs worth a QSL email.
  *
  * Deliberately conservative: only contacts not already confirmed or emailed, and
- * only those with no live queue entry. Ordered oldest-first so a backlog is
+ * only those with no live or skipped queue entry. Ordered oldest-first so a backlog is
  * worked through in the order the contacts happened.
  */
 export async function findQslCandidates(opts: {
@@ -66,8 +80,13 @@ export async function findQslCandidates(opts: {
       ...(opts.since ? { startTime: { gte: opts.since } } : {}),
       ...(opts.band ? { band: opts.band } : {}),
       ...(opts.mode ? { mode: opts.mode } : {}),
-      // No live entry already waiting or sent for this QSO.
-      qslEmails: { none: { status: { in: ["PENDING", "APPROVED", "SENT"] } } },
+      // No entry already waiting, sent, or SKIPPED for this QSO. Skipped is a decision, not
+      // a gap: `skipQsl` keeps the row precisely so it is not re-queued, and leaving it out
+      // here put every skipped contact back under "Not yet queued" — where "Queue all" and the
+      // automatic timer (lib/qsl/auto.ts) queued it again. Re-queuing a skipped contact is
+      // the Skipped tab's explicit Re-queue, which calls enqueueQsl by id and does not come
+      // through here. FAILED stays a candidate: nobody decided against those.
+      qslEmails: { none: { status: { in: LIVE_OR_DECIDED } } },
     },
     orderBy: { startTime: "asc" },
     take: Math.min(opts.limit ?? 25, 200),
@@ -80,6 +99,155 @@ export async function findQslCandidates(opts: {
     mode: r.mode,
     startTime: r.startTime,
   }));
+}
+
+// ---------------------------------------------------------------------------
+// Reading the queue, a page at a time
+// ---------------------------------------------------------------------------
+
+export const QUEUE_PAGE_DEFAULT = 100;
+export const QUEUE_PAGE_MAX = 200;
+
+/** A cursor the caller handed back that this code did not issue. */
+export class BadQueueCursor extends Error {}
+
+type SortKey = "sentAt" | "approvedAt" | "createdAt";
+
+/**
+ * Which column a status is listed by, and which way.
+ *
+ * SENT is newest first: that tab is history, and the question asked of it is "what went out
+ * lately". It used to come back oldest first with a cap of 200, so on any station with a few
+ * hundred sends the recent ones — the only ones anybody looks for — could not be reached.
+ *
+ * APPROVED is oldest APPROVAL first, because that is the order sendApprovedQsls takes them, so
+ * the list on the page is the order they will go out. Everything else is oldest first, the
+ * order a backlog is worked through.
+ */
+function queueOrder(status: QslEmailStatus | undefined): { key: SortKey; dir: "asc" | "desc" } {
+  if (status === "SENT") return { key: "sentAt", dir: "desc" };
+  if (status === "APPROVED") return { key: "approvedAt", dir: "asc" };
+  return { key: "createdAt", dir: "asc" };
+}
+
+interface CursorValue {
+  /** The sort column's value on the last row of the page, ISO, or null. */
+  v: string | null;
+  id: string;
+}
+
+function encodeCursor(c: CursorValue): string {
+  return Buffer.from(JSON.stringify(c), "utf8").toString("base64url");
+}
+
+function decodeCursor(raw: string): CursorValue {
+  try {
+    const c = JSON.parse(Buffer.from(raw, "base64url").toString("utf8")) as unknown;
+    if (c && typeof c === "object") {
+      const { v, id } = c as Record<string, unknown>;
+      const okV = v === null || (typeof v === "string" && !Number.isNaN(new Date(v).getTime()));
+      if (okV && typeof id === "string" && id.length > 0) return { v: v as string | null, id };
+    }
+  } catch {
+    // fall through
+  }
+  throw new BadQueueCursor("Not a queue cursor");
+}
+
+/**
+ * Rows strictly after `c` in (key, id) order, with NULL keys sorted last in either direction.
+ *
+ * Keyset rather than offset paging: the Sent tab grows at its head while somebody is reading
+ * it, and an offset would hand them the same rows again on the next page (or, when a gateway
+ * re-queue takes rows out of SENT, silently skip some). The id breaks ties — two rows claimed
+ * in the same millisecond still page cleanly.
+ */
+function afterCursor(key: SortKey, dir: "asc" | "desc", c: CursorValue): Prisma.QslEmailWhereInput {
+  const beyond = dir === "desc" ? "lt" : "gt";
+  const nullable = key !== "createdAt";
+  if (c.v === null) {
+    // Already into the NULL tail: only further NULLs remain, ordered by id.
+    return { [key]: null, id: { [beyond]: c.id } } as Prisma.QslEmailWhereInput;
+  }
+  const v = new Date(c.v);
+  const or: Prisma.QslEmailWhereInput[] = [
+    { [key]: { [beyond]: v } } as Prisma.QslEmailWhereInput,
+    { [key]: v, id: { [beyond]: c.id } } as Prisma.QslEmailWhereInput,
+  ];
+  if (nullable) or.push({ [key]: null } as Prisma.QslEmailWhereInput);
+  return { OR: or };
+}
+
+export interface QueuePageOptions {
+  /** One status, or every status but SKIPPED (the old unfiltered behaviour). */
+  status?: QslEmailStatus;
+  /** `nextCursor` from the previous page. */
+  cursor?: string | null;
+  limit?: number;
+  /** SENT rows whose outcome was never recorded (`isUnconfirmedSend`) only. */
+  unconfirmedOnly?: boolean;
+}
+
+const QUEUE_INCLUDE = {
+  qso: { select: { band: true, mode: true, startTime: true, gridSquare: true } },
+  approvedBy: { select: { name: true } },
+} satisfies Prisma.QslEmailInclude;
+
+/**
+ * One page of the queue. `nextCursor` is null on the last page.
+ *
+ * Throws BadQueueCursor for a cursor this did not issue, so the API can answer 400 rather
+ * than quietly starting again from the top.
+ */
+export async function listQueuePage(opts: QueuePageOptions = {}) {
+  const limit = Math.max(1, Math.min(Math.trunc(opts.limit ?? QUEUE_PAGE_DEFAULT), QUEUE_PAGE_MAX));
+  const status = opts.unconfirmedOnly ? "SENT" : opts.status;
+  const { key, dir } = queueOrder(status);
+
+  const filters: Prisma.QslEmailWhereInput[] = [
+    status ? { status } : { status: { not: "SKIPPED" } },
+  ];
+  if (opts.unconfirmedOnly) filters.push({ error: { startsWith: UNCONFIRMED_SEND_PREFIX } });
+  if (opts.cursor) filters.push(afterCursor(key, dir, decodeCursor(opts.cursor)));
+
+  const orderBy: Prisma.QslEmailOrderByWithRelationInput[] = [
+    key === "createdAt"
+      ? { createdAt: dir }
+      : ({ [key]: { sort: dir, nulls: "last" } } as Prisma.QslEmailOrderByWithRelationInput),
+    { id: dir },
+  ];
+
+  const found = await prisma.qslEmail.findMany({
+    where: filters.length === 1 ? filters[0] : { AND: filters },
+    orderBy,
+    // One extra, to know whether there is another page without a second COUNT.
+    take: limit + 1,
+    include: QUEUE_INCLUDE,
+  });
+  const rows = found.slice(0, limit);
+  const last = rows[rows.length - 1];
+  const lastKey = last ? last[key] : null;
+  const nextCursor =
+    found.length > limit && last
+      ? encodeCursor({ v: lastKey ? lastKey.toISOString() : null, id: last.id })
+      : null;
+  return { rows, nextCursor };
+}
+
+/**
+ * SENT rows whose sender stopped before recording the outcome — claimed longer ago than any
+ * live send could still be running (`SEND_STALE_AFTER_MS`). Each is a message that may or may
+ * not have reached the recipient; nothing automatic will touch it again.
+ */
+export async function countInterruptedSends(now: number = Date.now()): Promise<number> {
+  return prisma.qslEmail.count({
+    where: {
+      status: "SENT",
+      error: { startsWith: UNCONFIRMED_SEND_PREFIX },
+      // The claim sets sentAt in the same write that sets the claim text.
+      sentAt: { lt: new Date(now - SEND_STALE_AFTER_MS) },
+    },
+  });
 }
 
 /**
@@ -315,19 +483,8 @@ export interface SendQueueResult {
   failures: { id: string; callsign: string; reason: string }[];
 }
 
-/**
- * What `error` holds while a sender owns a row: `sending since <ISO time> [claim <uuid>]`.
- *
- * The claim is also the compare-and-set token for every later write that sender makes to the
- * row. A SENT row whose `error` still starts with this is a send whose outcome was never
- * recorded — see "AT MOST ONCE" on sendApprovedQsls.
- */
-export const UNCONFIRMED_SEND_PREFIX = "sending since ";
-
-/** Claimed by a sender that stopped before recording what happened. Delivery unknown. */
-export function isUnconfirmedSend(row: { status: string; error: string | null }): boolean {
-  return row.status === "SENT" && (row.error ?? "").startsWith(UNCONFIRMED_SEND_PREFIX);
-}
+// UNCONFIRMED_SEND_PREFIX and isUnconfirmedSend live in lib/qsl/unconfirmed.ts (re-exported
+// above): the claim format and how to recognise a send whose outcome was never recorded.
 
 /**
  * Take one approved row for sending. Compare-and-set: only a row that is STILL approved moves,
@@ -385,8 +542,24 @@ async function settleClaim(
  * approves is the WORDING, which is still the stored copy. The cost is that
  * changing the artwork between approval and sending changes the card — far
  * better than an email that promises an attachment and has none.
+ *
+ * NEVER THROWS. Every read is inside the try — the QSO lookup, the card settings and the
+ * operator's name/QTH — not only the render: a database hiccup on any of them used to escape
+ * from here, and sendApprovedQsls called this AFTER claiming the row, so the row was left SENT
+ * with `sending since …` and the QSO was never offered again. It is now called before the
+ * claim as well (see sendApprovedQsls); this is the second line of defence.
  */
 async function cardFor(qsoId: string): Promise<RenderedEmail["card"]> {
+  try {
+    return await renderCardFor(qsoId);
+  } catch {
+    // A card that will not render must not block the QSL. The body still
+    // reads correctly without it; only the image is missing.
+    return undefined;
+  }
+}
+
+async function renderCardFor(qsoId: string): Promise<RenderedEmail["card"]> {
   const qsoRow = await prisma.qso.findUnique({
     where: { id: qsoId },
     select: {
@@ -398,42 +571,36 @@ async function cardFor(qsoId: string): Promise<RenderedEmail["card"]> {
   if (!qsoRow) return undefined;
   const cardCfg = await loadCardSettings();
   if (!cardCfg.enabled) return undefined;
-  try {
-    const rendered = await renderQslCard(
-      {
-        callsign: qsoRow.callsign,
-        band: qsoRow.band,
-        mode: qsoRow.mode,
-        startTime: qsoRow.startTime,
-        freqHz: qsoRow.freqHz === null ? null : Number(qsoRow.freqHz),
-        rstSent: qsoRow.rstSent,
-        rstRcvd: qsoRow.rstRcvd,
-        gridSquare: qsoRow.gridSquare,
-        txPowerW: qsoRow.txPowerW,
-      },
-      {
-        callsign: qsoRow.station.callsign,
-        grid: qsoRow.station.grid,
-        name: await getSetting("qsl.operatorName"),
-        qth: await getSetting("qsl.qth"),
-        txPower: await getSetting("qsl.txPower"),
-      },
-      cardCfg,
-    );
-    return {
-      jpeg: rendered.jpeg,
-      filename: `QSL-${qsoRow.station.callsign.toUpperCase()}-${qsoRow.callsign.toUpperCase()}-${qsoRow.startTime.toISOString().slice(0, 10)}.jpg`,
-      // Must match the cid in the STORED html, or the inline image breaks.
-      cid: `qslcard-${qsoRow.startTime.getTime().toString(36)}@digishack`,
-      disposition: (await getBooleanSetting("qsl.email.attachCard", true))
-        ? "attachment"
-        : "inline",
-    };
-  } catch {
-    // A card that will not render must not block the QSL. The body still
-    // reads correctly without it; only the image is missing.
-    return undefined;
-  }
+  const rendered = await renderQslCard(
+    {
+      callsign: qsoRow.callsign,
+      band: qsoRow.band,
+      mode: qsoRow.mode,
+      startTime: qsoRow.startTime,
+      freqHz: qsoRow.freqHz === null ? null : Number(qsoRow.freqHz),
+      rstSent: qsoRow.rstSent,
+      rstRcvd: qsoRow.rstRcvd,
+      gridSquare: qsoRow.gridSquare,
+      txPowerW: qsoRow.txPowerW,
+    },
+    {
+      callsign: qsoRow.station.callsign,
+      grid: qsoRow.station.grid,
+      name: await getSetting("qsl.operatorName"),
+      qth: await getSetting("qsl.qth"),
+      txPower: await getSetting("qsl.txPower"),
+    },
+    cardCfg,
+  );
+  return {
+    jpeg: rendered.jpeg,
+    filename: `QSL-${qsoRow.station.callsign.toUpperCase()}-${qsoRow.callsign.toUpperCase()}-${qsoRow.startTime.toISOString().slice(0, 10)}.jpg`,
+    // Must match the cid in the STORED html, or the inline image breaks.
+    cid: `qslcard-${qsoRow.startTime.getTime().toString(36)}@digishack`,
+    disposition: (await getBooleanSetting("qsl.email.attachCard", true))
+      ? "attachment"
+      : "inline",
+  };
 }
 
 /**
@@ -469,6 +636,19 @@ async function cardFor(qsoId: string): Promise<RenderedEmail["card"]> {
  * queue exists to prevent, while a missing QSL is cheap to put right by hand — Resend from the
  * log re-queues it through review. The cost is the window between claim and SMTP acceptance:
  * a crash there loses that one message, never more than one per sender.
+ *
+ * ONLY A CRASH MAY STRAND A ROW. A THROW MAY NOT. Stranding is the price of at-most-once for
+ * the one case that needs it — SMTP accepted, the database never heard. Anything that THROWS
+ * between the claim and SMTP has, by construction, sent nothing, and used to strand the row
+ * all the same: the card's settings reads, the opt-out lookup on a database error, the SMTP
+ * settings read inside sendQslEmail. The QSO keeps `emailQslSent = false` and the candidate
+ * search skips any QSO with a SENT row, so that contact was never offered again — a lost QSL
+ * that looked delivered. So: the card is rendered BEFORE the claim, and every step between the
+ * claim and the transport is inside a try that RELEASES the claim to FAILED with the reason —
+ * visible on the Failed tab, re-approvable by a person, never retried automatically.
+ * sendQslEmail itself cannot throw once the transport has accepted a message (its sendMail
+ * rejection is a returned outcome and closing the transport is guarded), so a throw caught
+ * here is always a message that did not go.
  */
 export async function sendApprovedQsls(opts: { limit?: number } = {}): Promise<SendQueueResult> {
   // One lookup for the whole run rather than one per message.
@@ -478,7 +658,7 @@ export async function sendApprovedQsls(opts: { limit?: number } = {}): Promise<S
     where: { status: "APPROVED" },
     orderBy: { approvedAt: "asc" },
     take: Math.min(opts.limit ?? 25, 100),
-    select: { id: true },
+    select: { id: true, qsoId: true },
   });
 
   const result: SendQueueResult = {
@@ -490,7 +670,12 @@ export async function sendApprovedQsls(opts: { limit?: number } = {}): Promise<S
     failures: [],
   };
 
-  for (const { id } of batch) {
+  for (const { id, qsoId } of batch) {
+    // BEFORE the claim: the slowest step and the one with the most reads. Rendered for the
+    // QSO the batch read; a row is one QSO's message, so that cannot change under us, and the
+    // check below re-renders if it somehow did.
+    const prepared = await cardFor(qsoId);
+
     const claim = `${UNCONFIRMED_SEND_PREFIX}${new Date().toISOString()} [claim ${randomUUID()}]`;
     const entry = await claimForSending(id, claim);
     if (!entry) {
@@ -498,48 +683,68 @@ export async function sendApprovedQsls(opts: { limit?: number } = {}): Promise<S
       continue;
     }
 
-    const card = await cardFor(entry.qsoId);
+    let counted = false;
+    let outcome: Awaited<ReturnType<typeof sendQslEmail>>;
+    try {
+      const card = entry.qsoId === qsoId ? prepared : await cardFor(entry.qsoId);
 
-    // The last look before SMTP — see "Why after the claim" above.
-    if (await hasOptedOut(entry.callsign)) {
-      await settleClaim(id, claim, {
-        status: "SKIPPED",
-        sentAt: null,
-        error: `Not sent: ${entry.callsign} opted out of QSL email before it went out`,
+      // The last look before SMTP — see "Why after the claim" above.
+      if (await hasOptedOut(entry.callsign)) {
+        await settleClaim(id, claim, {
+          status: "SKIPPED",
+          sentAt: null,
+          error: `Not sent: ${entry.callsign} opted out of QSL email before it went out`,
+        });
+        result.skipped++;
+        continue;
+      }
+
+      result.attempted++;
+      counted = true;
+      outcome = await sendQslEmail({
+        to: entry.toAddress,
+        // The header, not the body. The stored body already carries the link that was
+        // approved; this adds List-Unsubscribe at send time so the recipient's own mail
+        // client offers its button too. Recomputed rather than stored because it is derived
+        // from the callsign and a setting, and a queue entry approved before the public URL
+        // was configured should still go out with a working header once it is.
+        unsubscribeUrl: sendBase ? unsubscribeUrl(sendBase, entry.callsign) : null,
+        // Only reaches the message when the gateway rules drop the card — see the send
+        // path. Passed unconditionally because the decision belongs with the rules rather
+        // than duplicated here, where it would drift.
+        cardUrl: sendBase ? cardUrl(sendBase, entry.qsoId) : null,
+        // The stored copy is authoritative; these only shape a re-render that is
+        // then discarded in favour of the stored body below.
+        qso: {
+          callsign: entry.callsign,
+          band: "",
+          mode: "",
+          startTime: entry.createdAt,
+        },
+        sender: { callsign: "" },
+        preRendered: {
+          subject: entry.subject,
+          text: entry.bodyText,
+          html: entry.bodyHtml,
+          card,
+        },
       });
-      result.skipped++;
+    } catch (err) {
+      // Nothing reached the mail server: release the claim rather than strand the row.
+      const reason = `Not sent: ${err instanceof Error ? err.message : String(err)} (before the mail server was reached)`;
+      if (!counted) result.attempted++;
+      result.failed++;
+      result.failures.push({ id, callsign: entry.callsign, reason });
+      const released = await settleClaim(id, claim, { status: "FAILED", sentAt: null, error: reason }).catch(
+        () => false,
+      );
+      if (!released) {
+        // The database is still unreachable, or the row was replaced meanwhile. The first
+        // leaves it reading as an unconfirmed send, which the queue page shows.
+        console.warn(`[qsl] ${entry.callsign}: not sent, and the claim could not be released — ${reason}`);
+      }
       continue;
     }
-
-    result.attempted++;
-    const outcome = await sendQslEmail({
-      to: entry.toAddress,
-      // The header, not the body. The stored body already carries the link that was
-      // approved; this adds List-Unsubscribe at send time so the recipient's own mail
-      // client offers its button too. Recomputed rather than stored because it is derived
-      // from the callsign and a setting, and a queue entry approved before the public URL
-      // was configured should still go out with a working header once it is.
-      unsubscribeUrl: sendBase ? unsubscribeUrl(sendBase, entry.callsign) : null,
-      // Only reaches the message when the gateway rules drop the card — see the send
-      // path. Passed unconditionally because the decision belongs with the rules rather
-      // than duplicated here, where it would drift.
-      cardUrl: sendBase ? cardUrl(sendBase, entry.qsoId) : null,
-      // The stored copy is authoritative; these only shape a re-render that is
-      // then discarded in favour of the stored body below.
-      qso: {
-        callsign: entry.callsign,
-        band: "",
-        mode: "",
-        startTime: entry.createdAt,
-      },
-      sender: { callsign: "" },
-      preRendered: {
-        subject: entry.subject,
-        text: entry.bodyText,
-        html: entry.bodyHtml,
-        card,
-      },
-    });
 
     if (outcome.sent) {
       result.sent++;

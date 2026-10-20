@@ -14,7 +14,7 @@ import { LAND_RINGS } from "@/lib/geo/land";
 import type { ViewWindow } from "@/lib/geo/viewport";
 
 import { nightPolygon, terminatorLine, twilightGrid, type SunPosition } from "./greyline";
-import { MAP_COLOURS, alpha, rgbOf } from "./palette";
+import { alpha, mapColourFor, mapColoursFor, rgbOf, type MapColours, type MapTheme } from "./palette";
 import {
   FIELD_H,
   FIELD_LABELS,
@@ -94,8 +94,11 @@ export class MapPainter {
   private land: Path2D | null = null;
   private nightFor: SunPosition | null = null;
   private night: { poly: Path2D; line: Path2D; twilight: HTMLCanvasElement } | null = null;
+  /** The colour the cached twilight band was tinted with: it changes with the theme. */
+  private nightTint: string | null = null;
   private loggedFor: readonly LoggedMarker[] | null = null;
   private loggedByColour = new Map<string, LoggedMarker[]>();
+  private loggedTheme: MapTheme | null = null;
 
   private landPath(): Path2D {
     if (!this.land) {
@@ -113,8 +116,8 @@ export class MapPainter {
     return this.land;
   }
 
-  private nightShapes(sun: SunPosition) {
-    if (this.night && this.nightFor === sun) return this.night;
+  private nightShapes(sun: SunPosition, tint: string) {
+    if (this.night && this.nightFor === sun && this.nightTint === tint) return this.night;
     const poly = new Path2D();
     nightPolygon(sun, 0, 1).forEach(([lon, lat], i) => {
       const q = project(lat, lon);
@@ -136,7 +139,7 @@ export class MapPainter {
     if (tctx) {
       const depth = twilightGrid(sun, 360, 180);
       const img = tctx.createImageData(360, 180);
-      const [r, g, b] = rgbOf(MAP_COLOURS.night);
+      const [r, g, b] = rgbOf(tint);
       for (let i = 0; i < depth.length; i++) {
         img.data[i * 4] = r;
         img.data[i * 4 + 1] = g;
@@ -147,23 +150,29 @@ export class MapPainter {
     }
     this.night = { poly, line, twilight };
     this.nightFor = sun;
+    this.nightTint = tint;
     return this.night;
   }
 
-  private groupLogged(logged: readonly LoggedMarker[]) {
-    if (this.loggedFor === logged) return this.loggedByColour;
+  /** Grouped by the colour each is DRAWN in, which at night is the band colour made night-safe. */
+  private groupLogged(logged: readonly LoggedMarker[], theme: MapTheme) {
+    if (this.loggedFor === logged && this.loggedTheme === theme) return this.loggedByColour;
     const m = new Map<string, LoggedMarker[]>();
     for (const p of logged) {
-      const list = m.get(p.colour);
+      const colour = mapColourFor(p.colour, theme);
+      const list = m.get(colour);
       if (list) list.push(p);
-      else m.set(p.colour, [p]);
+      else m.set(colour, [p]);
     }
     this.loggedFor = logged;
+    this.loggedTheme = theme;
     this.loggedByColour = m;
     return m;
   }
 
-  draw(ctx: CanvasRenderingContext2D, scene: MapScene, vp: Viewport): void {
+  /** `theme` picks the palette: the night theme draws the same layers in its reds and ambers. */
+  draw(ctx: CanvasRenderingContext2D, scene: MapScene, vp: Viewport, theme: MapTheme = "dark"): void {
+    const C = mapColoursFor(theme);
     const { view, cssW, cssH, dpr } = vp;
     const k = scaleOf(vp);
     const sx = (x: number) => (x - view.x) * k;
@@ -177,15 +186,15 @@ export class MapPainter {
 
     screenTransform();
     ctx.globalAlpha = 1;
-    ctx.fillStyle = MAP_COLOURS.ocean;
+    ctx.fillStyle = C.ocean;
     ctx.fillRect(0, 0, cssW, cssH);
 
     // Land.
     worldTransform();
     const land = this.landPath();
-    ctx.fillStyle = MAP_COLOURS.land;
+    ctx.fillStyle = C.land;
     ctx.fill(land);
-    ctx.strokeStyle = MAP_COLOURS.coast;
+    ctx.strokeStyle = C.coast;
     ctx.lineWidth = 1 / k;
     ctx.stroke(land);
 
@@ -198,7 +207,7 @@ export class MapPainter {
         if (list) list.push(c);
         else buckets.set(q, [c]);
       }
-      ctx.fillStyle = MAP_COLOURS.worked;
+      ctx.fillStyle = C.worked;
       const x0 = view.x - SQUARE_W;
       const x1 = view.x + view.w;
       const y0 = view.y - SQUARE_H;
@@ -217,18 +226,18 @@ export class MapPainter {
 
     // Day and night: a crisp night polygon, the soft twilight band, then the greyline.
     if (scene.sun) {
-      const n = this.nightShapes(scene.sun);
+      const n = this.nightShapes(scene.sun, C.night);
       // Darkening alone is invisible on a near-black sea, so the whole world is lifted a
       // touch and night takes it back with interest.
-      ctx.fillStyle = alpha(MAP_COLOURS.day, 0.06);
+      ctx.fillStyle = alpha(C.day, 0.06);
       ctx.fillRect(0, 0, WORLD_W, WORLD_H);
-      ctx.fillStyle = alpha(MAP_COLOURS.night, 0.42);
+      ctx.fillStyle = alpha(C.night, 0.42);
       ctx.fill(n.poly);
       ctx.imageSmoothingEnabled = true;
       ctx.globalAlpha = 0.3;
       ctx.drawImage(n.twilight, 0, 0, WORLD_W, WORLD_H);
       ctx.globalAlpha = 1;
-      ctx.strokeStyle = alpha(MAP_COLOURS.terminator, 0.6);
+      ctx.strokeStyle = alpha(C.terminator, 0.6);
       ctx.lineWidth = 1.25 / k;
       ctx.stroke(n.line);
     }
@@ -236,7 +245,7 @@ export class MapPainter {
     // Maidenhead fields, then the square mesh once squares are big enough to aim at.
     screenTransform();
     ctx.lineWidth = 1;
-    ctx.strokeStyle = MAP_COLOURS.gridLine;
+    ctx.strokeStyle = C.gridLine;
     ctx.beginPath();
     for (let i = 1; i < 18; i++) {
       const x = Math.round(sx(i * FIELD_W)) + 0.5;
@@ -254,7 +263,7 @@ export class MapPainter {
 
     const squarePx = SQUARE_W * k;
     if (squarePx >= 14) {
-      ctx.strokeStyle = MAP_COLOURS.squareLine;
+      ctx.strokeStyle = C.squareLine;
       ctx.beginPath();
       const i0 = Math.floor(view.x / SQUARE_W);
       const i1 = Math.ceil((view.x + view.w) / SQUARE_W);
@@ -275,7 +284,7 @@ export class MapPainter {
 
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    ctx.fillStyle = MAP_COLOURS.label;
+    ctx.fillStyle = C.label;
     if (FIELD_W * k >= 90) {
       ctx.font = `600 ${Math.min(22, Math.max(12, FIELD_W * k * 0.12))}px ${FONT}`;
       for (const f of FIELD_LABELS) {
@@ -314,7 +323,7 @@ export class MapPainter {
     if (scene.logged.length > 0) {
       const r = 2.4 + grow * 0.6;
       ctx.globalAlpha = 0.7;
-      for (const [colour, pts] of this.groupLogged(scene.logged)) {
+      for (const [colour, pts] of this.groupLogged(scene.logged, theme)) {
         ctx.fillStyle = colour;
         ctx.beginPath();
         for (const p of pts) {
@@ -332,7 +341,7 @@ export class MapPainter {
     // Who heard us. Hollow, so they read as ears rather than voices.
     if (scene.heard.length > 0) {
       const r = 4 + grow * 0.6;
-      ctx.strokeStyle = MAP_COLOURS.heard;
+      ctx.strokeStyle = C.heard;
       ctx.lineWidth = 1.5;
       ctx.globalAlpha = 0.9;
       ctx.beginPath();
@@ -362,14 +371,14 @@ export class MapPainter {
           ctx.globalAlpha = s.opacity;
           ctx.beginPath();
           ctx.arc(x, y, r, 0, TAU);
-          ctx.fillStyle = s.isCq ? MAP_COLOURS.cq : MAP_COLOURS.live;
+          ctx.fillStyle = s.isCq ? C.cq : C.live;
           ctx.fill();
           if (s.isCq) {
-            ctx.strokeStyle = MAP_COLOURS.cqRing;
+            ctx.strokeStyle = C.cqRing;
             ctx.lineWidth = 1;
             ctx.stroke();
           }
-          if (showCalls) haloText(ctx, s.callsign, x, y - r - 2);
+          if (showCalls) haloText(ctx, C, s.callsign, x, y - r - 2);
         }
       }
       ctx.globalAlpha = 1;
@@ -380,8 +389,8 @@ export class MapPainter {
       ctx.lineCap = "round";
       ctx.lineJoin = "round";
       for (const [width, colour] of [
-        [4, alpha(MAP_COLOURS.halo, 0.7)],
-        [1.75, alpha(MAP_COLOURS.path, 0.9)],
+        [4, alpha(C.halo, 0.7)],
+        [1.75, alpha(C.path, 0.9)],
       ] as const) {
         ctx.strokeStyle = colour;
         ctx.lineWidth = width;
@@ -402,15 +411,15 @@ export class MapPainter {
       const y = sy(scene.target.y);
       ctx.beginPath();
       ctx.arc(x, y, 7, 0, TAU);
-      ctx.strokeStyle = alpha(MAP_COLOURS.halo, 0.8);
+      ctx.strokeStyle = alpha(C.halo, 0.8);
       ctx.lineWidth = 4;
       ctx.stroke();
-      ctx.strokeStyle = MAP_COLOURS.selected;
+      ctx.strokeStyle = C.selected;
       ctx.lineWidth = 2;
       ctx.stroke();
       ctx.font = `600 12px ${FONT}`;
       ctx.textBaseline = "bottom";
-      haloText(ctx, scene.target.label, x, y - 10);
+      haloText(ctx, C, scene.target.label, x, y - 10);
     }
 
     if (scene.home) {
@@ -418,12 +427,12 @@ export class MapPainter {
       const y = sy(scene.home.y);
       // A ringed dot with a cross: nothing else on the map has that shape.
       ctx.lineWidth = 4;
-      ctx.strokeStyle = alpha(MAP_COLOURS.halo, 0.8);
+      ctx.strokeStyle = alpha(C.halo, 0.8);
       ctx.beginPath();
       ctx.arc(x, y, 6, 0, TAU);
       ctx.stroke();
       ctx.lineWidth = 1.75;
-      ctx.strokeStyle = MAP_COLOURS.home;
+      ctx.strokeStyle = C.home;
       ctx.stroke();
       ctx.beginPath();
       ctx.moveTo(x - 10, y);
@@ -437,18 +446,18 @@ export class MapPainter {
       ctx.stroke();
       ctx.beginPath();
       ctx.arc(x, y, 2, 0, TAU);
-      ctx.fillStyle = MAP_COLOURS.home;
+      ctx.fillStyle = C.home;
       ctx.fill();
     }
   }
 }
 
-function haloText(ctx: CanvasRenderingContext2D, text: string, x: number, y: number): void {
+function haloText(ctx: CanvasRenderingContext2D, C: MapColours, text: string, x: number, y: number): void {
   ctx.lineWidth = 3;
   ctx.lineJoin = "round";
-  ctx.strokeStyle = alpha(MAP_COLOURS.halo, 0.85);
+  ctx.strokeStyle = alpha(C.halo, 0.85);
   ctx.strokeText(text, x, y);
-  ctx.fillStyle = MAP_COLOURS.selected;
+  ctx.fillStyle = C.selected;
   ctx.fillText(text, x, y);
 }
 

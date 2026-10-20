@@ -10,7 +10,7 @@ import {
   PageHeader,
 } from "@/components/ui/primitives";
 import { withPageAuth } from "@/lib/auth/guard";
-import { ApiError, apiGet, useApi } from "@/lib/client/api";
+import { ApiError, useApi } from "@/lib/client/api";
 import { formatUtc } from "@/lib/time";
 
 // Backup and restore — for moving an installation to another machine.

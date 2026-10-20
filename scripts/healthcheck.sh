@@ -25,7 +25,7 @@
 # answered wrongly from inside a wedged process — "does it still answer?" — from outside it.
 # PM2 checks whether a process EXISTS. Nothing checked whether it still WORKS.
 #
-# Install (see scripts/install.sh, which does this):
+# Install (scripts/install.sh does this, in root's crontab, when run as root):
 #     * * * * * /opt/digishack/scripts/healthcheck.sh
 #
 # Absolute paths throughout, because cron's PATH is

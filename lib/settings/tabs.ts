@@ -118,6 +118,24 @@ export function groupsInTab(tabId: string, registeredGroupIds: readonly string[]
   return [...listed, ...unclaimed];
 }
 
+/**
+ * A category's groups as the sidebar lists them: the ones with something to show, then —
+ * behind "More" — the quiet ones (advanced only, every setting at its default). Seven groups
+ * were left like that by the settings diet, and seven near-empty entries listed as loudly as
+ * FlexRadio made the sidebar read as a list of things needing attention.
+ *
+ * Order is kept within each half, and every id lands in exactly one of them.
+ */
+export function splitQuietGroups(
+  ids: readonly string[],
+  isQuiet: (groupId: string) => boolean,
+): { main: string[]; more: string[] } {
+  const main: string[] = [];
+  const more: string[] = [];
+  for (const g of ids) (isQuiet(g) ? more : main).push(g);
+  return { main, more };
+}
+
 /** Where a settings URL points. `group` and `setting` are null when it names only a category. */
 export interface SettingsLocation {
   tab: string;

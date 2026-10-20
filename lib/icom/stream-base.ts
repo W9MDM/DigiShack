@@ -22,7 +22,6 @@ import {
   buildIdle,
   buildOpenRequest,
   buildSessionOpen,
-  buildPacket,
   buildPingReply,
   buildPingRequest,
   HEADER_LENGTH,

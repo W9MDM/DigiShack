@@ -13,7 +13,7 @@ under a waterfall that scrolls in real time, with the decode list drawn over the
 1. In YouTube Studio, **Create → Go live → Stream**. Set the stream to unlisted or
    private while testing.
 2. Copy the **stream key**.
-3. In DigiShack, **Settings → YouTube Live**, paste it into **YouTube stream key**, save.
+3. In DigiShack, **Settings → Spotting & broadcast → YouTube Live**, paste it into **YouTube stream key**, save.
 4. On the **Rig** page, click **Go live**.
 
 YouTube takes about twenty seconds to show the stream after ffmpeg connects. Until then

@@ -5,6 +5,7 @@ import { HelpText, Highlight } from "@/components/settings/HelpText";
 import { LimitField, Toggle } from "@/components/settings/SettingControls";
 import type { DisplayItem } from "@/components/settings/display";
 import type { ClientSetting, SettingsEditor } from "@/components/settings/types";
+import { UNREADABLE_PLACEHOLDER, unreadableNotice } from "@/components/settings/visibility";
 import { HelpTip } from "@/components/ui/HelpTip";
 import { Badge, Button, Input, Select, Textarea } from "@/components/ui/primitives";
 import { cn } from "@/lib/utils";
@@ -78,6 +79,14 @@ function SafetyBadge({ kind }: { kind: ClientSetting["safety"] }) {
   );
 }
 
+function UnreadableBadge() {
+  return (
+    <Badge tone="warn" size="sm">
+      Can&rsquo;t decrypt
+    </Badge>
+  );
+}
+
 function UnsavedBadge() {
   return (
     <Badge tone="info" size="sm">
@@ -116,6 +125,10 @@ function statusLine(s: ClientSetting, cleared: boolean): { text: string; warn: b
   // Says the value is still there, not just that it is going. Naming Undo is the
   // difference between a warning and an instruction.
   if (cleared) return { text: "Still stored. It goes when you save — Undo keeps it.", warn: true };
+  // A stored value that will not decrypt is not "Currently ••••1234": nothing uses it, and
+  // nothing falls back past it, so the service is off until it is typed in again.
+  const unreadable = unreadableNotice(s);
+  if (unreadable) return { text: unreadable, warn: true };
   if (s.type === "secret" && s.configured) {
     return {
       text: s.fromEnv
@@ -211,6 +224,7 @@ export function SettingField({
   const dirty = editor.isDirty(s.key);
   const onChange = (v: string) => editor.setValue(s.key, v);
   const status = statusLine(s, cleared);
+  const unreadable = s.unreadable || s.problem !== null;
   const describedBy = [s.help ? helpId : null, status ? statusId : null].filter(Boolean).join(" ") || undefined;
 
   const custom = CUSTOM_CONTROLS[s.key];
@@ -290,7 +304,14 @@ export function SettingField({
         type={s.type === "secret" ? "password" : s.type === "number" ? "number" : "text"}
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        placeholder={s.type === "secret" && s.configured ? "unchanged" : (s.placeholder ?? "")}
+        placeholder={
+          unreadable
+            ? UNREADABLE_PLACEHOLDER
+            : s.type === "secret" && s.configured
+              ? "unchanged"
+              : (s.placeholder ?? "")
+        }
+        aria-invalid={unreadable && !dirty ? true : undefined}
         autoComplete={s.type === "secret" ? "new-password" : "off"}
         spellCheck={false}
         disabled={cleared}
@@ -306,12 +327,13 @@ export function SettingField({
       label={<Highlight text={s.label} terms={terms} />}
       labelFor={custom ? undefined : controlId}
       wide={s.wide}
-      safety={s.safety !== null}
+      safety={s.safety !== null || unreadable}
       dirty={dirty}
       flash={flash}
       badges={
         <>
           <SafetyBadge kind={s.safety} />
+          {unreadable && <UnreadableBadge />}
           {dirty && <UnsavedBadge />}
           {showAdvanced && s.advanced && <Badge size="sm">Advanced</Badge>}
         </>

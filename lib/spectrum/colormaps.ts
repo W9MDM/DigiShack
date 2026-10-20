@@ -16,8 +16,9 @@
 //   * Turbo: Google's published polynomial approximation (Mikhailov 2019, Apache-2.0),
 //     with the coefficients d3-scale-chromatic uses.
 //   * Grayscale: black to white.
+//   * Night red: DigiShack's own, for the night theme. See NIGHT_STOPS.
 
-export type ColormapId = "digishack" | "viridis" | "inferno" | "magma" | "turbo" | "grayscale";
+export type ColormapId = "digishack" | "viridis" | "inferno" | "magma" | "turbo" | "grayscale" | "night";
 
 export interface ColormapInfo {
   id: ColormapId;
@@ -31,9 +32,13 @@ export const COLORMAPS: readonly ColormapInfo[] = [
   { id: "magma", label: "Magma" },
   { id: "turbo", label: "Turbo" },
   { id: "grayscale", label: "Grayscale" },
+  { id: "night", label: "Night red" },
 ];
 
 export const DEFAULT_COLORMAP: ColormapId = "digishack";
+
+/** What the night theme draws every waterfall and spectrogram with. */
+export const NIGHT_COLORMAP: ColormapId = "night";
 
 export function isColormapId(value: unknown): value is ColormapId {
   return typeof value === "string" && COLORMAPS.some((c) => c.id === value);
@@ -117,6 +122,29 @@ export const MAGMA_STOPS: readonly ColorStop[] = [
   [at(255), 252, 253, 191], // #fcfdbf
 ];
 
+/**
+ * NIGHT RED — black, deep red, red, amber. For the night theme (styles/globals.css), and
+ * held to the same rule as its tokens: blue is ZERO everywhere and R >= G, so every entry
+ * is a hue between red and amber. Rods are nearly blind to long-wavelength red, so a
+ * waterfall drawn in it costs the operator's dark adaptation least.
+ *
+ * Shaped like the DigiShack map underneath: the bottom half — where the noise lives — stays
+ * near-black and dim red, so a band full of noise is a dark field and only real signals
+ * climb into bright red and then amber. Both channels only ever rise, so luminance is
+ * monotonic and a stronger signal can never read as a weaker one (check:spectrum-view).
+ * The top is amber, not yellow or white: #ffa000 is the brightest thing the night theme
+ * draws, about the same as its body text.
+ */
+export const NIGHT_STOPS: readonly ColorStop[] = [
+  [0.0, 0, 0, 0],
+  [0.15, 22, 0, 0],
+  [0.35, 70, 0, 0],
+  [0.55, 150, 6, 0],
+  [0.72, 225, 28, 0],
+  [0.86, 255, 84, 0],
+  [1.0, 255, 160, 0],
+];
+
 export const GRAYSCALE_STOPS: readonly ColorStop[] = [
   [0, 0, 0, 0],
   [1, 255, 255, 255],
@@ -170,6 +198,7 @@ const STOPS: Record<Exclude<ColormapId, "turbo">, readonly ColorStop[]> = {
   inferno: INFERNO_STOPS,
   magma: MAGMA_STOPS,
   grayscale: GRAYSCALE_STOPS,
+  night: NIGHT_STOPS,
 };
 
 const rgbCache = new Map<ColormapId, Uint8Array>();
@@ -217,6 +246,42 @@ export const BACKGROUND_RGB: readonly [number, number, number] = [10, 10, 11];
 
 /** Cycle-boundary rule over the spectrogram: white at low alpha. */
 export const CYCLE_LINE_RGBA: readonly [number, number, number, number] = [255, 255, 255, 0.2];
+
+/**
+ * The non-data colours a view draws around a map: the clear colour, the no-data hatch, the
+ * cycle rule and the 3D grid. Every map but Night red uses the dark-theme set above,
+ * unchanged; Night red brings its own, so choosing it — which the night theme does by
+ * default — takes the white rules and blue-grey hatch with it.
+ */
+export interface ColormapChrome {
+  background: readonly [number, number, number];
+  gapA: readonly [number, number, number];
+  gapB: readonly [number, number, number];
+  /** RGB 0-255 and alpha 0-1. */
+  cycleLine: readonly [number, number, number, number];
+  gridLine: readonly [number, number, number, number];
+}
+
+const DARK_CHROME: ColormapChrome = {
+  background: BACKGROUND_RGB,
+  gapA: GAP_RGB_A,
+  gapB: GAP_RGB_B,
+  cycleLine: CYCLE_LINE_RGBA,
+  gridLine: [255, 255, 255, 0.16],
+};
+
+/** Red-black hatch, black clear (--color-bg at night), amber rules; blue zero throughout. */
+const NIGHT_CHROME: ColormapChrome = {
+  background: [0, 0, 0],
+  gapA: [20, 4, 0],
+  gapB: [34, 8, 0],
+  cycleLine: [255, 140, 0, 0.22],
+  gridLine: [255, 94, 0, 0.18],
+};
+
+export function colormapChrome(id: ColormapId): ColormapChrome {
+  return id === "night" ? NIGHT_CHROME : DARK_CHROME;
+}
 
 /** Relative luminance (WCAG) of a table entry, for the monotonicity checks. */
 export function lutLuminance(lut: Uint8Array, index: number): number {

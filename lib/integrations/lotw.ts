@@ -7,9 +7,10 @@ import { getSetting } from "@/lib/settings";
 // Query service: https://lotw.arrl.org/lotwuser/lotwreport.adi
 // Docs: https://lotw.arrl.org/lotw-help/developer-query-qsos-qsls/
 //
-// DOWNLOAD ONLY. Uploading to LoTW requires the QSO to be signed by TQSL with the
-// operator's certificate — there is no username/password upload path — so
-// `lotw.tqslPath` exists for a later step and is not used here.
+// DOWNLOAD ONLY. Uploading to LoTW requires each QSO to be signed with the operator's
+// certificate — there is no username/password upload path — and lives elsewhere: the
+// signing in `lotw-tq8.ts` (certificate from `lotw-cert.ts`, no TQSL binary needed) and
+// the POST in `lotw-upload.ts`.
 //
 // Downloading is read-only against ARRL, which is what makes it safe to run
 // against a real account without risking anything in the operator's LoTW record.

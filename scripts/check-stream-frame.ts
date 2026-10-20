@@ -15,8 +15,6 @@
 import { paletteFor, WaterfallCanvas, overlayText } from "../lib/stream/frame";
 import {
   DECODE_CHARS,
-  MAX_DECODES,
-  HEADER_LINES,
 } from "../lib/stream/layout";
 import type { WorkingNow } from "../lib/stream/frame";
 

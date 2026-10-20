@@ -53,37 +53,112 @@ export const FAQ: FaqSection[] = [
         a: (
           <>
             <p>
-              Into six menus along the top: <strong>Operate</strong>, <strong>Log</strong>,{" "}
-              <strong>Analyze</strong>, <strong>Tools</strong>, <strong>Settings</strong> and{" "}
-              <strong>Help</strong>. Pages kept their addresses, so bookmarks still work. On a
-              phone the same menus open from the menu button at the top left.
+              Into four menus along the top — <strong>Operate</strong> (Digital, Grid map,
+              Spectrum, DX cluster, Rig control), <strong>Log</strong> (Logbook, New QSO, QSL,
+              POTA), <strong>Analyze</strong> (Statistics, Awards, Coverage) and{" "}
+              <strong>Tools</strong> — between Dashboard on the left and Settings and Help on the
+              right. Pages kept their addresses, so bookmarks still work. When the window is
+              narrow the bar shrinks, then folds into one menu button; on a phone the same menus
+              open from the menu button at the top left.
             </p>
             <p>
-              The configuration pages — Stations, Users, ADIF, Backup, Updates and the rest — are
-              also tabs across the top of Settings.
+              Rig control appears only once an admin switches on{" "}
+              <em>Show the experimental Rig page</em> (Settings → Station). The configuration
+              pages — Stations, Users, ADIF, DXCC data, API keys, Backup, Updates and the rest — are
+              in the sidebar on the Settings page, under the setting categories.
             </p>
           </>
         ),
       },
       {
+        id: "go-to-palette",
+        q: "Is there a quick way to jump to a page?",
+        keywords: "ctrl k cmd command palette keyboard shortcut search goto jump",
+        a: (
+          <p>
+            Press <strong>Ctrl+K</strong> (<strong>⌘K</strong> on a Mac) on any page and type part
+            of a page&apos;s name — &quot;nq&quot; finds New QSO. It lists every page your role can
+            open, including ones with no menu entry such as Account, QSL cards, Users and Backup.
+            Arrow keys move, Enter opens, Escape closes.
+          </p>
+        ),
+      },
+      {
         id: "new-pages",
-        q: "What are the Spectrum, Tools and Cluster pages?",
+        q: "What are the Spectrum, Tools and DX cluster pages?",
         keywords: "spectrogram 3d waterfall toolkit calculator maidenhead dx spots bandmap new",
         a: (
           <List>
             <li>
               <To href="/spectrum">Spectrum</To> — a spectrogram and a 3D waterfall, of either the
-              audio passband or the radio&apos;s RF panadapter.
+              audio passband or the radio&apos;s RF panadapter. Receive only.
             </li>
             <li>
               <To href="/tools">Tools</To> — the ham toolkit: grid squares, band privileges,
-              antenna, dB and SWR calculators, and reference tables.
+              antenna, dB and SWR calculators, and reference tables. Each tool has its own link,
+              such as <code>/tools#swr</code>.
             </li>
             <li>
-              <To href="/cluster">Cluster</To> — DX cluster spots, and a band map that places them
-              on the band.
+              <To href="/cluster">DX cluster</To> — DX cluster spots, and a band map that places
+              them on the band. Clicking a spot only tunes the receiver; nothing transmits.
             </li>
           </List>
+        ),
+      },
+      {
+        id: "cluster-off",
+        q: "The DX cluster page says it is off.",
+        keywords: "cluster spots empty enable telnet node dxspider login",
+        a: (
+          <>
+            <p>
+              It is off on a new install, because it logs in to somebody else&apos;s server. An
+              admin switches it on under Settings → System → <strong>DX cluster</strong> →{" "}
+              <em>Connect to a DX cluster</em>; the radio service picks the change up within about
+              15 seconds, with no restart.
+            </p>
+            <p>
+              The default node is <code>dxc.hamserve.uk</code> on port 7300, and it logs in with
+              the station callsign unless you set a login. Add an SSID (such as{" "}
+              <code>-2</code>) if another logging program is already on the same node with your
+              plain callsign, or the two sessions keep throwing each other off. Nothing is sent to
+              the node except the login, an occasional empty line to keep the link alive, and BYE.
+            </p>
+          </>
+        ),
+      },
+      {
+        id: "spectrum-links",
+        q: "Can I link straight to a Spectrum view?",
+        keywords: "spectrum url query view source 3d split spectrogram rf audio bookmark deep link",
+        a: (
+          <>
+            <p>
+              Yes. <code>/spectrum?view=</code> takes <code>spectrogram</code>, <code>3d</code> or{" "}
+              <code>split</code> (both at once), and <code>?source=</code> takes{" "}
+              <code>audio</code> (the receiver&apos;s passband) or <code>rf</code> (the FlexRadio&apos;s
+              panadapter). They combine:{" "}
+              <code>/spectrum?view=split&amp;source=rf</code>. The RF view needs panadapter frames
+              from the FlexRadio; until they arrive the page shows the audio passband.
+            </p>
+            <p>
+              Without them the page opens the way you last left it in this browser; a link&apos;s
+              choice is then remembered the same way.
+            </p>
+          </>
+        ),
+      },
+      {
+        id: "night-mode",
+        q: "Is there a red night mode?",
+        keywords: "night red dark theme dark adaptation colours colors moon",
+        a: (
+          <p>
+            Yes — the <strong>Night</strong> button with the moon, in the header next to FT-0. It
+            turns the whole interface red and amber on black, for operating in a dark shack, and
+            pressing it again goes back. It is remembered per browser, so the shack PC and a phone
+            can differ. The waterfall, spectrum and SSTV pictures keep their own colours.
+          </p>
         ),
       },
       {
@@ -114,13 +189,35 @@ export const FAQ: FaqSection[] = [
             <p>
               Arm it with the <strong>TX</strong> control in the header, next to FT-0. It is off on
               a new install, and FT-0 turns it off again. While it is off nothing keys the radio —
-              not the automatic modes, not a call from the decode list, not the tuner.
+              not the automatic modes, not a call from the decode list, not the tuner. Only an admin
+              can arm it, and it asks first, showing the radio and its RF power. It cannot be armed
+              while FT-0 is engaged: resume the radio first.
             </p>
             <p>
               It is the same switch as <strong>Allow transmit</strong> under Settings → Radio, and
               it belongs to one radio: arming the FlexRadio arms nothing on the Icom, which has its
               own. It is read again before every transmission, so switching it off stops the next
               one.
+            </p>
+          </>
+        ),
+      },
+      {
+        id: "disarm-from-header",
+        q: "What happens when I disarm from the header?",
+        keywords: "disarm tx armed on air stop pause auto resume header button",
+        a: (
+          <>
+            <p>
+              Clicking <strong>TX ARMED</strong> or <strong>ON AIR</strong> disarms at once, with no
+              question — any operator may, because it only makes the station safer. It halts the
+              contact in progress, pauses the automatic mode, and cancels a transmission that was
+              still waiting for its window, so nothing goes out when that window arrives.
+            </p>
+            <p>
+              Arming from the header again <strong>resumes the automatic mode that the disarm
+              paused</strong> — the same one, and nothing else. Arming from Settings → Radio
+              resumes nothing.
             </p>
           </>
         ),
@@ -339,7 +436,7 @@ export const FAQ: FaqSection[] = [
               the computer&apos;s clock.
             </p>
             <p>
-              Then check that audio is arriving. <em>waiting for spectrum…</em> beside the Digital
+              Then check that audio is arriving. <em>Waiting for receiver audio…</em> on the Digital
               page&apos;s waterfall means nothing is reaching it from the bridge. For a FlexRadio:
               the slice in DIGU on a digital frequency, DAX enabled, and no other program holding
               the DAX channel.
@@ -365,16 +462,18 @@ export const FAQ: FaqSection[] = [
               under the Digital page&apos;s waterfall brightens it.
             </p>
             <p>
-              <strong>Nothing at all</strong>, with <em>waiting for spectrum…</em> beside it, means
-              no spectrum is reaching the page: the bridge is not running (the page says so), the
-              radio is not connected, or — behind a reverse proxy — <code>/ws/decodes</code> and{" "}
-              <code>/ws/audio</code> are not routed to the bridge. The shipped{" "}
-              <code>deploy/nginx/digishack.conf</code> has both.
+              <strong>Nothing at all</strong>, with <em>Waiting for receiver audio…</em> on it,
+              means no spectrum is reaching the page: the bridge is not running (the page says so),
+              the radio is not connected, or — behind a reverse proxy — <code>/ws/decodes</code>{" "}
+              and <code>/ws/audio</code> are not routed to the bridge. The shipped{" "}
+              <code>deploy/nginx/digishack.conf</code> has both. The live feed also needs you to be
+              signed in: a proxy that drops the <code>Host</code> header or serves the socket from
+              another host gets it refused.
             </p>
             <p>
-              <strong>Still scrolling but blank</strong> means reception stopped. The waterfall
-              keeps moving through an outage on purpose, so the gap is visible instead of a frozen
-              picture that looks live.
+              <strong>Still scrolling but blank</strong>, with <em>No new spectrum — check receiver
+              audio</em>, means reception stopped. The waterfall keeps moving through an outage on
+              purpose, so the gap is visible instead of a frozen picture that looks live.
             </p>
           </>
         ),
@@ -431,8 +530,8 @@ export const FAQ: FaqSection[] = [
           <>
             <p>
               Use <strong>Forgot password?</strong> on the sign-in page. The emailed link works once
-              and expires after 30 minutes. It needs outgoing email (SMTP, under Settings → QSL) to
-              be set up.
+              and expires after 30 minutes. It needs outgoing email (SMTP, under Settings → QSL &amp;
+              email → Outgoing email) to be set up.
             </p>
             <p>
               Without email, an admin can set a new password from the Users page. If nobody can

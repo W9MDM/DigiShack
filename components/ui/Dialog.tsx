@@ -114,6 +114,8 @@ export function Dialog({
 
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
+        // An inner popover (HelpTip) already handled this press: close only that.
+        if (e.defaultPrevented) return;
         if (dismissibleRef.current) {
           e.stopPropagation();
           onCloseRef.current();

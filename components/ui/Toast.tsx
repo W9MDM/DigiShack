@@ -176,10 +176,13 @@ function Toast({
   useEffect(() => {
     if (paused || !Number.isFinite(remaining.current)) return;
     const started = Date.now();
+    const version = item.version;
     const timer = window.setTimeout(() => onDismiss(item.id), Math.max(0, remaining.current));
     return () => {
       window.clearTimeout(timer);
-      remaining.current -= Date.now() - started;
+      // A replaced toast has already reset `remaining` during render; charging the old
+      // version's elapsed time to it made a repeated toast vanish early.
+      if (seenVersion.current === version) remaining.current -= Date.now() - started;
     };
   }, [paused, item.id, item.version, onDismiss]);
 

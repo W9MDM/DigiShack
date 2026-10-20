@@ -1,5 +1,7 @@
 import { useEffect, useRef } from "react";
 
+import { useActiveTheme, type Theme } from "@/lib/client/use-theme";
+
 // The live spectrum trace: a filled line graph of the current row.
 //
 // This is the "where are the conversations" display. The waterfall shows history, and
@@ -74,15 +76,56 @@ const DECAY = 0.72;
  * trace as it does in the history below it. Two displays of one measurement disagreeing
  * on their colour scale is worse than either of them having no colour at all.
  */
-const FILL_STOPS: [number, string][] = [
-  [0.0, "rgba(8, 12, 30, 0.60)"],
-  [0.15, "rgba(28, 52, 122, 0.75)"],
-  [0.35, "rgba(30, 110, 200, 0.82)"],
-  [0.55, "rgba(34, 200, 210, 0.86)"],
-  [0.72, "rgba(90, 220, 120, 0.89)"],
-  [0.88, "rgba(240, 210, 70, 0.92)"],
-  [1.0, "rgba(255, 90, 60, 0.95)"],
-];
+/** Everything the trace draws in, per theme. */
+export interface TraceColours {
+  fill: readonly (readonly [number, string])[];
+  grid: string;
+  feather: string;
+  core: string;
+  hold: string;
+}
+
+const DARK_TRACE: TraceColours = {
+  fill: [
+    [0.0, "rgba(8, 12, 30, 0.60)"],
+    [0.15, "rgba(28, 52, 122, 0.75)"],
+    [0.35, "rgba(30, 110, 200, 0.82)"],
+    [0.55, "rgba(34, 200, 210, 0.86)"],
+    [0.72, "rgba(90, 220, 120, 0.89)"],
+    [0.88, "rgba(240, 210, 70, 0.92)"],
+    [1.0, "rgba(255, 90, 60, 0.95)"],
+  ],
+  grid: "rgba(255, 255, 255, 0.07)",
+  feather: "rgba(120, 220, 255, 0.20)",
+  core: "rgba(190, 240, 255, 0.92)",
+  hold: "rgba(255, 210, 140, 0.55)",
+};
+
+/**
+ * The night theme's trace: the same progression as Night red in lib/spectrum/colormaps.ts
+ * (black, deep red, red, amber), so the trace and the waterfall under it still agree on
+ * what a colour means. Blue is zero in every one, the white glow becomes a red one, and
+ * the peak hold is a dim amber — still a different colour from the live line it sits over.
+ */
+const NIGHT_TRACE: TraceColours = {
+  fill: [
+    [0.0, "rgba(10, 0, 0, 0.60)"],
+    [0.15, "rgba(40, 0, 0, 0.75)"],
+    [0.35, "rgba(90, 0, 0, 0.82)"],
+    [0.55, "rgba(160, 8, 0, 0.86)"],
+    [0.72, "rgba(225, 30, 0, 0.89)"],
+    [0.88, "rgba(255, 84, 0, 0.92)"],
+    [1.0, "rgba(255, 150, 0, 0.95)"],
+  ],
+  grid: "rgba(255, 94, 0, 0.08)",
+  feather: "rgba(255, 44, 0, 0.22)",
+  core: "rgba(255, 120, 0, 0.92)",
+  hold: "rgba(216, 160, 0, 0.55)",
+};
+
+export function traceColours(theme: Theme): TraceColours {
+  return theme === "night" ? NIGHT_TRACE : DARK_TRACE;
+}
 
 /**
  * How fast the peak-hold line falls back, per frame.
@@ -116,6 +159,13 @@ export function SpectrumTrace({
   const holdRef = useRef<Float32Array | null>(null);
   const lastAtRef = useRef<number>(0);
   const drawnAxisRef = useRef<{ lowHz: number; spanHz: number } | null>(null);
+  const colours = traceColours(useActiveTheme());
+  // Read at draw time, so a theme change takes effect on the next frame without a redraw
+  // of its own — the trace is redrawn from scratch ten times a second anyway.
+  const coloursRef = useRef(colours);
+  useEffect(() => {
+    coloursRef.current = colours;
+  }, [colours]);
 
   // Slide the smoothing buffer to follow the axis.
   useEffect(() => {
@@ -193,12 +243,13 @@ export function SpectrumTrace({
     }
 
     ctx.clearRect(0, 0, w, h);
+    const c = coloursRef.current;
 
     const yOf = (v: number): number => h - v * (h - 2) - 1;
 
     // The dB grid, first, so the trace covers it rather than the other way round.
     if (floorDb !== null && ceilingDb !== null && ceilingDb > floorDb) {
-      ctx.strokeStyle = "rgba(255, 255, 255, 0.07)";
+      ctx.strokeStyle = c.grid;
       ctx.lineWidth = 1;
       const first = Math.ceil(floorDb / DB_GRID_STEP) * DB_GRID_STEP;
       for (let db = first; db < ceilingDb; db += DB_GRID_STEP) {
@@ -212,7 +263,7 @@ export function SpectrumTrace({
 
     // 1. The gradient fill.
     const grad = ctx.createLinearGradient(0, h, 0, 0);
-    for (const [at, colour] of FILL_STOPS) grad.addColorStop(at, colour);
+    for (const [at, colour] of c.fill) grad.addColorStop(at, colour);
 
     ctx.beginPath();
     ctx.moveTo(0, h);
@@ -237,13 +288,13 @@ export function SpectrumTrace({
     ctx.lineJoin = "round";
     ctx.lineCap = "round";
     curve();
-    ctx.strokeStyle = "rgba(120, 220, 255, 0.20)";
+    ctx.strokeStyle = c.feather;
     ctx.lineWidth = 4;
     ctx.stroke();
 
     // 3. The core.
     curve();
-    ctx.strokeStyle = "rgba(190, 240, 255, 0.92)";
+    ctx.strokeStyle = c.core;
     ctx.lineWidth = 1;
     ctx.stroke();
 
@@ -260,7 +311,7 @@ export function SpectrumTrace({
       if (x === 0) ctx.moveTo(x, y);
       else ctx.lineTo(x, y);
     }
-    ctx.strokeStyle = "rgba(255, 210, 140, 0.55)";
+    ctx.strokeStyle = c.hold;
     ctx.lineWidth = 1;
     ctx.stroke();
   }, [row, gain, floorDb, ceilingDb]);

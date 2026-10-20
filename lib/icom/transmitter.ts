@@ -74,6 +74,11 @@ export class IcomTransmitter implements RadioTransmitter {
   private cancelled = false;
   /** Ends the wait for a transmission's window early. Set only while waiting. */
   private wakePending: (() => void) | null = null;
+  /**
+   * Bumped by every unkey(). Recorded when a transmission starts: a stop that landed while the
+   * gate was being read was wiped by the `cancelled = false` reset below and lost.
+   */
+  private stopGen = 0;
 
   constructor(private readonly opts: IcomTransmitterOptions) {
     this.allowed = opts.allowTransmit;
@@ -113,6 +118,7 @@ export class IcomTransmitter implements RadioTransmitter {
       reason,
       startedAt: null,
     });
+    const stopsAtStart = this.stopGen;
 
     // The LIVE setting decides, not the snapshot taken when this was constructed.
     //
@@ -132,6 +138,7 @@ export class IcomTransmitter implements RadioTransmitter {
       : this.allowed;
     this.allowed = armed;
     if (!armed) return refuse("Transmit is disabled in settings");
+    if (this.stopGen !== stopsAtStart) return refuse("Cancelled before keying");
     if (this.busy) return refuse("Already transmitting");
     if (this.opts.serial.state !== "open") {
       // Refusing here rather than keying and hoping: without CI-V there is no way to
@@ -210,7 +217,7 @@ export class IcomTransmitter implements RadioTransmitter {
 
       // Checked at the last moment before PTT: a stop or a closed gate during the wait
       // used to key the radio anyway, briefly, before the send loop noticed.
-      if (this.cancelled) {
+      if (this.cancelled || this.stopGen !== stopsAtStart) {
         return { sent: false, reason: "Cancelled before keying", startedAt: null };
       }
       if (this.opts.isTransmitAllowed) {
@@ -225,7 +232,7 @@ export class IcomTransmitter implements RadioTransmitter {
           return { sent: false, reason: "Transmit was turned off while waiting for the window", startedAt: null };
         }
         // The read is async; a stop can land while it is in flight.
-        if (this.cancelled) {
+        if (this.cancelled || this.stopGen !== stopsAtStart) {
           return { sent: false, reason: "Cancelled before keying", startedAt: null };
         }
       }
@@ -306,6 +313,7 @@ export class IcomTransmitter implements RadioTransmitter {
    * the state where an extra unkey matters, and an unnecessary one costs nothing.
    */
   async unkey(): Promise<void> {
+    this.stopGen++;
     this.cancelled = true;
     // A transmission waiting for its window is cancelled too, not left to key later.
     this.wakePending?.();

@@ -19,7 +19,7 @@ import {
   perspective,
   type OrbitCamera,
 } from "@/lib/spectrum/camera";
-import { BACKGROUND_RGB, colormapRgba, type ColormapId } from "@/lib/spectrum/colormaps";
+import { colormapChrome, colormapRgba, type ColormapId } from "@/lib/spectrum/colormaps";
 import type { SpectrumHistory } from "@/lib/spectrum/history";
 
 import {
@@ -216,7 +216,11 @@ export class Waterfall3DGL {
     const w = this.canvas.width;
     const h = this.canvas.height;
     gl.viewport(0, 0, w, h);
-    gl.clearColor(BACKGROUND_RGB[0] / 255, BACKGROUND_RGB[1] / 255, BACKGROUND_RGB[2] / 255, 1);
+    // Clear colour and grid come with the map, so Night red is not drawn on a grey field
+    // under white rules.
+    const chrome = colormapChrome(f.colormap);
+    const bg = chrome.background;
+    gl.clearColor(bg[0] / 255, bg[1] / 255, bg[2] / 255, 1);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
     perspective(this.proj, FOV_Y, w / Math.max(1, h), 0.05, 50);
@@ -234,7 +238,8 @@ export class Waterfall3DGL {
       gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
       gl.useProgram(this.lines.program);
       gl.uniformMatrix4fv(this.lines.uniform("uMVP"), false, this.mvp);
-      gl.uniform4f(this.lines.uniform("uColor"), 1, 1, 1, 0.16);
+      const [lr, lg, lb, la] = chrome.gridLine;
+      gl.uniform4f(this.lines.uniform("uColor"), lr / 255, lg / 255, lb / 255, la);
       gl.bindVertexArray(this.lineVao);
       gl.bindBuffer(gl.ARRAY_BUFFER, this.lineBuffer);
       gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.lineData, 0, nLines * 3);

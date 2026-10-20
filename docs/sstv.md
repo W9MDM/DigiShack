@@ -77,7 +77,7 @@ a **Stop** that unkeys at once.
 
 Before it keys, the bridge checks:
 
-- **Your licence class** (Settings, General). In the US an image mode shares the phone
+- **Your licence class** (Settings → Station → General). In the US an image mode shares the phone
   sub-bands, which differ by class: 14.230 needs General or above, 7.171 Advanced or
   Extra. Unset, nothing is sent. "other" is a licence outside the US.
 - **Allow transmit**, as for every mode.

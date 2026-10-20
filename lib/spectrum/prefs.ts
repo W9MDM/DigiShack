@@ -4,7 +4,7 @@
 // value, another tab's half-written JSON — and returns something valid. A preference store
 // that can wedge a page into an unusable state is worse than none.
 
-import { DEFAULT_COLORMAP, isColormapId, type ColormapId } from "@/lib/spectrum/colormaps";
+import { DEFAULT_COLORMAP, isColormapId, NIGHT_COLORMAP, type ColormapId } from "@/lib/spectrum/colormaps";
 import {
   MAX_FLOOR_OFFSET_DB,
   MAX_RANGE_DB,
@@ -31,6 +31,12 @@ export interface SpectrumPrefs {
   view: SpectrumView;
   source: FeedKind;
   colormap: ColormapId;
+  /**
+   * Whether the operator picked `colormap` from the menu. Until they do, the night theme
+   * draws in Night red (see effectiveColormap); once they do, their choice is kept in
+   * either theme — someone who picked Grayscale for the night meant it.
+   */
+  colormapChosen: boolean;
   /** Per source: an audio passband and an RF panadapter want very different windows. */
   contrast: Record<FeedKind, Contrast>;
   historySec: number;
@@ -43,6 +49,7 @@ export const DEFAULT_PREFS: SpectrumPrefs = {
   view: "spectrogram",
   source: "audio",
   colormap: DEFAULT_COLORMAP,
+  colormapChosen: false,
   contrast: {
     audio: { floorOffsetDb: 0, rangeDb: null },
     rf: { floorOffsetDb: 0, rangeDb: null },
@@ -94,6 +101,11 @@ export function sanitizePrefs(raw: unknown): SpectrumPrefs {
     view: isView(o.view) ? o.view : d.view,
     source: isFeedKind(o.source) ? o.source : d.source,
     colormap: isColormapId(o.colormap) ? o.colormap : d.colormap,
+    // Stored before the flag existed: a map other than the default can only have been picked.
+    colormapChosen:
+      typeof o.colormapChosen === "boolean"
+        ? o.colormapChosen
+        : isColormapId(o.colormap) && o.colormap !== d.colormap,
     contrast: {
       audio: sanitizeContrast(contrast.audio, d.contrast.audio),
       rf: sanitizeContrast(contrast.rf, d.contrast.rf),
@@ -103,6 +115,11 @@ export function sanitizePrefs(raw: unknown): SpectrumPrefs {
     heightScale: height === null ? d.heightScale : Math.max(MIN_HEIGHT_SCALE, Math.min(MAX_HEIGHT_SCALE, height)),
     depthSec: nearest(DEPTH_CHOICES_SEC, finite(o.depthSec), d.depthSec),
   };
+}
+
+/** The map actually drawn: the operator's pick, or Night red in the night theme if they never made one. */
+export function effectiveColormap(prefs: Pick<SpectrumPrefs, "colormap" | "colormapChosen">, night: boolean): ColormapId {
+  return night && !prefs.colormapChosen ? NIGHT_COLORMAP : prefs.colormap;
 }
 
 function structuredCloneish(p: SpectrumPrefs): SpectrumPrefs {

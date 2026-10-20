@@ -1,5 +1,4 @@
 import {
-  adifToQslRoute,
   qslRouteToAdif,
   ADIF_VERSION,
   boolToAdif,

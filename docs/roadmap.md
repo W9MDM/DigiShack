@@ -335,9 +335,11 @@ missing entry, because nobody re-examines it.
 
 ### Still open
 
-- **DX cluster, and workable DXCC.** The join between "what is being spotted" and "what I still
-  need". Every piece exists — the band strip, the spot feed, the worked index, the award
-  progress — and the join does not. The largest remaining item and the most useful for chasing.
+- **Workable DXCC, from our own decodes.** The DX cluster landed in 1.233.0 (`/cluster`): spots
+  from a node, flagged for the new entities, band slots and mode slots the log still needs —
+  the "what is being spotted against what I need" half. The other half, "of the entities I
+  still need, which are audible here now", from this receiver's own decodes rather than other
+  people's spots, is not built. The cluster itself has never been connected to a real node.
 - **Cabrillo export.** Only matters if a contest is entered, and it wants the contest's own
   exchange fields rather than a rename of the CSV columns, so it is worth doing when there is a
   contest to test it against.
@@ -377,4 +379,6 @@ LoTW upload (1.94.0, verified against the live service), LoTW upload verificatio
 eQSL upload (1.90.0) and inbox sync (1.101.0), Cloudlog/Wavelog upload, the QSO map, statistics
 beyond the dashboard (1.103.0), callsign history (1.104.0), CSV export (1.105.0), ADIF import and
 export, the scheduled-job list (1.96.0), and the incomplete-exchange recorder with its QRZ
-reconciliation (1.111.0-1.112.0).
+reconciliation (1.111.0-1.112.0). Since then: arming transmit from the header (1.220.0),
+the DX cluster and band map (1.233.0), the Spectrum page (1.229.0), the ham toolkit
+(1.230.0), and the greyline on the grid map (1.239.0).

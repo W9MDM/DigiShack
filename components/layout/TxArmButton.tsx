@@ -159,7 +159,10 @@ export function TxArmButton() {
           role={confirming ? "dialog" : "alert"}
           aria-label={confirming ? "Arm transmit" : undefined}
           className={cn(
-            "absolute right-0 top-full z-40 mt-2 w-72 max-w-[calc(100vw-2rem)]",
+            // On a phone the pill sits mid-header, so a right-anchored 288px panel ran off the
+            // left edge; pin it to the screen width under the header instead.
+            "fixed inset-x-4 top-[calc(3rem+env(safe-area-inset-top)+0.5rem)] z-40",
+            "sm:absolute sm:inset-x-auto sm:right-0 sm:top-full sm:mt-2 sm:w-72",
             "rounded-md border border-line-strong bg-surface p-3 text-sm shadow-pop",
           )}
         >

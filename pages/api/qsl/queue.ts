@@ -7,15 +7,20 @@ import type { AuthContext } from "@/lib/auth/session";
 import { prisma } from "@/lib/db/prisma";
 import {
   approveQsl,
+  BadQueueCursor,
+  countInterruptedSends,
   enqueueQsl,
   findQslCandidates,
+  listQueuePage,
+  QUEUE_PAGE_MAX,
   requeueGatewayAffected,
   sendApprovedQsls,
   skipQsl,
 } from "@/lib/qsl/queue";
 import { getBooleanSetting, getNumberSetting } from "@/lib/settings";
 
-// GET  /api/qsl/queue  — the queue, plus candidates worth queuing
+// GET  /api/qsl/queue  — one page of the queue (?status=, ?cursor=, ?limit=, ?unconfirmed=1),
+//                        plus counts and candidates worth queuing on the first page
 // POST /api/qsl/queue  — enqueue / approve / skip / send
 //
 // Sending is a separate, explicit action from approving, and approving is
@@ -161,27 +166,61 @@ const postSchema = z.discriminatedUnion("action", [
   }),
 ]);
 
-async function get(req: NextApiRequest, res: NextApiResponse) {
-  const status = typeof req.query.status === "string" ? req.query.status : undefined;
+const getSchema = z.object({
+  status: z.enum(["PENDING", "APPROVED", "SENT", "FAILED", "SKIPPED"]).optional(),
+  // `nextCursor` from the previous response. A cursor request returns the next rows only —
+  // no counts, candidates or sender status, which the first page already carried (and the
+  // sender check alone can cost two seconds waiting on the radio service).
+  cursor: z.string().min(1).max(512).optional(),
+  limit: z.coerce.number().int().min(1).max(QUEUE_PAGE_MAX).optional(),
+  // "1": only SENT rows whose outcome was never recorded (a send interrupted mid-flight).
+  unconfirmed: z.enum(["1", "0"]).optional(),
+});
 
-  const [queue, counts, candidates, sender] = await Promise.all([
-    prisma.qslEmail.findMany({
-      where: status ? { status: status as never } : { status: { not: "SKIPPED" } },
-      orderBy: { createdAt: "asc" },
-      take: 200,
-      include: {
-        qso: { select: { band: true, mode: true, startTime: true, gridSquare: true } },
-        approvedBy: { select: { name: true } },
-      },
-    }),
+async function get(req: NextApiRequest, res: NextApiResponse) {
+  const q = getSchema.safeParse({
+    status: req.query.status,
+    cursor: req.query.cursor,
+    limit: req.query.limit,
+    unconfirmed: req.query.unconfirmed,
+  });
+  if (!q.success) {
+    sendError(res, 400, "Bad queue request", q.error.flatten().fieldErrors);
+    return;
+  }
+  const { status, cursor, limit } = q.data;
+  const unconfirmedOnly = q.data.unconfirmed === "1";
+
+  let page: Awaited<ReturnType<typeof listQueuePage>>;
+  try {
+    page = await listQueuePage({ status, cursor, limit, unconfirmedOnly });
+  } catch (err) {
+    if (err instanceof BadQueueCursor) {
+      sendError(res, 400, "Bad queue cursor");
+      return;
+    }
+    throw err;
+  }
+
+  if (cursor) {
+    sendJson(res, 200, { queue: page.rows, nextCursor: page.nextCursor });
+    return;
+  }
+
+  const [counts, interrupted, candidates, sender] = await Promise.all([
     prisma.qslEmail.groupBy({ by: ["status"], _count: { _all: true } }),
+    countInterruptedSends(),
     findQslCandidates({ limit: 25 }),
     qslSenderStatus(),
   ]);
 
   sendJson(res, 200, {
-    queue,
+    queue: page.rows,
+    nextCursor: page.nextCursor,
     counts: Object.fromEntries(counts.map((c) => [c.status, c._count._all])),
+    // SENT rows whose sender died between claiming and recording — delivery unknown. Counted
+    // over the whole table, because they are rare and would otherwise sit pages deep.
+    interrupted,
     candidates,
     // Whether anything will send any of the above. Without this the page can only show what
     // is in the queue, which is the half of the picture that never explains itself.

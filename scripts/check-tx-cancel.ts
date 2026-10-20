@@ -44,13 +44,13 @@ interface FlexRig {
   packets: () => number;
 }
 
-function flexRig(isArmed: () => boolean): FlexRig {
+function flexRig(isArmed: () => boolean, gate?: () => Promise<boolean>): FlexRig {
   const commands: string[] = [];
   let packets = 0;
   const tx = new FlexDaxTransmitter({
     host: "127.0.0.1",
     allowTransmit: true,
-    isTransmitAllowed: async () => isArmed(),
+    isTransmitAllowed: gate ?? (async () => isArmed()),
   });
   const inner = tx as unknown as {
     client: unknown;
@@ -127,6 +127,30 @@ async function flexChecks(): Promise<void> {
     ok(!rig.commands.includes("xmit 1"), "neither keyed");
   }
 
+  console.log("\nFlexRadio: a stop that lands while the gate is being read");
+  for (const which of ["before the wait", "after the wait"] as const) {
+    let reads = 0;
+    // A read that misses the settings cache goes to the database: model it as slow.
+    const slowRead = async () => {
+      reads++;
+      if (which === "before the wait" ? reads === 1 : reads === 2) await sleep(80);
+      return true;
+    };
+    const rig = flexRig(() => true, slowRead);
+    const pending = rig.tx.transmit({
+      message: "CQ K9XYZ EN61",
+      mode: "FT8",
+      offsetHz: 1500,
+      startAt: boundaryKeyingIn("FT8", 250),
+    });
+    await sleep(which === "before the wait" ? 30 : 290);
+    await rig.tx.unkey();
+    const r = await pending;
+    ok(!r.sent && /cancelled before keying/i.test(r.reason ?? ""), `HALT during the gate read ${which}: not sent`, r.reason);
+    ok(!rig.commands.includes("xmit 1"), `  and never keyed (${which})`, rig.commands.join(","));
+    ok(!rig.tx.isBusy, `  and the transmitter is free (${which})`);
+  }
+
   console.log("\nFlexRadio: a normal transmission still goes out whole");
   {
     const rig = flexRig(() => true);
@@ -170,7 +194,7 @@ const ADDR = 0x94;
 const IDENTITY = { vendor: "icom", model: "IC-7300", host: "127.0.0.1" };
 const KEY_ON = setPtt(ADDR, true).toString("hex");
 
-function icomRig(isArmed: () => boolean): { tx: IcomTransmitter; civ: () => string[] } {
+function icomRig(isArmed: () => boolean, gate?: () => Promise<boolean>): { tx: IcomTransmitter; civ: () => string[] } {
   const civ: Buffer[] = [];
   const serial = {
     get state() {
@@ -192,9 +216,31 @@ function icomRig(isArmed: () => boolean): { tx: IcomTransmitter; civ: () => stri
     address: ADDR,
     identity: IDENTITY,
     allowTransmit: true,
-    isTransmitAllowed: async () => isArmed(),
+    isTransmitAllowed: gate ?? (async () => isArmed()),
   });
   return { tx, civ: () => civ.map((b) => b.toString("hex")) };
+}
+
+async function icomRaceChecks(): Promise<void> {
+  console.log("\nIcom: a stop that lands while the gate is being read");
+  let reads = 0;
+  const slowRead = async () => {
+    reads++;
+    if (reads === 1) await sleep(80);
+    return true;
+  };
+  const rig = icomRig(() => true, slowRead);
+  const pending = rig.tx.transmit({
+    message: "CQ K9XYZ EN61",
+    mode: "FT8",
+    offsetHz: 1500,
+    startAt: boundaryKeyingIn("FT8", 300),
+  });
+  await sleep(30);
+  await rig.tx.unkey();
+  const r = await pending;
+  ok(!r.sent && /cancelled before keying/i.test(r.reason ?? ""), "a stop during the first gate read is not wiped by the reset", r.reason ?? "");
+  ok(!rig.civ().includes(KEY_ON), "PTT never went on");
 }
 
 async function icomChecks(): Promise<void> {
@@ -262,6 +308,7 @@ async function icomChecks(): Promise<void> {
 async function main(): Promise<void> {
   await flexChecks();
   await icomChecks();
+  await icomRaceChecks();
   console.log(`\n${pass} passed, ${fail} failed\n`);
   process.exit(fail > 0 ? 1 : 0);
 }

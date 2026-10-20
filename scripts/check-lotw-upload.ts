@@ -180,6 +180,20 @@ eq(mhz(144_200_000), "144.2", "VHF");
 // The reason this is not String(hz / 1e6): binary floating point makes some divisions
 // print an artefact, and the string goes into the SIGNED BYTES as well as the field.
 ok(!mhz(28_074_000).includes("0000000"), "and no floating-point artefact reaches the signature");
+{
+  // `mhz` now delegates to the display formatter `formatFreqMHz`. The string is SIGNED, so
+  // it must stay byte-identical to the formula it replaced across everything loggable: every
+  // Hz across the FT8 sub-band of 20m, and a coarse sweep from 100 kHz to 450 MHz.
+  const original = (hz: number) => (hz / 1_000_000).toFixed(6).replace(/\.?0+$/, "");
+  let mismatch: number | null = null;
+  for (let hz = 14_070_000; hz <= 14_080_000 && mismatch === null; hz++) {
+    if (mhz(hz) !== original(hz)) mismatch = hz;
+  }
+  for (let hz = 100_000; hz <= 450_000_000 && mismatch === null; hz += 997) {
+    if (mhz(hz) !== original(hz)) mismatch = hz;
+  }
+  ok(mismatch === null, `mhz() is byte-identical to the original fixed-then-trim formula${mismatch === null ? "" : ` (differs at ${mismatch} Hz)`}`);
+}
 
 console.log("\nthe LoTW mode name");
 eq(lotwMode("FT8"), "FT8", "FT8 is its own LoTW mode");
@@ -347,6 +361,13 @@ console.log("\nreading LoTW's reply");
   ok(!readLotwReply(200, "").ok, "and so is an empty 200");
   ok(readLotwReply(200, "<script>x</script><!-- .UPL. accepted -->ok").ok,
      "script tags in the page do not defeat the match");
+  // REGRESSION: the reader decoded `&amp;` FIRST, so the page's escaped text "&lt;CALL&gt;"
+  // (sent as `&amp;lt;CALL&amp;gt;`) was shown to the operator as "<CALL>".
+  eq(
+    readLotwReply(200, "<!-- .UPL. rejected -->Bad &amp;lt;CALL&amp;gt; &amp; &lt;BAND&gt;").detail,
+    "LoTW rejected the file: Bad &lt;CALL&gt; & <BAND>",
+    "entities decode once, with &amp; last, so an escaped entity stays escaped",
+  );
 }
 
 console.log("\nthe reply LoTW really sends");

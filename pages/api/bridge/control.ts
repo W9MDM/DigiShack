@@ -4,6 +4,7 @@ import { z } from "zod";
 import { sendError, sendJson } from "@/lib/api/respond";
 import { authedRoute } from "@/lib/auth/guard";
 import type { AuthContext } from "@/lib/auth/session";
+import { controlTimeoutMessage, controlTimeoutMs, isTimeoutError } from "@/lib/bridge/control-timeout";
 import { getNumberSetting, getSetting } from "@/lib/settings";
 
 // Server-side proxy for the radio service's QSO control API.
@@ -179,6 +180,7 @@ async function post(req: NextApiRequest, res: NextApiResponse, auth: AuthContext
   }
 
   const port = await getNumberSetting("bridge.port", 3101);
+  const timeoutMs = controlTimeoutMs(action, payload);
 
   try {
     const upstream = await fetch(`http://127.0.0.1:${port}/${action}`, {
@@ -188,10 +190,14 @@ async function post(req: NextApiRequest, res: NextApiResponse, auth: AuthContext
         "X-Bridge-Token": token,
       },
       body: JSON.stringify(payload),
-      signal: AbortSignal.timeout(5_000),
+      signal: AbortSignal.timeout(timeoutMs),
     });
     sendJson(res, upstream.status, await upstream.json());
-  } catch {
+  } catch (err) {
+    if (isTimeoutError(err)) {
+      sendError(res, 504, controlTimeoutMessage(action, timeoutMs));
+      return;
+    }
     sendError(res, 502, "The radio service is not answering. Is it running?");
   }
 }

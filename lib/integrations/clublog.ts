@@ -1,4 +1,4 @@
-import { adifHeader, adifRecord, type AdifQsoInput } from "@/lib/adif/write";
+import { adifRecord, type AdifQsoInput } from "@/lib/adif/write";
 import { getSetting } from "@/lib/settings";
 import { classifyClubLogReply } from "@/lib/integrations/clublog-reply";
 
@@ -30,18 +30,13 @@ import { classifyClubLogReply } from "@/lib/integrations/clublog-reply";
 //
 // UPLOADS GO ONE CONTACT AT A TIME through `realtime.php` — see `uploadQsoToClubLog`.
 //
-// `uploadAdifToClubLog` HAS NO CALLER, and that is said plainly because this file has
-// been here before: `upload-runner.ts` opens by recording that it and `insertQrzQso` were
-// once "written, tested and never called". It is kept for one capability `realtime.php`
-// does not have — Club Log's `clear` flag, which replaces a log rather than merging into
-// it, and which is the only way to repair a log uploaded wrongly. Deleting it would mean
-// writing it again the first time somebody needs that. If a whole-log rebuild is still
-// unbuilt a release or two from now, delete it rather than let this comment keep
-// excusing it.
+// ONLY THE REAL-TIME UPLOAD REMAINS. A batch `putlogs.php` uploader (the one carrier of
+// Club Log's `clear` flag, which replaces a log rather than merging into it), a
+// credential probe and a `getadif.php` downloader sat here for many releases with no
+// caller and were deleted, as this comment had promised they would be. Git history has
+// them if a whole-log rebuild is ever built.
 
-const PUT_URL = "https://clublog.org/putlogs.php";
 const REALTIME_URL = "https://clublog.org/realtime.php";
-const GET_URL = "https://clublog.org/getadif.php";
 
 export interface ClubLogCredentials {
   email: string;
@@ -98,70 +93,6 @@ export interface ClubLogUploadResult {
 // this one never was: the refusal was a missing API key. A flag whose only purpose is to
 // suppress the report of a fixable fault is worse than no flag, so the fault is reported
 // again, with the fix named in the message.
-
-/**
- * Upload a batch of QSOs as ADIF.
- *
- * `clear` maps to Club Log's own flag for replacing the log rather than merging.
- * It defaults to false and should stay that way unless the operator explicitly
- * asks: passing it discards whatever Club Log holds, including confirmations that
- * exist nowhere else.
- */
-export async function uploadAdifToClubLog(
-  qsos: AdifQsoInput[],
-  opts: { clear?: boolean; callsign?: string; timeoutMs?: number } = {},
-): Promise<ClubLogUploadResult> {
-  const creds = await getClubLogCredentials();
-  if (!creds) {
-    return { ok: false, sent: 0, detail: "Club Log email/password are not configured" };
-  }
-  if (qsos.length === 0) return { ok: true, sent: 0, detail: "Nothing to upload" };
-
-  const callsign = opts.callsign || creds.callsign || qsos[0]!.station.callsign;
-  if (!callsign) {
-    return { ok: false, sent: 0, detail: "No station callsign to attribute the upload to" };
-  }
-
-  const adif =
-    adifHeader({ programVersion: "DigiShack", createdAt: new Date() }) +
-    qsos.map((q) => adifRecord(q)).join("");
-
-  const form = new FormData();
-  form.set("email", creds.email);
-  form.set("password", creds.password);
-  form.set("callsign", callsign.toUpperCase());
-  // Documented as optional and obtained from Club Log's helpdesk, so it is sent only when
-  // present. See clublog.apiKey in the settings registry for why an empty one is worse
-  // than none.
-  if (creds.apiKey) form.set("api", creds.apiKey);
-  if (opts.clear) form.set("clear", "1");
-  // Club Log expects a file part, not a plain field.
-  form.set("file", new Blob([adif], { type: "text/plain" }), "digishack.adi");
-
-  try {
-    const res = await fetch(PUT_URL, {
-      method: "POST",
-      body: form,
-      signal: AbortSignal.timeout(opts.timeoutMs ?? 180_000),
-    });
-    // Club Log answers 200 with a body describing the outcome and uses non-200 for auth
-    // and quota problems, so the reply is read rather than the status. See
-    // `clublog-reply.ts` for every case and what it was measured to say.
-    const verdict = classifyClubLogReply(res.status, await res.text());
-    return {
-      ok: verdict.ok,
-      sent: verdict.ok ? qsos.length : 0,
-      duplicate: verdict.duplicate,
-      detail: verdict.detail,
-    };
-  } catch (err) {
-    return {
-      ok: false,
-      sent: 0,
-      detail: err instanceof Error ? err.message : "Club Log upload failed",
-    };
-  }
-}
 
 /**
  * Upload ONE contact through Club Log's real-time endpoint.
@@ -235,95 +166,3 @@ export async function uploadQsoToClubLog(
   }
 }
 
-/**
- * Check the credentials by uploading nothing.
- *
- * Club Log offers no read-only endpoint that accepts these credentials, so the
- * cheapest honest check is an upload of an empty ADIF: it exercises
- * authentication without adding a QSO. A rejection here is a credential problem;
- * anything else means the path works.
- */
-export async function testClubLog(): Promise<{ ok: boolean; detail: string }> {
-  const creds = await getClubLogCredentials();
-  if (!creds) return { ok: false, detail: "Club Log credentials are not configured" };
-
-
-  const form = new FormData();
-  form.set("email", creds.email);
-  form.set("password", creds.password);
-  form.set("callsign", (creds.callsign || "K9XYZ").toUpperCase());
-  // Without this the probe fails at the edge exactly as the real uploads did, which is
-  // what an operator who had just pasted a valid key would have seen.
-  if (creds.apiKey) form.set("api", creds.apiKey);
-  form.set("file", new Blob([adifHeader({ programVersion: "DigiShack" })], { type: "text/plain" }), "probe.adi");
-
-  try {
-    const res = await fetch(PUT_URL, {
-      method: "POST",
-      body: form,
-      signal: AbortSignal.timeout(60_000),
-    });
-    // NOT routed through `classifyClubLogReply`, deliberately. This probe uploads a
-    // header and no records, and what Club Log answers to that has never been measured.
-    // The shared rules read an empty 200 as a failure, which is right for a real contact
-    // and would be wrong here — reporting a working configuration as broken. UNVERIFIED
-    // either way; it stays lenient until somebody measures it.
-    const body = (await res.text()).trim();
-    if (!res.ok) return { ok: false, detail: `HTTP ${res.status}: ${body.slice(0, 200)}` };
-    if (/invalid|denied|error/i.test(body)) return { ok: false, detail: body.slice(0, 200) };
-    return { ok: true, detail: body.slice(0, 200) || "Accepted" };
-  } catch (err) {
-    return { ok: false, detail: err instanceof Error ? err.message : "Club Log request failed" };
-  }
-}
-
-
-export interface ClubLogDownloadResult {
-  ok: boolean;
-  adif?: string;
-  count?: number;
-  error?: string;
-}
-
-/**
- * Download the log Club Log holds.
- *
- * POST and form-encoded, both mandatory. Without `type` this is the entire log,
- * which is what a local-vs-remote diff needs — the alternative, trusting
- * server-side dedup and re-uploading everything, moves several megabytes to
- * discover a handful of missing contacts.
- */
-export async function downloadClubLogAdif(
-  opts: { callsign?: string; type?: "dxqrs"; timeoutMs?: number } = {},
-): Promise<ClubLogDownloadResult> {
-  const creds = await getClubLogCredentials();
-  if (!creds) return { ok: false, error: "Club Log credentials are not configured" };
-
-  const call = opts.callsign || creds.callsign;
-  if (!call) return { ok: false, error: "No callsign to download for" };
-
-  const body = new URLSearchParams({
-    email: creds.email,
-    password: creds.password,
-    call: call.toUpperCase(),
-  });
-  if (opts.type) body.set("type", opts.type);
-
-  try {
-    const res = await fetch(GET_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body,
-      signal: AbortSignal.timeout(opts.timeoutMs ?? 180_000),
-    });
-    const text = await res.text();
-    if (!res.ok) return { ok: false, error: `HTTP ${res.status}: ${text.slice(0, 200)}` };
-    if (!/<call:/i.test(text)) {
-      return { ok: false, error: `Club Log returned no ADIF: ${text.slice(0, 200)}` };
-    }
-    const { parseAdif } = await import("@/lib/adif/parse");
-    return { ok: true, adif: text, count: parseAdif(text).qsos.length };
-  } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : "Club Log download failed" };
-  }
-}

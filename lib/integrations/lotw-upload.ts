@@ -1,3 +1,5 @@
+import { unescapeHtml } from "@/lib/html";
+
 // POSTing a signed .tq8 to Logbook of the World.
 //
 // There is no API key. THE CERTIFICATE IS THE AUTHENTICATION -- the signature inside the
@@ -28,16 +30,14 @@ export interface LotwUploadResult {
 
 /** Strip tags and squeeze whitespace, to get a sentence out of an HTML reply. */
 function readable(html: string): string {
-  return html
+  const text = html
     .replace(/<script[\s\S]*?<\/script>/gi, " ")
     .replace(/<style[\s\S]*?<\/style>/gi, " ")
     .replace(/<[^>]*>/g, " ")
-    .replace(/&nbsp;/g, " ")
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/\s+/g, " ")
-    .trim();
+    .replace(/&nbsp;/g, " ");
+  // Entities after the tags are gone, and through `unescapeHtml`, which decodes `&amp;`
+  // last. This used to decode it first, turning `&amp;lt;` into "<" instead of "&lt;".
+  return unescapeHtml(text).replace(/\s+/g, " ").trim();
 }
 
 /**

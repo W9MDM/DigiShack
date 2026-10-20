@@ -40,6 +40,7 @@ and a backup moves the whole installation.
 | [Exposure](exposure.md) | What is reachable without signing in, and how that was checked |
 | [Cloudlog audit](cloudlog-audit.md) | A read of Cloudlog against this codebase: what is missing and worth building |
 | [Roadmap](roadmap.md) | Planned and not built, with the reasoning |
+| [Backlog](backlog.md) | Pointer to the issue tracker, and what its labels mean |
 | [Troubleshooting](troubleshooting.md) | Symptoms, in the order you are likely to meet them |
 | [Development](development.md) | Conventions, the test suite, how to add things |
 
@@ -52,8 +53,13 @@ DigiShack is two processes and a database:
   runs the automatic operating modes, and keys the transmitter. Separate because it
   binds a UDP socket, and a bound UDP socket cannot be shared across workers.
 
-They talk over a token-guarded HTTP API on localhost and a WebSocket carrying the live
-decode feed.
+They talk over a token-guarded HTTP API on localhost. Browsers get the live decode feed
+and receiver audio from the bridge's two WebSockets, which need a signed-in session (or,
+for a script on the box, the bridge token) — see [Architecture](architecture.md#the-websockets-and-who-may-open-them).
+
+Inside the app, the header's menus (Operate, Log, Analyze, Tools), **Ctrl/⌘+K** to jump
+to any page, and the **Help** page — searchable answers to "why did it do that?" — are the
+quickest ways round.
 
 ## Conventions used throughout
 
@@ -62,8 +68,9 @@ timestamps does not match LoTW, does not match the other operator, and cannot be
 compared with anything. Every timestamp on screen carries a `Z` or the word UTC. If you
 ever see one that does not, that is a bug.
 
-**Nothing transmits without being told to.** Automatic modes are off by default,
-`flex.allowTransmit` is a master gate re-read before every transmission, and the
+**Nothing transmits without being told to.** Automatic modes are off by default, each
+radio has its own transmit gate (`flex.allowTransmit`, `icom.allowTransmit`, armed from the
+header's TX control or Settings) re-read before every transmission, and the
 [operating guards](operating.md#the-brakes) will stop a run rather than let a station
 key unattended into a fault.
 

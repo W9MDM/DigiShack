@@ -68,7 +68,6 @@ import { IcomSerialStream } from "@/lib/icom/serial-stream";
 import { type Decode, DecodePipeline } from "@/lib/radio/decode-pipeline";
 import { UNREAD_RECEIVER, type ReceiverControls } from "@/lib/radio/receiver-controls";
 import {
-  SPECTRUM_INTERVAL_MS,
   type SpectrumProfile,
   spectrumIntervalFor,
   SpectrumAnalyser,

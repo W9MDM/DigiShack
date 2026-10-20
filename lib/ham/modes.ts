@@ -15,41 +15,6 @@ export type RstStyle =
   /** No report is conventionally exchanged. */
   | "NONE";
 
-export interface Mode {
-  /** ADIF MODE enumeration value. */
-  name: string;
-  label: string;
-  digital: boolean;
-  rstStyle: RstStyle;
-  /** ADIF SUBMODE, where the mode requires one. */
-  submode?: string;
-}
-
-export const MODES: readonly Mode[] = [
-  { name: "SSB", label: "SSB", digital: false, rstStyle: "RS" },
-  { name: "CW", label: "CW", digital: false, rstStyle: "RST" },
-  { name: "FM", label: "FM", digital: false, rstStyle: "RS" },
-  { name: "AM", label: "AM", digital: false, rstStyle: "RS" },
-  { name: "FT8", label: "FT8", digital: true, rstStyle: "DB" },
-  { name: "MFSK", label: "FT4", digital: true, rstStyle: "DB", submode: "FT4" },
-  // FT2: ADIF 3.1.7 certified (March 2026). Same 77-bit payload, LDPC(174,91)
-  // and 4-GFSK core as FT8/FT4, on a 3.8 s T/R cycle. DigiShack cannot decode it
-  // yet — our codec is FT8/FT4 only — but QSOs made elsewhere must import,
-  // export and log correctly, which needs the mode to exist here.
-  { name: "MFSK", label: "FT2", digital: true, rstStyle: "DB", submode: "FT2" },
-  { name: "JS8", label: "JS8Call", digital: true, rstStyle: "DB" },
-  { name: "RTTY", label: "RTTY", digital: true, rstStyle: "RST" },
-  { name: "PSK", label: "PSK31", digital: true, rstStyle: "RST", submode: "PSK31" },
-  { name: "JT65", label: "JT65", digital: true, rstStyle: "DB" },
-  { name: "JT9", label: "JT9", digital: true, rstStyle: "DB" },
-  { name: "MSK144", label: "MSK144", digital: true, rstStyle: "DB" },
-  { name: "OLIVIA", label: "Olivia", digital: true, rstStyle: "RST" },
-  { name: "CONTESTI", label: "Contestia", digital: true, rstStyle: "RST" },
-  { name: "HELL", label: "Hellschreiber", digital: true, rstStyle: "RST" },
-  { name: "SSTV", label: "SSTV", digital: false, rstStyle: "RS" },
-  { name: "DIGITALVOICE", label: "Digital Voice", digital: false, rstStyle: "RS" },
-];
-
 // FT4 is ADIF MODE=MFSK SUBMODE=FT4, but WSJT-X reports it as "FT4" and
 // operators think of it as its own mode. DigiShack stores what the operator and
 // the decoder call it; the ADIF writer in Phase 2 is responsible for splitting

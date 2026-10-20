@@ -5,9 +5,11 @@ import { ConfirmSaveDialog } from "@/components/settings/ConfirmSaveDialog";
 import { SaveBar } from "@/components/settings/SaveBar";
 import { SettingsLayout } from "@/components/settings/SettingsLayout";
 import { SearchResults, SettingsSearchBox } from "@/components/settings/SettingsSearch";
+import { UnreadableBanner } from "@/components/settings/UnreadableBanner";
 import { useSettingsLocation } from "@/components/settings/useSettingsLocation";
 import { useSettingsState } from "@/components/settings/useSettingsState";
 import { useUnsavedChangesGuard } from "@/components/settings/useUnsavedChangesGuard";
+import { staysInView } from "@/components/settings/visibility";
 import { ErrorBanner, PageHeader } from "@/components/ui/primitives";
 import { withPageAuth } from "@/lib/auth/guard";
 import { navGroups } from "@/lib/settings/presentation";
@@ -42,13 +44,30 @@ export default function SettingsPage() {
     return out;
   }, [st.dirtyKeys, st.byKey]);
 
-  const advancedCount = settings.filter((s) => s.advanced).length;
+  // An advanced setting that is not at its default is shown, so it is not counted as hidden.
+  const advancedCount = settings.filter((s) => s.advanced && !staysInView(s)).length;
   const summary =
     settings.length === 0
       ? undefined
       : advancedCount > 0
         ? `${settings.length - advancedCount} settings · ${advancedCount} advanced hidden`
         : `${settings.length} settings`;
+
+  const problemGroups = useMemo(
+    () => new Set(settings.filter((s) => s.unreadable || s.problem !== null).map((s) => s.group)),
+    [settings],
+  );
+  // The sidebar's "More": advanced-only groups with every setting at its default. The same
+  // rule as the page's (isQuietGroup), worked out per group from what is stored.
+  const quietGroups = useMemo(
+    () =>
+      new Set(
+        NAV_GROUPS.filter(
+          (g) => g.advancedOnly && !settings.some((s) => s.group === g.id && staysInView(s)),
+        ).map((g) => g.id),
+      ),
+    [settings],
+  );
 
   const dirty = st.dirtyKeys.length;
   useUnsavedChangesGuard(
@@ -71,9 +90,11 @@ export default function SettingsPage() {
         activeGroup: nav.activeGroup,
         groups: NAV_GROUPS,
         dirtyGroups: new Set(dirtyGroups),
-        onNavigate: () => {
+        problemGroups,
+        quietGroups,
+        onNavigate: (target) => {
           setQuery("");
-          nav.followed();
+          nav.followed(target.group);
         },
       }}
     >
@@ -91,6 +112,10 @@ export default function SettingsPage() {
             </ErrorBanner>
           </div>
         )}
+
+        {/* Separate from the key problem above: that one says nothing NEW can be stored;
+            this one names each value already stored that cannot be read. */}
+        <UnreadableBanner settings={settings} groupTitle={groupTitle} onJump={(setting) => jump({ setting })} />
 
         <SettingsSearchBox value={query} onChange={setQuery} summary={summary} />
 

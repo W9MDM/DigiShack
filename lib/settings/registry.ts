@@ -1915,7 +1915,7 @@ export const SETTINGS: SettingDef[] = [
     type: "string",
     group: "bridge",
     advanced: true,
-    help: "Which address the radio service listens on. 127.0.0.1 (the default) means only this machine can reach it, which is why listening to receiver audio from a phone or another computer does not work out of the box. Set it to 0.0.0.0 to allow the rest of your network. Read this before you do: the control API is protected by a shared secret, but the decode and audio WebSockets are NOT — anything on your network could listen to your receiver. On a home LAN behind a router that is usually fine; on shared or public wifi it is not. The safer alternative is leaving this alone and proxying /ws/decodes and /ws/audio through NGINX on the app's own origin, then setting the public WebSocket URL below.",
+    help: "Which address the radio service listens on. 127.0.0.1 (the default) means only this machine can reach it, which is why listening to receiver audio from a phone or another computer does not work out of the box. Set it to 0.0.0.0 to allow the rest of your network. Read this before you do: the control API is protected by a shared secret, and the decode and audio WebSockets admit only a signed-in DigiShack session (or that secret, from this machine). But GET /status still answers anyone who can reach the port — the radio, the dial frequency, what the station is doing. On a home LAN behind a router that is usually fine; on shared or public wifi it is not. The safer alternative is leaving this alone and proxying /ws/decodes and /ws/audio through NGINX on the app's own origin, then setting the public WebSocket URL below.",
     default: "127.0.0.1",
   },
   {

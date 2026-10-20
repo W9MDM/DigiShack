@@ -1,7 +1,5 @@
-import type { FlexDaxSource } from "@/lib/flex/dax";
 import type { DigitalSource, DigitalTransmitter } from "@/lib/radio/types";
 import type { DigitalMode } from "@/lib/ham/digital-freqs";
-import type { FlexDaxTransmitter } from "@/lib/flex/tx";
 import type { OperatingGuards } from "@/lib/digital/qso";
 import { parseMessage, standardMessages, type MayCallChecks } from "@/lib/digital/qso";
 import { callableFrom, isClosing } from "@/lib/digital/callable";

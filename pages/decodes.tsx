@@ -1,4 +1,5 @@
 import type { GetServerSidePropsContext } from "next";
+import Link from "next/link";
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 
 import { BattleRoyaleAutoWarning, BattleRoyaleFeed } from "@/components/decodes/BattleRoyale";
@@ -57,6 +58,7 @@ import { formatFreqMHz } from "@/lib/ham/bands";
 import { ituRegionFromGrid, type DigitalMode } from "@/lib/ham/digital-freqs";
 import { gridFromMessage } from "@/lib/ham/grid-message";
 import { NO_SEQUENCER_MODES } from "@/lib/radio/automation-gate";
+import { decodeBase64Bins } from "@/lib/spectrum/wire";
 import { cn } from "@/lib/utils";
 
 /** Rolling RTTY text kept on the page, characters. */
@@ -134,14 +136,6 @@ function playDing(): void {
   } catch {
     /* no audio available — fine */
   }
-}
-
-/** base64 -> Uint8Array, without pulling in a dependency for it. */
-function decodeBins(b64: string): Uint8Array {
-  const raw = atob(b64);
-  const out = new Uint8Array(raw.length);
-  for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
-  return out;
 }
 
 export default function DigitalPage({ wsUrl }: Props) {
@@ -507,7 +501,7 @@ export default function DigitalPage({ wsUrl }: Props) {
           else if (msg.kind === "spectrum") {
             const s = msg as SpectrumMsg;
             // The waterfall keeps running while paused: pausing is about the list.
-            setSpectrum({ bins: decodeBins(s.bins), at: s.at });
+            setSpectrum({ bins: decodeBase64Bins(s.bins), at: s.at });
             setScale({ binHz: s.binHz, maxHz: s.maxHz, periodMs: s.periodMs });
           } else if (msg.kind === "backlog" && Array.isArray(msg.decodes)) {
             // MERGED, not discarded: on a reconnect the bridge replays what the dropped
@@ -1253,6 +1247,13 @@ export default function DigitalPage({ wsUrl }: Props) {
           {status?.txDF !== null && status?.txDF !== undefined && (
             <span className="text-accent-bright tnum">TX offset {status.txDF} Hz</span>
           )}
+          <Link
+            href="/spectrum?source=audio"
+            className="ml-auto text-accent-bright hover:underline"
+            title="This waterfall as a spectrogram and 3D waterfall"
+          >
+            Open spectrum
+          </Link>
         </div>
 
         {/* Radio and Heard-by are narrow fixed columns and the decode list takes the rest.

@@ -105,7 +105,10 @@ The QSO sequencer answers one question: *what would a competent operator send ri
 now?* It never transmits on its own initiative. Each transmission is a tick on our
 cycle parity, and every one passes:
 
-1. `flex.allowTransmit` — the master gate, re-read each time.
+1. The radio's transmit gate (`flex.allowTransmit` or `icom.allowTransmit`, armed from
+   the header's TX control or Settings → Radio) — re-read each time, and once more at the
+   last moment before PTT, so disarming while a transmission waits for its window cancels
+   it.
 2. The [operating guards](operating.md#the-brakes).
 3. `preflight()` — transmit inhibited, DAX not selected, another client holding the
    transmitter, a non-DIGU slice, power over 30%. Reported rather than enforced:

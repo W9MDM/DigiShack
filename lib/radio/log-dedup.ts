@@ -1,3 +1,5 @@
+import { normaliseCall } from "@/lib/ham/callsign";
+
 // Recognising the same logged contact twice.
 //
 // An external decoder announces a finished QSO over UDP, and it can announce the same one
@@ -33,9 +35,7 @@ export function normaliseMode(mode: string): string {
 }
 
 /** The callsign as the log should record it. */
-export function normaliseCallsign(call: string): string {
-  return call.trim().toUpperCase();
-}
+export { normaliseCall as normaliseCallsign };
 
 /**
  * The dedup key for a logged contact.
@@ -46,5 +46,5 @@ export function normaliseCallsign(call: string): string {
  * protecting it and the duplicates come back.
  */
 export function logDedupKey(call: string, band: string, mode: string): string {
-  return `${normaliseCallsign(call)}|${band.trim().toUpperCase()}|${normaliseMode(mode)}`;
+  return `${normaliseCall(call)}|${band.trim().toUpperCase()}|${normaliseMode(mode)}`;
 }

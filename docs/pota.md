@@ -87,7 +87,7 @@ API key scheme.
 
 **Getting the token:** sign in at pota.app, open developer tools, Network tab, click any
 request to `api.pota.app`, and copy the whole `Authorization` request header value.
-Paste it into Settings → POTA chasing → *POTA session token*.
+Paste it into Settings → Automation → POTA chasing → *POTA session token*.
 
 It is a short-lived AWS Cognito JWT and expires within hours, which is why this is a
 **one-time backfill** rather than a live connection. Once the history is in, DigiShack

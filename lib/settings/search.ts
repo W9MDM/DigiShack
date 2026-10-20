@@ -13,6 +13,8 @@ export interface SearchableSetting {
   help?: string;
   group: string;
   options?: { value: string; label: string }[];
+  /** What is wrong with it, when something is — a stored value that will not decrypt. */
+  problem?: string | null;
 }
 
 /** Lower-cased words of a query, de-duplicated. Empty for a blank query. */
@@ -38,7 +40,8 @@ export interface SearchContext {
  * Looks at the label, the key, the help, the group's title and the category's label — so
  * "qrz.logbookApiKey" from an error message, "FlexRadio" from a "Settings → FlexRadio"
  * hint and "automation" all find something — and at a picker's choice labels, so a font
- * name finds the font setting.
+ * name finds the font setting. A setting with a problem (see SettingView) also matches the
+ * word "problem" and the problem's own text.
  */
 export function searchSettings<T extends SearchableSetting>(
   items: readonly T[],
@@ -56,6 +59,8 @@ export function searchSettings<T extends SearchableSetting>(
         ctx.groupTitle(s.group),
         settingsTabFor(s.group).label,
         ...(s.options ?? []).map((o) => o.label),
+        // "problem" lists every setting that has one, whatever its wording.
+        s.problem ? `problem ${s.problem}` : "",
       ],
       terms,
     ),

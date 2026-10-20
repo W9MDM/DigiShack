@@ -44,10 +44,31 @@ in sequence, failing on the first one that exits non-zero.
 | `check:sntp` | SNTP packets and the clock correction — offline, with `--live` for one real exchange |
 | `check:watchdog` | The liveness watchdog's timing |
 | `check:schedule` | The operating schedule and PA duty tracking |
-| `check:settings-tabs` | That every settings group lands on a tab and none can go missing |
+| `check:settings-tabs` | That every settings group lands in a sidebar category, none can go missing, and tool-page roles match their page guards |
 | `check:docs` | That `docs/settings.md` still matches the registry |
-| `check:contrast` | Colour contrast in the theme |
+| `check:settings-docs` | Every setting has help text and its help links point somewhere real; no protection (a transmit gate, a brake, a power limit) is tagged `advanced` and so hidden by default |
+| `check:contrast` | Colour contrast in both themes, Dark and Night, and that the night palette stays red-to-amber |
+| `check:tokens` | Every design-token class name resolves to a token that exists (Tailwind v4 silently drops one that does not) |
+| `check:client-bundle` | Nothing the browser loads reaches a Node builtin (Prisma, `node:crypto`, …) |
 | `check:cloudlog` | Cloudlog/Wavelog API shaping |
+| `check:tx-cancel` | HALT, Skip, FT-0, voice mode or turning transmit off cancels a transmission still waiting for its window, on both radios, against fake transports |
+| `check:ws-auth` | Who may open the bridge's WebSockets, against a real HTTP server and the shipped nginx file |
+| `check:nav` | Every menu and palette link's role against the page's own guard, and the bar-width thresholds |
+| `check:help` | The Help page's anchors, its search, and the links inside its answers |
+| `check:cluster` | The DX cluster spot parser, and the client against a fake telnet node |
+| `check:spectrum-view` | The Spectrum page's decoder, history, gap and merge rules, fed the bridge's own frames |
+| `check:ham-tools` | The toolkit's known answers: grid, privileges, antennas, dB, SWR |
+| `check:greyline` | The day/night terminator against solstice, equinox and equation-of-time answers |
+| `check:logbook` | That the rebuilt log page sends byte-for-byte the API request and export link it used to |
+| `check:qsl-labels` | Label-sheet layouts at their published sizes |
+| `check:backup-snapshot`, `check:adif-import`, `check:qso-patch`, `check:settings-fallback` | The 1.226.0 data-safety fixes: a consistent backup, references on the right contact, PATCH validated as the row will look, no fallback for an undecryptable secret |
+| `check:qsl-claim`, `check:account-locks`, `check:update-lock` | The 1.231.0 race fixes: a QSL emailed at most once, one first-run admin, never zero admins, one update at a time |
+| `check:decode-recovery`, `check:audio-player`, `check:audio-worklet`, `check:receiver-listen`, `check:audio-format`, `check:flex-greeting` | The 1.225.0 recovery fixes: a hung decoder is retired, Listen owns its AudioContext and survives a radio switch |
+
+`package.json` holds the full list (over 150 `check:*` scripts). These are **not** in
+`npm run check`: `check:restore` (needs a real database), and
+`check:audio-rate`, `check:contributors`, `check:clublog`, `check:headers`,
+`check:best-day`, `check:decode-worker` and `check:cq-modifier`. Run those by name.
 
 There is no framework. Each script prints `ok` / `FAIL` lines and exits non-zero. The
 hard problems here are numerical and protocol-shaped — LDPC decoding, tar checksums,
@@ -90,6 +111,23 @@ that up. Comments that restate the code are noise; comments that record a constr
 save the next person a day.
 
 **Every displayed time goes through `lib/time.ts`** and carries a UTC marker.
+
+## Talking to the bridge from a script
+
+The bridge's WebSockets need a credential (1.222.0). A probe or recorder that opens
+`ws://127.0.0.1:3101/ws/audio` or `/ws/decodes` with a bare `new WebSocket(...)` gets
+**401**. Use the helper, which reads `bridge.token` from settings and sends it as
+`X-Bridge-Token`:
+
+```ts
+import { localBridgeSocket } from "@/lib/bridge/ws-auth";
+const ws = localBridgeSocket("/ws/audio");
+```
+
+Run it from inside the project tree (`npx tsx scripts/…`), for the `@/` paths and the
+settings key. It only connects to loopback, and the bridge only honours the token on a
+direct loopback connection — never through nginx. The HTTP control API wants the same
+token as an `X-Bridge-Token` header; `GET /status` needs none.
 
 ## Adding a database column
 

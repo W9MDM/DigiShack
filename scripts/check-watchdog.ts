@@ -44,7 +44,9 @@ console.log("\nsilence before the first beat is not a fault");
   w.check();
   eq(deaths.length, 0, "an hour of silence before the first beat does nothing");
   eq(w.silentFor, null, "and there is no measurable silence yet");
-  ok(!w.armed || true, "the watchdog is running but unarmed");
+  ok(!w.armed, "the watchdog is running but unarmed");
+  w.beat();
+  ok(w.armed, "and the first beat arms it");
   w.stop();
 }
 

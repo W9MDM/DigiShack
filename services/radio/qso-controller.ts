@@ -1,6 +1,5 @@
 import { nowMs } from "@/lib/time/clock";
-import { PERIOD_MS, transmitStartAt, TX_START_OFFSET_MS } from "@/lib/radio/timing";
-import { TRANSMISSION_MS } from "@/lib/radio/decode-pipeline";
+import { transmitStartAt } from "@/lib/radio/timing";
 import { MAX_OFFSET_HZ as WAVEFORM_MAX_OFFSET_HZ, type TxMode } from "@/lib/radio/waveform";
 
 /**
@@ -81,10 +80,8 @@ const KEY_PREP_MS = 100;
 export { lateTxToleranceMs } from "@/lib/radio/timing";
 import { lateTxToleranceMs } from "@/lib/radio/timing";
 
-import type { FlexDaxSource } from "@/lib/flex/dax";
 import type { DigitalSource, DigitalTransmitter } from "@/lib/radio/types";
 import type { DigitalMode } from "@/lib/ham/digital-freqs";
-import type { FlexDaxTransmitter } from "@/lib/flex/tx";
 import {
   OperatingGuards,
   QsoSequencer,

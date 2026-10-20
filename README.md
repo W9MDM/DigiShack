@@ -36,20 +36,89 @@ with sleeping hours and a PA duty-cycle rest. Every transmission passes safety b
 duplicate suppression, a runaway stop, a dead-receiver guard, SWR and PA-temperature
 cutouts, and a wall-clock session limit.
 
-**Rig control.** CAT panel, RF panadapter with click-to-tune, receiver audio in the
-browser, and a voice mode that closes the digital path and hands the radio back.
+**Transmit control on every page.** The header carries a **TX** control beside **FT-0**.
+An admin arms transmit for the radio in use (with a confirmation that names the radio and
+its RF power); any operator disarms it in one click, which halts the contact in progress,
+pauses the automatic mode and cancels a transmission still waiting for its window. Arming
+from the header again resumes the automatic mode that a header disarm paused. FT-0 stops
+everything and releases the radio.
+
+**Rig control.** One control surface that follows whichever radio is selected: dial and
+modulation, RF panadapter (FlexRadio) or audio waterfall (Icom) with click-to-tune,
+receiver and transmitter cards, receiver audio in the browser, and a voice mode that
+closes the digital path and hands the radio back. The Rig page is off the menu until
+**Show the experimental Rig page** (`ui.experimental.rig`) is switched on.
+
+**Spectrum.** A WebGL spectrogram and a 3D waterfall of the audio passband or the
+FlexRadio's RF panadapter, receive-only, with selectable colormaps that recolour the whole
+history at once.
+
+**DX cluster.** Live spots from a DX Spider / AR-Cluster / CC-Cluster node, read by the
+bridge, with a per-band band map and flags for the entities, band slots and mode slots the
+log still needs. Off by default; clicking a spot only tunes the receiver.
+
+**Ham toolkit.** Grid locator, "where can I operate?" band privileges, antenna and
+feedline lengths, power and dB, SWR, wavelength, time zones and reference tables — all
+computed in the browser, no internet needed.
 
 **QSL.** Rendered cards from your own artwork, an email queue you review before
-anything sends, and handling for addresses that are not ordinary mailboxes — Winlink's
+anything sends (tabs per status, bulk approve/skip), printable Avery address-label sheets
+for paper cards, and handling for addresses that are not ordinary mailboxes — Winlink's
 accept-list key, arrl.net's forwarder, and the `mycall@` placeholder convention.
 
-**Logbook services.** LoTW upload and download, QRZ, eQSL, Club Log, and
-Cloudlog/Wavelog. PSKReporter spot upload and band-condition figures. Email alerts when
-the station faults.
+**Logbook services.** LoTW upload and download, QRZ, eQSL, Club Log, Cloudlog/Wavelog
+and N3FJP. PSKReporter spot upload and band-condition figures. Email alerts when the
+station faults.
+
+## Finding your way
+
+The header holds **Dashboard**, four menus — **Operate**, **Log**, **Analyze**,
+**Tools** — then **Settings** (admins) and **Help**. On the right: the UTC clock, the TX
+control, FT-0, the **Night** toggle and your account. When the bar is short of room it
+narrows (Dashboard drops, Settings and Help become icons) and finally collapses into one
+menu button; on a phone the same groups open in a drawer from the button at the top left.
+
+**Ctrl+K** (**⌘K** on a Mac) opens a go-to palette over every page your role can open,
+including the ones with no menu entry (Account, QSL cards, Users, Backup …).
+
+**Night** switches this device to a red-on-black theme for a dark shack; it is remembered
+per browser. The waterfall, spectrum and SSTV canvases keep their own palettes.
+
+| Menu | Page | Route | Who | What it is |
+|---|---|---|---|---|
+| — | Dashboard | `/` | everyone | Live station card, today's figures, recent contacts, all-time totals |
+| Operate | Digital | `/decodes` | everyone (operating needs OPERATOR) | Decode list, waterfall, click-to-call, the automatic modes, HALT TX |
+| Operate | Grid map | `/gridmap` | everyone | Live decodes and worked squares on a world map, with the greyline |
+| Operate | Spectrum | `/spectrum` | everyone | Spectrogram, 3D waterfall, or both |
+| Operate | DX cluster | `/cluster` | everyone | Cluster spots, filters and a band map |
+| Operate | Rig control | `/rig` | OPERATOR, once `ui.experimental.rig` is on | The radio's control surface |
+| Log | Logbook | `/qsos` | everyone | Filterable log; filters, sort and page live in the URL |
+| Log | New QSO | `/qsos/new` | OPERATOR | Log a contact by hand |
+| Log | QSL | `/qsl` | OPERATOR | The QSL email queue (paper cards at `/qsl/cards`) |
+| Log | POTA | `/pota` | everyone | Activations, hunting progress, the POTA log import |
+| Analyze | Statistics | `/stats` | everyone | Totals with a per-year trend, highlights, most worked, by band, mode and continent |
+| Analyze | Awards | `/awards` | everyone | DXCC, WAS, WAZ, WAC, grids and IOTA on one screen |
+| Analyze | Coverage | `/map` | everyone | Every contact by bearing and distance from home |
+| Tools | Ham toolkit | `/tools` | everyone | The calculators and references above, each deep-linkable (`/tools#swr`) |
+| — | Settings | `/settings` | ADMIN | Every setting, plus the admin tool pages in one sidebar |
+| — | Help | `/help` | everyone | Searchable answers to "why did it do that?" |
+
+Stations (`/stations`, OPERATOR) and ADIF (`/adif`) appear under Tools for operators and
+viewers; admins reach them, with Users, Incomplete, DXCC data, API keys, Integrations,
+Backup and Updates, from the settings sidebar.
+
+**Settings** has one sidebar of categories — Station, Radio, Modes, Automation, Logbook
+sync, Spotting & broadcast, QSL & email, System — each expanding to its groups, a search
+over every setting (`/` focuses it), and a save bar that appears only when something is
+unsaved. Each group shows its essential settings and folds the rest under **Advanced**:
+86 of the 222 settings are on show by default; the other 136 are tagged advanced. Links can deep-link a category, group or
+setting (`/settings?tab=…`, `?group=…`, `?setting=…`).
 
 ## Screenshots
 
-Live station, mid-session — not mock-ups.
+Live station, mid-session — not mock-ups. Taken at 1.116.0, before the 1.224–1.239 page
+rebuilds and the grouped menus: the features shown are still there, the layout around them
+has changed.
 
 **Digital** — FT8 running unattended. Auto Hunt is working a station while the next
 caller waits in the call-back queue; the band strip along the top is what the whole
@@ -95,8 +164,8 @@ which also lists a page per digital mode. The main ones:
 | Background work | Timers in the two processes, listed in `lib/schedule/jobs.ts`. BullMQ and Redis are installed but unused |
 | Process manager | PM2 (no Docker) |
 | Reverse proxy | NGINX |
-| Realtime | WebSocket (`ws`) for the live decode feed |
-| Theme | Permanent dark mode, red accent `#c21807`, Oswald |
+| Realtime | WebSocket (`ws`) for the live decode feed and receiver audio, sign-in required |
+| Theme | Dark, with a per-device Night (red-on-black) theme; red accent `#c21807`, Oswald |
 
 There is no `app/` directory and no App Router. Don't add one.
 
@@ -198,6 +267,29 @@ pm2 save && pm2 startup
 
 NGINX config lives in [`deploy/nginx/digishack.conf`](deploy/nginx/digishack.conf).
 
+**The live sockets need a sign-in (1.222.0).** `/ws/decodes` and `/ws/audio` are served by
+the bridge on `:3101`, and every upgrade is checked by
+[`lib/bridge/ws-auth.ts`](lib/bridge/ws-auth.ts) before a socket exists: an `Origin`
+header, when present, must name the request's host, and the request must carry either the
+browser's `digishack_session` cookie or — from a process on the box itself, over a direct
+loopback connection with no proxy headers — the bridge token. Through a proxy the token is
+refused even when correct. If you run your own nginx (or another proxy) instead of the
+shipped file:
+
+- route **both** `/ws/decodes` and `/ws/audio` to the bridge, with the WebSocket upgrade
+  headers, or the Digital page sits at "connecting" with no waterfall;
+- pass `Host` through (`proxy_set_header Host $host`, or set `X-Forwarded-Host`), or the
+  Origin check answers 403;
+- serve the sockets on the same host as the pages, so the browser sends the session cookie;
+- strip any client-sent `X-Bridge-Token` (`proxy_set_header X-Bridge-Token "";`), as the
+  shipped file does.
+
+**Local scripts that open the bridge's socket** — a recorder, a probe — must now
+authenticate. `new WebSocket("ws://127.0.0.1:3101/ws/audio")` with no credential gets
+**401**. Use `localBridgeSocket("/ws/audio")` from `lib/bridge/ws-auth.ts` (run from inside
+the project tree, as the `scripts/*.ts` are), or send the `bridge.token` value as an
+`X-Bridge-Token` header.
+
 PM2 only checks that a process exists. [`scripts/healthcheck.sh`](scripts/healthcheck.sh)
 checks that each tier still answers, and restarts one that has stopped (three misses in a
 row, at most four restarts an hour). It assumes the container layout — the app in
@@ -231,8 +323,8 @@ finishes:
   tolerates about a second of error before decoding degrades and nobody decodes you —
   which reads exactly like a dead band. Fix NTP on the *host*.
 - **FlexRadio discovery uses multicast**, which containers are bad at. Set `flex.host`
-  explicitly and leave auto-discovery off. A networked Icom is unaffected: plain unicast
-  UDP to an address you configure.
+  explicitly (a blank `flex.host` is what turns discovery on). A networked Icom is
+  unaffected: plain unicast UDP to an address you configure.
 
 `ecosystem.config.js` defines two processes: `digishack-web` and
 `digishack-bridge`. The bridge is separate on purpose — it binds a UDP socket, and
@@ -247,17 +339,26 @@ web tier is what allows the web tier to scale.
 ```
 pages/              routes (Pages Router)
   api/              the app's own API; api/v1/ is the stable public one
-components/         React components by area: ui primitives, layout shell, qso, digital, settings
+components/         React components by area: ui primitives, layout shell (menus, palette,
+                    TX control), decodes, rig, spectrum, cluster, maps, tools, log, qso,
+                    qsl, dashboard, settings, help, auth
 services/radio/     the bridge process (PM2: digishack-bridge) and its operating logic
 services/winlink/   Winlink: supervisor for a pinned Pat engine (in progress)
 lib/
   radio/            shared by both radios: decode pipeline and worker threads, timing,
-                    transmit gate, schedules, receiver controls
+                    transmit gate, station gate (the header's TX view), schedules,
+                    receiver controls
+  bridge/           WebSocket auth for the bridge (ws-auth.ts, localBridgeSocket) and the
+                    browser's socket URL (ws-url.ts)
   flex/ icom/       the two radio drivers (SmartSDR API + DAX; RS-BA1 + CI-V)
   digital/ dsp/     modems and message codecs: FT8/FT4/FT2, WSPR, JS8, RTTY, CW, PSK31, ...
   wsjtx/            the WSJT-X UDP protocol, for an external decoder
+  cluster/          DX cluster telnet client, spot parser, dedupe and "needed" flags
+  spectrum/         the Spectrum page's history, colormaps, camera and wire decoding
+  maps/ geo/        canvas map drawing, projection, greyline; distance and land outlines
+  ham/              bands, band plan, modes, grid geometry; ham/tools/ is the toolkit maths
   adif/ dxcc/ awards/ pota/ qsl/ qrz/ integrations/   the logbook side
-  settings/         the settings registry and encrypted storage
+  settings/         the settings registry, categories (tabs.ts), search and encrypted storage
   auth/ api/ validation/ db/ client/   sessions and keys, route helpers, zod schemas,
                     Prisma and backups, browser-side fetch and socket hooks
   time.ts           UTC display and datetime-local conversion (lib/time/ is clock correction)
@@ -400,8 +501,9 @@ unset.
 
 It listens for Heartbeat/Status/Decode/QSOLogged, persists decodes to
 `DigitalDecode`, optionally auto-logs QSOs, broadcasts everything to browsers on
-`ws://…/ws/decodes`, and exposes a control API so the web app can send
-Reply / HaltTx / HighlightCallsign back to the decoder.
+`ws://…/ws/decodes` (signed-in browsers only — see [Production](#production)), and exposes
+a control API so the web app can send Reply / HaltTx / HighlightCallsign back to the
+decoder.
 
 Point the decoder's UDP server at this host on `wsjtx.udpPort` (WSJT-X defaults
 to 2237).
@@ -412,10 +514,11 @@ to 2237).
   UDP socket cannot be shared across cluster workers — a second instance either
   fails to bind or silently steals half the datagrams. This is also why it is a
   separate process rather than living inside Next.js.
-- **The control API is never proxied by NGINX.** `/reply`, `/halt`, `/free-text`
-  and friends make the radio transmit. The web app reaches them over localhost with
-  `bridge.token`; without that token the control API refuses to start serving
-  and says so.
+- **The control API is never proxied by NGINX.** `/reply`, `/halt`, `/free-text`,
+  `/transmit-gate` and friends make the radio transmit or change whether it may. The web
+  app reaches them over localhost with `bridge.token` (through `/api/bridge/control`, which
+  checks the user's role first — arming needs ADMIN); without that token the control API
+  refuses to serve and says so.
 - **`wsjtx.autoLog` defaults to off.** Writing to the log because a radio said so
   is opt-in.
 - Decodes are **batched** before insert — one FT8 cycle yields 30+ in the same
@@ -545,12 +648,15 @@ dedupe absorbs. `MAX:5000` is accepted.
 
 ## Awards
 
-**/awards** tracks DXCC, WAS, WAZ, WAC, grid squares and IOTA — worked vs
-confirmed, what's missing, and a per-band and per-mode matrix for each.
+**/awards** tracks DXCC, WAS, WAZ, WAC, grid squares and IOTA on one screen — a
+confirmed / worked / not-yet bar for each, and on demand the codes worked, the ones
+missing, and a by-band breakdown — filterable by station, band and mode.
 
-**"Confirmed" means confirmed by any method** — card, LoTW or eQSL. That is the
-same definition [`lib/db/qso.ts`](lib/db/qso.ts) uses for the log's confirmed
-filter, and the two must not drift apart.
+**For awards, "confirmed" means a paper card or LoTW — not eQSL**
+([`lib/awards/compute.ts`](lib/awards/compute.ts)). The ARRL does not accept eQSL for DXCC,
+WAS or VUCC, nor CQ for WAZ, so counting it would inflate every total against what could
+actually be submitted. The log's own "confirmed" filter
+([`lib/db/qso.ts`](lib/db/qso.ts)) is broader and does include eQSL.
 
 Each award keys off one ADIF field, which is why they are stored:
 
@@ -581,7 +687,8 @@ Every page and every API route requires a session, with these exceptions:
 `/api/auth/{setup,login,logout,me,forgot,reset}`, `/api/health` (liveness, no log data),
 and the two links a QSL recipient follows, `/api/qsl/card/[id]` and `/api/qsl/unsubscribe`,
 which need an HMAC token instead. [docs/exposure.md](docs/exposure.md) records how each was
-checked.
+checked. The bridge's WebSockets need the same session (or, from the box itself, the
+bridge token) — see [Production](#production).
 
 **`User` is the login identity; `Operator` is the QSO-attribution record.** They
 are separate on purpose — an `Operator` is scoped to exactly one `Station`, so
@@ -669,12 +776,13 @@ their contacts instead of destroying log rows.
 
 ## Build status
 
-Phases 1 to 5 are implemented, apart from the one open Phase 2 item below.
+Phases 1 to 5 are implemented. The last open Phase 2 item, the DX cluster, landed in
+1.233.0.
 
 - [x] Phase 1 — schema, QSO/station/operator/rig CRUD, dashboard, log view
 - [x] Authentication — users, roles, sessions, first-run setup, password reset by
       email (not a numbered spec phase; added because DigiShack is web-facing)
-- [ ] Phase 2 — Cloudlog parity
+- [x] Phase 2 — Cloudlog parity
   - [x] Manual QSO entry
   - [x] ADIF import/export
   - [x] DXCC entity resolution (Club Log cty.xml)
@@ -685,7 +793,7 @@ Phases 1 to 5 are implemented, apart from the one open Phase 2 item below.
   - [x] Uploads to QRZ, LoTW (signed here, no TQSL), eQSL, Club Log,
         Cloudlog/Wavelog and N3FJP
   - [x] QSO maps — `/map` (bearing and distance from home) and `/gridmap`
-  - [ ] DX cluster
+  - [x] DX cluster (`/cluster`, 1.233.0) — receive-only; never yet connected to a real node
   - [x] CAT control panel (`/rig`)
   - [x] QSL card management (`/qsl/cards`)
 - [x] Phase 4a — WSJT-X UDP bridge (protocol, persistence, auto-log, WebSocket, control API)
@@ -716,6 +824,10 @@ Phases 1 to 5 are implemented, apart from the one open Phase 2 item below.
       on the list, listen two cycles, settle or hop on.
 - [x] ATU tune button and `flex.atuOnBandChange`.
 - [x] Live band-activity page (`/decodes`)
+- [x] Spectrum page (`/spectrum`): WebGL spectrogram and 3D waterfall (1.229.0)
+- [x] Ham toolkit (`/tools`) (1.230.0)
+- [x] Arm/disarm transmit from the header (1.220.0); grouped menus and the Ctrl/⌘+K
+      palette (1.234.0); the Night theme (1.235.0)
 - [x] Phase 4f — a second radio: the networked Icom (RS-BA1), decoding,
       transmitting and running the automatic modes from the same operating layer
       as the FlexRadio. Verified on air with an IC-7300MK2.

@@ -262,8 +262,12 @@ function presentedToken(req: IncomingMessage): { value: string; via: "header" | 
   }
 }
 
-/** Constant-time AND length-independent: compares digests, not the strings. */
-function tokensEqual(a: string, b: string): boolean {
+/**
+ * Constant-time AND length-independent: compares digests, not the strings. Both digests
+ * are 32 bytes, so timingSafeEqual never sees a length mismatch, and a wrong length is
+ * just a different digest. Shared with the bridge's HTTP token check (services/radio).
+ */
+export function tokensEqual(a: string, b: string): boolean {
   return timingSafeEqual(
     createHash("sha256").update(a).digest(),
     createHash("sha256").update(b).digest(),

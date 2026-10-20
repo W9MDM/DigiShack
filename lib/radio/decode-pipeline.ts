@@ -226,15 +226,6 @@ export function anotherSliceFits(spentMs: number, lastSliceMs: number): boolean 
  */
 const PRIORITY_MATCH_HZ = 10;
 
-/**
- * How often the deferred full-band pass asks whether the transmitter has finished, ms.
- *
- * See `transmitPending`. The wait being polled is 13 s long, so the granularity costs
- * nothing and a poll is far simpler to reason about than an event that has to be
- * unsubscribed on every teardown path.
- */
-const DEFER_POLL_MS = 100;
-
 /** What the message layer read from a JS8 frame, carried beside the printed form. */
 export interface Js8DecodeExtra {
   frame: string;

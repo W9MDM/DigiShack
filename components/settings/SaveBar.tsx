@@ -130,6 +130,24 @@ export function SaveBar({
                       Not saved: {error}
                     </p>
                   )}
+                  {/* A refused value stays in the draft, which keeps the bar in this view —
+                      so the reasons have to be shown here, or they are never shown at all. */}
+                  {report && report.rejected.length > 0 && (
+                    <p role="alert" className="text-danger">
+                      {report.saved.length + report.cleared.length > 0 &&
+                        `${plural(report.saved.length + report.cleared.length, "setting", "settings")} saved. `}
+                      <span className="font-medium">Refused: </span>
+                      {report.rejected.map((r, i) => (
+                        <span key={r.key}>
+                          {i > 0 && "; "}
+                          <button type="button" onClick={() => onJumpToSetting(r.key)} className="tap-inline underline">
+                            {r.label}
+                          </button>{" "}
+                          ({r.reason})
+                        </span>
+                      ))}
+                    </p>
+                  )}
                 </div>
                 <div className="flex shrink-0 items-center gap-2">
                   <Button variant="ghost" onClick={onDiscard} disabled={saving}>

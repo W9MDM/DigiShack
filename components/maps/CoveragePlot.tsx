@@ -1,7 +1,9 @@
 import { memo, useCallback, useMemo, useRef, useState } from "react";
 
+import { useActiveTheme } from "@/lib/client/use-theme";
 import type { ViewWindow } from "@/lib/geo/viewport";
 import type { DistanceUnit } from "@/lib/maps/geodesy";
+import { mapColourFor } from "@/lib/maps/palette";
 import { PLOT_SIZE, radiusFor, ringsFor, wedgePath } from "@/lib/maps/polar";
 
 import { ZoomControls } from "./ZoomControls";
@@ -40,7 +42,7 @@ const PlotLayers = memo(function PlotLayers({
   deadSectors,
   zoom,
 }: {
-  groups: readonly { colour: string; dots: readonly PlotDot[] }[];
+  groups: readonly { colour: string; fill: string; dots: readonly PlotDot[] }[];
   unit: DistanceUnit;
   deadSectors: readonly number[];
   zoom: number;
@@ -110,7 +112,7 @@ const PlotLayers = memo(function PlotLayers({
       {groups.map((g) => (
         <path
           key={g.colour}
-          fill={g.colour}
+          fill={g.fill}
           opacity={0.75}
           d={g.dots
             .map((d) => `M${(d.x - r).toFixed(2)},${d.y.toFixed(2)}a${r},${r} 0 1 0 ${2 * r},0a${r},${r} 0 1 0 ${-2 * r},0`)
@@ -150,6 +152,8 @@ export function CoveragePlot({
   }, []);
   const reset = useCallback(() => setView(WHOLE), [setView]);
 
+  // Band colours are a rainbow; at night each is moved onto the red-amber line, as on the map.
+  const theme = useActiveTheme();
   const groups = useMemo(() => {
     const m = new Map<string, PlotDot[]>();
     for (const d of dots) {
@@ -157,8 +161,8 @@ export function CoveragePlot({
       if (list) list.push(d);
       else m.set(d.colour, [d]);
     }
-    return [...m.entries()].map(([colour, list]) => ({ colour, dots: list }));
-  }, [dots]);
+    return [...m.entries()].map(([colour, list]) => ({ colour, fill: mapColourFor(colour, theme), dots: list }));
+  }, [dots, theme]);
 
   /** The nearest dot to a point on the element, within `radius` CSS px. */
   const nearest = (px: number, py: number, radius: number): PlotDot | null => {

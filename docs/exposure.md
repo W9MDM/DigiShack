@@ -53,6 +53,26 @@ CF-Connecting-IP` trusting loopback alone.
 held there — that was checked, not assumed — so no data was exposed; what was bypassed was
 nginx's body-size limit, its logging and its header handling. Now `next start -H 127.0.0.1`.
 
+## What the sweep missed: the WebSockets
+
+The sweep enumerated `pages/api`, and the bridge's sockets are not there. `/ws/decodes`
+(station status, the QSO and auto state, every decode, the spectrum) and `/ws/audio` (the
+receiver) are proxied by nginx onto the public origin, and until 1.222.0 they upgraded
+anyone who reached them — through the tunnel, the internet. Every page that opens them was
+behind the login; the URLs themselves were not. Found by code review (R04), not by this
+sweep.
+
+Now every upgrade goes through [`lib/bridge/ws-auth.ts`](../lib/bridge/ws-auth.ts): an
+`Origin` that does not name the request's host is 403; otherwise it needs a signed-in
+session cookie, or the bridge token on a direct loopback connection with no proxy headers.
+Anything else is 401 — including anonymous loopback, because nginx and cloudflared are
+loopback. The shipped nginx file strips a client-sent `X-Bridge-Token`. A repeat of this
+sweep should include both paths:
+
+    curl -s -o /dev/null -w "%{http_code}\n" -H "Connection: Upgrade" -H "Upgrade: websocket" \
+      -H "Sec-WebSocket-Version: 13" -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" \
+      "$BASE/ws/decodes"     # expect 401 with no cookie
+
 ## Repeating it
 
     # every route, no credentials

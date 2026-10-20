@@ -1,43 +1,16 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 
-import { groupIdFor, itemSettings, type DisplayItem } from "@/components/settings/display";
+import { groupIdFor, rowFacts, type DisplayItem } from "@/components/settings/display";
 import { Chevron } from "@/components/settings/Chevron";
 import { HelpText } from "@/components/settings/HelpText";
 import { DisplayRow } from "@/components/settings/SettingField";
 import type { SettingGroup, SettingsEditor } from "@/components/settings/types";
+import { blurbLine, layoutGroup } from "@/components/settings/visibility";
 import { HelpTip } from "@/components/ui/HelpTip";
 import { Badge, Button, Card } from "@/components/ui/primitives";
-import { partitionAdvanced } from "@/lib/settings/presentation";
 import { cn } from "@/lib/utils";
 
-/** How many of these rows hold unsaved edits, and how many differ from the defaults. */
-function tally(items: readonly DisplayItem[], editor: SettingsEditor) {
-  let unsaved = 0;
-  let customised = 0;
-  for (const it of items) {
-    for (const s of itemSettings(it)) {
-      if (editor.isDirty(s.key)) unsaved++;
-      else if (s.customised) customised++;
-    }
-  }
-  return { unsaved, customised };
-}
-
-/** The dot on a closed disclosure: something in there is not as a fresh install has it. */
-function HiddenChanges({ unsaved, customised }: { unsaved: number; customised: number }) {
-  if (unsaved === 0 && customised === 0) return null;
-  return (
-    <span className="inline-flex items-center gap-1.5 text-xs">
-      <span
-        aria-hidden="true"
-        className={cn("size-1.5 rounded-full", unsaved > 0 ? "bg-info" : "bg-fg-subtle")}
-      />
-      {unsaved > 0 && <span className="text-info">{unsaved} unsaved</span>}
-      {unsaved > 0 && customised > 0 && <span className="text-fg-subtle">·</span>}
-      {customised > 0 && <span className="text-fg-subtle">{customised} customised</span>}
-    </span>
-  );
-}
+const NONE: ReadonlySet<string> = new Set();
 
 function GroupHeading({ group }: { group: SettingGroup }) {
   return (
@@ -87,11 +60,13 @@ export interface GroupCardProps {
  * One setting group.
  *
  * Everyday settings first, then a closed "Advanced (N)" disclosure for the ones that are
- * rarely changed — with a dot when something in there has an unsaved edit or is not at its
- * default, so a knob turned months ago is not forgotten just because it is folded away.
+ * rarely changed. The disclosure only ever folds away settings that are at their defaults:
+ * one that has been changed, holds an unsaved edit or cannot be decrypted is drawn outside
+ * it, marked Advanced — see components/settings/visibility.ts.
  *
- * A group with only advanced settings and nothing else to show is one line, not an empty
- * card: a card whose whole body is a closed disclosure is a box with nothing in it.
+ * A group with only advanced settings, all at their defaults, and nothing else to show is
+ * one line saying what it controls, not an empty card: a card whose whole body is a closed
+ * disclosure is a box with nothing in it.
  */
 export function SettingGroupCard({
   group,
@@ -104,19 +79,38 @@ export function SettingGroupCard({
   onToggleExpanded,
   flashId,
 }: GroupCardProps) {
-  const { basic, advanced } = partitionAdvanced(items);
   const anchor = groupIdFor(group.id);
   const flashGroup = flashId === anchor;
-  const advancedOnly = basic.length === 0 && advanced.length > 0 && !extra;
+  const allAdvanced = items.length > 0 && items.every((it) => it.advanced) && !extra;
+  // An all-advanced group has one switch, "Show"; a mixed group has its disclosure.
+  const open = allAdvanced ? expanded : advancedOpen;
+  const toggle = allAdvanced ? onToggleExpanded : onToggleAdvanced;
 
-  if (advancedOnly && !expanded) {
-    const t = tally(advanced, editor);
+  const [held, setHeld] = useState<ReadonlySet<string>>(NONE);
+  const layout = layoutGroup(
+    items.map((it) => rowFacts(it, editor)),
+    { open, held, hasExtra: Boolean(extra) },
+  );
+  // Remembering which unsaved rows were drawn outside a closed disclosure — state adjusted
+  // during render, React's sanctioned form for state derived from props.
+  if (layout.held.length !== held.size || layout.held.some((id) => !held.has(id))) {
+    setHeld(layout.held.length === 0 ? NONE : new Set(layout.held));
+  }
+
+  const byId = new Map(items.map((it) => [it.id, it]));
+  const pick = (ids: readonly string[]) =>
+    ids.map((id) => byId.get(id)).filter((x): x is DisplayItem => x !== undefined);
+  const visible = pick(layout.visible);
+  const folded = pick(layout.folded);
+
+  if (layout.quiet && !open) {
+    const line = blurbLine(group.blurb);
     return (
       <div
         id={anchor}
         data-group={group.id}
         className={cn(
-          "flex scroll-mt-20 flex-wrap items-center gap-x-3 gap-y-2 rounded-md border border-dashed border-line-strong bg-surface/60 px-4 py-3",
+          "flex scroll-mt-20 flex-wrap items-center gap-x-3 gap-y-1 rounded-md border border-dashed border-line-strong bg-surface/60 px-4 py-3",
           flashGroup && "ring-2 ring-accent-bright/60",
         )}
       >
@@ -125,29 +119,40 @@ export function SettingGroupCard({
         </h3>
         <Badge size="sm">Advanced only</Badge>
         <span className="tnum text-sm text-fg-subtle">
-          {advanced.length} {advanced.length === 1 ? "setting" : "settings"}
+          {folded.length} {folded.length === 1 ? "setting" : "settings"}, all at their defaults
         </span>
-        <HiddenChanges {...t} />
         <Button
           size="sm"
           variant="secondary"
           className="ml-auto"
           aria-expanded={false}
           aria-controls={`${anchor}-body`}
-          onClick={onToggleExpanded}
+          onClick={toggle}
         >
           Show
           <span className="sr-only"> {group.title}</span>
         </Button>
+        {/* What it controls, so a row of these is a list of choices and not a list of
+            names. One line: "Show" has the whole blurb. */}
+        {line && (
+          <p title={line} className="order-last basis-full truncate text-sm text-fg-muted">
+            {line}
+          </p>
+        )}
       </div>
     );
   }
 
-  const row = (it: DisplayItem) => (
-    <DisplayRow key={it.id} item={it} editor={editor} flash={flashId === it.id} />
+  // An advanced row out in the open says so, or it reads as an everyday setting that
+  // vanishes again once it is back at its default. Inside the disclosure it goes without saying.
+  const row = (outside: boolean) => (it: DisplayItem) => (
+    <DisplayRow key={it.id} item={it} editor={editor} flash={flashId === it.id} showAdvanced={outside} />
   );
-  const t = tally(advanced, editor);
   const panelId = `${anchor}-advanced`;
+  // An opened quiet group shows its rows directly: the disclosure would be a second click
+  // for the same thing.
+  const direct = layout.quiet && open;
+  const rows = direct ? folded : visible;
 
   return (
     <div
@@ -158,8 +163,8 @@ export function SettingGroupCard({
       <Card
         title={<GroupHeading group={group} />}
         actions={
-          advancedOnly ? (
-            <Button size="sm" variant="ghost" aria-expanded aria-controls={`${anchor}-body`} onClick={onToggleExpanded}>
+          direct ? (
+            <Button size="sm" variant="ghost" aria-expanded aria-controls={`${anchor}-body`} onClick={toggle}>
               Hide
             </Button>
           ) : undefined
@@ -168,31 +173,27 @@ export function SettingGroupCard({
         <div id={`${anchor}-body`}>
           {group.blurb && <HelpText text={group.blurb} subject={group.title} className="mb-1 text-fg-muted" />}
 
-          {/* An advanced-only group that has been opened shows its rows directly: the
-              disclosure would be a second click for the same thing. */}
-          {(advancedOnly ? advanced : basic).length > 0 && (
-            <div className="divide-y divide-line">{(advancedOnly ? advanced : basic).map(row)}</div>
-          )}
+          {rows.length > 0 && <div className="divide-y divide-line">{rows.map(row(!direct))}</div>}
 
           {extra && <div className="mt-4 flex flex-col gap-4">{extra}</div>}
 
-          {!advancedOnly && advanced.length > 0 && (
+          {!direct && folded.length > 0 && (
             <div className="-mx-4 -mb-4 mt-3 border-t border-line">
               <button
                 type="button"
-                aria-expanded={advancedOpen}
+                aria-expanded={open}
                 aria-controls={panelId}
-                onClick={onToggleAdvanced}
+                onClick={toggle}
                 className="flex w-full flex-wrap items-center gap-x-2 gap-y-1 rounded-b-md px-4 py-3 text-left text-sm text-fg-muted hover:bg-surface-2 hover:text-fg"
               >
-                <Chevron open={advancedOpen} />
-                <span className="font-medium">Advanced</span>
-                <span className="tnum text-fg-subtle">({advanced.length})</span>
-                {!advancedOpen && <HiddenChanges {...t} />}
+                <Chevron open={open} />
+                <span className="font-medium">{visible.some((it) => it.advanced) ? "More advanced" : "Advanced"}</span>
+                <span className="tnum text-fg-subtle">({folded.length})</span>
+                {!open && <span className="text-xs text-fg-subtle">all at their defaults</span>}
               </button>
-              {advancedOpen && (
+              {open && (
                 <div id={panelId} className="divide-y divide-line border-t border-line px-4">
-                  {advanced.map(row)}
+                  {folded.map(row(false))}
                 </div>
               )}
             </div>

@@ -1,5 +1,7 @@
 import { gunzipSync } from "node:zlib";
 
+import { unescapeHtml } from "@/lib/html";
+
 // Parser for Club Log's cty.xml.
 //
 // Schema: https://cdn.clublog.org/cty.xsd
@@ -76,18 +78,8 @@ function field(block: string, name: string): string | null {
   const m = re.exec(block);
   if (!m || m[1] === undefined) return null;
   const raw = m[1].trim();
-  return raw === "" ? null : decodeEntities(raw);
-}
-
-function decodeEntities(s: string): string {
-  // cty.xml contains entity names with ampersands; the rest are rare but cheap
-  // to handle. No numeric-reference handling — the file is plain ASCII/UTF-8.
-  return s
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&apos;/g, "'")
-    .replace(/&amp;/g, "&");
+  // cty.xml escapes ampersands in entity names; the other entities are rare but cheap.
+  return raw === "" ? null : unescapeHtml(raw);
 }
 
 function num(block: string, name: string): number | null {
