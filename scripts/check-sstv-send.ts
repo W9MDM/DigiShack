@@ -28,7 +28,9 @@ async function main(): Promise<void> {
   ok(may("us-general", 21_340_000, "USB") && may("us-general", 28_680_000, "USB"), "and on 21.340 and 28.680");
   ok(!may("us-technician", 14_230_000, "USB"), "a Technician may not on 14.230");
   ok(!may("us-technician", 28_680_000, "USB"), "nor 28.680, above the Technician's 28.300-28.500");
-  ok(may("us-technician", 28_400_000, "USB"), "but may inside it");
+  // 97.307(f)(10): CW and SSB voice only on 28.300-28.500 for Novice/Technician — no image.
+  ok(!may("us-technician", 28_400_000, "USB"), "nor inside it: 28.3-28.5 is CW and SSB voice only for a Technician");
+  ok(may("us-technician", 50_200_000, "USB"), "but may on 6 m");
   ok(!may("us-general", 14_223_500, "USB") && may("us-general", 14_224_000, "USB"), "the whole occupied width counts, not the dial: 14.2235 USB straddles the 14.225 edge, 14.224 does not");
   ok(may("other", 7_100_000, "LSB"), "a licence outside the US: its own rules, not checked here");
   ok(parseLicenceClass("nonsense") === null, "an unknown class reads as unset");

@@ -2,6 +2,7 @@ import type { GetServerSidePropsContext } from "next";
 import { useRouter } from "next/router";
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { Persistence, Ridgeline } from "@/components/spectrum/ClassicViews";
 import { Spectrogram } from "@/components/spectrum/Spectrogram";
 import { Waterfall3D } from "@/components/spectrum/Waterfall3D";
 import { HelpTip } from "@/components/ui/HelpTip";
@@ -374,6 +375,8 @@ export default function SpectrumPage({ wsUrl }: Props) {
       >
         {prefs.view === "spectrogram" && spectrogram}
         {prefs.view === "3d" && waterfall}
+        {prefs.view === "ridgeline" && <Ridgeline feed={feed} contrast={contrast} colormap={colormap} height="100%" />}
+        {prefs.view === "persistence" && <Persistence feed={feed} contrast={contrast} colormap={colormap} height="100%" />}
         {prefs.view === "split" && (
           <>
             <div className="min-h-0">{spectrogram}</div>

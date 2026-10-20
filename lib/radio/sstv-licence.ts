@@ -2,8 +2,9 @@
 //
 // SSTV is an image mode, and in the US image emissions share the phone sub-bands
 // (47 CFR 97.305), which differ by class: 14.230 needs General or above, 7.171 needs
-// Advanced or Extra (General's 40 m phone starts at 7.175), and a Technician has only
-// 28.300 to 28.500 on HF. The check is on the signal's whole occupied width - 1100 to
+// Advanced or Extra (General's 40 m phone starts at 7.175), and a Technician has no HF
+// image privilege at all: on 28.300-28.500 Novices and Technicians are limited to CW and SSB
+// voice (97.307(f)(10)), so their SSTV starts at 50.1 MHz. The check is on the signal's whole occupied width - 1100 to
 // 2300 Hz from the dial, on whichever side the sideband puts it - not the dial alone.
 //
 // "other" is a station licensed outside the US: its own rules apply and this does not
@@ -19,7 +20,7 @@ const PHONE: Record<Exclude<LicenceClass, "other">, [number, number][]> = {
   "us-extra": [[1.8, 2.0], [3.6, 4.0], [7.125, 7.3], [14.15, 14.35], [18.11, 18.168], [21.2, 21.45], [24.93, 24.99], [28.3, 29.7], [50.1, 54.0]],
   "us-advanced": [[1.8, 2.0], [3.7, 4.0], [7.125, 7.3], [14.175, 14.35], [18.11, 18.168], [21.225, 21.45], [24.93, 24.99], [28.3, 29.7], [50.1, 54.0]],
   "us-general": [[1.8, 2.0], [3.8, 4.0], [7.175, 7.3], [14.225, 14.35], [18.11, 18.168], [21.275, 21.45], [24.93, 24.99], [28.3, 29.7], [50.1, 54.0]],
-  "us-technician": [[28.3, 28.5], [50.1, 54.0]],
+  "us-technician": [[50.1, 54.0]],
 };
 
 const LABEL: Record<LicenceClass, string> = {

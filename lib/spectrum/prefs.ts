@@ -14,12 +14,14 @@ import {
 } from "@/lib/spectrum/levels";
 import type { FeedKind } from "@/lib/spectrum/wire";
 
-export type SpectrumView = "spectrogram" | "3d" | "split";
+export type SpectrumView = "spectrogram" | "3d" | "split" | "ridgeline" | "persistence";
 
 export const VIEWS: readonly { id: SpectrumView; label: string }[] = [
   { id: "spectrogram", label: "Spectrogram" },
   { id: "3d", label: "3D" },
   { id: "split", label: "Split" },
+  { id: "ridgeline", label: "Ridgeline" },
+  { id: "persistence", label: "Persistence" },
 ];
 
 export const HISTORY_CHOICES_SEC = [60, 120, 300, 600, 900] as const;

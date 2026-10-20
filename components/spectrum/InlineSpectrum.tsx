@@ -17,13 +17,11 @@ import { DEFAULT_PREFS, effectiveColormap, loadPrefs, VIEWS, type SpectrumPrefs,
 import { FrameDecoder, type FeedKind } from "@/lib/spectrum/wire";
 import { cn } from "@/lib/utils";
 
-export type InlineView = "waterfall" | SpectrumView | "ridgeline" | "persistence";
+export type InlineView = "waterfall" | SpectrumView;
 
 export const INLINE_VIEWS: readonly { id: InlineView; label: string }[] = [
   { id: "waterfall", label: "Waterfall" },
   ...VIEWS,
-  { id: "ridgeline", label: "Ridgeline" },
-  { id: "persistence", label: "Persistence" },
 ];
 
 function isInlineView(v: unknown): v is InlineView {
