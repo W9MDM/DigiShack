@@ -2,6 +2,8 @@
 // of the feed the bridge keeps (who worked whom, for how much, every steal), which is what
 // the steal marks in the points column are scored from.
 
+import { useEffect, useState } from "react";
+
 import { CallChip } from "@/components/decodes/controls";
 import type { DecodeEvent } from "@/components/decodes/types";
 import { ErrorBanner } from "@/components/ui/primitives";
@@ -16,16 +18,53 @@ import { cn } from "@/lib/utils";
  * anything off: a display option must not silently change what the station is doing.
  */
 export function BattleRoyaleAutoWarning({ autoMode }: { autoMode: string }) {
+  // Dismissed per auto mode, in this browser: a different mode is a new situation and the
+  // warning returns. Read after mount so the server render (always shown) matches.
+  const [dismissedFor, setDismissedFor] = useState<string | null>(null);
+  useEffect(() => {
+    try {
+      setDismissedFor(window.localStorage.getItem(DISMISS_KEY));
+    } catch {
+      /* storage blocked: the warning just stays */
+    }
+  }, []);
+
+  if (dismissedFor === autoMode) return null;
+
+  const dismiss = () => {
+    setDismissedFor(autoMode);
+    try {
+      window.localStorage.setItem(DISMISS_KEY, autoMode);
+    } catch {
+      /* dismissed for this page view only */
+    }
+  };
+
   return (
     <div className="mb-4">
       <ErrorBanner>
-        <strong>The auto operator is running ({autoMode}).</strong> FT8 Battle Royale requires
-        human-operated contacts — automated operation is detected and carries a permanent ban.
-        Stop auto before logging contacts you intend to score.
+        <div className="flex items-start gap-3">
+          <p className="min-w-0 flex-1">
+            <strong>The auto operator is running ({autoMode}).</strong> FT8 Battle Royale requires
+            human-operated contacts — automated operation is detected and carries a permanent ban.
+            Stop auto before logging contacts you intend to score.
+          </p>
+          <button
+            type="button"
+            onClick={dismiss}
+            aria-label="Dismiss this warning"
+            title={`Hide this while auto is in ${autoMode}. It comes back if the auto mode changes.`}
+            className="-my-0.5 shrink-0 rounded-sm px-1.5 text-lg leading-none text-danger hover:bg-danger/15 focus-visible:outline-2 focus-visible:outline-danger"
+          >
+            ×
+          </button>
+        </div>
       </ErrorBanner>
     </div>
   );
 }
+
+const DISMISS_KEY = "digishack.brAutoWarningDismissed";
 
 export function BattleRoyaleFeed({
   feed,
