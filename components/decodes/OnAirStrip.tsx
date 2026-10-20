@@ -1,6 +1,6 @@
 // What is on the air right now: this cycle's decode count, how fresh the list is, the
 // day's contacts, the recent cycles, where we are in the cycle — and, on the right, the
-// band and mode the radio is on.
+// band and mode the radio is on, and the automatic mode with its HALT TX. One bar.
 
 import type { ReactNode } from "react";
 
@@ -17,6 +17,7 @@ export function OnAirStrip({
   qsosToday,
   recentCycles,
   picker,
+  operate,
 }: {
   /** Modes with cycles and a decode list. The text and picture modes have neither. */
   slotted: boolean;
@@ -30,13 +31,15 @@ export function OnAirStrip({
   recentCycles: { at: number; count: number }[];
   /** The band and mode controls. */
   picker: ReactNode;
+  /** The automatic mode, its status and HALT TX. */
+  operate?: ReactNode;
 }) {
   // Scaled to its own peak; an absolute scale flattens a quiet band into nothing.
   const peak = Math.max(1, ...recentCycles.map((c) => c.count));
 
   return (
     <div className="mb-4 rounded-md border border-line bg-surface shadow-panel">
-      <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3 px-3 py-2.5">
+      <div className="flex flex-wrap items-center gap-x-5 gap-y-2 px-3 py-2">
         <dl className="flex flex-wrap items-end gap-x-5 gap-y-2">
           {slotted && (
             <>
@@ -78,6 +81,7 @@ export function OnAirStrip({
           )}
         </dl>
         {picker}
+        {operate && <div className="flex min-w-0 flex-1 flex-wrap items-center justify-end gap-2">{operate}</div>}
       </div>
 
       {/* Where we are in the cycle: FT8 transmits for 12.6 s of every 15, so this says

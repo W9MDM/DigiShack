@@ -15,7 +15,7 @@ import {
 } from "@/components/decodes/DecodeToolbar";
 import { HeardBy } from "@/components/decodes/HeardBy";
 import { OnAirStrip } from "@/components/decodes/OnAirStrip";
-import { OperatePanel } from "@/components/decodes/OperatePanel";
+import { AutoControls, WorkPanel } from "@/components/decodes/OperatePanel";
 import { RadioCard } from "@/components/decodes/RadioCard";
 import type {
   AutoState,
@@ -1131,23 +1131,9 @@ export default function DigitalPage({ wsUrl }: Props) {
             onTuned={clearRows}
           />
         }
+        operate={<AutoControls sequencer={sequencer} auto={auto} qso={qso} schedule={status?.schedule ?? null} />}
       />
 
-      <OperatePanel
-        sequencer={sequencer}
-        auto={auto}
-        qso={qso}
-        schedule={status?.schedule ?? null}
-        target={target}
-        suggestSlot={suggestSlot}
-        lastTx={lastTx}
-        myCall={myCall}
-        myGrid={status?.deGrid ?? null}
-        onClose={() => {
-          setTarget(null);
-          setLastTx(null);
-        }}
-      />
 
       <div className="flex flex-col gap-4">
         {/* The waterfall goes last on a phone, after the decode list; `lg:order-none`
@@ -1192,6 +1178,23 @@ export default function DigitalPage({ wsUrl }: Props) {
             }
           />
         </div>
+
+        {/* The contact being worked, in the space under the waterfall: on a phone it comes
+            before the decode list (the waterfall itself goes last there). */}
+        <WorkPanel
+          sequencer={sequencer}
+          auto={auto}
+          qso={qso}
+          target={target}
+          suggestSlot={suggestSlot}
+          lastTx={lastTx}
+          myCall={myCall}
+          myGrid={status?.deGrid ?? null}
+          onClose={() => {
+            setTarget(null);
+            setLastTx(null);
+          }}
+        />
 
         {/* The passband and "waiting" notes that were here are the waterfall's own ruler
             and overlay already. */}
