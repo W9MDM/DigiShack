@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { modulationForFrequency } from "@/lib/radio/modes";
 import { Panadapter, snapHz, tuneStepFor } from "@/components/digital/Panadapter";
 import { Waterfall } from "@/components/digital/Waterfall";
+import { InlineSpectrum, useInlineView, useLiveSpectrum, ViewSwitch } from "@/components/spectrum/InlineSpectrum";
 import { ReceiverCard } from "@/components/rig/ReceiverCard";
 import { RigDial } from "@/components/rig/RigDial";
 import { StationActions } from "@/components/rig/StationActions";
@@ -110,8 +111,13 @@ export default function RigPage({ wsUrl }: Props) {
   const [audioScale, setAudioScale] = useState<{ binHz: number; maxHz: number; periodMs: number } | null>(null);
   // DX cluster spots: the bridge's list once, then each new spot off the same socket.
   const [clusterSpots, setClusterSpots] = useState<ClusterSpot[]>([]);
+  // The same frames, recorded for the Spectrogram / 3D views of the display.
+  const liveRf = useLiveSpectrum("rf");
+  const liveAudio = useLiveSpectrum("audio");
+  const [rigView, setRigView] = useInlineView("digishack.rig.view");
   const { connected: wsConnected } = useBridgeSocket(wsUrl, (msg) => {
     if (msg.kind === "panadapter") {
+      liveRf.ingest(msg);
       const m = msg as unknown as {
         bins: string;
         centerHz: number;
@@ -133,6 +139,7 @@ export default function RigPage({ wsUrl }: Props) {
         radio: m.radio,
       });
     } else if (msg.kind === "spectrum") {
+      liveAudio.ingest(msg);
       // The audio spectrum (receiver passband), broadcast by every source including the
       // Icom. The RF panadapter is FlexRadio-only today; this is the fallback.
       const s = msg as unknown as { bins: string; binHz: number; maxHz: number; at: number; periodMs: number };
@@ -537,8 +544,20 @@ export default function RigPage({ wsUrl }: Props) {
         </RigDial>
 
         {/* THE BAND. The reason to be on this page: tens of kHz of RF with every station
-            on it. */}
-        {pan && panScale ? (
+            on it — as the panadapter, or as a spectrogram / 3D surface of the same frames. */}
+        {((pan && panScale) || (!caps.panadapter && audioSpec && audioScale)) && (
+          <div className="-mb-2 flex items-center justify-end">
+            <ViewSwitch value={rigView} onChange={setRigView} />
+          </div>
+        )}
+        {rigView !== "waterfall" && ((pan && panScale) || (!caps.panadapter && audioSpec && audioScale)) ? (
+          <InlineSpectrum
+            feed={pan && panScale ? liveRf.feed : liveAudio.feed}
+            view={rigView}
+            height={356}
+            dialHz={shownDialHz ?? null}
+          />
+        ) : pan && panScale ? (
           <Panadapter
             row={pan}
             centerHz={panScale.centerHz}

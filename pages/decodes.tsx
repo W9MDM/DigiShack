@@ -39,6 +39,7 @@ import { SstvPanel, type SstvMessage, type SstvPanelHandle, type SstvStats } fro
 import type { SstvTxState } from "@/components/digital/SstvSend";
 import { StreamPanel, type StreamStats } from "@/components/digital/StreamPanel";
 import { Waterfall, type WaterfallMarker, type WaterfallTag } from "@/components/digital/Waterfall";
+import { InlineSpectrum, useInlineView, useLiveSpectrum, ViewSwitch } from "@/components/spectrum/InlineSpectrum";
 import { Badge, Button, Card, EmptyState, ErrorBanner, PageHeader } from "@/components/ui/primitives";
 import { withPageAuth } from "@/lib/auth/guard";
 import { bridgeWsUrl } from "@/lib/bridge/ws-url";
@@ -271,6 +272,9 @@ export default function DigitalPage({ wsUrl }: Props) {
     lastCallsign: string | null;
   }>("/api/stats/today");
   const [spectrum, setSpectrum] = useState<{ bins: Uint8Array; at: number } | null>(null);
+  // The same frames, recorded for the Spectrogram / 3D views of the waterfall.
+  const liveAudio = useLiveSpectrum("audio");
+  const [wfView, setWfView] = useInlineView("digishack.decodes.view");
   const [scale, setScale] = useState({ binHz: 5.86, maxHz: 3000, periodMs: 15000 });
   const [connected, setConnected] = useState(false);
   const [attempts, setAttempts] = useState(0);
@@ -513,6 +517,7 @@ export default function DigitalPage({ wsUrl }: Props) {
             sstvPanel.current?.receive(msg as SstvMessage);
           }
           else if (msg.kind === "spectrum") {
+            liveAudio.ingest(msg);
             const s = msg as SpectrumMsg;
             // The waterfall keeps running while paused: pausing is about the list.
             setSpectrum({ bins: decodeBase64Bins(s.bins), at: s.at });
@@ -1162,6 +1167,12 @@ export default function DigitalPage({ wsUrl }: Props) {
         {/* The waterfall goes last on a phone, after the decode list; `lg:order-none`
             restores source order on the desktop. */}
         <div className="order-last lg:order-none">
+          <div className="mb-1.5 flex items-center justify-end">
+            <ViewSwitch value={wfView} onChange={setWfView} />
+          </div>
+          {wfView !== "waterfall" ? (
+            <InlineSpectrum feed={liveAudio.feed} view={wfView} height={waterfall.height} />
+          ) : (
           <Waterfall
             row={spectrum}
             binHz={scale.binHz}
@@ -1190,6 +1201,7 @@ export default function DigitalPage({ wsUrl }: Props) {
             // resizing reveals or crops older rows without changing their time scale.
             height={waterfall.height}
           />
+          )}
           <ResizeHandle
             onPointerDown={waterfall.onHandleDown}
             onDoubleClick={waterfall.reset}

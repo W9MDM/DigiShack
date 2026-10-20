@@ -4504,9 +4504,10 @@ async function main(): Promise<void> {
             /* the watchdog and the exit hooks are the backstop */
           }
           activeAuto()?.setMode("off");
-          // Nothing may resume it after this — clear the held resume mode too.
+          // Nothing may resume it after this — clear the held resume mode too, and the stored one.
           autoResumeMode = null;
           disarmRestoreAuto = "off";
+          void persistAutoMode("off");
           if (user) {
             await writeSettings(
               [{ key: transmitGateKey(activeRadio), value: "false" }],
@@ -4565,6 +4566,7 @@ async function main(): Promise<void> {
           let autoBack = false;
           if (restoreTx && restoreAuto !== "off" && activeAuto()) {
             activeAuto()!.setMode(restoreAuto);
+            void persistAutoMode(restoreAuto);
             autoBack = true;
           }
 
@@ -4624,6 +4626,8 @@ async function main(): Promise<void> {
           pausedAuto = activeAuto()?.state.mode ?? "off";
           activeAuto()?.setMode("off");
           autoResumeMode = null;
+          // Saved: the in-memory note is what resumes it from the header, not a restart.
+          if (pausedAuto !== "off") void persistAutoMode("off");
           const qso = activeQso();
           try {
             if (qso?.state.active) await qso.halt();
@@ -4649,6 +4653,7 @@ async function main(): Promise<void> {
           if (on) disarmRestoreAuto = "off";
           if (restore !== "off" && activeAuto()) {
             activeAuto()!.setMode(restore);
+            void persistAutoMode(restore);
             resumedAuto = restore;
           }
         } else if (pausedAuto !== "off") {
@@ -5169,6 +5174,7 @@ async function main(): Promise<void> {
           // transmission into a radio that is halfway between two modes.
           activeAuto()?.setMode("off");
           disarmRestoreAuto = "off";
+          void persistAutoMode("off");
           // Close the gate the TRANSMITTERS read, not just the one the endpoints read.
           // Without this a QSO already in flight kept keying and sending FT8 while the
           // operator was switching to voice — see isTransmitArmed.
@@ -5797,8 +5803,11 @@ async function main(): Promise<void> {
             return;
           }
           case "/qso-halt":
-            // HALT means everything: the active QSO and any auto mode.
+            // HALT means everything: the active QSO and any auto mode — and it is SAVED as off.
+            // Unsaved, the stored mode outlived the halt and the next bridge restart (a deploy,
+            // the watchdog) resumed the hunt the operator had stopped: N9MMR, 2026-10-20.
             activeAuto()?.setMode("off");
+            void persistAutoMode("off");
             await qso.halt();
             sendJson(res, 200, { ok: true, qso: qso.state });
             return;
