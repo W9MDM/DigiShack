@@ -11,6 +11,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Analyzer } from "@/components/spectrum/Analyzer";
 import { Delta, Threshold } from "@/components/spectrum/ChangeViews";
 import { Persistence, Ridgeline } from "@/components/spectrum/ClassicViews";
+import { Slot } from "@/components/spectrum/SlotView";
 import { Spectrogram } from "@/components/spectrum/Spectrogram";
 import { Waterfall3D } from "@/components/spectrum/Waterfall3D";
 import { useNightMode } from "@/lib/client/use-theme";
@@ -76,7 +77,7 @@ export function useInlineView(storageKey: string): [InlineView, (v: InlineView) 
 
 /**
  * The view switch. It wraps rather than running off the screen: in its callers' right-aligned
- * row, a phone is narrower than all nine buttons, and an overflow off the left edge can't be
+ * row, a phone is narrower than all ten buttons, and an overflow off the left edge can't be
  * scrolled back to.
  *
  * Below sm: it takes the full width and the buttons grow to fill each wrapped row, so the two
@@ -128,11 +129,17 @@ export function InlineSpectrum({
   view,
   height,
   dialHz = null,
+  txParity = null,
+  clockOffsetMs = 0,
 }: {
   feed: SpectrumFeed;
   view: Exclude<InlineView, "waterfall">;
   height: number;
   dialHz?: number | null;
+  /** For Slot: the parity we transmit in, when the page knows it. */
+  txParity?: 0 | 1 | null;
+  /** For Slot: the bridge's clock correction, so slots sit on UTC. */
+  clockOffsetMs?: number;
 }) {
   const [prefs, setPrefs] = useState<SpectrumPrefs>(DEFAULT_PREFS);
   useEffect(() => {
@@ -194,6 +201,16 @@ export function InlineSpectrum({
       {view === "persistence" && <Persistence feed={feed} contrast={contrast} colormap={colormap} height={height} />}
       {view === "delta" && <Delta feed={feed} contrast={contrast} colormap={colormap} height={height} />}
       {view === "threshold" && <Threshold feed={feed} contrast={contrast} colormap={colormap} height={height} />}
+      {view === "slot" && (
+        <Slot
+          feed={feed}
+          contrast={contrast}
+          colormap={colormap}
+          height={height}
+          txParity={txParity}
+          clockOffsetMs={clockOffsetMs}
+        />
+      )}
       {view === "spectrogram" && spectrogram}
       {view === "3d" && surface}
       {view === "split" && (

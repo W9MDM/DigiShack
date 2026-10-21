@@ -22,7 +22,8 @@ export type SpectrumView =
   | "ridgeline"
   | "persistence"
   | "delta"
-  | "threshold";
+  | "threshold"
+  | "slot";
 
 export const VIEWS: readonly { id: SpectrumView; label: string }[] = [
   { id: "spectrum", label: "Spectrum" },
@@ -36,6 +37,7 @@ export const VIEWS: readonly { id: SpectrumView; label: string }[] = [
   { id: "persistence", label: "Persistence" },
   { id: "delta", label: "Delta" },
   { id: "threshold", label: "Threshold" },
+  { id: "slot", label: "Slot" },
 ];
 
 export const HISTORY_CHOICES_SEC = [60, 120, 300, 600, 900] as const;

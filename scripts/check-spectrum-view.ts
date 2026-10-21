@@ -85,6 +85,21 @@ import {
   SIGNAL_ROWS,
   THRESHOLD_KEY,
 } from "@/lib/spectrum/rowmath";
+import {
+  cellGrid,
+  clearestGap,
+  DEFAULT_SLOT_COUNT,
+  loadSlotCount,
+  occupancy,
+  rowSlot,
+  sanitizeSlotCount,
+  saveSlotCount,
+  SlotFolder,
+  slotIndex,
+  slotParity,
+  slotPeriodMs,
+  SLOTS_KEY,
+} from "@/lib/spectrum/slots";
 import { decodeBase64Bins, FrameDecoder } from "@/lib/spectrum/wire";
 
 let pass = 0;
@@ -682,6 +697,164 @@ console.log("\nthreshold: noise floor, signal count and the stored slider");
     VIEWS.find((x) => x.id === "spectrogram")?.label === "Waterfall HD" && !VIEWS.some((x) => x.label === "Spectrogram"),
     "the high-resolution waterfall is labelled Waterfall HD, under its old id so saved views and ?view=spectrogram links still work",
   );
+}
+
+// ---------------------------------------------------------------------------------------
+console.log("\nslot: the feed folded on the T/R period, and the clearest frequency");
+{
+  ok(slotPeriodMs("FT8", 15_000) === 15_000 && slotPeriodMs("FT4", null) === 7_500 && slotPeriodMs(null, null) === 15_000, "the period is the feed's own, else 7.5 s for FT4, else FT8's 15 s");
+  ok(slotPeriodMs("FT8", 0) === 15_000 && slotPeriodMs("FT4", Number.NaN) === 7_500, "a missing or junk period falls back by mode");
+  ok(slotIndex(30_000, 15_000) === 2 && slotIndex(29_999, 15_000) === 1 && slotIndex(45_000, 15_000) === 3, "a boundary instant starts the new slot");
+  ok(slotParity(2) === 0 && slotParity(3) === 1 && slotParity(-1) === 1 && slotParity(0) === 0, "parity is the slot index's, negative indices included");
+
+  // 300 bins of 10 Hz (0-3000 Hz, 60 cells), a row every 250 ms, 60 rows a slot. Slot 1000 is
+  // even. Byte 30 is the noise; a signal is byte 200, 26.7 dB over it.
+  const P = 15_000;
+  const BASE = 1000 * P;
+  const SIG = (170 * 40) / 255;
+  const mk = () => {
+    const h = new SpectrumHistory({ maxRows: 1024, defaultIntervalMs: 250 });
+    h.setHistoryMs(1); // no merging
+    return h;
+  };
+  const h = mk();
+  // Slot 1000 (even): a signal at 1220-1240 Hz (cell 24). Slot 1001 (odd): one at 1000-1040 Hz
+  // (cell 20). Slot 1002 (even): noise. Slot 1003 (odd): our own transmission.
+  for (let k = 0; k < 240; k++) {
+    const slot = 1000 + Math.floor(k / 60);
+    const peaks: Record<number, number> = slot === 1000 ? { 122: 200, 123: 200 } : slot === 1001 ? { 100: 200, 103: 200 } : {};
+    h.push(row(BASE + 250 * (k + 1), 300, slot === 1003 ? 0 : 30, peaks), slot === 1003);
+  }
+  ok(rowSlot(h, h.physical(59), P) === 1000 && rowSlot(h, h.physical(60), P) === 1001, "a row ending on the boundary is the earlier slot's; the next row is the new slot's");
+  ok(rowSlot(h, h.physical(59), P, 200) === 1001, "the clock correction moves rows onto the UTC grid");
+
+  const folder = new SlotFolder();
+  const f = folder.update(h, { periodMs: P, slots: 3, spanLow: 0, spanHigh: 3000 });
+  const S = f.slots;
+  const C = f.grid.cells;
+  const lvl = (q: 0 | 1, s: number, c: number) => f.level[(q * S + s) * C + c]!;
+  ok(C === 60 && f.grid.cellHz === 50 && f.grid.lowHz === 0, "the audio passband is sixty 50 Hz cells");
+  ok(f.newest === 1003 && f.index[0] === 1002 && f.index[1] === 1000 && f.index[S] === 1003 && f.index[S + 1] === 1001, "each panel's slots step back by two from its newest", Array.from(f.index).join());
+  ok(f.rows[1] === 60 && f.rows[S + 1] === 60, "every row of a slot lands in it, the boundary row included", `${f.rows[1]} ${f.rows[S + 1]}`);
+  ok(f.rows[S] === 0, "a slot we transmitted in has no rows: on-air rows are skipped");
+  ok(f.rows[0] === 49, "rows within the TX guard before our transmission are skipped too", String(f.rows[0]));
+  ok(f.rows[2] === 0 && Number.isNaN(lvl(0, 2, 24)), "a slot older than the history is no data, not quiet");
+  ok(near(lvl(0, 1, 24), SIG, 1e-3) && lvl(0, 1, 20) === 0 && lvl(0, 1, 40) === 0, "the even slot's signal is its own cell, at its height over the noise", String(lvl(0, 1, 24)));
+  ok(near(lvl(1, 1, 20), SIG, 1e-3) && lvl(1, 1, 24) === 0, "and the odd slot's is in the odd panel only");
+  ok(lvl(0, 0, 24) === 0 && Number.isNaN(lvl(1, 0, 24)), "a quiet slot is zero; the on-air slot is no data");
+
+  // Cached rows must agree with a fresh fold as the ring wraps and rows are evicted.
+  const ring = new SpectrumHistory({ maxRows: 16, defaultIntervalMs: 1000 });
+  ring.setHistoryMs(1);
+  const kept = new SlotFolder();
+  let same = true;
+  for (let k = 0; k < 60; k++) {
+    ring.push(row(BASE + 1000 * (k + 1), 300, 30, { [(k * 7) % 300]: 200 }));
+    const a = kept.update(ring, { periodMs: P, slots: 2, spanLow: 0, spanHigh: 3000 });
+    const b = new SlotFolder().update(ring, { periodMs: P, slots: 2, spanLow: 0, spanHigh: 3000 });
+    for (let i = 0; i < a.level.length; i++) {
+      const x = a.level[i]!;
+      const y = b.level[i]!;
+      if (!(x === y || (Number.isNaN(x) && Number.isNaN(y)))) same = false;
+    }
+  }
+  ok(same, "the per-row cache gives what a fresh fold gives, through a wrapped ring");
+
+  // A span change mid-history: rows keep their own axis.
+  const m = mk();
+  for (let k = 0; k < 60; k++) m.push(row(BASE + 250 * (k + 1), 300, 30, { 122: 200, 123: 200 })); // slot 1000, 0-3000 Hz
+  for (let k = 60; k < 120; k++) m.push(row(BASE + 250 * (k + 1), 300, 30, { 72: 200, 73: 200 }, 500)); // slot 1001, 500-3500 Hz
+  const mf = new SlotFolder().update(m, { periodMs: P, slots: 2, spanLow: 500, spanHigh: 3500 });
+  const mc = mf.grid.cells;
+  const ml = (q: 0 | 1, c: number) => mf.level[q * mf.slots * mc + c]!;
+  ok(mf.grid.lowHz === 500 && mc === 60, "the grid follows the newest span");
+  ok(near(ml(0, 14), SIG, 1e-3) && near(ml(1, 14), SIG, 1e-3), "a signal at 1225 Hz is in the same cell before and after the retune", `${ml(0, 14)} ${ml(1, 14)}`);
+  ok(Number.isNaN(ml(0, 54)) && ml(1, 54) === 0, "frequencies the older span never covered are no data, not quiet");
+
+  // The clearest frequency, from the fold: the even panel's only signal is at cell 24.
+  const occ = new Float32Array(C);
+  const mean = new Float32Array(C);
+  occupancy(f, [0], occ, mean);
+  ok(occ[24] === 0.5 && occ[30] === 0, "occupancy is the share of slots with data a cell was busy in", String(occ[24]));
+  const fg = clearestGap(occ, mean, f.grid);
+  ok(fg !== null && fg.occupancy === 0 && fg.lowHz === 1950 && fg.highHz === 2050 && fg.offsetHz === 1975, "it marks the middle 100 Hz of the longest clear run, and centres an FT8 signal in it", JSON.stringify(fg));
+
+  // And on hand-made occupancy, cell c = c*50 Hz.
+  const grid = cellGrid(0, 3000);
+  const busy = () => new Float32Array(60).fill(1);
+  const o1 = busy();
+  o1[10] = 0;
+  o1[30] = 0;
+  o1[31] = 0;
+  const g1 = clearestGap(o1, null, grid);
+  ok(g1 !== null && g1.lowHz === 1500 && g1.highHz === 1600 && g1.offsetHz === 1525, "an empty 100 Hz run is picked over an equally empty lone cell", JSON.stringify(g1));
+  const o2 = busy();
+  o2.fill(0, 20, 26);
+  o2[40] = 0;
+  o2[41] = 0;
+  const g2 = clearestGap(o2, null, grid);
+  ok(g2 !== null && g2.lowHz === 1100 && g2.highHz === 1200, "of two clear runs the longer wins, marked in its middle", JSON.stringify(g2));
+  const o3 = busy();
+  o3.fill(0, 0, 4); // 0-200 Hz: below the edge
+  o3.fill(0, 56, 60); // 2800-3000 Hz: above it
+  o3[40] = 0.5;
+  const g3 = clearestGap(o3, null, grid);
+  ok(g3 !== null && g3.lowHz === 2000 && g3.highHz === 2050 && g3.offsetHz === 2000, "clear cells outside 200-2800 Hz are ignored; the clearest inside is a lone cell when no run is near as clear", JSON.stringify(g3));
+  const o4 = busy();
+  o4[4] = 0;
+  o4[5] = 0;
+  o4[55] = 0;
+  o4[56] = 0;
+  const g4 = clearestGap(o4, null, grid);
+  ok(g4 !== null && g4.lowHz === 200 && g4.highHz === 300, "the cell starting at 200 Hz counts; a run reaching past 2800 Hz is cut at the edge", JSON.stringify(g4));
+  const o5 = busy();
+  o5[10] = 0;
+  o5[30] = 0.1;
+  o5[31] = 0.1;
+  const g5 = clearestGap(o5, null, grid);
+  ok(g5 !== null && g5.lowHz === 1500 && g5.highHz === 1600, "a 100 Hz run one slot in ten busier still beats a lone clear cell");
+  o5[30] = 0.3;
+  const g6 = clearestGap(o5, null, grid);
+  ok(g6 !== null && g6.lowHz === 500 && g6.highHz === 550, "a run much busier does not");
+  const o7 = busy();
+  o7[20] = 0;
+  o7[21] = 0;
+  o7[40] = 0;
+  o7[41] = 0;
+  const quiet = new Float32Array(60).fill(3);
+  quiet[40] = 0.5;
+  quiet[41] = 0.5;
+  const g7 = clearestGap(o7, quiet, grid);
+  ok(g7 !== null && g7.lowHz === 2000, "between equal runs the quieter one wins", JSON.stringify(g7));
+  ok(clearestGap(new Float32Array(60).fill(Number.NaN), null, grid) === null, "no data, no hint");
+  ok(new SlotFolder().update(new SpectrumHistory(), { periodMs: P, slots: 10, spanLow: 0, spanHigh: 3000 }).rows.every((r) => r === 0), "an empty history folds to empty slots");
+  const rf = cellGrid(14_000_000, 14_200_000);
+  ok(rf.cells <= 256 && rf.cellHz >= 50 && rf.lowHz <= 14_000_000, "a 200 kHz panadapter gets wider cells, never thousands of them", JSON.stringify(rf));
+
+  ok(sanitizeSlotCount("20") === 20 && sanitizeSlotCount(7) === DEFAULT_SLOT_COUNT && sanitizeSlotCount(null) === 10, "the slot count is one of 6/10/20, default 10");
+  const blocked = {
+    getItem: () => {
+      throw new Error("blocked");
+    },
+    setItem: () => {
+      throw new Error("blocked");
+    },
+  };
+  let threw = false;
+  try {
+    saveSlotCount(blocked, 6);
+  } catch {
+    threw = true;
+  }
+  ok(loadSlotCount(blocked) === DEFAULT_SLOT_COUNT && !threw, "blocked storage gives the default and does not throw");
+  const store = new Map<string, string>();
+  const mem = { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, s: string) => void store.set(k, s) };
+  saveSlotCount(mem, 6);
+  ok(loadSlotCount(mem) === 6 && SLOTS_KEY.startsWith("digishack."), "a saved slot count reads back, under the app's namespace");
+
+  const ids = VIEWS.map((x) => x.id);
+  ok(ids.indexOf("slot") === ids.indexOf("threshold") + 1 && VIEWS.find((x) => x.id === "slot")?.label === "Slot", "Slot follows Threshold on the switch");
+  ok(sanitizePrefs({ view: "slot" }).view === "slot", "and is remembered");
 }
 
 // ---------------------------------------------------------------------------------------

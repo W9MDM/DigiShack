@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Analyzer } from "@/components/spectrum/Analyzer";
 import { Delta, Threshold } from "@/components/spectrum/ChangeViews";
 import { Persistence, Ridgeline } from "@/components/spectrum/ClassicViews";
+import { Slot } from "@/components/spectrum/SlotView";
 import { Spectrogram } from "@/components/spectrum/Spectrogram";
 import { Waterfall3D } from "@/components/spectrum/Waterfall3D";
 import { HelpTip } from "@/components/ui/HelpTip";
@@ -69,6 +70,10 @@ interface FeedStats {
   spanDb: number | null;
 }
 
+function parityOf(v: unknown): 0 | 1 | null {
+  return v === 0 || v === 1 ? v : null;
+}
+
 /** Range slider limits, dB. */
 const RANGE_MIN = 6;
 const RANGE_MAX = 100;
@@ -85,9 +90,22 @@ export default function SpectrumPage({ wsUrl }: Props) {
   const seenRef = useRef(seen);
   seenRef.current = seen;
 
+  // For the Slot view: which parity we transmit in (a QSO's, else the automatic CQ's) and the
+  // bridge's clock correction. Read from messages the socket carries anyway; nothing is sent.
+  const [qsoParity, setQsoParity] = useState<0 | 1 | null>(null);
+  const [cqParity, setCqParity] = useState<0 | 1 | null>(null);
+  const [clockOffsetMs, setClockOffsetMs] = useState(0);
+
   const { connected, attempts } = useBridgeSocket(wsUrl, (msg) => {
     if (msg.kind === "status" && msg.status && typeof msg.status === "object") {
       setStatus(msg.status as LiveStatus);
+      return;
+    }
+    if (msg.kind === "qso" || msg.kind === "auto" || msg.kind === "clock") {
+      const body = (msg.qso ?? msg.auto ?? msg.clock) as Record<string, unknown> | null | undefined;
+      if (msg.kind === "qso") setQsoParity(parityOf(body?.txParity));
+      else if (msg.kind === "auto") setCqParity(body?.mode !== "off" ? parityOf(body?.cqParity) : null);
+      else if (typeof body?.offsetMs === "number" && Number.isFinite(body.offsetMs)) setClockOffsetMs(body.offsetMs);
       return;
     }
     const frame = decoder.current.decode(msg);
@@ -406,6 +424,16 @@ export default function SpectrumPage({ wsUrl }: Props) {
         {prefs.view === "persistence" && <Persistence feed={feed} contrast={contrast} colormap={colormap} height="100%" />}
         {prefs.view === "delta" && <Delta feed={feed} contrast={contrast} colormap={colormap} height="100%" />}
         {prefs.view === "threshold" && <Threshold feed={feed} contrast={contrast} colormap={colormap} height="100%" />}
+        {prefs.view === "slot" && (
+          <Slot
+            feed={feed}
+            contrast={contrast}
+            colormap={colormap}
+            height="100%"
+            txParity={qsoParity ?? cqParity}
+            clockOffsetMs={clockOffsetMs}
+          />
+        )}
         {prefs.view === "split" && (
           <>
             <div className="min-h-0">{spectrogram}</div>
