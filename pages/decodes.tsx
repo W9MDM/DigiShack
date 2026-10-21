@@ -1148,7 +1148,14 @@ export default function DigitalPage({ wsUrl }: Props) {
             <ViewSwitch value={wfView} onChange={setWfView} />
           </div>
           {wfView !== "waterfall" ? (
-            <InlineSpectrum feed={liveAudio.feed} view={wfView} height={waterfall.height} />
+            <InlineSpectrum
+              feed={liveAudio.feed}
+              view={wfView}
+              height={waterfall.height}
+              // Slot view: our parity (a QSO's, else the automatic CQ's) and the bridge's clock correction.
+              txParity={qso?.txParity ?? (auto && auto.mode !== "off" ? auto.cqParity : null)}
+              clockOffsetMs={clockSync?.offsetMs ?? 0}
+            />
           ) : (
           <Waterfall
             row={spectrum}
