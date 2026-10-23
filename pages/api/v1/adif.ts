@@ -4,6 +4,7 @@ import { BodyTooLargeError, readRawBody } from "@/lib/api/raw-body";
 import { sendError, sendJson } from "@/lib/api/respond";
 import { importAdifDocument } from "@/lib/adif/import-service";
 import { authedRoute } from "@/lib/auth/guard";
+import { API_HEAVY_LIMIT } from "@/lib/auth/throttle";
 import { importOptionsSchema } from "@/lib/validation/adif";
 
 // Public ADIF ingest — the endpoint third-party tools should post to.
@@ -53,7 +54,8 @@ async function post(req: NextApiRequest, res: NextApiResponse) {
 }
 
 export default authedRoute({
-  POST: { role: "OPERATOR", handler: post, allowApiKey: true },
+  // Up to 64 MB parsed and deduped against the whole log: the heavy budget.
+  POST: { role: "OPERATOR", handler: post, allowApiKey: true, rateLimit: API_HEAVY_LIMIT },
 });
 
 export const config = {

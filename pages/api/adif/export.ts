@@ -3,6 +3,7 @@ import type { NextApiRequest, NextApiResponse } from "next";
 import { QSO_INCLUDE, toAdifInput } from "@/lib/adif/from-row";
 import { adifFilename, adifHeader, adifRecord } from "@/lib/adif/write";
 import { authedRoute } from "@/lib/auth/guard";
+import { API_HEAVY_LIMIT } from "@/lib/auth/throttle";
 import { prisma } from "@/lib/db/prisma";
 import { buildQsoWhere } from "@/lib/db/qso";
 import { qsoListQuerySchema } from "@/lib/validation/qso";
@@ -78,7 +79,8 @@ async function get(req: NextApiRequest, res: NextApiResponse) {
 // Not authedRoute: the streaming response can't use sendJson, and an error after
 // headers are sent can't become a JSON body. Errors before the first write still
 // produce a normal status.
-export default authedRoute({ GET: { role: "VIEWER", handler: get } });
+// The whole log, streamed: the heavy budget, a few a minute per user or key.
+export default authedRoute({ GET: { role: "VIEWER", handler: get, rateLimit: API_HEAVY_LIMIT } });
 
 export const config = {
   api: {

@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import { sendJson } from "@/lib/api/respond";
 import { authedRoute } from "@/lib/auth/guard";
+import { API_HEAVY_LIMIT } from "@/lib/auth/throttle";
 import { computeAwards } from "@/lib/awards/compute";
 
 const querySchema = z.object({
@@ -16,5 +17,6 @@ async function get(req: NextApiRequest, res: NextApiResponse) {
 }
 
 export default authedRoute({
-  GET: { role: "VIEWER", handler: get, allowApiKey: true },
+  // Every award computed over the whole log: the heavy budget.
+  GET: { role: "VIEWER", handler: get, allowApiKey: true, rateLimit: API_HEAVY_LIMIT },
 });

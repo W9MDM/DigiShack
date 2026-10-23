@@ -9,6 +9,7 @@ import { z } from "zod";
 
 import { sendError, sendJson } from "@/lib/api/respond";
 import { authedRoute } from "@/lib/auth/guard";
+import { API_MAP_LIMIT } from "@/lib/auth/throttle";
 import { prisma } from "@/lib/db/prisma";
 import { bearingDeg, distanceKm, gridToLatLon } from "@/lib/propagation";
 
@@ -170,4 +171,6 @@ async function get(req: NextApiRequest, res: NextApiResponse) {
   sendJson(res, 200, body);
 }
 
-export default authedRoute({ GET: { role: "VIEWER", handler: get } });
+// Every contact in range, aggregated: its own budget, tighter than the general one but
+// loose enough for the map pages, which refetch on each filter change (lib/auth/throttle.ts).
+export default authedRoute({ GET: { role: "VIEWER", handler: get, rateLimit: API_MAP_LIMIT } });
