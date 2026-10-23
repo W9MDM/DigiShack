@@ -2,6 +2,8 @@ import { readFileSync } from "node:fs";
 
 import type { NextConfig } from "next";
 
+import { contentSecurityPolicy } from "./lib/security/csp";
+
 // The running version, read once at build time and handed to the client.
 // The service worker registration uses it as its cache key (see
 // lib/client/service-worker.ts), so it has to be reachable from the browser —
@@ -11,62 +13,10 @@ const { version } = JSON.parse(readFileSync("./package.json", "utf8")) as {
   version: string;
 };
 
-/**
- * Content Security Policy.
- *
- * MEASURED AGAINST THE BUILT OUTPUT rather than assumed, because a CSP that is wrong fails
- * silently in someone else's browser. The served HTML was read and every directive below
- * corresponds to something that is actually in it:
- *
- *   - the ONLY inline `<script>` Next emits is `__NEXT_DATA__`, and it carries
- *     `type="application/json"`. That is not executable, so `script-src` never applies to
- *     it. Every other script is a `src=` under `/_next/static/`.
- *   - there is no `dangerouslySetInnerHTML` anywhere in `pages/` or `components/`, and no
- *     `eval` or `new Function` in client code.
- *
- * So `script-src 'self'` holds with NEITHER 'unsafe-inline' NOR 'unsafe-eval'. That is the
- * directive that does the real work: it means an injected `<script>` cannot run and an
- * attacker-hosted one cannot load, which is most of what CSP is for. It is worth keeping,
- * so anything that would force 'unsafe-inline' back — an inline handler, a third-party
- * snippet, a chart library that evals — should be rejected on that basis rather than
- * accommodated by loosening this line.
- *
- * `style-src` DOES need 'unsafe-inline': 34 React `style={{...}}` props and one `<style>`
- * block in the QSL card page. Inline styles are a far smaller weapon than inline scripts,
- * and removing them would mean rewriting dynamic sizing — the waterfall height, the award
- * progress bars — as CSS custom properties for no security gain worth the churn.
- *
- * `connect-src` carries `ws:` and `wss:` as a deliberate loosening. Same-origin sockets
- * would be covered by 'self' alone, but `bridge.publicWsUrl` is a documented setting that
- * points the decode and audio sockets at another origin, and this header is built at BUILD
- * time and cannot read a runtime setting. The choice was between a wildcard scheme and
- * silently breaking a shipped feature for anyone who uses it. The cost is bounded: with
- * `script-src 'self'` holding, there is no easy way to run the code that would abuse it.
- *
- * NO `upgrade-insecure-requests`, on purpose. LAN visitors reach this over plain http by
- * design (see docs/exposure.md); upgrading their requests would break them for a property
- * HSTS already provides to everyone arriving over the tunnel.
- */
-const CSP = [
-  "default-src 'self'",
-  "base-uri 'self'",
-  "object-src 'none'",
-  "frame-ancestors 'none'",
-  "form-action 'self'",
-  // TEMPORARY (1.261.1): Next.js 16.4 with Turbopack inlines a per-page bootstrap script
-  // (`globalThis["TURBOPACK"].push(...)`) that `script-src 'self'` silently blocked, so
-  // no page started on either install after the 16.2.9 -> 16.4.2 security upgrade. It
-  // differs per page and per build, so no hash can allow it; the replacement is a
-  // per-request nonce, after which this goes back to plain 'self'.
-  "script-src 'self' 'unsafe-inline'",
-  "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' data: blob:",
-  "font-src 'self' data:",
-  "media-src 'self' data: blob:",
-  "connect-src 'self' ws: wss:",
-  "worker-src 'self'",
-  "manifest-src 'self'",
-].join("; ");
+// The static form of the Content Security Policy, for responses proxy.ts does not see
+// (static assets, API JSON): no nonce, so no inline script at all. Pages get the same policy
+// with a per-request nonce from proxy.ts. Reasoning in lib/security/csp.ts.
+const CSP = contentSecurityPolicy();
 
 /**
  * Permissions-Policy.

@@ -83,3 +83,9 @@ export default function ForgotPage() {
     </AuthLayout>
   );
 }
+
+// Rendered per request, not prebuilt, so the page carries this request's CSP nonce
+// (proxy.ts, lib/security/csp.ts); a prebuilt page has none and its scripts would not run.
+export function getServerSideProps() {
+  return { props: {} };
+}
