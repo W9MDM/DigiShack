@@ -53,7 +53,12 @@ const CSP = [
   "object-src 'none'",
   "frame-ancestors 'none'",
   "form-action 'self'",
-  "script-src 'self'",
+  // TEMPORARY (1.261.1): Next.js 16.4 with Turbopack inlines a per-page bootstrap script
+  // (`globalThis["TURBOPACK"].push(...)`) that `script-src 'self'` silently blocked, so
+  // no page started on either install after the 16.2.9 -> 16.4.2 security upgrade. It
+  // differs per page and per build, so no hash can allow it; the replacement is a
+  // per-request nonce, after which this goes back to plain 'self'.
+  "script-src 'self' 'unsafe-inline'",
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob:",
   "font-src 'self' data:",
