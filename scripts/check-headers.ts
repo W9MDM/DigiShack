@@ -16,6 +16,8 @@
 // scores well in a scanner, and gives up most of what CSP is for.
 
 import config from "../next.config";
+import { config as proxyConfig } from "../proxy";
+import { contentSecurityPolicy, newNonce } from "../lib/security/csp";
 
 let failures = 0;
 function check(name: string, cond: boolean, extra?: unknown): void {
@@ -69,12 +71,9 @@ async function main(): Promise<void> {
     // <script> is __NEXT_DATA__ with type="application/json", which is not executable.
     check("script-src is present", directive("script-src").length > 0, csp);
     check("script-src allows 'self'", /script-src[^;]*'self'/.test(csp), directive("script-src"));
-    // TEMPORARY EXCEPTION (1.261.1), see next.config.ts: Next 16.4's inline Turbopack
-    // bootstrap needs it until the per-request nonce lands. Remove this branch with it.
-    const inlineAllowedUntilNonce = true;
     check(
-      inlineAllowedUntilNonce ? "script-src 'unsafe-inline' is the temporary 1.261.1 exception" : "script-src has NO 'unsafe-inline'",
-      inlineAllowedUntilNonce || !/script-src[^;]*'unsafe-inline'/.test(csp),
+      "script-src has NO 'unsafe-inline'",
+      !/script-src[^;]*'unsafe-inline'/.test(csp),
       directive("script-src"),
     );
     check(
@@ -154,6 +153,36 @@ async function main(): Promise<void> {
   console.log("6. the stack is not advertised");
   {
     check("poweredByHeader is off", config.poweredByHeader === false, config.poweredByHeader);
+  }
+
+  console.log("");
+  console.log("7. pages get a per-request nonce, never 'unsafe-inline' (proxy.ts, lib/security/csp.ts)");
+  {
+    // Next 16.4 inlines a per-page Turbopack bootstrap; without a nonce it was silently
+    // blocked and no page started (1.260.1). The fix must not be 'unsafe-inline'.
+    const a = newNonce();
+    const b = newNonce();
+    check("nonces are 128 bits of base64", /^[A-Za-z0-9+/]{22}==$/.test(a), a);
+    check("each nonce is fresh", a !== b);
+    const paged = contentSecurityPolicy(a);
+    const scriptSrc = paged.split(";").map((d) => d.trim()).find((d) => d.startsWith("script-src ")) ?? "";
+    check("the page policy names exactly this nonce", scriptSrc === `script-src 'self' 'nonce-${a}'`, scriptSrc);
+    check("the page policy has no 'unsafe-inline' for scripts", !scriptSrc.includes("unsafe-inline"), scriptSrc);
+    check("no form of the policy allows 'unsafe-eval'", !paged.includes("unsafe-eval") && !csp.includes("unsafe-eval"));
+    check("next.config sends the no-nonce form", csp === contentSecurityPolicy(), csp);
+    check(
+      "the two forms differ only in script-src",
+      paged.replace(/script-src [^;]*/, "") === csp.replace(/script-src [^;]*/, ""),
+    );
+    const matcher = proxyConfig.matcher[0]!;
+    const re = new RegExp(`^${matcher.source}$`);
+    for (const p of ["/", "/decodes", "/rig", "/settings", "/login", "/forgot", "/qsos/123"]) {
+      check(`proxy sees page ${p}`, re.test(p));
+    }
+    for (const p of ["/api/health", "/_next/static/chunks/x.js", "/_next/data/b/decodes.json", "/icons/icon.svg", "/sw.js", "/manifest.webmanifest"]) {
+      check(`proxy leaves ${p} alone`, !re.test(p));
+    }
+    check("prefetches are skipped", matcher.missing?.some((m) => m.key === "next-router-prefetch") === true);
   }
 
   console.log("");
