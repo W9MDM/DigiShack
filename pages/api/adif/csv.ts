@@ -3,6 +3,7 @@ import type { NextApiRequest, NextApiResponse } from "next";
 import { csvFilename, csvHeader, csvRecord } from "@/lib/adif/csv";
 import { QSO_INCLUDE, toAdifInput } from "@/lib/adif/from-row";
 import { authedRoute } from "@/lib/auth/guard";
+import { API_HEAVY_LIMIT } from "@/lib/auth/throttle";
 import { prisma } from "@/lib/db/prisma";
 import { buildQsoWhere } from "@/lib/db/qso";
 import { qsoListQuerySchema } from "@/lib/validation/qso";
@@ -60,4 +61,5 @@ async function get(req: NextApiRequest, res: NextApiResponse) {
   res.end();
 }
 
-export default authedRoute({ GET: { role: "VIEWER", handler: get } });
+// The whole log, streamed: the heavy budget, a few a minute per user or key.
+export default authedRoute({ GET: { role: "VIEWER", handler: get, rateLimit: API_HEAVY_LIMIT } });

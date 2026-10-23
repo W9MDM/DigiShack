@@ -1,5 +1,7 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 
+import { clientIp } from "@/lib/auth/client-ip";
+import { UNSUBSCRIBE_LIMIT } from "@/lib/auth/throttle";
 import { escapeHtml } from "@/lib/html";
 import { optOut, tokenValid } from "@/lib/qsl/opt-out";
 
@@ -12,8 +14,14 @@ import { optOut, tokenValid } from "@/lib/qsl/opt-out";
 //
 // The worst a forged token achieves is that somebody stops receiving unsolicited email
 // they never asked for. That is not an attack worth defending against, which is why there
-// is no rate limit and no confirmation step: a confirmation page is one more thing between
-// a person and the outcome they have already asked for twice.
+// is no confirmation step: a confirmation page is one more thing between a person and the
+// outcome they have already asked for twice.
+//
+// IT IS RATE LIMITED, per address, and not because of forged tokens. It is the one
+// endpoint the whole internet may call without an account, and each valid call is a
+// database write, so it gets a budget of its own (UNSUBSCRIBE_LIMIT, lib/auth/throttle.ts)
+// on top of nginx's. Spent before the token is checked, so it also caps guessing. Sized for
+// people, with room for a mail provider's One-Click POSTs arriving from one server.
 //
 // GET and POST both. GET is the link in the body; POST is RFC 8058 One-Click, which is
 // what Gmail and Outlook use for their own Unsubscribe button. A GET-only endpoint would
@@ -23,6 +31,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (req.method !== "GET" && req.method !== "POST") {
     res.setHeader("Allow", "GET, POST");
     res.status(405).end("Method not allowed");
+    return;
+  }
+
+  // Same address helper as the login throttle: through the tunnel the socket is loopback.
+  const ip = clientIp({ headers: req.headers, socketAddress: req.socket.remoteAddress }) ?? "unknown";
+  const limited = UNSUBSCRIBE_LIMIT.hit(ip);
+  if (!limited.allowed) {
+    res.setHeader("Retry-After", String(limited.retryAfterSeconds));
+    res.setHeader("Cache-Control", "no-store");
+    res.status(429).setHeader("Content-Type", "text/html; charset=utf-8");
+    res.end(
+      page(
+        "Too many requests",
+        `This address has made too many requests in the last minute. Try the link again in ${limited.retryAfterSeconds} seconds, ` +
+          "or reply to the email and it will be handled by hand.",
+      ),
+    );
     return;
   }
 

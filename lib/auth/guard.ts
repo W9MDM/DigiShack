@@ -7,9 +7,10 @@ import type {
 import type { NextApiRequest, NextApiResponse } from "next";
 import type { ServerResponse } from "node:http";
 
-import { sendError } from "@/lib/api/respond";
+import { sendError, sendJson } from "@/lib/api/respond";
 import { getBooleanSetting } from "@/lib/settings";
 import { getApiKeyIdentity } from "@/lib/auth/apikey";
+import { API_GENERAL_LIMIT, type RateDecision, type RateLimiter } from "@/lib/auth/throttle";
 import {
   type AuthContext,
   type AuthUser,
@@ -42,6 +43,13 @@ export interface MethodSpec {
    * leaked key can never reach user management or the updater.
    */
   allowApiKey?: boolean;
+  /**
+   * The per-caller budget this method spends. Defaults to API_GENERAL_LIMIT; the
+   * whole-logbook routes (exports, the QSO map, awards, ADIF import) name a tighter one.
+   * Charged per USER for a session and per KEY for an API key, so one cannot exhaust the
+   * other — see lib/auth/throttle.ts for the limits and the polling arithmetic behind them.
+   */
+  rateLimit?: RateLimiter;
 }
 
 /**
@@ -122,6 +130,15 @@ export function authedRoute(
         return;
       }
 
+      // Charged once the caller is known, and before anything is done for them. A request
+      // with no credentials never reaches here; it is nginx's limit_req that bounds those.
+      const limiter = spec.rateLimit ?? API_GENERAL_LIMIT;
+      const decision = limiter.hit(auth.user.id);
+      if (!decision.allowed) {
+        sendRateLimited(res, decision, limiter);
+        return;
+      }
+
       if (!hasRole(auth.user, spec.role)) {
         sendError(
           res,
@@ -137,6 +154,25 @@ export function authedRoute(
       handleError(res, err);
     }
   };
+}
+
+/**
+ * The 429. Retry-After is the window's end, so a client that honours it is let in on its
+ * next try; the same number is in the body for a client that does not read headers.
+ * `no-store`, or a cache in between could keep serving the refusal after it lapsed.
+ */
+export function sendRateLimited(
+  res: NextApiResponse,
+  decision: RateDecision,
+  limiter: Pick<RateLimiter, "name" | "windowMs">,
+): void {
+  const window = Math.round(limiter.windowMs / 1000);
+  res.setHeader("Retry-After", String(decision.retryAfterSeconds));
+  res.setHeader("Cache-Control", "no-store");
+  sendJson(res, 429, {
+    error: `Too many requests (${limiter.name} limit: ${decision.limit} per ${window} s). Try again in ${decision.retryAfterSeconds} s.`,
+    retryAfterSeconds: decision.retryAfterSeconds,
+  });
 }
 
 /** Seconds a client is told to wait before asking again after a failed session lookup. */
