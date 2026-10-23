@@ -5,7 +5,15 @@
 import { DetailRow } from "@/components/decodes/controls";
 import { Button, Card } from "@/components/ui/primitives";
 import { useApi } from "@/lib/client/api";
+import { useVisibleInterval } from "@/lib/client/use-visible-interval";
 import { formatUtcTime } from "@/lib/time";
+
+/**
+ * The collector asks PSKReporter every five minutes inside the radio service; the panel has
+ * to ask the database again too, or it shows the answer from whenever the page was opened.
+ * It used to fetch once, so it said "Nobody yet" all evening after hunt started.
+ */
+const POLL_MS = 60_000;
 
 // `className` goes on the Card because the Card is the grid item that stretches to the
 // row height; a wrapper would take the stretch instead.
@@ -33,6 +41,7 @@ export function HeardBy({ className }: { className?: string }) {
       detail: string;
     };
   }>("/api/psk-spots?minutes=60&limit=12");
+  useVisibleInterval(() => void reload(), POLL_MS);
 
   return (
     <Card title="Heard by" className={className}>

@@ -23,6 +23,7 @@ import Link from "next/link";
 import type { GetServerSidePropsContext } from "next";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+import { qrzUrl } from "@/components/log/links";
 import { BandKey, LayerToggle } from "@/components/maps/Legend";
 import { WorldMap } from "@/components/maps/WorldMap";
 import { Badge, Card, ErrorBanner, Field, PageHeader, Select } from "@/components/ui/primitives";
@@ -679,12 +680,24 @@ export default function GridMapPage({ wsUrl }: Props) {
                   </>
                 )}
               </dl>
-              <Link
-                href={`/qsos?q=${encodeURIComponent(selected.callsign)}`}
-                className="mt-3 inline-block text-sm text-accent-bright hover:underline"
-              >
-                View {selected.callsign}&apos;s QSOs →
-              </Link>
+              <div className="mt-3 flex flex-wrap gap-x-4 gap-y-2 text-sm">
+                <Link
+                  href={`/qsos?q=${encodeURIComponent(selected.callsign)}`}
+                  className="nav-target inline-flex items-center text-accent-bright hover:underline"
+                >
+                  View {selected.callsign}&apos;s QSOs →
+                </Link>
+                <a
+                  href={qrzUrl(selected.callsign)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="nav-target inline-flex items-center text-accent-bright hover:underline"
+                >
+                  View QRZ page
+                  <span aria-hidden="true">&nbsp;↗</span>
+                  <span className="sr-only"> (opens in a new tab)</span>
+                </a>
+              </div>
               {selected.kind === "live" && selected.station.isCq && (
                 <p className="mt-3 pt-3 border-t border-line text-sm">
                   <Link href="/decodes" className="text-accent-bright hover:underline">
