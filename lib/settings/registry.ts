@@ -388,6 +388,22 @@ export const SETTING_GROUPS: SettingGroup[] = [
       "Used by the QSL emailer. Those are unsolicited emails to other operators, so bulk sends always go through a review queue.",
   },
   {
+    id: "ms365",
+    doc: "qsl",
+    docLabel: "Sending and receiving QSL mail through Microsoft 365",
+    title: "Microsoft 365 mail app",
+    blurb:
+      "One Microsoft Entra app registration, used for sending (Mail.Send) when Outgoing email is set to Microsoft 365, and for reading received cards (Mail.Read) when Received cards is. The app signs in as itself with a client secret — no password of yours is stored. Your tenant admin creates it and grants admin consent; an Exchange application access policy can limit it to this one mailbox.",
+  },
+  {
+    id: "qslinbound",
+    doc: "qsl",
+    docLabel: "How received cards are imported and matched to the log",
+    title: "Received cards (email)",
+    blurb:
+      "Reads the station mailbox for QSL cards other operators email you — the picture attached, a reply to your card, or a notice that a card is waiting on a website — and links each to the contact it confirms. Read-only: nothing in the mailbox is marked, moved or deleted. Your own outgoing cards and their bounces are recognised and never counted as received.",
+  },
+  {
     id: "auto",
     doc: "operating",
     docLabel: "Automatic operating and every brake on it",
@@ -2129,6 +2145,146 @@ export const SETTINGS: SettingDef[] = [
   // A private fork that genuinely needs authentication configures a git credential
   // helper on the server, which is ordinary operations and keeps the secret out of the
   // application entirely.
+
+  // --- Sending: which service ---
+  {
+    key: "mail.sendProvider",
+    label: "Send mail through",
+    type: "select",
+    options: [
+      { value: "smtp", label: "SMTP server (below)" },
+      { value: "graph", label: "Microsoft 365 app (Graph)" },
+    ],
+    group: "smtp",
+    help:
+      "Every message DigiShack sends — QSL cards, alerts, password resets — goes through this one choice. SMTP uses the server settings below and is what every install used before this existed. Microsoft 365 sends as the mailbox in Microsoft 365 mail app, through the app registration (Mail.Send); the From address is that mailbox, and the card and the unsubscribe header travel exactly as they do over SMTP. A message over about 3.9 MB once encoded is refused, which a normal card is nowhere near.",
+    default: "smtp",
+  },
+
+  // --- Microsoft 365 app registration (shared by sending and receiving) ---
+  {
+    key: "ms365.tenantId",
+    label: "Tenant ID",
+    type: "string",
+    group: "ms365",
+    help: "The Directory (tenant) ID from the app registration's Overview page in Microsoft Entra — a GUID — or the tenant's domain, such as example.onmicrosoft.com.",
+    placeholder: "00000000-0000-0000-0000-000000000000",
+  },
+  {
+    key: "ms365.clientId",
+    label: "Application (client) ID",
+    type: "string",
+    group: "ms365",
+    help: "The Application (client) ID from the same Overview page. A GUID, not the app's name and not the secret's ID.",
+    placeholder: "00000000-0000-0000-0000-000000000000",
+  },
+  {
+    key: "ms365.clientSecret",
+    label: "Client secret",
+    type: "secret",
+    group: "ms365",
+    help: "The secret's VALUE (shown once, when it is created under Certificates & secrets) — not its Secret ID. Secrets expire; when sign-in starts failing with AADSTS7000222 or 7000215, make a new one and paste it here.",
+  },
+  {
+    key: "ms365.mailbox",
+    label: "Mailbox",
+    type: "string",
+    group: "ms365",
+    help: "The mailbox the app sends from and reads, e.g. the station's own address. It must be one the app's permissions — and any Exchange application access policy — allow; a 403 when testing almost always means the policy does not include it.",
+    placeholder: "station@example.com",
+  },
+
+  // --- Received cards ---
+  {
+    key: "qsl.inbound.enabled",
+    label: "Import received cards automatically",
+    type: "boolean",
+    group: "qslinbound",
+    help: "Check the mailbox on a timer in the radio service and import new cards. Off by default. Import now on the QSL → Received page works whether or not this is on. Takes effect at the next interval; no restart needed.",
+    default: "false",
+  },
+  {
+    key: "qsl.inbound.provider",
+    label: "Read cards from",
+    type: "select",
+    options: [
+      { value: "graph", label: "Microsoft 365 app (Graph)" },
+      { value: "imap", label: "IMAP — coming next" },
+      { value: "gmail", label: "Gmail / Google Workspace — coming next" },
+    ],
+    group: "qslinbound",
+    help: "Microsoft 365 reads Inbox and Junk of the mailbox in Microsoft 365 mail app, with the app's Mail.Read permission. IMAP and Gmail (Google Workspace included) are listed and not yet run: they arrive in the next release, and choosing one now reports that rather than importing.",
+    default: "graph",
+  },
+  {
+    key: "qsl.inbound.startDate",
+    label: "Import cards received since",
+    type: "string",
+    group: "qslinbound",
+    help: "A date, YYYY-MM-DD. The first run reads from here; later runs carry on from the newest message already read. Blank means the last 30 days.",
+    placeholder: "2026-01-01",
+  },
+  {
+    key: "qsl.inbound.intervalMinutes",
+    label: "Check every (minutes)",
+    type: "number",
+    group: "qslinbound",
+    advanced: true,
+    help: "How often the radio service looks for new cards. Minimum 5. Read when the radio service starts, so a change needs a restart of digishack-bridge.",
+    default: "15",
+  },
+  {
+    key: "imap.host",
+    label: "IMAP server",
+    type: "string",
+    group: "qslinbound",
+    advanced: true,
+    help: "Coming next: the IMAP server for the IMAP choice above, e.g. imap.example.com. Not used by this release.",
+    placeholder: "imap.example.com",
+  },
+  {
+    key: "imap.port",
+    label: "IMAP port",
+    type: "number",
+    group: "qslinbound",
+    advanced: true,
+    help: "Coming next: 993 for TLS from the start, the usual arrangement. Not used by this release.",
+    default: "993",
+  },
+  {
+    key: "imap.tls",
+    label: "IMAP over TLS from the start",
+    type: "boolean",
+    group: "qslinbound",
+    advanced: true,
+    help: "Coming next: on for port 993. Off means connect and upgrade with STARTTLS; the password is never sent unencrypted either way.",
+    default: "true",
+  },
+  {
+    key: "imap.user",
+    label: "IMAP username",
+    type: "string",
+    group: "qslinbound",
+    advanced: true,
+    help: "Coming next: usually the full email address. For Gmail and Google Workspace, the full address.",
+  },
+  {
+    key: "imap.password",
+    label: "IMAP password",
+    type: "secret",
+    group: "qslinbound",
+    advanced: true,
+    help: "Coming next. For Gmail and Google Workspace this must be an App Password (Google Account → Security → 2-Step Verification → App passwords); the normal Google password will not work, and a Workspace admin must allow IMAP and 2-Step Verification for the user.",
+  },
+  {
+    key: "imap.folder",
+    label: "IMAP folder(s)",
+    type: "string",
+    group: "qslinbound",
+    advanced: true,
+    help: "Coming next: folders to read, comma-separated. INBOX by default; on Gmail, [Gmail]/All Mail also finds cards a filter has archived.",
+    default: "INBOX",
+  },
 
   // --- SMTP ---
   {

@@ -12,6 +12,8 @@ export interface QslFlags {
   eqslSent?: boolean;
   eqslRcvd: boolean;
   emailQslSent?: boolean;
+  /** They emailed US a card or answered ours. Not award credit; see Qso.emailQslRcvd. */
+  emailQslRcvd?: boolean;
   qrzSent?: boolean;
   qrzRcvd?: boolean;
 }
@@ -71,12 +73,19 @@ export function qslChannels(q: QslFlags, opts: { includeQrz?: boolean } = {}): Q
             ? "Paper card: sent"
             : "Paper card: none",
     },
+    // Received outranks sent, as it does for every other channel. It is NOT counted by
+    // isConfirmed above: an emailed picture is not award credit, so the log's Confirmed
+    // filter and the awards page stay exactly as they were.
     {
       key: "email",
       label: "Email",
-      state: q.emailQslSent ? "sent" : "none",
-      word: q.emailQslSent ? "Sent" : "Not sent",
-      description: q.emailQslSent ? "Card image emailed" : "No card image emailed",
+      state: q.emailQslRcvd ? "confirmed" : q.emailQslSent ? "sent" : "none",
+      word: q.emailQslRcvd ? "Received" : q.emailQslSent ? "Sent" : "Not sent",
+      description: q.emailQslRcvd
+        ? "Emailed card: received"
+        : q.emailQslSent
+          ? "Card image emailed"
+          : "No card image emailed",
     },
   ];
   if (opts.includeQrz) {

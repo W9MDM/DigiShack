@@ -86,6 +86,9 @@ export interface Qso {
    */
   emailQslSent: boolean;
   emailQslSentAt: string | null;
+  /** They emailed us a card, or replied to ours. Not paper, not award credit. */
+  emailQslRcvd?: boolean;
+  emailQslRcvdAt?: string | null;
   eqslRcvd: boolean;
   /**
    * Which radio made the contact — "FLEX-6400", "IC-7300MK2". ADIF MY_RIG.
