@@ -469,3 +469,166 @@ export function quietProgress(base: string, windows: number, limit: number): str
   if (windows <= 0 || limit <= 0) return base;
   return `${base} (${Math.min(windows, limit)}/${limit})`;
 }
+
+// ---------------------------------------------------------------------------
+// The 2026-10-23 evening loop: FT4 left on, every band "quiet", 20 m forever
+// ---------------------------------------------------------------------------
+//
+// THE FAULT, from the bridge log, 19:45 to 20:01 local, every four minutes:
+//
+//     [auto] leaving 20M: 1 station called CQ here in 20 windows and it was refused ...
+//     [auto] band hop -> 40M ... band too quiet (0 decodes) - hopping on
+//     [auto] busiest band on the hop list: 20M (39 stations seen)
+//     [auto] settled on new band (8 decodes) ... leaving 20M ...
+//
+// Three separate faults made that loop, and each has a pure rule below:
+//
+//   * The sub-mode had been left on FT4, and nobody was on FT4 that evening. 40 m and
+//     30 m were not dead - 40 m FT8 had 22 stations on it - so "too quiet" was a fact
+//     about the MODE and was read as a fact about the BAND. `shouldTryFt8`.
+//   * The band just left as unproductive was picked straight back, because the
+//     busiest-band choice never looked at why we had left it. `bandsFreeToHop`.
+//   * "39 stations seen" was PSKReporter's FT4 count, and figures held over a refusal
+//     or an outage have no age limit at all. `activityIfFresh`.
+//
+// And the fourth thing the operator did by hand, and the station could not: with
+// nobody callable on a band that is clearly open, call CQ there. `cqFallbackStep`.
+
+/**
+ * Should a quiet FT4 band be given a hearing on FT8 before it is called quiet?
+ *
+ * FT4 and FT8 are two populations on two frequencies. An FT4 band with nobody on it
+ * says nothing about the FT8 sub-band a few kHz away, which on any ordinary evening is
+ * where most of the band is. FT8 is the bigger population on every HF band, so the
+ * step only ever goes FT4 -> FT8: once on FT8 nothing here moves it back, and an
+ * FT4 -> FT8 -> FT4 loop is impossible by construction.
+ *
+ * `unavailable` is the one-way latch for a station whose decoder does NOT follow the
+ * dial (`digital.mode` pinned to FT4): the dial moved, the decoder stayed, and asking
+ * again on every band would retune it for nothing every time.
+ */
+export function shouldTryFt8(opts: {
+  enabled: boolean;
+  mode: string;
+  band: string | null;
+  unavailable: boolean;
+}): boolean {
+  return opts.enabled && !opts.unavailable && opts.band !== null && opts.mode.toUpperCase() === "FT4";
+}
+
+/**
+ * The hop list minus every band that is cooling off, poor or the one we are on.
+ *
+ * `blocked` maps an upper-case band to the time it may be chosen again. Expired
+ * entries are simply ignored here - the caller prunes - so this stays pure.
+ *
+ * THIS IS THE PING-PONG FIX. Before it, only the network-driven hop and the
+ * leave-for-nobody rule looked at the poor list; the ordinary "too quiet, hop on" path
+ * asked for the busiest band with no idea why we had left any of them, and the busiest
+ * band was the one just abandoned.
+ */
+export function bandsFreeToHop(
+  bands: readonly string[],
+  current: string | null,
+  blocked: ReadonlyMap<string, number>,
+  now: number,
+): string[] {
+  const here = current?.toUpperCase() ?? null;
+  return bands.filter((raw) => {
+    const b = raw.toUpperCase();
+    if (b === here) return false;
+    const until = blocked.get(b);
+    return until === undefined || now >= until;
+  });
+}
+
+/**
+ * Nowhere left to hop to: which band to stay on.
+ *
+ * "The best one" means the one THIS receiver measured the most decodes a cycle on -
+ * the same `bandRate` figures the deaf-band rule already files - and the band we are
+ * on wins a tie, because staying costs nothing and moving costs a warm-up. A band
+ * never measured here is not a candidate: we have no evidence it is better.
+ *
+ * Returns the band to be on, which is `current` when staying put.
+ */
+export function pickBandToStayOn(opts: {
+  bands: readonly string[];
+  current: string;
+  /** Decodes a cycle on the current band, this stay. Null when too early to say. */
+  currentRate: number | null;
+  /** Decodes a cycle this receiver measured on each band, upper-case keys. */
+  rates: ReadonlyMap<string, number>;
+}): string {
+  const here = opts.current.toUpperCase();
+  let best = { band: here, rate: opts.currentRate ?? 0 };
+  for (const raw of opts.bands) {
+    const b = raw.toUpperCase();
+    if (b === here) continue;
+    const r = opts.rates.get(b);
+    // `>` not `>=`: the band we are on wins a tie.
+    if (r !== undefined && r > best.rate) best = { band: b, rate: r };
+  }
+  return best.band;
+}
+
+/**
+ * Band activity, or null when it is too old to choose a band by.
+ *
+ * WHAT "39 STATIONS SEEN" IS: distinct transmitting callsigns in PSKReporter reception
+ * reports over the last 15 minutes, for ONE mode - the one the decoder is on - fetched
+ * at most every 12 minutes. On a refusal, a rate-limit stand-off or an outage the
+ * fetcher hands back the last good figures with no age limit, which is right for a band
+ * strip a human reads with its timestamp and wrong for a hop nobody is watching. Past
+ * `maxAgeMs` the caller rotates instead, exactly as it does when the feed is down.
+ *
+ * `fetchedAt` null means "age unknown" and is passed through unchanged: a feed that
+ * cannot report an age is not evidence that it is stale.
+ */
+export function activityIfFresh<T>(
+  activity: T[] | null,
+  fetchedAt: number | null,
+  now: number,
+  maxAgeMs: number,
+): T[] | null {
+  if (!activity) return null;
+  if (fetchedAt === null || maxAgeMs <= 0) return activity;
+  return now - fetchedAt > maxAgeMs ? null : activity;
+}
+
+/**
+ * The hunt's CQ fallback, one window at a time.
+ *
+ * Hunting only ever answers. On a band that is open and has nobody callable on it -
+ * everyone already worked, every CQ a dupe - it waits for ever, and the only way out
+ * it had was to leave the band, which is how the evening loop began. Calling CQ there
+ * is what an operator does, and it turns a band full of dupes into a band full of
+ * people who may answer.
+ *
+ *   enter  `limit` consecutive SETTLED windows with nobody callable. Warm-up windows
+ *          do not count: they are the station deciding whether it likes the band.
+ *   leave  anybody callable appears - a CQ we may work, or a station calling us.
+ *   stay   otherwise, while active.
+ *
+ * `held` is true while a fallback on this band has already ended in the dead-band
+ * brake ("15 CQs with no answer") and there was nowhere to hop: CQing there again
+ * would only trip it again. `limit` <= 0 is the off switch, and `mode` must be
+ * exactly "hunt" - hunt-pota exists to work parks, and a CQ from a park hunter is
+ * answered by everybody except activators.
+ */
+export function cqFallbackStep(opts: {
+  mode: string;
+  active: boolean;
+  limit: number;
+  nobodyWindows: number;
+  callable: boolean;
+  held: boolean;
+}): "enter" | "leave" | "stay" | null {
+  const eligible = opts.mode === "hunt" && opts.limit > 0;
+  if (opts.active) {
+    if (!eligible || opts.callable) return "leave";
+    return "stay";
+  }
+  if (!eligible || opts.held || opts.callable) return null;
+  return opts.nobodyWindows >= opts.limit ? "enter" : null;
+}
