@@ -265,6 +265,8 @@ export async function fetchPskActivity(opts: {
     return theirs.value;
   }
   const lastGood = mine ?? theirs ?? null;
+  // Remembered here so `pskActivityFetchedAt` can say how old the answer below is.
+  if (!mine && theirs) pskCache.set(key, theirs);
   if (now < shared.blockedUntil) return lastGood?.value ?? null;
   if (now - shared.lastQueryAt < PSK_GLOBAL_GAP_MS) return lastGood?.value ?? null;
   // Spend the budget before asking, so the other process sees it at once.
@@ -362,6 +364,17 @@ export async function fetchPskActivity(opts: {
   })();
 
   return pskInFlight;
+}
+
+/**
+ * When the figures `fetchPskActivity` last handed back for a mode were fetched, or null.
+ *
+ * The fetcher returns the last good figures through a refusal, a stand-off or an
+ * outage, with no age limit - right for the band strip, which a person reads, and wrong
+ * for an unattended band hop. This is how the hop finds out. See `activityIfFresh`.
+ */
+export function pskActivityFetchedAt(mode: string): number | null {
+  return pskCache.get(mode.toUpperCase())?.at ?? null;
 }
 
 export interface SolarConditions {

@@ -1694,6 +1694,52 @@ export const SETTINGS: SettingDef[] = [
     default: "false",
   },
   {
+    key: "auto.hopFt4ToFt8",
+    label: "Try FT8 before giving up on a quiet FT4 band",
+    type: "boolean",
+    group: "auto",
+    help:
+      "When the automatic operator is on FT4 and finds a band quiet, or nobody on it to " +
+      "call, it moves to that band's FT8 calling frequency and listens for the usual settle " +
+      "period before deciding the band is no good. Nobody being on FT4 does not mean the " +
+      "band is dead: FT8 is where most of every band is, and a station left on FT4 can " +
+      "otherwise hop from band to band hearing nothing while FT8 is busy. Only ever goes " +
+      "FT4 to FT8, never back. Needs the decoder to follow the dial (Digital mode set to " +
+      "auto); if it does not, the station returns to FT4 and stops trying.",
+    default: "true",
+  },
+  {
+    key: "auto.hopCoolOffMin",
+    label: "Do not go back to an unproductive band for (minutes)",
+    type: "number",
+    group: "auto",
+    advanced: true,
+    help:
+      "When band-hopping leaves a band because it was quiet, because nobody on it could " +
+      "be called (all dupes, cooldowns or do-not-call), or because nobody answered our " +
+      "CQs, that band is skipped for this long, even when the network says it is the " +
+      "busiest. Without it the station can bounce straight back to the band it just " +
+      "left. If every band on the hop list is cooling off, the station stops hopping and " +
+      "stays on the best of them. 0 switches the cool-off off.",
+    default: "20",
+  },
+  {
+    key: "auto.huntCqFallbackWindows",
+    label: "Hunt calls CQ after this many windows with nobody to call",
+    type: "number",
+    group: "auto",
+    advanced: true,
+    help:
+      "Auto Hunt only answers other stations, so on a band where everyone audible is " +
+      "already worked it waits for ever. After this many listening windows in a row with " +
+      "nobody it may call (counted once the band has settled), Hunt calls CQ itself, " +
+      "exactly as Auto CQ does, and answers whoever replies. As soon as somebody callable " +
+      "turns up, or somebody calls us, it goes back to hunting. Every transmit rule still " +
+      "applies: the transmit switch, the schedule and sleeping hours, HALT and the guards. " +
+      "Hunt POTA never does this: it exists to work parks. 0 switches it off.",
+    default: "10",
+  },
+  {
     key: "flex.antenna",
     label: "Antenna port",
     type: "string",

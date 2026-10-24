@@ -35,12 +35,13 @@ import {
 } from "@/lib/digital/qso";
 import { buildWorkedIndex, invalidateWorkedIndex } from "@/lib/digital/worked-index";
 import { doNotCallKind } from "@/lib/digital/do-not-call";
-import { fetchPskActivity } from "@/lib/propagation";
+import { fetchPskActivity, pskActivityFetchedAt } from "@/lib/propagation";
+import { activityIfFresh } from "@/lib/radio/band-hop";
 import { TxPowerTracker } from "@/lib/radio/power";
 import type { WorkedIndex } from "@/lib/digital/worth";
 import { resolveDxcc } from "@/lib/dxcc/resolve";
 import { freqToBand } from "@/lib/ham/bands";
-import { callingFrequencyFor, type DigitalMode } from "@/lib/ham/digital-freqs";
+import { callingFrequencyFor, ituRegionFromGrid, type DigitalMode } from "@/lib/ham/digital-freqs";
 import { runUploads } from "@/lib/integrations/upload-runner";
 import { linkWindow, sentByEither } from "@/lib/digital/decode-link";
 import { setSigRefs } from "@/lib/pota/refs";
@@ -446,6 +447,15 @@ export function callingFrequencyHz(band: string, mode: DigitalMode, region: 1 | 
   return callingFrequencyFor(band, mode, region);
 }
 
+/**
+ * The oldest PSKReporter figures a band hop may choose by, ms.
+ *
+ * Each figure is already a 15-minute window, and the fetcher asks at most every 12
+ * minutes, so ordinary operation never exceeds about 27. Thirty minutes is that plus a
+ * little: older than this the answer has been held over a refusal or an outage.
+ */
+const PSK_HOP_MAX_AGE_MS = 30 * 60_000;
+
 export async function buildOperating(deps: OperatingDeps): Promise<Operating> {
   const { source, tx, station, broadcast, log } = deps;
   const s = deps.settings ?? databaseSettings;
@@ -605,7 +615,13 @@ export async function buildOperating(deps: OperatingDeps): Promise<Operating> {
         .filter(Boolean),
       toBusiest: await s.getBoolean("auto.hopToBusiest", false),
       whenBetterRatio: await s.getNumber("auto.hopWhenBetterRatio", 2.5),
+      ft4ToFt8: await s.getBoolean("auto.hopFt4ToFt8", true),
+      coolOffMs: Math.max(0, await s.getNumber("auto.hopCoolOffMin", 20)) * 60_000,
     }),
+    // The same table `retune` and /tune use, so a same-band FT4 -> FT8 move lands where
+    // the FT8 chip would put it. Moved with `tuneHz`, not `retune`: the band does not
+    // change, and on the FlexRadio `retune` runs an ATU cycle every time it is called.
+    callingHz: (band, mode) => callingFrequencyFor(band, mode, ituRegionFromGrid(station.grid)),
     // The same PSKReporter figures the decodes page's band strip shows. The fetcher
     // holds a five-minute cache and collapses concurrent callers, so asking on every
     // hop cannot turn into a rate-limit block — and it is only ever called when
@@ -615,11 +631,15 @@ export async function buildOperating(deps: OperatingDeps): Promise<Operating> {
       const contact =
         (await s.getString("pskreporter.contact")) ?? (await s.getString("smtp.from")) ?? "digishack";
       const { mode } = getBandMode();
-      return fetchPskActivity({
+      const activity = await fetchPskActivity({
         mode,
         contact,
         ourCallsign: identity.myCall || null,
       });
+      // Figures held over a refusal or an outage have no age limit in the fetcher. A
+      // band hop nobody is watching must not be steered by an hour-old count: past this
+      // it rotates instead, as it does when the feed is down. See `activityIfFresh`.
+      return activityIfFresh(activity, pskActivityFetchedAt(mode), Date.now(), PSK_HOP_MAX_AGE_MS);
     },
     huntPrefs: async () => ({
       newOnly: await s.getBoolean("auto.huntNewOnly", false),
@@ -630,6 +650,8 @@ export async function buildOperating(deps: OperatingDeps): Promise<Operating> {
       // whose risk is doubling on a stranger's contact — is one an operator will want to
       // switch off mid-session and see obeyed on the next cycle.
       callFinished: await s.getBoolean("auto.callFinishedStations", false),
+      // Read per window like the rest, so 0 switches the CQ fallback off on the next one.
+      cqFallbackWindows: await s.getNumber("auto.huntCqFallbackWindows", 10),
     }),
     resolveEntity: data.resolveEntity,
     workedIndex: data.workedIndex,

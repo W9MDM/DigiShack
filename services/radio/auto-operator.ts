@@ -9,8 +9,12 @@ import type { QsoController } from "./qso-controller";
 import {
   bandHasNobodyToCall,
   bandIsUnproductive,
+  bandsFreeToHop,
+  cqFallbackStep,
   pickBandForSwr,
+  pickBandToStayOn,
   pickBusiestBand,
+  shouldTryFt8,
   shouldHopForBetterBand,
   shouldReturnToPreviousBand,
   type BandActivity,
@@ -106,7 +110,23 @@ export interface AutoOperatorOptions {
     toBusiest: boolean;
     /** Leave a working band when another is this many times busier. <=1 is off. */
     whenBetterRatio: number;
+    /**
+     * Give a quiet FT4 band a hearing on its FT8 frequency before calling it quiet.
+     *
+     * Optional, and absent means off, so a bench that predates it keeps its behaviour.
+     */
+    ft4ToFt8?: boolean;
+    /** How long a band left as unproductive is skipped by every hop, ms. 0 or absent is off. */
+    coolOffMs?: number;
   }>;
+  /**
+   * A band's calling frequency for a mode, Hz, or null when none is listed.
+   *
+   * Used for the same-band FT4 -> FT8 move, which goes through `tuneHz` rather than
+   * `retune`: the band is not changing, and the FlexRadio's `retune` runs an ATU cycle on
+   * every call. Absent, the move falls back to `retune(band, "FT8")`.
+   */
+  callingHz?: (band: string, mode: DigitalMode) => number | null;
   /**
    * Stations per band the PSKReporter network currently sees, for hop-to-busiest.
    *
@@ -133,7 +153,16 @@ export interface AutoOperatorOptions {
    */
   warmupMs?: number;
   /** Hunt preferences from settings. */
-  huntPrefs: () => Promise<{ newOnly: boolean; minSnr: number; callFinished?: boolean }>;
+  huntPrefs: () => Promise<{
+    newOnly: boolean;
+    minSnr: number;
+    callFinished?: boolean;
+    /**
+     * Settled windows with nobody callable before plain hunt calls CQ itself. 0 or absent
+     * is off. See `cqFallbackStep`.
+     */
+    cqFallbackWindows?: number;
+  }>;
   /** Current POTA activators on the digital modes. */
   potaSpots: () => Promise<
     { activator: string; freqHz: number; band: string | null; mode: string; reference: string; parkName: string | null }[]
@@ -356,6 +385,22 @@ const NOBODY_TO_CALL_WINDOWS = 20;
  */
 const NOBODY_CQ_TALLY_MAX = 500;
 
+/**
+ * Windows to wait for the decoder to follow the dial onto FT8 before giving up on it.
+ *
+ * The bridge re-infers the sub-mode from the slice frequency as soon as the radio reports
+ * the move, which is well inside one window. Three is slack for a slow status frame, not
+ * a measured figure. A decoder that is still on FT4 after that is pinned (`digital.mode`),
+ * and staying would mean an FT4 sequencer on the FT8 calling frequency.
+ */
+const FT8_TRIAL_CONFIRM_WINDOWS = 3;
+
+/**
+ * How long hunt will not CQ again on a band where its CQ fallback ran into the dead-band
+ * brake with nowhere to hop. Long enough for the band to change, the same as POOR_BAND_MS.
+ */
+const CQ_FALLBACK_HOLD_MS = 30 * 60_000;
+
 /** Someone who called us while the transmitter was busy with another contact. */
 interface PendingCallback {
   call: string;
@@ -456,6 +501,33 @@ export class AutoOperator {
    * it just fled, every five minutes, for as long as the numbers looked good.
    */
   private poorBands = new Map<string, number>();
+  /**
+   * Bands LEFT as unproductive - too quiet, nobody callable, CQs unanswered - and when
+   * each may be chosen again (`auto.hopCoolOffMin`).
+   *
+   * Separate from `poorBands` because the two are different claims with different
+   * lengths: poor is "this receiver is deaf there", cooling is "we were just there and it
+   * gave us nothing". Every hop honours both. See `bandsFreeToHop` for the evening loop
+   * this closes.
+   */
+  private coolingBands = new Map<string, number>();
+  /**
+   * A same-band FT4 -> FT8 move waiting for the decoder to follow. See `tryFt8Here`.
+   *
+   * `windows` counts the windows since the move; the trial is confirmed the first time
+   * the decoder reports FT8, and abandoned after FT8_TRIAL_CONFIRM_WINDOWS.
+   */
+  private ft8Trial: { band: string; windows: number } | null = null;
+  /** The decoder did not follow the dial to FT8 once; do not ask it again this run. */
+  private ft8Unavailable = false;
+  /** Hunt is calling CQ because nobody here was callable. See `cqFallbackStep`. */
+  private cqFallback = false;
+  /** Consecutive SETTLED hunted windows with nobody callable, for the CQ fallback. */
+  private fallbackNobody = 0;
+  /** Bands where the CQ fallback hit the dead-band brake, and until when it is held off. */
+  private fallbackHeld = new Map<string, number>();
+  /** The last "nowhere to hop" line, so a window-by-window re-ask does not repeat it. */
+  private lastStuckLine: string | null = null;
   /** Per-window decode counts for this stay, so a band can be judged against itself. */
   private windowDecodes: number[] = [];
   /** Contacts made and lost on this band since arriving. */
@@ -627,6 +699,17 @@ export class AutoOperator {
     this.decodesOnBand = 0;
     this.resetNobodyStreak();
     this.returnIfWorse = null;
+    // A mode change is a fresh start for everything that was a judgement about THIS run:
+    // the CQ fallback (a hunt state, meaningless in any other mode), a half-finished FT8
+    // move, the "decoder will not follow" latch - the operator may have just fixed the
+    // setting - and the fallback holds, which are cleared by a re-arm like the brake that
+    // set them. The cool-off and poor-band marks are facts about BANDS and survive it.
+    this.cqFallback = false;
+    this.fallbackNobody = 0;
+    this.ft8Trial = null;
+    this.ft8Unavailable = false;
+    this.fallbackHeld.clear();
+    this.lastStuckLine = null;
     // Anyone waiting is waiting on THIS band at THIS parity, and a switch between the
     // automatic modes that stay on it — hunt, hunt-pota, cq — changes neither. Off ends
     // the only thing that drains the queue, and chase may leave the band, so those two
@@ -771,6 +854,8 @@ export class AutoOperator {
   /** The gates every candidate path shares, so the pipeline and the fast path agree. */
   private candidateReady(windowStartMs: number): boolean {
     if (this.mode !== "hunt" && this.mode !== "hunt-pota") return false;
+    // An FT8 move the decoder has not followed yet: whatever was ranked was FT4.
+    if (this.ft8Trial) return false;
     // WARMUP DOES NOT GATE ANSWERING. It used to — \`if (this.warmup > 0) return false\` sat
     // here — and the operator watched this happen on hunt-pota, listening with "5 more
     // cycles" to go:
@@ -832,6 +917,7 @@ export class AutoOperator {
         theirMessage: heard.message,
       });
       if (!result.ok) return;
+      this.leaveCqFallback(`${c.call} is calling CQ and callable`);
       const why = c.reasons.length ? ` — ${c.reasons.join(", ")}` : "";
       this.lastAction = `hunting ${c.call} (${heard.snr} dB)${why} — from their slice, on time`;
       this.o.log(`[auto] ${this.lastAction}`);
@@ -942,6 +1028,14 @@ export class AutoOperator {
     // somebody genuinely calling US.
     this.noteCallbacks(answers, windowStartMs);
 
+    // A same-band move to FT8 is not finished until the DECODER is on FT8. Nothing
+    // transmits until it is: every path below that could key is skipped, because
+    // whatever this window decoded was decoded as FT4 on the FT8 frequency.
+    if (this.ft8Trial && (await this.awaitFt8Decoder())) {
+      this.broadcastState();
+      return;
+    }
+
     // A paused guard is where band-hopping takes over — otherwise wait for the
     // operator to re-arm.
     // Only hop on a QUIET pause — with ONE exception, high SWR.
@@ -1008,6 +1102,19 @@ export class AutoOperator {
       // with 42. Two hops and one ATU cycle each, in 31 seconds, exactly as designed.
       if (this.warmup === 0 && this.hopping) {
         if (this.hopDecodeCount < HOP_MIN_DECODES) {
+          // QUIET ON FT4 IS NOT QUIET. See `shouldTryFt8`: the evening of 2026-10-23 hopped
+          // 40 m and 30 m on FT4 for a quarter of an hour, calling each one quiet, while 40 m
+          // FT8 had 22 stations on it. Not a quiet hop, so it does not count toward the
+          // backstop - it is the same band, listened to properly.
+          const hopCfg = await this.o.bandHop();
+          const { band: quietBand } = this.o.getBandMode();
+          if (
+            quietBand &&
+            (await this.tryFt8Here(hopCfg, quietBand, `band too quiet (${this.hopDecodeCount} decodes)`))
+          ) {
+            this.broadcastState();
+            return;
+          }
           this.quietHops++;
           // THE BACKSTOP. Hopping decodes nothing while the radio is moving, and a
           // rotation that never finds anything moves it for ever — measured on
@@ -1025,7 +1132,10 @@ export class AutoOperator {
           } else {
             this.lastAction = `band too quiet (${this.hopDecodeCount} decodes) — hopping on`;
             this.o.log(`[auto] ${this.lastAction}`);
-            await this.hopNext();
+            // Remembered BEFORE choosing, so neither the busiest-band pick nor a later
+            // hop walks straight back into it - the other half of the evening loop.
+            if (quietBand) this.coolOff(quietBand, hopCfg);
+            if ((await this.hopNext()) === "nowhere") await this.stayOnBest(hopCfg, quietBand);
           }
           // Either we have just left this band or decided nothing is audible anywhere. This
           // window's decodes belong to a band we are no longer on, so there is nothing here
@@ -1087,6 +1197,7 @@ export class AutoOperator {
           theirMessage: best.message,
           theirWindowStart: windowStartMs,
         });
+        this.leaveCqFallback(`${p.from} answered our CQ`);
         this.lastAction = `answering ${p.from}`;
         this.broadcastState();
         return;
@@ -1103,6 +1214,9 @@ export class AutoOperator {
     // transmitter. The deferral in the decode pipeline usually keeps that window from
     // arriving at all; this is what holds when it does.
     if (this.o.controller.hasActive || this.startingCall) {
+      // A contact is somebody callable, however it started. The catch-all for the CQ
+      // fallback: every path that starts one also ends it, and this is the net under them.
+      if (this.o.controller.hasActive) this.leaveCqFallback("a contact is under way");
       this.broadcastState();
       return;
     }
@@ -1158,7 +1272,12 @@ export class AutoOperator {
     if (this.mode === "pota-chase") {
       await this.potaChaseWindow(windowStartMs, decodes);
     } else if (this.mode === "hunt" || this.mode === "hunt-pota") {
-      this.noteHuntOutcome(await this.huntWindow(windowStartMs, decodes));
+      const outcome = await this.huntWindow(windowStartMs, decodes);
+      this.noteHuntOutcome(outcome);
+      // After the hunt, never instead of it: a callable station this window is called
+      // above and ends the fallback here, so a CQ is only ever sent on a window that
+      // offered nobody.
+      await this.stepCqFallback(windowStartMs, outcome.callable);
     } else if (this.mode === "cq") {
       await this.cqWindow(windowStartMs);
     }
@@ -1985,6 +2104,9 @@ export class AutoOperator {
         theirMessage: next.message,
       });
       if (result.ok) {
+        // Somebody called us: during the CQ fallback this is what the CQ was FOR, and
+        // the fallback has done its job.
+        this.leaveCqFallback(`${next.call} called us`);
         this.lastAction = `calling back ${next.call} (${this.callbacks.length} still waiting)`;
         this.o.log(`[auto] ${this.lastAction}`);
         return true;
@@ -2092,16 +2214,30 @@ export class AutoOperator {
    * deaf, and propagation changes. Half an hour later it is worth another look.
    */
   private hearableBands(bands: string[]): string[] {
+    // AND minus the bands cooling off after being left as unproductive. Every hop path
+    // reads its candidates through here, which is what makes the cool-off hold for the
+    // busiest-band pick and the rotation alike - the evening loop went through the one
+    // path that did not.
+    return bandsFreeToHop(bands, null, this.blockedBands(), Date.now());
+  }
+
+  /** Poor and cooling bands together, expired entries pruned. Upper-case keys. */
+  private blockedBands(): Map<string, number> {
     const now = Date.now();
-    return bands.filter((b) => {
-      const until = this.poorBands.get(b.toUpperCase());
-      if (until === undefined) return true;
-      if (now >= until) {
-        this.poorBands.delete(b.toUpperCase());
-        return true;
+    const out = new Map<string, number>();
+    for (const marks of [this.poorBands, this.coolingBands]) {
+      for (const [b, until] of marks) {
+        if (now >= until) marks.delete(b);
+        else out.set(b, Math.max(out.get(b) ?? 0, until));
       }
-      return false;
-    });
+    }
+    return out;
+  }
+
+  /** Skip this band for `auto.hopCoolOffMin`, because we are leaving it with nothing. */
+  private coolOff(band: string, cfg: { coolOffMs?: number }): void {
+    const ms = cfg.coolOffMs ?? 0;
+    if (ms > 0) this.coolingBands.set(band.toUpperCase(), Date.now() + ms);
   }
 
   /**
@@ -2118,6 +2254,7 @@ export class AutoOperator {
     // candidate fast path needs: `callCandidate` starts a contact without `huntWindow`
     // ever running, so the streak would otherwise survive a contact untouched.
     this.resetNobodyStreak();
+    this.fallbackNobody = 0;
   }
 
   /**
@@ -2186,11 +2323,16 @@ export class AutoOperator {
    * target left, this declines, and the station settles until the marks expire.
    */
   private async leaveBandFor(
-    cfg: { bands: string[]; toBusiest: boolean },
+    cfg: Awaited<ReturnType<AutoOperatorOptions["bandHop"]>>,
     current: string,
     mode: DigitalMode,
     reason: string,
   ): Promise<boolean> {
+    // An FT4 band offering nothing is first given a hearing on FT8. On 2026-10-23 20 m
+    // FT4 was "0.7 decodes a cycle, every one a dupe" and was left for bands that were
+    // just as empty on FT4 - FT8 a few kHz up was where everyone was.
+    if (await this.tryFt8Here(cfg, current, reason)) return true;
+
     // Somewhere else to go, chosen the same way any other hop chooses.
     //
     // The emptiness test comes FIRST, before the band-activity lookup. With every band
@@ -2220,8 +2362,10 @@ export class AutoOperator {
       return false;
     }
 
-    // Marked poor so the network figures cannot walk us straight back into it.
+    // Marked poor so the network figures cannot walk us straight back into it, and
+    // cooling so no OTHER hop can either.
     this.poorBands.set(current.toUpperCase(), Date.now() + POOR_BAND_MS);
+    this.coolOff(current, cfg);
     this.returnIfWorse = null;
     this.resetBandCounters(current);
     this.lastAction = `left ${current} — ${reason}`;
@@ -2296,6 +2440,10 @@ export class AutoOperator {
     if (this.hasWaitingCallers()) return false;
     if (this.o.controller.hasActive || this.startingCall) return false;
     if (this.returnIfWorse) return false;
+    // CALLING CQ IS THE ANSWER TO "NOBODY TO CALL", not a reason to leave. While the
+    // fallback runs the station is operating as Auto CQ does, and leaves the band the
+    // way Auto CQ does: through the dead-band brake when nobody answers.
+    if (this.cqFallback) return false;
     if (this.nobodyWindows < NOBODY_TO_CALL_WINDOWS) return false;
 
     const cfg = await this.o.bandHop();
@@ -2389,6 +2537,11 @@ export class AutoOperator {
     // A streak is a claim about ONE band. Carrying it across a hop would judge the new
     // band on windows spent listening to the old one.
     this.resetNobodyStreak();
+    // And so is the CQ fallback: a CQ belongs to the band it was sent on, and the new one
+    // has to earn its own N empty windows first.
+    this.fallbackNobody = 0;
+    this.leaveCqFallback("changed band or mode");
+    this.lastStuckLine = null;
   }
 
   /**
@@ -2529,11 +2682,76 @@ export class AutoOperator {
     return true;
   }
 
-  /** Guard paused us. If band-hopping is on, move; otherwise stay paused. */
+  /**
+   * Guard paused us on a QUIET pause. If band-hopping is on, move; otherwise stay paused.
+   *
+   * The only quiet pause is the dead-band brake - so many CQs with no answer - so the band
+   * we are leaving is one our CQs got nothing on, and it is cooled off like any other
+   * unproductive band. On FT4 the same band is tried on FT8 first.
+   *
+   * NOWHERE TO GO. With every other band on the list cooling off, the station does not
+   * hop (that was the loop). Auto CQ stays paused, and re-asks every window, so it moves
+   * the moment a cool-off expires. Hunt does not stay paused: the only CQs it sends are
+   * the fallback's, so the brake is about the fallback, and the fallback is what stops -
+   * see `fallbackHitBrake`.
+   */
   private async maybeHop(): Promise<void> {
+    if (this.o.controller.hasActive) return;
     const cfg = await this.o.bandHop();
-    if (!cfg.enabled || cfg.bands.length === 0 || this.o.controller.hasActive) return;
-    await this.hopNext(cfg.bands);
+    const { band: current } = this.o.getBandMode();
+    if (cfg.enabled && cfg.bands.length > 0) {
+      if (current && (await this.tryFt8Here(cfg, current, this.o.guards.pausedReason ?? "no answers"))) {
+        // A new sub-band is a new audience, exactly as a new band is: the brake that was
+        // about the FT4 one is cleared the way `hopNext` clears it, quiet pauses only.
+        this.o.guards.rearmIfQuiet();
+        return;
+      }
+      const moved = await this.hopNext(cfg.bands);
+      if (moved === "moved") {
+        if (current) this.coolOff(current, cfg);
+        return;
+      }
+      if (moved === "failed") return;
+    }
+    if (this.mode === "hunt" && current) {
+      this.fallbackHitBrake(current, cfg.enabled);
+      return;
+    }
+    this.sayStuck(
+      cfg.enabled
+        ? `${this.o.guards.pausedReason} — every other band on the hop list is cooling off, ` +
+            `staying paused on ${current ?? "this band"} until one is free`
+        : `paused: ${this.o.guards.pausedReason}`,
+    );
+  }
+
+  /**
+   * Hunt's CQ fallback ran into the dead-band brake and there is nowhere to hop.
+   *
+   * The brake is OBEYED, by stopping the thing it is about: no more CQs from this band for
+   * CQ_FALLBACK_HOLD_MS. What is lifted is the pause - quiet pauses only, as a band hop
+   * would - because hunting itself never CQs and a pause would otherwise leave a hunt that
+   * cannot call the next new station to appear. Faults and the runaway brake are never
+   * touched here: `rearmIfQuiet` refuses both.
+   */
+  private fallbackHitBrake(band: string, hopEnabled: boolean): void {
+    const why = this.o.guards.pausedReason ?? "no answers";
+    this.fallbackHeld.set(band.toUpperCase(), Date.now() + CQ_FALLBACK_HOLD_MS);
+    this.leaveCqFallback(
+      `${why}${hopEnabled ? ", and every other band on the hop list is cooling off" : ""}`,
+    );
+    if (this.o.guards.rearmIfQuiet()) {
+      this.lastAction = `no answers to CQ on ${band} — hunting only, no CQ here for ${Math.round(CQ_FALLBACK_HOLD_MS / 60_000)} min`;
+      this.o.log(`[auto] ${this.lastAction}`);
+    }
+  }
+
+  /** Say why the station is not moving, once per reason rather than once per window. */
+  private sayStuck(line: string): void {
+    this.lastAction = line;
+    if (this.lastStuckLine === line) return;
+    this.lastStuckLine = line;
+    this.o.log(`[auto] ${line}`);
   }
 
   /**
@@ -2546,6 +2764,11 @@ export class AutoOperator {
    * Only bands from the configured list are ever considered: the list is the
    * operator's statement of what this antenna can actually work, and 6 m being alive
    * is no use to a station with no 6 m antenna.
+   *
+   * WHAT THE COUNT IS: distinct transmitting callsigns in PSKReporter's last 15 minutes,
+   * for the mode the decoder is on - on 2026-10-23, "20M (39 stations seen)" was FT4,
+   * and 39 FT4 stations on 20 m said nothing about 40 m FT8. The log line now says which
+   * mode, and figures held over an outage past PSK_HOP_MAX_AGE_MS never reach here.
    */
   private async busiestBand(bands: string[], current: string | null): Promise<string | null> {
     if (!this.o.bandActivity) return null;
@@ -2559,30 +2782,44 @@ export class AutoOperator {
     const best = pickBusiestBand(bands, current, activity);
     if (best) {
       const n = activity?.find((a) => a.band.toUpperCase() === best)?.transmitting ?? 0;
-      this.o.log(`[auto] busiest band on the hop list: ${best} (${n} stations seen)`);
+      const { mode } = this.o.getBandMode();
+      this.o.log(
+        `[auto] busiest band on the hop list: ${best} (${n} stations seen on ${mode} in the last 15 min)`,
+      );
     }
     return best;
   }
 
-  private async hopNext(bands?: string[]): Promise<void> {
+  /**
+   * Hop to the next band: the busiest free one, or the next free one on the list.
+   *
+   * "Free" is the hop list minus the band we are on and every band cooling off or marked
+   * poor. "nowhere" means every other band is blocked and NOTHING moved - the caller
+   * decides what staying means. "failed" means the radio refused the retune.
+   */
+  private async hopNext(bands?: string[]): Promise<"moved" | "nowhere" | "failed"> {
     const hop = await this.o.bandHop();
     const cfg = bands ?? hop.bands;
-    if (cfg.length === 0) return;
+    if (cfg.length === 0) return "nowhere";
 
     const { band: current, mode } = this.o.getBandMode();
+    const here = current?.toUpperCase() ?? null;
+    const free = this.hearableBands(cfg).filter((b) => b.toUpperCase() !== here);
+    if (free.length === 0) return "nowhere";
 
     // Busiest-first, when the operator asked for it and the network can answer.
-    let target = hop.toBusiest ? await this.busiestBand(cfg, current) : null;
+    let target = hop.toBusiest ? await this.busiestBand(free, current) : null;
     if (target) {
       // Keep the rotation cursor with us, so a later fallback rotation carries on
       // from where we actually are rather than from wherever the cursor was left.
       const at = cfg.indexOf(target);
       if (at >= 0) this.hopIndex = at;
     } else {
-      // Next band on the list that isn't the one we're on.
+      // Next free band on the list. `free` is non-empty and drawn from `cfg`, so one
+      // full turn always lands on one.
       for (let i = 0; i < cfg.length; i++) {
         this.hopIndex = (this.hopIndex + 1) % cfg.length;
-        if (cfg[this.hopIndex] !== current) break;
+        if (free.includes(cfg[this.hopIndex]!)) break;
       }
       target = cfg[this.hopIndex]!;
     }
@@ -2595,7 +2832,7 @@ export class AutoOperator {
     const ok = await this.o.retune(target, mode);
     if (!ok) {
       this.lastAction = `band hop to ${target} failed`;
-      return;
+      return "failed";
     }
     this.lastAction = `hopped to ${target}, listening`;
     this.hopping = true;
@@ -2614,6 +2851,237 @@ export class AutoOperator {
     // must not clear an SWR trip, a hot PA or a dead receiver. rearm() cleared all
     // of them — including lastSwr — so a fault hopped band and kept transmitting.
     this.o.guards.rearmIfQuiet();
+    return "moved";
+  }
+
+  /**
+   * Every other band on the hop list is cooling off or quiet: stop hopping, stay on the
+   * best of them.
+   *
+   * "Best" is what THIS receiver measured, decodes a cycle (`pickBandToStayOn`). Usually
+   * that is where we already are and nothing moves. When it is a band we left earlier, the
+   * station goes back ONCE and settles there - `hopping` false, so no settle verdict can
+   * send it on again - and plain hunt then calls CQ there after its N empty windows. That
+   * is the opposite of the loop: one move, then staying.
+   */
+  private async stayOnBest(
+    cfg: Awaited<ReturnType<AutoOperatorOptions["bandHop"]>>,
+    here: string | null,
+  ): Promise<void> {
+    this.hopping = false;
+    if (!here) return;
+    const { mode } = this.o.getBandMode();
+    const best = pickBandToStayOn({
+      bands: cfg.bands,
+      current: here,
+      currentRate: this.currentBandRate(),
+      rates: this.bandRate,
+    });
+    // A band this receiver HEARS something on ends the run of quiet hops. Without this a
+    // second tour after the cool-off expired reached MAX_QUIET_HOPS and told an operator
+    // whose 20 m was decoding fine to check the antenna.
+    const bestRate = best === here.toUpperCase() ? (this.currentBandRate() ?? 0) : (this.bandRate.get(best) ?? 0);
+    if (bestRate > 0) this.quietHops = 0;
+    if (best === here.toUpperCase()) {
+      this.sayStuck(`every other band on the hop list is cooling off or quiet — staying on ${here}`);
+      return;
+    }
+    const rate = this.bandRate.get(best) ?? 0;
+    this.o.log(
+      `[auto] every band on the hop list is cooling off or quiet — going back to ${best}, ` +
+        `the best this receiver has heard (${rate.toFixed(1)} decodes a cycle), and staying`,
+    );
+    if (!(await this.o.retune(best, mode))) {
+      this.lastAction = `could not move to ${best}`;
+      return;
+    }
+    this.returnIfWorse = null;
+    this.resetBandCounters(here);
+    this.lastAction = `staying on ${best} — every other band is cooling off`;
+    this.hopping = false;
+    this.hopDecodeCount = 0;
+    this.warmup = this.warmupWindows();
+    this.cqParity = null;
+    this.cqOffsetHz = null;
+    this.cqedLastWindow = false;
+    this.dropCallbacks("left the band they called us on");
+    const at = cfg.bands.indexOf(best);
+    if (at >= 0) this.hopIndex = at;
+    this.o.guards.rearmIfQuiet();
+  }
+
+  /**
+   * A quiet or empty FT4 band: move to its FT8 calling frequency and listen again.
+   *
+   * Returns true when the dial moved, in which case the band is NOT to be called quiet
+   * yet - it gets the full warm-up on FT8 first, and is judged then exactly as a band
+   * just hopped to is (`hopping` follows `auto.bandHop`, so with hopping off this never
+   * leads to a band change). One way only, so FT4 -> FT8 -> FT4 cannot happen; and the
+   * latch in `awaitFt8Decoder` stops it being retried when the decoder will not follow.
+   *
+   * Transmits nothing. `tuneHz` moves the dial, and on the FlexRadio it only runs the ATU
+   * when the BAND changes, which here it does not.
+   */
+  private async tryFt8Here(
+    cfg: Awaited<ReturnType<AutoOperatorOptions["bandHop"]>>,
+    band: string,
+    reason: string,
+  ): Promise<boolean> {
+    const { mode } = this.o.getBandMode();
+    if (
+      !shouldTryFt8({
+        enabled: cfg.ft4ToFt8 === true,
+        mode,
+        band,
+        unavailable: this.ft8Unavailable,
+      })
+    ) {
+      return false;
+    }
+    if (this.o.controller.hasActive || this.startingCall) return false;
+
+    const hz = this.o.callingHz?.(band, "FT8") ?? null;
+    if (this.o.callingHz && hz === null) return false;
+    const moved = hz !== null ? await this.o.tuneHz(hz) : await this.o.retune(band, "FT8");
+    if (!moved) {
+      this.o.log(`[auto] could not move ${band} to FT8 — judging it on FT4`);
+      return false;
+    }
+
+    this.o.log(`[auto] ${band} FT4: ${reason} — trying ${band} FT8 before giving up on the band`);
+    this.ft8Trial = { band, windows: 0 };
+    this.returnIfWorse = null;
+    // Nothing filed: what FT4 gave us is not what this band gives us.
+    this.resetBandCounters(null);
+    this.lastAction = `${band} FT4 empty — listening on FT8`;
+    this.hopping = cfg.enabled;
+    this.hopDecodeCount = 0;
+    this.warmup = this.warmupWindows();
+    this.cqParity = null;
+    this.cqOffsetHz = null;
+    this.cqedLastWindow = false;
+    this.candidates = null;
+    this.lastCandidateWindow = null;
+    // They called us on FT4, and we are no longer listening there.
+    this.dropCallbacks("left FT4 for FT8");
+    return true;
+  }
+
+  /**
+   * Is the decoder on FT8 yet? True while still waiting, which holds the window.
+   *
+   * Confirmed: the warm-up restarts in FT8 windows - it was counted in FT4 ones, twice as
+   * many as FT8 needs. Not confirmed after FT8_TRIAL_CONFIRM_WINDOWS: the decoder is
+   * pinned, so the dial goes back to the FT4 calling frequency (an FT4 sequencer must not
+   * be left on the FT8 one), the latch is set so no band asks again this run, and the band
+   * carries on being judged on FT4 as it was before.
+   */
+  private async awaitFt8Decoder(): Promise<boolean> {
+    const trial = this.ft8Trial;
+    if (!trial) return false;
+    const { mode } = this.o.getBandMode();
+    if (mode.toUpperCase() === "FT8") {
+      this.ft8Trial = null;
+      this.warmup = this.warmupWindows();
+      this.hopDecodeCount = 0;
+      this.o.log(`[auto] ${trial.band} FT8: decoder on FT8, listening before judging the band`);
+      return false;
+    }
+    trial.windows++;
+    if (trial.windows < FT8_TRIAL_CONFIRM_WINDOWS) {
+      this.lastAction = `${trial.band}: waiting for the decoder to follow to FT8`;
+      return true;
+    }
+    this.ft8Trial = null;
+    this.ft8Unavailable = true;
+    this.o.log(
+      `[auto] the decoder stayed on ${mode} after moving ${trial.band} to FT8 (is Digital mode ` +
+        `pinned?) — going back to ${trial.band} ${mode} and not trying FT8 again this run`,
+    );
+    const back = this.o.callingHz?.(trial.band, mode) ?? null;
+    const ok = back !== null ? await this.o.tuneHz(back) : await this.o.retune(trial.band, mode);
+    if (!ok) {
+      // The dial is on the FT8 frequency and the decoder is not. Nothing here may
+      // transmit like that: stop, and say why.
+      this.o.log(`[auto] could not return ${trial.band} to ${mode} — stopping`);
+      this.setMode("off");
+      return true;
+    }
+    this.hopDecodeCount = 0;
+    this.warmup = this.warmupWindows();
+    return true;
+  }
+
+  /**
+   * Plain hunt calls CQ when the band has had nobody callable for a while.
+   *
+   * The decision is `cqFallbackStep`; this carries it out. The CQ itself is `cqWindow`,
+   * unchanged - same parity choice, same clear-offset pick, same `beforeTx` gate, same
+   * transmitter - and so is answering: a caller is queued by `noteCallbacks` and worked by
+   * `callBackWaiting`, or answered by the `startAnswer` path, both of which run before
+   * this every window and both of which end the fallback.
+   *
+   * Never during a warm-up, an FT8 trial or a pause: the first two return or skip before
+   * the hunt, and a paused guard returns from `onWindow` long before it.
+   */
+  private async stepCqFallback(windowStartMs: number, callable: boolean): Promise<void> {
+    if (this.mode !== "hunt") {
+      this.leaveCqFallback(`mode is ${this.mode}`);
+      return;
+    }
+    const settled = this.warmup === 0 && !this.hopping && !this.ft8Trial;
+    if (callable) this.fallbackNobody = 0;
+    else if (settled) this.fallbackNobody++;
+
+    // Cheap exit for the overwhelmingly common window: not CQing and not yet near the bar.
+    if (!this.cqFallback && (callable || !settled)) return;
+
+    const prefs = await this.o.huntPrefs();
+    const { band, mode } = this.o.getBandMode();
+    const key = band?.toUpperCase() ?? "";
+    const until = this.fallbackHeld.get(key);
+    if (until !== undefined && Date.now() >= until) this.fallbackHeld.delete(key);
+
+    const step = cqFallbackStep({
+      mode: this.mode,
+      active: this.cqFallback,
+      limit: prefs.cqFallbackWindows ?? 0,
+      nobodyWindows: this.fallbackNobody,
+      callable,
+      held: this.fallbackHeld.has(key),
+    });
+
+    if (step === "leave") {
+      this.leaveCqFallback(callable ? "somebody callable is on frequency" : "switched off");
+      return;
+    }
+    if (step === "enter") {
+      // On FT4, FT8 first: an empty FT4 band is usually a busy FT8 one, and answering
+      // somebody beats CQing into nobody.
+      if (band && (await this.tryFt8Here(await this.o.bandHop(), band, `nobody to call in ${this.fallbackNobody} windows`))) {
+        return;
+      }
+      this.cqFallback = true;
+      this.cqParity = null;
+      this.cqOffsetHz = null;
+      this.o.log(
+        `[auto] hunt: nobody callable on ${band ?? "this band"} ${mode} for ${this.fallbackNobody} ` +
+          `settled windows — calling CQ until somebody callable turns up`,
+      );
+    }
+    if (this.cqFallback && settled) await this.cqWindow(windowStartMs);
+  }
+
+  /** End the CQ fallback, if it is running, and say why. Back to hunting. */
+  private leaveCqFallback(reason: string): void {
+    if (!this.cqFallback) return;
+    this.cqFallback = false;
+    this.fallbackNobody = 0;
+    // Hunting has no CQ frequency. Left set, the answer path in `onWindow` would keep
+    // treating directed calls as answers to a CQ we are no longer sending.
+    this.cqParity = null;
+    this.cqOffsetHz = null;
+    this.o.log(`[auto] hunt: leaving the CQ fallback — ${reason}; back to hunting`);
   }
 
   private broadcastState(): void {
