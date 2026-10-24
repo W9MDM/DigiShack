@@ -486,6 +486,20 @@ model Qso {
   /// the related QslEmail row.
   emailQslSent   Boolean              @default(false)
   emailQslSentAt DateTime?
+  /// They emailed US a card — an image attached, or a reply to ours. The mirror of
+  /// `emailQslSent`, and NOT `qslRcvd`, for the same reasons in the other direction.
+  ///
+  /// `qslRcvd` is a paper card: the ADIF export turns it into QSL_RCVD:Y, the upload sweep
+  /// sends that to Club Log, QRZ and Cloudlog, and the awards page counts it as DXCC credit.
+  /// A JPEG in a mailbox is none of those things, so recording it there would change what
+  /// leaves this station and inflate every award total — the eQSL mistake fixed in
+  /// lib/integrations/eqsl.ts, made again by another route.
+  ///
+  /// Not exported to ADIF at all, so nothing uploaded anywhere changes. The cards themselves
+  /// live on ReceivedQsl rows; this is the per-contact summary the log badges read.
+  emailQslRcvd   Boolean              @default(false)
+  /// The earliest received card's arrival, kept rather than overwritten by later ones.
+  emailQslRcvdAt DateTime?
   /// Sent to N3FJP Amateur Contact Log over its TCP API.
   ///
   /// A flag like the others, and it means slightly less than they do: the API has no
@@ -551,6 +565,7 @@ model Qso {
   spots          PskSpot[]
   decodes        DigitalDecode[] // back-relation required by DigitalDecode.loggedAsQso
   qslEmails      QslEmail[] // back-relation required by QslEmail.qso
+  receivedQsls   ReceivedQsl[] // back-relation required by ReceivedQsl.qso
   createdAt      DateTime             @default(now())
   updatedAt      DateTime             @updatedAt
   promotedFrom   IncompleteExchange[]
@@ -767,6 +782,77 @@ model QslEmail {
   /// One live queue entry per QSO: re-queuing replaces rather than duplicates.
   @@unique([qsoId])
   @@index([status, createdAt])
+}
+
+/// One thing that arrived in the station mailbox about a QSL: a card, a reply to ours, a
+/// notice that a card is waiting on a website, or a bounce of one we sent.
+///
+/// The INBOUND counterpart of QslEmail, imported read-only from Microsoft 365 by
+/// lib/qsl/inbound. One row per picture, so an email with two card images is two rows, and
+/// one row per message when there is no picture at all.
+model ReceivedQsl {
+  id               String            @id @db.VarChar(32)
+  /// The contact it confirms, once matched. Null while unmatched, ambiguous or dismissed.
+  /// SetNull rather than Cascade: deleting a contact must not delete the card someone sent,
+  /// which then reappears in the unmatched list to be assigned again or dismissed.
+  qso              Qso?              @relation(fields: [qsoId], references: [id], onDelete: SetNull)
+  qsoId            String?
+  /// The OTHER station's callsign as read from the message. Empty when none could be read.
+  callsign         String            @db.VarChar(32)
+  kind             ReceivedQslKind
+  /// Sender address, as Graph reported it.
+  sender           String            @db.VarChar(191)
+  subject          String            @db.VarChar(255)
+  /// The RFC 5322 Message-ID (hashed when longer than the column), not Graph's item id —
+  /// Graph's id changes when the message is moved between folders, and an import keyed on
+  /// it would re-import a card the operator filed away.
+  messageId        String            @db.VarChar(191)
+  /// Which picture within the message: a hash of name, size and type, "" for a row with no
+  /// picture, "link" for one fetched from a notice. Never NULL, because MySQL lets any
+  /// number of NULLs through a unique index and the pair below is the idempotency key.
+  attachmentKey    String            @db.VarChar(64)
+  receivedAt       DateTime
+  /// Relative to the install directory: data/qsl-received/<id>.<ext>. Null without a picture.
+  imagePath        String?           @db.VarChar(191)
+  /// From the bytes, never from the filename or the content type the sender claimed.
+  imageContentType String?           @db.VarChar(32)
+  imageBytes       Int?
+  /// The original attachment filename — date, time, band and mode are often in it.
+  fileName         String?           @db.VarChar(255)
+  /// For a notice: where the card can be seen. Only ever http(s).
+  link             String?           @db.VarChar(1024)
+  matchStatus      ReceivedQslMatch
+  /// Why it matched, or did not, in a sentence. Ambiguous rows list their candidates here.
+  matchNote        String?           @db.Text
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+
+  @@unique([messageId, attachmentKey])
+  @@index([qsoId])
+  @@index([matchStatus, receivedAt])
+  @@index([kind, receivedAt])
+  @@index([callsign])
+}
+
+enum ReceivedQslKind {
+  /// A card image attached to the email, or a QSL email with no picture at all.
+  CARD
+  /// "Re: QSL Confirmation for …" — the worked station answering our card. A confirmation
+  /// even with no picture.
+  REPLY
+  /// "You have a QSL card waiting" from digiqsl, qslworld or eQSL. The card is behind a link.
+  NOTICE
+  /// One of OUR cards that did not arrive. Kept so a re-run does not report it twice.
+  BOUNCE
+}
+
+enum ReceivedQslMatch {
+  MATCHED
+  /// Several contacts fit equally well. The note names them; a human picks.
+  AMBIGUOUS
+  UNMATCHED
+  /// The operator looked and said it is not worth a contact.
+  DISMISSED
 }
 
 enum QslEmailStatus {

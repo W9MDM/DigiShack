@@ -128,6 +128,21 @@ export const JOBS: Job[] = [
     firstRunDelayMs: 60_000,
   },
   {
+    id: "qsl-inbound",
+    label: "Import received QSL cards",
+    what: "Reads the station mailbox for emailed cards and matches them to the log. Read only.",
+    host: "bridge",
+    intervalSetting: "qsl.inbound.intervalMinutes",
+    unit: "minutes",
+    defaultValue: 15,
+    floor: 5,
+    enabledSetting: "qsl.inbound.enabled",
+    enabledDefault: false,
+    // Two minutes after start: soon enough that a wrong setting shows promptly, late enough
+    // not to pile onto everything else the bridge does as it comes up.
+    firstRunDelayMs: 2 * 60_000,
+  },
+  {
     id: "pskreporter",
     label: "Collect reception reports",
     what: "Asks PSKReporter who heard us, and records the spots against the log.",

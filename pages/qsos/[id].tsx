@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { LinkButton, qrzUrl } from "@/components/log/links";
 import { lastLogUrl } from "@/components/log/log-query";
 import { QsoSummary } from "@/components/log/QsoSummary";
+import { ContactReceivedCards } from "@/components/qsl/ReceivedCards";
 import { Destinations } from "@/components/qso/Destinations";
 import {
   QsoForm,
@@ -170,6 +171,9 @@ export default function QsoDetailPage() {
 
         <div className="flex flex-col gap-4 sm:gap-6">
           <Destinations qsoId={qso.id} canEdit={canEdit} />
+
+          {/* Only drawn when there is one: a card they emailed us, a reply, or our card bouncing. */}
+          <ContactReceivedCards qsoId={qso.id} />
 
           <Card
             title="Heard by"

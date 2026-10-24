@@ -41,6 +41,7 @@ import type { QsoController } from "./qso-controller";
 import { MAX_TX_OFFSET_HZ, resolveMaxTxOffset } from "./qso-controller";
 import { buildOperating, callingFrequencyHz } from "./operating";
 import { runAutoQsl } from "@/lib/qsl/auto";
+import { runInboundImport } from "@/lib/qsl/inbound/run";
 import { getLotwCredentials, syncLotwConfirmations } from "@/lib/integrations/lotw";
 import type { AutoOperator, AutoMode } from "./auto-operator";
 import { isAutoMode } from "@/lib/radio/auto-mode";
@@ -6577,6 +6578,49 @@ async function main(): Promise<void> {
     setTimeout(() => void eqslTick(), 6 * 60_000);
     setInterval(() => void eqslTick(), eqslMinutes * 60_000);
     console.log(`[eqsl] automatic inbox sync every ${eqslMinutes} min`);
+  }
+
+  // Received QSL cards, from the station mailbox.
+  //
+  // The timer ALWAYS exists and the switch is read on every tick, unlike the jobs above: this
+  // one is off by default and will mostly be switched on from the settings page, and "turn it
+  // on, then restart the bridge" is a step people miss and then report as the feature not
+  // working. Only the interval is read once, at start.
+  //
+  // READ ONLY against the mailbox. A run that finds nothing new says nothing.
+  {
+    const inboundMinutes = Math.max(5, await getNumberSetting("qsl.inbound.intervalMinutes", 15));
+    let inboundFailures = 0;
+    const inboundTick = async () => {
+      try {
+        const r = await runInboundImport();
+        if (!r.ran) return;
+        const rep = r.report;
+        if (rep?.error) {
+          inboundFailures++;
+          console.error(`[qsl-in] import failed: ${rep.error}`);
+          if (inboundFailures >= 4) {
+            void raiseAlert("qsl-inbound", "Importing received QSL cards is failing", [
+              rep.error,
+              "",
+              `${inboundFailures} runs in a row have failed. Received cards are not being imported.`,
+            ]);
+          }
+          return;
+        }
+        if (inboundFailures > 0) {
+          void clearAlert("qsl-inbound", "Importing received QSL cards is working again", [
+            "The mailbox is being read normally.",
+          ]);
+        }
+        inboundFailures = 0;
+        if (rep && rep.cards + rep.replies + rep.notices + rep.bounces > 0) console.log(`[qsl-in] ${r.summary}`);
+      } catch (err) {
+        console.error(`[qsl-in] import threw: ${err instanceof Error ? err.message : err}`);
+      }
+    };
+    setTimeout(() => void inboundTick(), 2 * 60_000);
+    setInterval(() => void inboundTick(), inboundMinutes * 60_000);
   }
 
   // Prune the decode log.

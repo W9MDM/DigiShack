@@ -76,6 +76,17 @@ interface StatusResponse {
   services: ServiceStatus[];
   lotw?: { at: string | null; result: string | null; marker: string | null };
   eqsl?: EqslInboxStatus;
+  /** The received-card importer (lib/qsl/inbound). */
+  received?: {
+    enabled: boolean;
+    provider: string;
+    intervalMinutes: number;
+    lastRunAt: string | null;
+    lastResult: string | null;
+    detail: string;
+  };
+  /** Which service sends mail: "smtp" or "graph". */
+  sendProvider?: string;
 }
 
 interface SyncReport {
@@ -203,6 +214,20 @@ export default function IntegrationsPage() {
       await reload();
     } catch (e) {
       setSyncError(e instanceof ApiError ? e.message : "Sync failed");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  /** Send one message to the station itself — the only proof a sender works. */
+  async function testSend() {
+    setBusy("send");
+    setSmtp(null);
+    try {
+      const r = (await apiPost("/api/mail/test-send", {})) as { ok?: boolean; detail?: string };
+      setSmtp({ ok: r.ok === true, detail: r.detail ?? "No answer." });
+    } catch (e) {
+      setSmtp({ ok: false, detail: e instanceof ApiError ? e.message : "The test could not be sent" });
     } finally {
       setBusy(null);
     }
@@ -385,19 +410,58 @@ export default function IntegrationsPage() {
         <Card title="Outgoing email">
           <div className="flex flex-col gap-3">
             <p className="text-sm text-fg-muted">
-              QSL email and issue alerts both use these settings. The test opens a
-              connection and signs in — it does not send anything.
+              QSL email and issue alerts both go out through{" "}
+              {data?.sendProvider === "graph" ? "the Microsoft 365 app" : "the SMTP server"}{" "}
+              (Settings → QSL → Outgoing email). Test connection signs in without sending;
+              Send a test message mails the station&apos;s own alerts address and nobody else.
             </p>
-            <div>
+            <div className="flex flex-wrap gap-2">
               <Button disabled={busy !== null} onClick={() => void testSmtp()}>
                 {busy === "smtp" ? "Testing…" : "Test connection"}
               </Button>
+              {isAdmin && (
+                <Button disabled={busy !== null} loading={busy === "send"} onClick={() => void testSend()}>
+                  Send a test message
+                </Button>
+              )}
             </div>
             {smtp && (
               <p className={`text-sm ${smtp.ok ? "text-ok" : "text-danger"}`}>
                 {smtp.ok ? "✓ " : "✗ "}
                 {smtp.detail}
               </p>
+            )}
+          </div>
+        </Card>
+
+        {/* The received-card importer, beside the other inboxes that feed confirmations in. */}
+        <Card title="Received QSL cards (email)">
+          <div className="flex flex-col gap-3">
+            <p className="text-sm text-fg-muted">
+              Reads the station mailbox for cards other operators email you and links each to its
+              contact. Read only.
+            </p>
+            {data?.received ? (
+              <>
+                <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
+                  <dt className="text-fg-subtle">Last run</dt>
+                  <dd className="text-right tnum">
+                    {data.received.lastRunAt ? formatUtc(data.received.lastRunAt) : "never"}
+                  </dd>
+                  <dt className="text-fg-subtle">Result</dt>
+                  <dd className="text-right">{data.received.lastResult ?? "—"}</dd>
+                  <dt className="text-fg-subtle">Checks every</dt>
+                  <dd className="text-right tnum">
+                    {data.received.enabled ? `${data.received.intervalMinutes} min` : "not scheduled"}
+                  </dd>
+                </dl>
+                {data.received.detail !== "" && <p className="text-sm text-fg-muted">{data.received.detail}</p>}
+                <Link href="/qsl/received" className="text-sm text-accent-bright hover:underline">
+                  Received cards, import and test →
+                </Link>
+              </>
+            ) : (
+              <p className="text-sm text-fg-subtle">Checking…</p>
             )}
           </div>
         </Card>

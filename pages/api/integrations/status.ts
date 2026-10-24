@@ -13,6 +13,10 @@ import { testQrzLogbook } from "@/lib/integrations/qrz-logbook";
 import { testCloudlog } from "@/lib/integrations/cloudlog";
 import { testN3fjp } from "@/lib/integrations/n3fjp";
 import { lotwCertInfo } from "@/lib/integrations/lotw-cert";
+import { getReceiveProvider, getSendProvider, loadGraphConfig } from "@/lib/mail/providers";
+import { describeImport } from "@/lib/qsl/inbound/import";
+import { getInboundLastRun, IMAP_COMING_NEXT } from "@/lib/qsl/inbound/run";
+import { inboundDetail } from "@/lib/qsl/inbound/status";
 import { getBooleanSetting, getNumberSetting, getSetting } from "@/lib/settings";
 
 // Read-only credential checks.
@@ -88,6 +92,35 @@ async function eqslInboxStatus(): Promise<EqslInboxStatus> {
     port,
   };
   return { ...check, lastResult: last.result, detail: eqslInboxDetail(check) };
+}
+
+/** The received-card importer, in the same shape: last run, and the first missing link. */
+async function receivedCardsStatus() {
+  const [enabled, provider, intervalMinutes, port, last] = await Promise.all([
+    getBooleanSetting("qsl.inbound.enabled", false),
+    getReceiveProvider(),
+    getNumberSetting("qsl.inbound.intervalMinutes", 15),
+    getNumberSetting("bridge.port", 3101),
+    getInboundLastRun(),
+  ]);
+  const g = provider === "graph" ? await loadGraphConfig() : null;
+  const check = {
+    enabled,
+    configProblem: provider === "graph" ? (g && !g.ok ? g.reason : null) : IMAP_COMING_NEXT,
+    provider: provider === "graph" ? ("graph" as const) : ("imap" as const),
+    running: await bridgeUp(port),
+    intervalMinutes: Math.max(5, intervalMinutes),
+    lastRunAt: last.at,
+    port,
+  };
+  return {
+    enabled,
+    provider,
+    intervalMinutes: check.intervalMinutes,
+    lastRunAt: last.at,
+    lastResult: last.report ? describeImport(last.report) : null,
+    detail: inboundDetail(check),
+  };
 }
 
 interface ServiceStatus {
@@ -270,6 +303,8 @@ async function get(_req: NextApiRequest, res: NextApiResponse) {
     lotw: await getLotwLastRun(),
     // The same treatment for eQSL, which had none of it. See eqslInboxStatus above.
     eqsl: await eqslInboxStatus(),
+    received: await receivedCardsStatus(),
+    sendProvider: await getSendProvider(),
     note: "Every check here is read-only. Nothing on this page writes to a remote logbook.",
   });
 }

@@ -1,6 +1,10 @@
 import nodemailer, { type Transporter } from "nodemailer";
+import MailComposer from "nodemailer/lib/mail-composer";
+import type Mail from "nodemailer/lib/mailer";
 
 import { escapeHtml } from "@/lib/html";
+import { GraphClient, GraphError } from "@/lib/mail/graph";
+import { getSendProvider, loadGraphConfig } from "@/lib/mail/providers";
 import { loadCardSettings, renderQslCard } from "@/lib/qsl/card";
 import { rulesFor, withWl2kPrefix } from "@/lib/qsl/gateways";
 import { applyTemplate, renderTemplate, templateValues } from "@/lib/qsl/template";
@@ -333,6 +337,10 @@ function transportFor(cfg: SmtpConfig): Transporter {
  * rejected", which are very different problems to debug.
  */
 export async function verifySmtp(): Promise<{ ok: boolean; detail: string }> {
+  // Named for SMTP because that is what it always tested; with Microsoft 365 chosen for
+  // sending it tests that instead, so the existing button answers for whatever will send.
+  if ((await getSendProvider()) === "graph") return verifyGraphSending();
+
   const loaded = await loadSmtpConfig();
   if (!loaded.ok) return { ok: false, detail: loaded.reason };
 
@@ -350,10 +358,99 @@ export async function verifySmtp(): Promise<{ ok: boolean; detail: string }> {
   }
 }
 
+/**
+ * Sign the app in, which is as far as a check can go without sending anything.
+ *
+ * Mail.Send has no read-only probe — the only proof it works is a message — so this says
+ * so rather than calling a token a working sender. The test-message button is the proof.
+ */
+async function verifyGraphSending(): Promise<{ ok: boolean; detail: string }> {
+  const loaded = await loadGraphConfig();
+  if (!loaded.ok) return { ok: false, detail: loaded.reason };
+  try {
+    await new GraphClient(loaded.config).accessToken();
+    return {
+      ok: true,
+      detail:
+        `Signed in to Microsoft 365 as the app; mail will be sent from ${loaded.config.mailbox}. ` +
+        "Sending itself is only proven by sending — use Send a test message.",
+    };
+  } catch (err) {
+    return { ok: false, detail: err instanceof Error ? err.message : "Microsoft 365 sign-in failed" };
+  }
+}
+
 export interface SendResult {
   sent: boolean;
   messageId?: string;
   reason?: string;
+}
+
+/**
+ * The From address for a message sent through Microsoft 365.
+ *
+ * The app sends AS the mailbox, and Exchange refuses a From it has no send-as right for. So
+ * `smtp.from` is kept — display name and all — only when it IS the mailbox; otherwise the
+ * mailbox address is used bare rather than having every send refused.
+ */
+export function graphFrom(smtpFrom: string | null, mailbox: string): string {
+  if (smtpFrom) {
+    const addr = /<([^>]+)>/.exec(smtpFrom)?.[1] ?? smtpFrom;
+    if (addr.trim().toLowerCase() === mailbox.toLowerCase()) return smtpFrom;
+  }
+  return mailbox;
+}
+
+/**
+ * Hand one message to whichever service sends this station's mail.
+ *
+ * The ONE send path: QSL cards, alerts and password resets all arrive here, so the choice
+ * in Settings applies to every sender at once and none of them can take a route that skips
+ * it. SMTP is exactly what it was before the choice existed — the same settings, the same
+ * transport, the same close — and remains the default.
+ *
+ * Microsoft 365 gets the SAME message: nodemailer's own composer builds the MIME that SMTP
+ * would have carried, and Graph sends it. Headers (List-Unsubscribe) and the card part
+ * (Content-ID plus attachment disposition) are therefore identical on both routes.
+ */
+async function deliver(options: Omit<Mail.Options, "from">): Promise<SendResult> {
+  if ((await getSendProvider()) === "graph") {
+    const loaded = await loadGraphConfig();
+    if (!loaded.ok) return { sent: false, reason: loaded.reason };
+    try {
+      const node = new MailComposer({
+        ...options,
+        from: graphFrom(await getSetting("smtp.from"), loaded.config.mailbox),
+      }).compile();
+      const mime = await node.build();
+      await new GraphClient(loaded.config).sendMime(mime);
+      return { sent: true, messageId: node.messageId() };
+    } catch (err) {
+      return {
+        sent: false,
+        reason: err instanceof GraphError || err instanceof Error ? err.message : "Send failed",
+      };
+    }
+  }
+
+  const loaded = await loadSmtpConfig();
+  if (!loaded.ok) return { sent: false, reason: loaded.reason };
+
+  const transport = transportFor(loaded.config);
+  try {
+    const info = await transport.sendMail({ ...options, from: loaded.config.from });
+    return { sent: true, messageId: info.messageId };
+  } catch (err) {
+    return { sent: false, reason: err instanceof Error ? err.message : "Send failed" };
+  } finally {
+    // Guarded: by here SMTP may have accepted the message, and a throw from close() would
+    // reach the queue as "not sent" — which releases the claim on a message that went.
+    try {
+      transport.close();
+    } catch {
+      /* the pool is torn down either way */
+    }
+  }
 }
 
 /**
@@ -367,23 +464,7 @@ export async function sendSystemEmail(args: {
   subject: string;
   text: string;
 }): Promise<SendResult> {
-  const loaded = await loadSmtpConfig();
-  if (!loaded.ok) return { sent: false, reason: loaded.reason };
-
-  const transport = transportFor(loaded.config);
-  try {
-    const info = await transport.sendMail({
-      from: loaded.config.from,
-      to: args.to,
-      subject: args.subject,
-      text: args.text,
-    });
-    return { sent: true, messageId: info.messageId };
-  } catch (err) {
-    return { sent: false, reason: err instanceof Error ? err.message : "send failed" };
-  } finally {
-    transport.close();
-  }
+  return deliver({ to: args.to, subject: args.subject, text: args.text });
 }
 
 /** Send one QSL email to one recipient. */
@@ -427,9 +508,6 @@ export async function sendQslEmail(args: {
     return { sent: false, reason: "Dry run — nothing sent", rendered };
   }
 
-  const loaded = await loadSmtpConfig();
-  if (!loaded.ok) return { sent: false, reason: loaded.reason, rendered };
-
   // Winlink and arrl.net are not ordinary mailboxes — see lib/qsl/gateways.ts.
   //
   // Applied HERE rather than only at queue time so a row queued before these rules
@@ -463,65 +541,47 @@ ${args.cardUrl}`
   const subject =
     gateway.gateway === "winlink" ? withWl2kPrefix(rendered.subject) : rendered.subject;
 
-  const transport = transportFor(loaded.config);
-  try {
-    const info = await transport.sendMail({
-      from: loaded.config.from,
-      to: args.to,
-      subject,
-      text,
-      html,
-      // LIST-UNSUBSCRIBE, so the mail client offers its own button.
-      //
-      // This is the mechanism behind the "Unsubscribe" control Gmail and Outlook show
-      // beside a sender's name, and it is why it is worth setting even though the body
-      // already carries a link: a recipient who reaches for the client's own button gets
-      // the same result instead of concluding there is no way out.
-      //
-      // One-Click needs POST, per RFC 8058, and the endpoint accepts both — the header
-      // pair is only honoured when both are present, and a GET-only URL here would show
-      // the button and then fail to work.
-      ...(args.unsubscribeUrl
-        ? {
-            headers: {
-              "List-Unsubscribe": `<${args.unsubscribeUrl}>`,
-              "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
-            },
-          }
-        : {}),
-      // ONE part, carrying both a Content-ID and an explicit disposition.
-      //
-      // nodemailer forces `Content-Disposition: inline` whenever a `cid` is
-      // present, so an earlier version that passed only `cid` produced a message
-      // with no multipart/mixed container and nothing the recipient could save —
-      // while the body said "please find my QSL card attached". Setting the
-      // disposition explicitly keeps the cid reference working for the inline
-      // image and still lists the file, without sending 200 kB twice.
-      attachments: card
-        ? [
-            {
-              filename: card.filename,
-              content: card.jpeg,
-              cid: card.cid,
-              contentDisposition: card.disposition,
-            },
-          ]
-        : undefined,
-    });
-    return { sent: true, messageId: info.messageId, rendered };
-  } catch (err) {
-    return {
-      sent: false,
-      reason: err instanceof Error ? err.message : "Send failed",
-      rendered,
-    };
-  } finally {
-    // Guarded: by here SMTP may have accepted the message, and a throw from close() would
-    // reach the queue as "not sent" — which releases the claim on a message that went.
-    try {
-      transport.close();
-    } catch {
-      /* the pool is torn down either way */
-    }
-  }
+  const result = await deliver({
+    to: args.to,
+    subject,
+    text,
+    html,
+    // LIST-UNSUBSCRIBE, so the mail client offers its own button.
+    //
+    // This is the mechanism behind the "Unsubscribe" control Gmail and Outlook show
+    // beside a sender's name, and it is why it is worth setting even though the body
+    // already carries a link: a recipient who reaches for the client's own button gets
+    // the same result instead of concluding there is no way out.
+    //
+    // One-Click needs POST, per RFC 8058, and the endpoint accepts both — the header
+    // pair is only honoured when both are present, and a GET-only URL here would show
+    // the button and then fail to work.
+    ...(args.unsubscribeUrl
+      ? {
+          headers: {
+            "List-Unsubscribe": `<${args.unsubscribeUrl}>`,
+            "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
+          },
+        }
+      : {}),
+    // ONE part, carrying both a Content-ID and an explicit disposition.
+    //
+    // nodemailer forces `Content-Disposition: inline` whenever a `cid` is
+    // present, so an earlier version that passed only `cid` produced a message
+    // with no multipart/mixed container and nothing the recipient could save —
+    // while the body said "please find my QSL card attached". Setting the
+    // disposition explicitly keeps the cid reference working for the inline
+    // image and still lists the file, without sending 200 kB twice.
+    attachments: card
+      ? [
+          {
+            filename: card.filename,
+            content: card.jpeg,
+            cid: card.cid,
+            contentDisposition: card.disposition,
+          },
+        ]
+      : undefined,
+  });
+  return { ...result, rendered };
 }

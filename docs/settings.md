@@ -45,7 +45,9 @@ alongside the ones every station sets.
 - [YouTube Live](#youtube-live) — 10 settings, 5 advanced
 - [Issue alerts](#issue-alerts) — 4 settings, 3 advanced
 - [Software updates](#software-updates) — 1 setting
-- [Outgoing email](#outgoing-email) — 7 settings, 2 advanced
+- [Outgoing email](#outgoing-email) — 8 settings, 2 advanced
+- [Microsoft 365 mail app](#microsoft-365-mail-app) — 4 settings
+- [Received cards (email)](#received-cards-email) — 10 settings, 7 advanced
 - [Automatic operating limits](#automatic-operating-limits) — 22 settings, 9 advanced
 - [Automatic uploading](#automatic-uploading) — 13 settings, 5 advanced
 - [POTA chasing](#pota-chasing) — 7 settings, 6 advanced
@@ -377,6 +379,7 @@ Used by the QSL emailer. Those are unsolicited emails to other operators, so bul
 
 | Setting | Key | Type | Default | What it does |
 |---|---|---|---|---|
+| Send mail through | `mail.sendProvider` | select | `smtp` | Every message DigiShack sends — QSL cards, alerts, password resets — goes through this one choice. SMTP uses the server settings below and is what every install used before this existed. Microsoft 365 sends as the mailbox in Microsoft 365 mail app, through the app registration (Mail.Send); the From address is that mailbox, and the card and the unsubscribe header travel exactly as they do over SMTP. A message over about 3.9 MB once encoded is refused, which a normal card is nowhere near. |
 | SMTP host | `smtp.host` | text | from `SMTP_HOST` | Mail server for everything DigiShack sends — QSL emails and station alerts. Without it both are silently unavailable, which is why the Integrations page reports SMTP on its own. |
 | SMTP port *(advanced)* | `smtp.port` | number | `587` | 587 for STARTTLS, which is the usual choice. 465 for implicit TLS with the setting below turned on. 25 only on a local relay. |
 | Implicit TLS (port 465) *(advanced)* | `smtp.secure` | on/off | `false` | On only for implicit TLS on port 465. Leave it OFF for STARTTLS on 587, which is the usual arrangement — the connection is still encrypted, just negotiated after connecting. |
@@ -384,6 +387,34 @@ Used by the QSL emailer. Those are unsolicited emails to other operators, so bul
 | SMTP password | `smtp.password` | secret | from `SMTP_PASSWORD` | For Microsoft app passwords, remove the spaces. |
 | Operator name for QSL emails | `qsl.operatorName` | text | — | Signed at the bottom of QSL confirmations, alongside the station callsign. Leave blank to sign with the callsign only. |
 | From address | `smtp.from` | text | from `SMTP_FROM` | The address messages appear to come from. Many providers refuse to send when this does not match the authenticated account, and the refusal usually names the mismatch. |
+
+## Microsoft 365 mail app
+
+One Microsoft Entra app registration, used for sending (Mail.Send) when Outgoing email is set to Microsoft 365, and for reading received cards (Mail.Read) when Received cards is. The app signs in as itself with a client secret — no password of yours is stored. Your tenant admin creates it and grants admin consent; an Exchange application access policy can limit it to this one mailbox.
+
+| Setting | Key | Type | Default | What it does |
+|---|---|---|---|---|
+| Tenant ID | `ms365.tenantId` | text | — | The Directory (tenant) ID from the app registration's Overview page in Microsoft Entra — a GUID — or the tenant's domain, such as example.onmicrosoft.com. |
+| Application (client) ID | `ms365.clientId` | text | — | The Application (client) ID from the same Overview page. A GUID, not the app's name and not the secret's ID. |
+| Client secret | `ms365.clientSecret` | secret | — | The secret's VALUE (shown once, when it is created under Certificates & secrets) — not its Secret ID. Secrets expire; when sign-in starts failing with AADSTS7000222 or 7000215, make a new one and paste it here. |
+| Mailbox | `ms365.mailbox` | text | — | The mailbox the app sends from and reads, e.g. the station's own address. It must be one the app's permissions — and any Exchange application access policy — allow; a 403 when testing almost always means the policy does not include it. |
+
+## Received cards (email)
+
+Reads the station mailbox for QSL cards other operators email you — the picture attached, a reply to your card, or a notice that a card is waiting on a website — and links each to the contact it confirms. Read-only: nothing in the mailbox is marked, moved or deleted. Your own outgoing cards and their bounces are recognised and never counted as received.
+
+| Setting | Key | Type | Default | What it does |
+|---|---|---|---|---|
+| Import received cards automatically | `qsl.inbound.enabled` | on/off | `false` | Check the mailbox on a timer in the radio service and import new cards. Off by default. Import now on the QSL → Received page works whether or not this is on. Takes effect at the next interval; no restart needed. |
+| Read cards from | `qsl.inbound.provider` | select | `graph` | Microsoft 365 reads Inbox and Junk of the mailbox in Microsoft 365 mail app, with the app's Mail.Read permission. IMAP and Gmail (Google Workspace included) are listed and not yet run: they arrive in the next release, and choosing one now reports that rather than importing. |
+| Import cards received since | `qsl.inbound.startDate` | text | — | A date, YYYY-MM-DD. The first run reads from here; later runs carry on from the newest message already read. Blank means the last 30 days. |
+| Check every (minutes) *(advanced)* | `qsl.inbound.intervalMinutes` | number | `15` | How often the radio service looks for new cards. Minimum 5. Read when the radio service starts, so a change needs a restart of digishack-bridge. |
+| IMAP server *(advanced)* | `imap.host` | text | — | Coming next: the IMAP server for the IMAP choice above, e.g. imap.example.com. Not used by this release. |
+| IMAP port *(advanced)* | `imap.port` | number | `993` | Coming next: 993 for TLS from the start, the usual arrangement. Not used by this release. |
+| IMAP over TLS from the start *(advanced)* | `imap.tls` | on/off | `true` | Coming next: on for port 993. Off means connect and upgrade with STARTTLS; the password is never sent unencrypted either way. |
+| IMAP username *(advanced)* | `imap.user` | text | — | Coming next: usually the full email address. For Gmail and Google Workspace, the full address. |
+| IMAP password *(advanced)* | `imap.password` | secret | — | Coming next. For Gmail and Google Workspace this must be an App Password (Google Account → Security → 2-Step Verification → App passwords); the normal Google password will not work, and a Workspace admin must allow IMAP and 2-Step Verification for the user. |
+| IMAP folder(s) *(advanced)* | `imap.folder` | text | `INBOX` | Coming next: folders to read, comma-separated. INBOX by default; on Gmail, [Gmail]/All Mail also finds cards a filter has archived. |
 
 ## Automatic operating limits
 
@@ -582,5 +613,7 @@ page shows whether one is set, not what it is.
 - `youtube.refreshToken` — YouTube refresh token
 - `icom.password` — Network password
 - `bridge.token` — Bridge shared secret
+- `ms365.clientSecret` — Client secret
+- `imap.password` — IMAP password
 - `smtp.password` — SMTP password
 - `pota.userToken` — POTA session token (for importing your log)

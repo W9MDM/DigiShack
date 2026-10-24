@@ -3,14 +3,15 @@ import { useEffect, useRef, type KeyboardEvent } from "react";
 
 import { cn } from "@/lib/utils";
 
-// Navigation shared by the two QSL pages: which page you are on, and which slice of it.
+// Navigation shared by the QSL pages: which page you are on, and which slice of it.
 
 const SECTIONS = [
   { id: "email", href: "/qsl", label: "Email queue" },
   { id: "cards", href: "/qsl/cards", label: "Paper cards" },
+  { id: "received", href: "/qsl/received", label: "Received" },
 ] as const;
 
-/** The one way between the email queue and the paper cards, the same on both pages. */
+/** The one way between the email queue, the paper cards and the received cards, the same on each. */
 export function QslSectionNav({ active }: { active: (typeof SECTIONS)[number]["id"] }) {
   return (
     <nav

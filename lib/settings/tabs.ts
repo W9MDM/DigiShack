@@ -78,7 +78,7 @@ export const SETTINGS_TABS: SettingsTab[] = [
     id: "qsl",
     label: "QSL & email",
     description: "QSL cards and emails, and the mail server everything is sent through.",
-    groups: ["qsl", "smtp"],
+    groups: ["qsl", "smtp", "ms365", "qslinbound"],
   },
   {
     id: "system",

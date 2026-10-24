@@ -79,3 +79,42 @@ There is no standard ADIF field for "I emailed a card image", so it exports as
 `APP_DIGISHACK_EMAILQSLSENT`. The recipient address and the exact body live on the
 related `QslEmail` row — the logbook shows a badge, and the QSO detail page shows where
 it went and whether it worked.
+
+## Sending through Microsoft 365
+
+Settings → QSL → Outgoing email → **Send mail through** chooses the service for everything
+DigiShack sends: QSL cards, alerts, password resets. SMTP is the default and is what every
+install used before the choice existed. **Microsoft 365 app (Graph)** sends as the mailbox
+named under *Microsoft 365 mail app*, through an app registration with the `Mail.Send`
+application permission.
+
+The message is built exactly as it would be for SMTP and handed to Graph as MIME, so the
+card attachment, its Content-ID and the `List-Unsubscribe` header are identical on both
+routes. Graph caps one send at about 4 MB once encoded; a larger message is refused with a
+sentence rather than by Microsoft. The Integrations page has **Send a test message**, which
+mails the station's own alerts address and nobody else.
+
+## Received cards
+
+Settings → QSL → *Received cards (email)* reads the station mailbox (Inbox and Junk, with
+`Mail.Read`) for cards other operators send you, and links each to the contact it confirms.
+Read only: nothing in the mailbox is marked, moved or deleted. QSL → **Received** shows the
+cards, replies, items to review, notices and bounces, with **Import now** and **Test
+connection**.
+
+- **Your own cards are skipped** — mail from the mailbox itself, from any address the
+  station sends from, or with your card's own subject (`QSL Confirmation for X / <your call>
+  QSO`). Their bounces are recorded against the contact and never counted as received.
+- **Matching**: a card whose filename carries a time (`K9XYZ_20261023_1838_20M_FT4.jpg`)
+  matches a contact within ten minutes on the same band and mode; a date alone matches the
+  one contact near it; a reply matches the contact your card was about. Anything less certain
+  is left for you to assign or dismiss — a wrong match is worse than none.
+- **Pictures** are kept under `data/qsl-received/` (so backups include them), accepted only
+  when the bytes are JPEG, PNG, GIF or WebP, and never over 10 MB.
+- **Notices** keep their link. For digiqsl.com and qslworld.com the card picture is fetched
+  when the page exposes it publicly; eQSL cards need your eQSL login and come in through the
+  eQSL inbox sync instead.
+- A matched card sets the contact's **emailed card received** flag. It is not a paper card,
+  not LoTW, and not award credit, so the awards page and everything uploaded are unchanged.
+
+IMAP and Gmail / Google Workspace are listed in the settings and come in the next release.
