@@ -19,7 +19,7 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db/prisma";
 import { GraphClient } from "@/lib/mail/graph";
 import { getReceiveProvider, loadGraphConfig, type ReceiveProvider } from "@/lib/mail/providers";
-import { baseCall, isCallsign } from "@/lib/qsl/inbound/classify";
+import { baseCall, isCallsign, isOwnCardFile } from "@/lib/qsl/inbound/classify";
 import { fileAway, FILE_AWAY_MAX_PER_RUN } from "@/lib/qsl/inbound/file-away";
 import { GraphMailSource, testGraphMailbox } from "@/lib/qsl/inbound/graph-source";
 import { describeImport, importMailbox, type ImportReport, type InboundStore, type NewReceived } from "@/lib/qsl/inbound/import";
@@ -31,6 +31,9 @@ const KEY_LAST_RUN = "qsl.inbound.lastRunAt";
 const KEY_LAST_REPORT = "qsl.inbound.lastReport";
 const KEY_CURSOR = "qsl.inbound.cursor";
 const KEY_LOCK = "qsl.inbound.lock";
+/** Which rule the contacts' email flags were last computed under; a change recomputes them all. */
+const KEY_FLAGS = "qsl.inbound.flagsVersion";
+const FLAGS_VERSION = "2-card-reply-split";
 
 /** A lock older than this belongs to a run that died; it is taken over. */
 const LOCK_STALE_MS = 30 * 60_000;
@@ -82,27 +85,81 @@ async function deleteImage(rel: string): Promise<void> {
 // ---------------------------------------------------------------------------
 
 /**
- * Set `emailQslRcvd` from the cards actually linked to the contact.
+ * Set `emailQslRcvd` and `emailReplyRcvd` from what is actually linked to the contact.
  *
- * Recomputed rather than toggled, so assigning, unlinking and re-importing all leave it
- * right: true while any matched card or reply (or a notice with its picture) is linked, with
- * the earliest one's arrival as the date. Touches no other confirmation field — LoTW, eQSL
- * and the paper-card status are left exactly as they were.
+ * Recomputed rather than toggled, so assigning, unlinking and re-importing all leave them
+ * right, each dated by the earliest arrival. A CARD — or a reply or notice that brought their
+ * picture — is an emailed QSL; a reply with no picture of theirs is only a reply. Touches no
+ * other confirmation field — LoTW, eQSL and the paper-card status are left exactly as they were.
  */
 export async function refreshEmailCardFlag(qsoId: string, db: Prisma.TransactionClient | typeof prisma = prisma): Promise<void> {
-  const first = await db.receivedQsl.findFirst({
+  const card = await db.receivedQsl.findFirst({
     where: {
       qsoId,
       matchStatus: "MATCHED",
-      OR: [{ kind: { in: ["CARD", "REPLY"] } }, { kind: "NOTICE", imagePath: { not: null } }],
+      OR: [{ kind: "CARD" }, { kind: { in: ["REPLY", "NOTICE"] }, imagePath: { not: null } }],
     },
+    orderBy: { receivedAt: "asc" },
+    select: { receivedAt: true },
+  });
+  const reply = await db.receivedQsl.findFirst({
+    where: { qsoId, matchStatus: "MATCHED", kind: "REPLY", imagePath: null },
     orderBy: { receivedAt: "asc" },
     select: { receivedAt: true },
   });
   await db.qso.updateMany({
     where: { id: qsoId },
-    data: first ? { emailQslRcvd: true, emailQslRcvdAt: first.receivedAt } : { emailQslRcvd: false, emailQslRcvdAt: null },
+    data: {
+      emailQslRcvd: card !== null,
+      emailQslRcvdAt: card?.receivedAt ?? null,
+      emailReplyRcvd: reply !== null,
+      emailReplyRcvdAt: reply?.receivedAt ?? null,
+    },
   });
+}
+
+/**
+ * Take back our own cards that earlier imports stored as theirs (see isOwnCardFile), and —
+ * once — recompute every linked contact's flags under the card / reply split.
+ *
+ * The picture goes. A reply whose only pictures were ours stays as one picture-less reply, so
+ * the contact still shows that they answered; any other own-card row is removed. Cheap when
+ * there is nothing to do: one query on file names.
+ */
+export async function dropOwnCardRows(ownCalls: readonly string[]): Promise<number> {
+  const rows = await prisma.receivedQsl.findMany({
+    where: { fileName: { startsWith: "QSL" } },
+    select: { id: true, messageId: true, kind: true, fileName: true, imagePath: true, qsoId: true },
+  });
+  const own = rows.filter((r) => r.fileName && isOwnCardFile(r.fileName, ownCalls));
+  const touched = new Set<string>();
+  const byMessage = new Map<string, typeof own>();
+  for (const r of own) byMessage.set(r.messageId, [...(byMessage.get(r.messageId) ?? []), r]);
+  for (const [messageId, mine] of byMessage) {
+    const others = await prisma.receivedQsl.count({ where: { messageId, id: { notIn: mine.map((r) => r.id) } } });
+    const keep = others === 0 ? mine.find((r) => r.kind === "REPLY") : undefined;
+    for (const r of mine) {
+      if (r === keep) {
+        await prisma.receivedQsl.update({
+          where: { id: r.id },
+          data: { attachmentKey: "", fileName: null, imagePath: null, imageContentType: null, imageBytes: null },
+        });
+      } else {
+        await prisma.receivedQsl.delete({ where: { id: r.id } });
+      }
+      if (r.imagePath) await deleteImage(r.imagePath);
+      if (r.qsoId) touched.add(r.qsoId);
+    }
+  }
+  if ((await prisma.setting.findUnique({ where: { key: KEY_FLAGS } }))?.value !== FLAGS_VERSION) {
+    const linked = await prisma.receivedQsl.findMany({ where: { qsoId: { not: null } }, distinct: ["qsoId"], select: { qsoId: true } });
+    for (const l of linked) if (l.qsoId) touched.add(l.qsoId);
+    for (const id of touched) await refreshEmailCardFlag(id);
+    await putState(KEY_FLAGS, FLAGS_VERSION);
+  } else {
+    for (const id of touched) await refreshEmailCardFlag(id);
+  }
+  return own.length;
 }
 
 // ---------------------------------------------------------------------------
@@ -343,6 +400,8 @@ export async function runInboundImport(opts: { manual?: boolean } = {}): Promise
 
   let report: ImportReport;
   try {
+    // Before reading: our own cards stored by an earlier version come back out first.
+    await dropOwnCardRows(await ownCalls(opened.mailbox));
     const now = new Date();
     const start = parseStartDate(await getSetting("qsl.inbound.startDate"), now);
     const cursor = await readCursor();

@@ -14,6 +14,8 @@ export interface QslFlags {
   emailQslSent?: boolean;
   /** They emailed US a card or answered ours. Not award credit; see Qso.emailQslRcvd. */
   emailQslRcvd?: boolean;
+  /** They answered our emailed card without a card of their own. Not a QSL. */
+  emailReplyRcvd?: boolean;
   qrzSent?: boolean;
   qrzRcvd?: boolean;
 }
@@ -76,16 +78,20 @@ export function qslChannels(q: QslFlags, opts: { includeQrz?: boolean } = {}): Q
     // Received outranks sent, as it does for every other channel. It is NOT counted by
     // isConfirmed above: an emailed picture is not award credit, so the log's Confirmed
     // filter and the awards page stay exactly as they were.
+    // A reply without their card sits between: more than sent, less than a card. It keeps
+    // the "sent" look and says "Replied", so a glance still separates who sent a card back.
     {
       key: "email",
       label: "Email",
-      state: q.emailQslRcvd ? "confirmed" : q.emailQslSent ? "sent" : "none",
-      word: q.emailQslRcvd ? "Received" : q.emailQslSent ? "Sent" : "Not sent",
+      state: q.emailQslRcvd ? "confirmed" : q.emailQslSent || q.emailReplyRcvd ? "sent" : "none",
+      word: q.emailQslRcvd ? "Received" : q.emailReplyRcvd ? "Replied" : q.emailQslSent ? "Sent" : "Not sent",
       description: q.emailQslRcvd
         ? "Emailed card: received"
-        : q.emailQslSent
-          ? "Card image emailed"
-          : "No card image emailed",
+        : q.emailReplyRcvd
+          ? "Emailed card: they replied, without a card of their own"
+          : q.emailQslSent
+            ? "Card image emailed"
+            : "No card image emailed",
     },
   ];
   if (opts.includeQrz) {

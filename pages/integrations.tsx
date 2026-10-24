@@ -237,8 +237,14 @@ export default function IntegrationsPage() {
     setBusy("smtp");
     setSmtp(null);
     try {
-      const r = (await apiGet("/api/qsl/email")) as { ok?: boolean; detail?: string };
-      setSmtp({ ok: r.ok !== false, detail: r.detail ?? "Connected and signed in." });
+      // A failed check is a 400 with the reason in the body; read it rather than let apiGet
+      // turn it into "Request failed (400)".
+      const res = await fetch("/api/qsl/email", { credentials: "same-origin" });
+      const r = (await res.json().catch(() => ({}))) as { ok?: boolean; detail?: string };
+      setSmtp({
+        ok: res.ok && r.ok !== false,
+        detail: r.detail ?? (res.ok ? "Connected and signed in." : `The check failed (${res.status}).`),
+      });
     } catch (e) {
       // A failed test is the ANSWER, not an error in the page — the message from
       // the server is the useful part and belongs where the result goes.

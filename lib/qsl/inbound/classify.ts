@@ -53,6 +53,24 @@ export function isOwnCall(call: string, own: readonly string[]): boolean {
 }
 
 /**
+ * Is this attachment OUR card, come back quoted in somebody's reply?
+ *
+ * Mail programs re-attach the original's pictures to a reply, so a "Re: QSL Confirmation"
+ * often carries our own card next to — or instead of — theirs. Recognised by the names our
+ * senders give the file: the earlier emailer's `QSL_<THEM>_<US>.jpg` (our call last) and
+ * DigiShack's `QSL-<US>-<THEM>-<date>.jpg`. A station that names ITS card for us —
+ * `QSL_<US>_<THEM>.jpg`, `<US>_20251104_1519_17m_FT8.jpg` — is not matched: our call is in
+ * the other place.
+ */
+export function isOwnCardFile(name: string, own: readonly string[]): boolean {
+  const stem = name.trim().replace(/\.[A-Za-z0-9]{1,5}$/, "");
+  const old = /^QSL_([A-Z0-9/]+)_([A-Z0-9/]+)$/i.exec(stem);
+  if (old?.[1] && old[2] && isOwnCall(old[2], own) && !isOwnCall(old[1], own)) return true;
+  const ds = /^QSL-([A-Z0-9/]+)-([A-Z0-9/]+)-\d{4}-\d{2}-\d{2}$/i.exec(stem);
+  return Boolean(ds?.[1] && ds[2] && isOwnCall(ds[1], own) && !isOwnCall(ds[2], own));
+}
+
+/**
  * Subject patterns that NAME the other station, most specific first.
  *
  * Each captures one callsign; our own call is rejected afterwards rather than excluded in the

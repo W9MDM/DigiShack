@@ -2,7 +2,7 @@ import { useState } from "react";
 
 import type { SettingsEditor } from "@/components/settings/types";
 import { Button } from "@/components/ui/primitives";
-import { ApiError, apiGet, apiPost } from "@/lib/client/api";
+import { ApiError, apiPost } from "@/lib/client/api";
 
 // Test buttons under Outgoing email, where the settings they test are. They were only on the
 // Integrations page, which is not where anyone changing their mail server is looking.
@@ -25,8 +25,6 @@ export function MailTest({ editor }: { editor: SettingsEditor }) {
   const [result, setResult] = useState<{ ok: boolean; text: string } | null>(
     null,
   );
-  // The connection test is an SMTP sign-in; for Microsoft 365 the Received tab tests the app.
-  const smtp = editor.value("mail.sendProvider") !== "graph";
   const unsaved = MAIL_KEYS.some(
     (k) => editor.isDirty(k) || editor.isCleared(k),
   );
@@ -35,13 +33,18 @@ export function MailTest({ editor }: { editor: SettingsEditor }) {
     setBusy("connect");
     setResult(null);
     try {
-      const r = (await apiGet("/api/qsl/email")) as {
+      // A failed check answers 400 WITH the reason in the body; apiGet would throw that
+      // away and leave "Request failed (400)", so this reads the body itself.
+      const res = await fetch("/api/qsl/email", { credentials: "same-origin" });
+      const r = (await res.json().catch(() => ({}))) as {
         ok?: boolean;
         detail?: string;
       };
       setResult({
-        ok: r.ok !== false,
-        text: r.detail ?? "Connected and signed in.",
+        ok: res.ok && r.ok !== false,
+        text:
+          r.detail ??
+          (res.ok ? "Connected and signed in." : `The check failed (${res.status}).`),
       });
     } catch (e) {
       setResult({
@@ -79,17 +82,16 @@ export function MailTest({ editor }: { editor: SettingsEditor }) {
   return (
     <div className="flex flex-col gap-2 border-t border-line pt-3">
       <div className="flex flex-wrap gap-2">
-        {smtp && (
-          <Button
-            size="sm"
-            loading={busy === "connect"}
-            disabled={busy !== null || unsaved}
-            disabledReason={why}
-            onClick={() => void connect()}
-          >
-            Test connection
-          </Button>
-        )}
+        {/* SMTP sign-in, or with Microsoft 365 chosen, the app's sign-in (verifySmtp). */}
+        <Button
+          size="sm"
+          loading={busy === "connect"}
+          disabled={busy !== null || unsaved}
+          disabledReason={why}
+          onClick={() => void connect()}
+        >
+          Test connection
+        </Button>
         <Button
           size="sm"
           variant="primary"

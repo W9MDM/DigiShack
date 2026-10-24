@@ -738,6 +738,63 @@ async function main(): Promise<void> {
     }
   }
 
+  // -------------------------------------------------------------------------
+  console.log("\n15. our own card, sent back in a reply, is never their card");
+  {
+    // From the operator's mailbox: replies re-attach the card we sent, under our sender's name.
+    ok(C.isOwnCardFile(`QSL_KO4VK_${OUR}.jpg`, [OUR]), "the earlier emailer's QSL_<them>_<us>.jpg is ours");
+    ok(C.isOwnCardFile(`QSL-${OUR}-EA1BE-2026-10-23.jpg`, [OUR]), "DigiShack's QSL-<us>-<them>-<date>.jpg is ours");
+    ok(!C.isOwnCardFile(`QSL_${OUR}_KC4TLM.jpg`, [OUR]), "QSL_<us>_<them>.jpg is THEIR card made out to us");
+    ok(!C.isOwnCardFile(`${OUR}_20251104_1519_17m_FT8.jpg`, [OUR]), "a card named for us by its sender is theirs");
+    ok(!C.isOwnCardFile("QSL-W9XYZ.jpg", [OUR]) && !C.isOwnCardFile("IMG_5971.jpeg", [OUR]), "anything else is theirs");
+
+    const msgs: { m: SourceMessage; atts: { a: SourceAttachment; bytes: Buffer }[] }[] = [];
+    const add = (id: string, subject: string, files: string[]) => {
+      msgs.push({
+        m: { key: `<own-${id}@x>`, folder: "inbox", receivedAt: at("2026-10-20T12:00:00Z"), summary: sum({ from: "k1abc@example.net", subject, hasAttachments: files.length > 0 }) },
+        atts: files.map((name, i) => ({ a: { key: `k${i}`, name, contentType: "image/jpeg", size: JPEG.length, inline: false }, bytes: JPEG })),
+      });
+    };
+    add("1", "Re: QSL Confirmation for K1ABC / K9XYZ QSO", [`QSL_K1ABC_${OUR}.jpg`]);
+    add("2", "Re: QSL Confirmation for K2ABC / K9XYZ QSO", [`QSL_K2ABC_${OUR}.jpg`, "K2ABC card.jpg"]);
+    const src: MailSource = {
+      label: "fake",
+      folders: () => ["inbox"],
+      async *list() {
+        for (const x of msgs) yield x.m;
+      },
+      body: async () => "",
+      attachments: async (m) => msgs.find((x) => x.m.key === m.key)!.atts.map((x) => x.a),
+      attachmentBytes: async (m, a) => msgs.find((x) => x.m.key === m.key)!.atts.find((x) => x.a.key === a.key)!.bytes,
+    };
+    const rows: NewReceived[] = [];
+    const store: InboundStore = {
+      hasMessage: async () => false,
+      candidatesFor: async () => [],
+      sentCardsFor: async () => [],
+      bouncedCard: async () => null,
+      insert: async (r: NewReceived) => {
+        rows.push(r);
+        return true;
+      },
+      saveImage: async (id: string) => `data/qsl-received/${id}.jpg`,
+      deleteImage: async () => undefined,
+    };
+    const rep = await I.importMailbox({ source: src, store, fetchNoticeImage: async () => ({ ok: false, reason: "offline" }) }, { ...ctx, since: { inbox: at("2026-10-01T00:00:00Z") }, maxMessages: 10 });
+    const one = rows.filter((r) => r.messageId === "<own-1@x>");
+    eq(one.map((r) => [r.kind, r.fileName]), [["REPLY", null]], "a reply carrying only our card is stored as a reply with no picture");
+    const two = rows.filter((r) => r.messageId === "<own-2@x>");
+    eq(two.map((r) => r.fileName), ["K2ABC card.jpg"], "next to their own card, only theirs is kept");
+    ok(rep.rejected.some((x) => /our own card/.test(x)), "and the report says why ours was left out");
+  }
+  {
+    const L = await import("@/components/log/qsl");
+    const email = (f: Record<string, boolean>) => L.qslChannels({ qslRcvd: "", lotwRcvd: false, eqslRcvd: false, ...f }).find((c) => c.key === "email")!;
+    eq(email({ emailQslSent: true, emailReplyRcvd: true }).word, "Replied", "a reply without a card shows as Replied");
+    eq(email({ emailQslSent: true, emailReplyRcvd: true, emailQslRcvd: true }).word, "Received", "a card outranks a reply");
+    eq(email({ emailQslSent: true, emailReplyRcvd: true }).state, "sent", "and a reply is not shown as confirmed");
+  }
+
   console.log(`\n${pass} passed, ${fail} failed`);
   if (fail > 0) process.exit(1);
 }
