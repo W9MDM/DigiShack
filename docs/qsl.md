@@ -108,14 +108,18 @@ connection**.
 - **Your own cards are skipped** — mail from the mailbox itself, from any address the
   station sends from, or with your card's own subject (`QSL Confirmation for X / <your call>
   QSO`). Their bounces are recorded against the contact and never counted as received.
-- **Matching**: a card whose filename carries a time (`K9XYZ_20261023_1838_20M_FT4.jpg`)
-  matches a contact within ten minutes on the same band and mode; a date alone matches the
-  one contact near it; a reply matches the contact your card was about. Anything less certain
-  is left for you to assign or dismiss — a wrong match is worse than none.
+- **Matching**: a card whose filename or email carries a time (`K9XYZ_20261023_1838_20M_FT4.jpg`,
+  or `Date: 20261023` / `Time: 183800 UTC` / `Band: 20m` lines in the message) matches a
+  contact within ten minutes on the same band and mode; a date alone matches the one contact
+  near it; a reply matches the contact your card was about, and when several cards went to
+  that station, the details of yours quoted in the reply pick which. Anything less certain is
+  left for you to assign or dismiss — a wrong match is worse than none.
 - **Pictures** are kept under `data/qsl-received/` (so backups include them), accepted only
   when the bytes are JPEG, PNG, GIF or WebP, and never over 10 MB.
-- **Notices** keep their link. For digiqsl.com and qslworld.com the card picture is fetched
-  when the page exposes it publicly; eQSL cards need your eQSL login and come in through the
+- **Notices** keep their link. A digiqsl.com card page is read for the contact it confirms
+  (sender, date, time, band, mode); the site draws the card in the browser, so there is no
+  picture to keep, and a page made out to you counts as their card. qslworld.com pictures are
+  fetched when the page exposes them. eQSL cards need your eQSL login and come in through the
   eQSL inbox sync instead.
 - A matched card sets the contact's **emailed card received** flag. It is not a paper card,
   not LoTW, and not award credit, so the awards page and everything uploaded are unchanged.

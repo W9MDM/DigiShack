@@ -7,7 +7,8 @@
 // THE RULE, in the order it is applied, and why each step stops where it does:
 //
 //   1. A reply to OUR card is matched through the card we sent: we know exactly which
-//      contact that email was about. Only when there is no such card does it fall through.
+//      contact that email was about. Several cards sent: the date in the email (our card's,
+//      quoted back) picks among those. Only when there is no such card does it fall through.
 //   2. A card that states its time (K9XYZ_20261023_1838_20M_FT4.jpg) matches a contact within
 //      ten minutes of it, on the same band and mode where the card says. Several equally good
 //      is AMBIGUOUS — a person picks. Right time, wrong band or mode is ambiguous too, never
@@ -129,6 +130,15 @@ export function matchQso(input: MatchInput, candidates: QsoCandidate[]): MatchRe
       return one(q, `A reply to the card emailed for ${describe(q)}.`);
     }
     if (distinct.length > 1) {
+      // Several cards out to them: what the email says (usually our own card's details,
+      // quoted back) picks among THOSE contacts. Nothing else is credited from a reply.
+      if (input.hints.date) {
+        const narrowed = matchQso(
+          { callsign: input.callsign, kind: "card", receivedAt: input.receivedAt, hints: input.hints },
+          pool.filter((q) => distinct.includes(q.id)),
+        );
+        if (narrowed.status === "MATCHED") return { ...narrowed, note: `A reply. ${narrowed.note}` };
+      }
       return ambiguous(
         pool.filter((q) => distinct.includes(q.id)),
         `A reply, and ${distinct.length} cards were emailed to ${call}`,

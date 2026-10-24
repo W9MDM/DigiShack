@@ -19,6 +19,7 @@
 
 import type { InboundStore, NewReceived } from "@/lib/qsl/inbound/import";
 import type { MailSource, SourceAttachment, SourceMessage } from "@/lib/qsl/inbound/source";
+import type { FetchLike } from "@/lib/mail/graph";
 import type { ImapResponse } from "@/lib/mail/imap";
 
 import { FakeDb } from "./fake-db";
@@ -793,6 +794,118 @@ async function main(): Promise<void> {
     eq(email({ emailQslSent: true, emailReplyRcvd: true }).word, "Replied", "a reply without a card shows as Replied");
     eq(email({ emailQslSent: true, emailReplyRcvd: true, emailQslRcvd: true }).word, "Received", "a card outranks a reply");
     eq(email({ emailQslSent: true, emailReplyRcvd: true }).state, "sent", "and a reply is not shown as confirmed");
+  }
+
+  // -------------------------------------------------------------------------
+  console.log("\n16. what the email says: the subject's call, the body's date, time, band and mode");
+  {
+    // The shape that arrived unmatched: the call only at the front of the subject, the contact
+    // spelled out in the body, and a sender address that names nobody.
+    const subject = `KF1XYZ QSL Card — ${OUR} — 20260920`;
+    eq(C.callFromSubject(subject, [OUR]), "KF1XYZ", "a subject that starts with the station's call names it");
+    eq(C.classifyMessage(sum({ from: "someone@example.net", subject, hasAttachments: true }), ctx), { kind: "card", callsign: "KF1XYZ" }, "and is a card from them");
+    const theirs = `<p>Hello ${OUR},</p><p>Thank you for the QSO with KF1XYZ.</p><p>QSO Details:</p><p>Date: 20260920</p><p>Time: 140830 UTC</p><p>Band: 20m</p><p>Mode: FT8</p><p>Frequency: 14.075195</p>`;
+    const text = theirs.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
+    eq(C.parseBodyHints(text, [OUR]), { date: "2026-09-20", time: "1408", band: "20M", mode: "FT8", callsign: "KF1XYZ" }, "labelled lines in the body, with the line breaks gone");
+    const ours = `Thanks! On Sun wrote: Call: K1ABC DE ${OUR} Date: 2026-10-23 18:38:00 UTC Freq: 14.0800 MHz Band: 20m Mode: FT4`;
+    eq(C.parseBodyHints(ours, [OUR]), { date: "2026-10-23", time: "1838", band: "20M", mode: "FT4", callsign: "K1ABC" }, "our own card's details, quoted back in a reply");
+    eq(C.parseBodyHints("Date: Sun, 20 Sep 2026 14:08 Subject: hi", [OUR]), {}, "a quoted mail header's Date: is not the contact's");
+    eq(C.fillHints({ date: "2026-10-23" }, { date: "2026-10-24", time: "0100", band: "40M" }), { date: "2026-10-23", band: "40M" }, "a time is not borrowed from a different day");
+
+    const msgs: { m: SourceMessage; body: string; files: string[] }[] = [
+      { m: { key: "<body-1@x>", folder: "inbox", receivedAt: at("2026-10-24T12:00:00Z"), summary: sum({ from: "someone@example.net", subject: `K1ABC QSL Card — ${OUR} — 20261023`, hasAttachments: true }) }, body: "Date: 20261023 Time: 183900 UTC Band: 20m Mode: FT4", files: ["card.jpg"] },
+      { m: { key: "<body-2@x>", folder: "inbox", receivedAt: at("2026-10-24T12:00:00Z"), summary: sum({ from: "k5abc@example.net", subject: `Re: QSL Confirmation for K5ABC / ${OUR} QSO` }) }, body: `Thanks! Call: K5ABC DE ${OUR} Date: 2026-10-21 10:00:00 UTC Band: 20m Mode: FT8`, files: [] },
+    ];
+    const src: MailSource = {
+      label: "fake",
+      folders: () => ["inbox"],
+      async *list() {
+        for (const x of msgs) yield x.m;
+      },
+      body: async (m) => msgs.find((x) => x.m.key === m.key)!.body,
+      attachments: async (m) => msgs.find((x) => x.m.key === m.key)!.files.map((name, i) => ({ key: `k${i}`, name, contentType: "image/jpeg", size: JPEG.length, inline: false })),
+      attachmentBytes: async () => JPEG,
+    };
+    const rows: NewReceived[] = [];
+    const store: InboundStore = {
+      hasMessage: async () => false,
+      candidatesFor: async (call: string) => qsos.filter((q) => C.baseCall(q.callsign) === C.baseCall(call)),
+      // Two cards out to K5ABC: the reply alone cannot say which it answers; its quote can.
+      sentCardsFor: async (call: string) => (call === "K5ABC" ? [{ qsoId: "q4", at: at("2026-10-20T13:00:00Z") }, { qsoId: "q5", at: at("2026-10-21T13:00:00Z") }] : []),
+      bouncedCard: async () => null,
+      insert: async (r: NewReceived) => {
+        rows.push(r);
+        return true;
+      },
+      saveImage: async (id: string) => `data/qsl-received/${id}.jpg`,
+      deleteImage: async () => undefined,
+    };
+    await I.importMailbox({ source: src, store, fetchNoticeImage: async () => ({ ok: false, reason: "offline" }) }, { ...ctx, since: { inbox: at("2026-10-01T00:00:00Z") }, maxMessages: 10 });
+    const card = rows.find((r) => r.messageId === "<body-1@x>");
+    eq([card?.callsign, card?.qsoId, card?.matchStatus], ["K1ABC", "q1", "MATCHED"], "a card named card.jpg is matched by the date and time in its email");
+    const reply = rows.find((r) => r.messageId === "<body-2@x>");
+    eq([reply?.qsoId, reply?.matchStatus], ["q4", "MATCHED"], "a reply, with two cards out to that station, goes to the one its quote names");
+  }
+
+  // -------------------------------------------------------------------------
+  console.log("\n17. a digiqsl card page: its data is the card, its stock background is not");
+  {
+    const N = await import("@/lib/qsl/inbound/notice");
+    // The page's shape as seen live: og:image is the site's stock art on every page, and the
+    // card is drawn from window.qslViewerData.
+    const page = (to: string) =>
+      `<html><head><meta property="og:image" content="https://digiqsl.com/img/qsl-creator/backgroundImage.jpg"></head><body>` +
+      `<script>window.qslViewerData = {"contactCallsign":"${to}","qsoDate":"2026-10-21T00:00:00.000Z","qsoTime":"10:02","band":"20m","frequency":14.0748,"mode":"FT8","myStation":{"stationCallsign":"K5ABC","opName":"X"},"qslSnapshot":{"x":{"y":1}}};</script></body></html>`;
+    eq(N.readCardPage(page(OUR)), { callsign: "K5ABC", to: OUR, date: "2026-10-21", time: "1002", band: "20M", mode: "FT8" }, "the contact is read from the page's data");
+    eq(N.readCardPage("<html>nothing</html>"), null, "a page without it gives nothing");
+    eq(N.findCardImage(page(OUR), new URL("https://digiqsl.com/qsl/x")), null, "the stock background is never taken for the card");
+    const fetched: string[] = [];
+    const f = (async (u: string) => {
+      fetched.push(u);
+      return new Response(page(OUR), { status: 200, headers: { "content-type": "text/html" } });
+    }) as unknown as FetchLike;
+    const got = await N.fetchNoticeImage("https://digiqsl.com/qsl/pq_x", f);
+    eq([got.ok, got.details?.callsign], [false, "K5ABC"], "no picture, but the details come back");
+    eq(fetched.length, 1, "and the background is not downloaded");
+    eq(C.parseBodyHints(`Dear Matthew - ${OUR}, It is my pleasure to confirm our FT8 QSO on the 40m band. Vy 73, Dan - KK1XYZ You can RESPOND TO KK1XYZ and send`, [OUR]), { band: "40M", mode: "FT8", callsign: "KK1XYZ" }, "the notice's own sentence gives band, mode and call");
+
+    const msgs: SourceMessage[] = [
+      { key: "<dq-1@x>", folder: "inbox", receivedAt: at("2026-10-24T12:00:00Z"), summary: sum({ from: "noreply@digiqsl.com", subject: "New QSL card from K5ABC" }) },
+      { key: "<dq-2@x>", folder: "inbox", receivedAt: at("2026-10-24T12:00:00Z"), summary: sum({ from: "noreply@digiqsl.com", subject: "You have 4 QSL cards waiting" }) },
+    ];
+    const src: MailSource = {
+      label: "fake",
+      folders: () => ["inbox"],
+      async *list() {
+        for (const x of msgs) yield x;
+      },
+      body: async (m) => `<a href="https://digiqsl.com/qsl/${m.key === "<dq-1@x>" ? "a" : "b"}">View</a>`,
+      attachments: async () => [],
+      attachmentBytes: async () => null,
+    };
+    const rows: NewReceived[] = [];
+    const store: InboundStore = {
+      hasMessage: async () => false,
+      candidatesFor: async (call: string) => qsos.filter((q) => C.baseCall(q.callsign) === C.baseCall(call)),
+      sentCardsFor: async () => [],
+      bouncedCard: async () => null,
+      insert: async (r: NewReceived) => {
+        rows.push(r);
+        return true;
+      },
+      saveImage: async (id: string) => `data/qsl-received/${id}.jpg`,
+      deleteImage: async () => undefined,
+    };
+    const notice = async (link: string) => {
+      const d = N.readCardPage(page(link.endsWith("/a") ? OUR : "N0OTHER"))!;
+      return { ok: false as const, reason: "drawn in the browser", details: d };
+    };
+    await I.importMailbox({ source: src, store, fetchNoticeImage: notice }, { ...ctx, since: { inbox: at("2026-10-01T00:00:00Z") }, maxMessages: 10 });
+    const a = rows.find((r) => r.messageId === "<dq-1@x>");
+    eq([a?.qsoId, a?.matchStatus, a?.confirms, a?.attachmentKey, a?.imagePath], ["q4", "MATCHED", true, "link", null], "two K5ABC contacts that day; the page's time picks one, and it counts as their card");
+    const b = rows.find((r) => r.messageId === "<dq-2@x>");
+    eq([b?.callsign, b?.confirms], ["K5ABC", false], "a page made out to someone else names the sender but credits nothing");
+    ok(/made out to N0OTHER/.test(b?.matchNote ?? ""), "and says so", b?.matchNote);
   }
 
   console.log(`\n${pass} passed, ${fail} failed`);

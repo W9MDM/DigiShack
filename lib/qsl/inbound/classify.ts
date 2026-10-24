@@ -83,6 +83,8 @@ const SUBJECT_PATTERNS: RegExp[] = [
   new RegExp(`QSL Contact\\s*[,:\\-–—]\\s*(${CALL_CORE})(?![A-Z0-9])`, "gi"),
   new RegExp(`(?<![A-Z0-9])from\\s+(${CALL_CORE})(?![A-Z0-9])`, "gi"),
   new RegExp(`(?<![A-Z0-9/])(${CALL_CORE})\\s+sent you a QSL`, "gi"),
+  // "KF0VR QSL Card — K9XYZ — 20260920": the sender's call first, then what it is.
+  new RegExp(`^\\s*(${CALL_CORE})\\s+(?:e?QSL|QSO)\\b`, "gi"),
 ];
 
 function firstForeign(found: Iterable<string>, own: readonly string[]): string | null {
@@ -335,6 +337,70 @@ export function parseCardFilename(name: string): FileHints {
     }
     if (!out.mode && MODES.has(u)) out.mode = u;
   }
+  return out;
+}
+
+export interface BodyHints extends FileHints {
+  /** The other station, where the text names it: "Call: KF0VR DE K9XYZ", "the QSO with KF0VR". */
+  callsign?: string;
+}
+
+/**
+ * What the text of an email says about the contact — the labelled lines most senders write:
+ *
+ *   Date: 20260920 / Time: 140830 UTC / Band: 20m / Mode: FT8      (KF0VR's emailer)
+ *   Call: KF0VR DE K9XYZ / Date: 2026-09-20 14:08:00 UTC / Band: 20m (our own card, quoted
+ *                                                                    back in a reply)
+ *
+ * Works on tag-stripped text with the line breaks gone, so every pattern stops at the value
+ * it wants rather than at the end of a line. The first of each wins: in a reply that is the
+ * station's own words, ahead of the quote. "Date: Sun, 20 Sep" headers of a quoted message
+ * have no digits where the pattern wants them and are passed over.
+ */
+export function parseBodyHints(text: string, own: readonly string[]): BodyHints {
+  const out: BodyHints = {};
+  const date = /\b(?:QSO\s+)?Date\s*[:=]\s*(\d{4})-?(\d{2})-?(\d{2})(?![0-9])(?:[ T]+(\d{2}):?(\d{2}))?/i.exec(text);
+  if (date && validDate(Number(date[1]), Number(date[2]), Number(date[3]))) {
+    out.date = `${date[1]}-${date[2]}-${date[3]}`;
+    if (date[4] && date[5] && Number(date[4]) < 24 && Number(date[5]) < 60) out.time = `${date[4]}${date[5]}`;
+  }
+  if (!out.time) {
+    const time = /\b(?:QSO\s+)?(?:Time|UTC)\s*[:=]\s*(\d{2}):?(\d{2})(?::?\d{2})?(?![0-9])/i.exec(text);
+    if (time && Number(time[1]) < 24 && Number(time[2]) < 60) out.time = `${time[1]}${time[2]}`;
+  }
+  // Labelled, or in a sentence: digiqsl's "confirm our FT8 QSO on the 40m band".
+  const band =
+    /\bBand\s*[:=]\s*(\d+(?:\.\d+)?)\s*(c?m)\b/i.exec(text) ?? /\bon the\s+(\d+(?:\.\d+)?)\s*(c?m)\s+band\b/i.exec(text);
+  if (band && BANDS.has(`${band[1]}${band[2]}`.toUpperCase())) out.band = `${band[1]}${band[2]}`.toUpperCase();
+  const mode = /\bMode\s*[:=]\s*([A-Z0-9]+)/i.exec(text) ?? /\b([A-Z0-9]{2,6})\s+(?:QSO|contact)\s+on the\b/i.exec(text);
+  if (mode?.[1] && MODES.has(mode[1].toUpperCase())) out.mode = mode[1].toUpperCase();
+  const found: string[] = [];
+  for (const re of [
+    new RegExp(`\\bCall\\s*[:=]\\s*(${CALL_CORE})(?![A-Z0-9])`, "gi"),
+    new RegExp(`\\b(?:QSO|contact)\\s+with\\s+(${CALL_CORE})(?![A-Z0-9])`, "gi"),
+    new RegExp(`\\bRESPOND TO\\s+(${CALL_CORE})(?![A-Z0-9])`, "gi"),
+  ]) {
+    for (const m of text.matchAll(re)) if (m[1]) found.push(m[1]);
+  }
+  const call = firstForeign(found, own);
+  if (call) out.callsign = call;
+  return out;
+}
+
+/**
+ * `first`'s hints, gaps filled from `then`. A time is only borrowed with its own date: a card
+ * named for one day and a text naming another do not make a moment between them.
+ */
+export function fillHints(first: FileHints, then: FileHints): FileHints {
+  const out: FileHints = { ...first };
+  if (!out.date && then.date) {
+    out.date = then.date;
+    if (!out.time && then.time) out.time = then.time;
+  } else if (out.date && out.date === then.date && !out.time && then.time) {
+    out.time = then.time;
+  }
+  if (!out.band && then.band) out.band = then.band;
+  if (!out.mode && then.mode) out.mode = then.mode;
   return out;
 }
 
