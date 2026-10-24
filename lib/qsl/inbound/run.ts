@@ -20,6 +20,7 @@ import { prisma } from "@/lib/db/prisma";
 import { GraphClient } from "@/lib/mail/graph";
 import { getReceiveProvider, loadGraphConfig, type ReceiveProvider } from "@/lib/mail/providers";
 import { baseCall, isCallsign } from "@/lib/qsl/inbound/classify";
+import { fileAway, FILE_AWAY_MAX_PER_RUN } from "@/lib/qsl/inbound/file-away";
 import { GraphMailSource, testGraphMailbox } from "@/lib/qsl/inbound/graph-source";
 import { describeImport, importMailbox, type ImportReport, type InboundStore, type NewReceived } from "@/lib/qsl/inbound/import";
 import { fetchNoticeImage } from "@/lib/qsl/inbound/notice";
@@ -33,8 +34,12 @@ const KEY_LOCK = "qsl.inbound.lock";
 
 /** A lock older than this belongs to a run that died; it is taken over. */
 const LOCK_STALE_MS = 30 * 60_000;
-/** Messages per run. The first run on a busy mailbox takes several; each resumes. */
-const MAX_MESSAGES_PER_RUN = 400;
+/**
+ * Messages per run. The first run on a busy mailbox takes several; each resumes. Most of a
+ * mailbox is read as a one-line summary and passed over, so this is mostly paging: the
+ * operator mailbox held ~10,000 messages over 22 months, seven runs at this size.
+ */
+const MAX_MESSAGES_PER_RUN = 1500;
 /** Re-read this much before the mark, for mail that arrived out of order. Seen ones are skipped. */
 const OVERLAP_MS = 60 * 60_000;
 
@@ -281,11 +286,35 @@ async function ownAddresses(mailbox: string): Promise<string[]> {
   return [...out];
 }
 
-async function openSource(provider: ReceiveProvider): Promise<{ ok: true; source: MailSource; mailbox: string } | { ok: false; reason: string }> {
+async function openSource(
+  provider: ReceiveProvider,
+): Promise<{ ok: true; source: MailSource; mailbox: string; graph?: GraphClient } | { ok: false; reason: string }> {
   if (provider !== "graph") return { ok: false, reason: IMAP_COMING_NEXT };
   const loaded = await loadGraphConfig();
   if (!loaded.ok) return loaded;
-  return { ok: true, source: new GraphMailSource(new GraphClient(loaded.config)), mailbox: loaded.config.mailbox };
+  const graph = new GraphClient(loaded.config);
+  return { ok: true, source: new GraphMailSource(graph), mailbox: loaded.config.mailbox, graph };
+}
+
+/**
+ * Move the mail behind imported rows into the named folder, oldest first, and mark the rows
+ * so they are not looked up again. Rows imported before filing was switched on are included:
+ * turning it on files the backlog too, a run at a time.
+ */
+async function fileImported(graph: GraphClient, folder: string): Promise<NonNullable<ImportReport["filing"]> | undefined> {
+  const rows = await prisma.receivedQsl.findMany({
+    where: { filedAt: null },
+    distinct: ["messageId"],
+    orderBy: { receivedAt: "asc" },
+    select: { messageId: true },
+    take: FILE_AWAY_MAX_PER_RUN,
+  });
+  if (rows.length === 0) return undefined;
+  const r = await fileAway(graph, folder, rows.map((x) => x.messageId));
+  if (r.done.length > 0) {
+    await prisma.receivedQsl.updateMany({ where: { messageId: { in: r.done } }, data: { filedAt: new Date() } });
+  }
+  return { folder, moved: r.moved, failed: r.failed, ...(r.error ? { error: r.error } : {}) };
 }
 
 export interface InboundRunResult {
@@ -336,6 +365,17 @@ export async function runInboundImport(opts: { manual?: boolean } = {}): Promise
     const next = { ...cursor };
     for (const [folder, iso] of Object.entries(report.newest)) next[`${provider}:${folder}`] = iso;
     await putState(KEY_CURSOR, JSON.stringify(next));
+
+    // After the cursor is saved: a filing failure must never cost the import its progress.
+    const fileTo = ((await getSetting("qsl.inbound.fileToFolder")) ?? "").trim();
+    if (fileTo && opened.graph) {
+      try {
+        const filing = await fileImported(opened.graph, fileTo);
+        if (filing) report.filing = filing;
+      } catch (err) {
+        report.filing = { folder: fileTo, moved: 0, failed: 0, error: err instanceof Error ? err.message : String(err) };
+      }
+    }
   } catch (err) {
     const why = err instanceof Error ? err.message : String(err);
     report = {

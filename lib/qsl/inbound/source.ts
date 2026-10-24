@@ -5,7 +5,9 @@
 // ours and which contact it belongs to are written once.
 //
 // Every method READS. There is deliberately no way to mark, move or delete through this
-// interface — an importer that cannot express a write cannot perform one by mistake.
+// interface — an importer that cannot express a write cannot perform one by mistake. The one
+// write there is, filing imported mail into a folder, is file-away.ts: separate, opt-in, and
+// run after the import has finished.
 
 import { createHash } from "node:crypto";
 

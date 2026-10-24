@@ -123,6 +123,8 @@ export interface ImportReport {
   complete: boolean;
   /** Set when the run could not proceed at all (sign-in refused, mailbox not readable). */
   error?: string;
+  /** Moving imported mail into its own folder, when that is switched on. */
+  filing?: { folder: string; moved: number; failed: number; error?: string };
 }
 
 /** An image id: random rather than a database default, so the file can be written first. */
@@ -461,6 +463,8 @@ export function describeImport(r: ImportReport): string {
   ];
   if (r.bounces > 0) parts.push(`${r.bounces} bounce(s)`);
   if (r.errors.length > 0) parts.push(`${r.errors.length} error(s)`);
+  if (r.filing?.error) parts.push(`not moved to ${r.filing.folder}: ${r.filing.error}`);
+  else if (r.filing && r.filing.moved > 0) parts.push(`${r.filing.moved} moved to ${r.filing.folder}`);
   if (!r.complete) parts.push("more to read next run");
   return parts.join("; ");
 }

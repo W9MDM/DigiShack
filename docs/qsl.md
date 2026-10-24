@@ -98,7 +98,10 @@ mails the station's own alerts address and nobody else.
 
 Settings → QSL → *Received cards (email)* reads the station mailbox (Inbox and Junk, with
 `Mail.Read`) for cards other operators send you, and links each to the contact it confirms.
-Read only: nothing in the mailbox is marked, moved or deleted. QSL → **Received** shows the
+Nothing in the mailbox is marked or deleted. Nothing is moved either, unless *Move imported
+mail to folder* names one (e.g. `DigiShack`): then the cards, replies, notices and bounces
+an import recorded are moved there from Inbox and Junk, which needs `Mail.ReadWrite` on the
+app. QSL → **Received** shows the
 cards, replies, items to review, notices and bounces, with **Import now** and **Test
 connection**.
 

@@ -824,6 +824,9 @@ model ReceivedQsl {
   matchStatus      ReceivedQslMatch
   /// Why it matched, or did not, in a sentence. Ambiguous rows list their candidates here.
   matchNote        String?           @db.Text
+  /// When the email was moved into the qsl.inbound.fileToFolder folder (or found already
+  /// gone from Inbox / Junk). Null until then; never set while filing is off.
+  filedAt          DateTime?
   createdAt        DateTime          @default(now())
   updatedAt        DateTime          @updatedAt
 

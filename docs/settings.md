@@ -47,7 +47,7 @@ alongside the ones every station sets.
 - [Software updates](#software-updates) — 1 setting
 - [Outgoing email](#outgoing-email) — 8 settings, 2 advanced
 - [Microsoft 365 mail app](#microsoft-365-mail-app) — 4 settings
-- [Received cards (email)](#received-cards-email) — 10 settings, 7 advanced
+- [Received cards (email)](#received-cards-email) — 11 settings, 7 advanced
 - [Automatic operating limits](#automatic-operating-limits) — 22 settings, 9 advanced
 - [Automatic uploading](#automatic-uploading) — 13 settings, 5 advanced
 - [POTA chasing](#pota-chasing) — 7 settings, 6 advanced
@@ -401,13 +401,14 @@ One Microsoft Entra app registration, used for sending (Mail.Send) when Outgoing
 
 ## Received cards (email)
 
-Reads the station mailbox for QSL cards other operators email you — the picture attached, a reply to your card, or a notice that a card is waiting on a website — and links each to the contact it confirms. Read-only: nothing in the mailbox is marked, moved or deleted. Your own outgoing cards and their bounces are recognised and never counted as received.
+Reads the station mailbox for QSL cards other operators email you — the picture attached, a reply to your card, or a notice that a card is waiting on a website — and links each to the contact it confirms. Nothing in the mailbox is marked or deleted, and nothing is moved unless you name a folder below. Your own outgoing cards and their bounces are recognised and never counted as received.
 
 | Setting | Key | Type | Default | What it does |
 |---|---|---|---|---|
 | Import received cards automatically | `qsl.inbound.enabled` | on/off | `false` | Check the mailbox on a timer in the radio service and import new cards. Off by default. Import now on the QSL → Received page works whether or not this is on. Takes effect at the next interval; no restart needed. |
 | Read cards from | `qsl.inbound.provider` | select | `graph` | Microsoft 365 reads Inbox and Junk of the mailbox in Microsoft 365 mail app, with the app's Mail.Read permission. IMAP and Gmail (Google Workspace included) are listed and not yet run: they arrive in the next release, and choosing one now reports that rather than importing. |
 | Import cards received since | `qsl.inbound.startDate` | text | — | A date, YYYY-MM-DD. The first run reads from here; later runs carry on from the newest message already read. Blank means the last 30 days. |
+| Move imported mail to folder | `qsl.inbound.fileToFolder` | text | — | A mail folder name, e.g. DigiShack. After each import, the cards, replies, notices and bounces it recorded are moved out of Inbox / Junk into this folder, created if missing; mail imported earlier is moved too, 200 a run. Your own outgoing cards and anything not about a QSL stay put. Microsoft 365 only, and needs the Mail.ReadWrite application permission on the mail app. Blank leaves the mailbox untouched. |
 | Check every (minutes) *(advanced)* | `qsl.inbound.intervalMinutes` | number | `15` | How often the radio service looks for new cards. Minimum 5. Read when the radio service starts, so a change needs a restart of digishack-bridge. |
 | IMAP server *(advanced)* | `imap.host` | text | — | Coming next: the IMAP server for the IMAP choice above, e.g. imap.example.com. Not used by this release. |
 | IMAP port *(advanced)* | `imap.port` | number | `993` | Coming next: 993 for TLS from the start, the usual arrangement. Not used by this release. |
