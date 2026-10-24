@@ -515,6 +515,10 @@ model Qso {
   emailQslRcvd   Boolean              @default(false)
   /// The earliest received card's arrival, kept rather than overwritten by later ones.
   emailQslRcvdAt DateTime?
+  /// They answered our emailed card WITHOUT a card of their own: a reply, not a QSL. Set
+  /// from ReceivedQsl like emailQslRcvd, and like it never exported or counted for awards.
+  emailReplyRcvd   Boolean   @default(false)
+  emailReplyRcvdAt DateTime?
   /// Sent to N3FJP Amateur Contact Log over its TCP API.
   ///
   /// A flag like the others, and it means slightly less than they do: the API has no

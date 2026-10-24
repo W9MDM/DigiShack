@@ -352,7 +352,15 @@ export async function verifySmtp(): Promise<{ ok: boolean; detail: string }> {
       detail: `Connected to ${loaded.config.host}:${loaded.config.port} and authenticated`,
     };
   } catch (err) {
-    return { ok: false, detail: err instanceof Error ? err.message : "SMTP verify failed" };
+    const msg = err instanceof Error ? err.message : "SMTP verify failed";
+    // Google refuses an account password over SMTP outright; the 535 does not say so.
+    const gmail = /(^|\.)(gmail|google(mail)?)\.com$/i.test(loaded.config.host) && /\b535\b/.test(msg);
+    return {
+      ok: false,
+      detail: gmail
+        ? `${msg} — Gmail and Google Workspace take only an App Password here (16 letters, from myaccount.google.com → Security → App passwords, with 2-Step Verification on), not the account password.`
+        : msg,
+    };
   } finally {
     transport.close();
   }

@@ -24,6 +24,7 @@ import {
   classifyMessage,
   extractLinks,
   isOwnCall,
+  isOwnCardFile,
   MAX_IMAGE_BYTES,
   mightBeImage,
   parseCardFilename,
@@ -197,6 +198,10 @@ export async function importMailbox(deps: ImportDeps, opts: ImportOptions): Prom
     for (const a of atts) {
       if (out.length >= MAX_PICTURES) break;
       if (!mightBeImage(a.name, a.contentType)) continue;
+      if (isOwnCardFile(a.name, opts.ownCalls)) {
+        report.rejected.push(`${a.name}: our own card, sent back with the reply`);
+        continue;
+      }
       if (a.inline && !allowInline) continue;
       // Graph's size includes some overhead, so the declared size is only a pre-filter; the
       // bytes themselves are what the limit is enforced on.
