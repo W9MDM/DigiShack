@@ -908,6 +908,63 @@ async function main(): Promise<void> {
     ok(/made out to N0OTHER/.test(b?.matchNote ?? ""), "and says so", b?.matchNote);
   }
 
+  // -------------------------------------------------------------------------
+  console.log("\n18. our card quoted back as image001.jpg is recognised by the picture");
+  {
+    const FP = await import("@/lib/qsl/inbound/fingerprint");
+    const sharp = (await import("sharp")).default;
+    // Artwork made here, since the operator's is not published: shapes on a gradient.
+    const svg = (a: string, b: string, shapes: string) =>
+      Buffer.from(
+        `<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1067"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${a}"/><stop offset="1" stop-color="${b}"/></linearGradient></defs><rect width="1600" height="1067" fill="url(#g)"/>${shapes}</svg>`,
+      );
+    const ours = svg("#123456", "#88aacc", `<rect x="160" y="120" width="1200" height="260" rx="40" fill="#e0f7ff"/><circle cx="560" cy="700" r="260" fill="#202020"/><rect x="900" y="420" width="600" height="300" fill="#b02020"/>`);
+    const theirs = svg("#aa6600", "#ffee99", `<circle cx="1200" cy="300" r="220" fill="#ffffff"/><rect x="100" y="500" width="700" height="400" fill="#006633"/><rect x="0" y="0" width="400" height="200" fill="#330000"/>`);
+    const art = await sharp(ours).png().toBuffer();
+    // A sent card: the artwork smaller, a white QSO table in the corner, recompressed.
+    const sent = await sharp(ours)
+      .resize(2048)
+      .composite([{ input: Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="160"><rect width="1200" height="160" fill="#fff"/></svg>'), left: 820, top: 1170 }])
+      .jpeg({ quality: 70 })
+      .toBuffer();
+    const other = await sharp(theirs).jpeg({ quality: 80 }).toBuffer();
+    const isOurs = await FP.ownCardTest(art);
+    ok(isOurs !== null, "the artwork gives a test");
+    eq(await isOurs!(sent), true, "our card, resized, recompressed and with its table, is ours");
+    eq(await isOurs!(other), false, "another station's card is not");
+    eq(await isOurs!(Buffer.from("not an image")), false, "nor is something that is not a picture");
+    eq(await FP.ownCardTest(null), null, "no artwork, no test — the filename rule still applies");
+
+    const msg: SourceMessage = { key: "<img001@x>", folder: "inbox", receivedAt: at("2026-10-24T12:00:00Z"), summary: sum({ from: "k1abc@example.net", subject: `Re: QSL Confirmation for K1ABC / ${OUR} QSO`, hasAttachments: true }) };
+    const files: Record<string, Buffer> = { "image001.jpg": sent, [`${OUR} de K1ABC.jpg`]: other };
+    const src: MailSource = {
+      label: "fake",
+      folders: () => ["inbox"],
+      async *list() {
+        yield msg;
+      },
+      body: async () => "",
+      attachments: async () => Object.keys(files).map((name, i) => ({ key: `k${i}`, name, contentType: "image/jpeg", size: files[name]!.length, inline: name.startsWith("image") })),
+      attachmentBytes: async (_m, a) => files[a.name]!,
+    };
+    const rows: NewReceived[] = [];
+    const store: InboundStore = {
+      hasMessage: async () => false,
+      candidatesFor: async () => [],
+      sentCardsFor: async () => [],
+      bouncedCard: async () => null,
+      insert: async (r: NewReceived) => {
+        rows.push(r);
+        return true;
+      },
+      saveImage: async (id: string) => `data/qsl-received/${id}.jpg`,
+      deleteImage: async () => undefined,
+    };
+    const rep = await I.importMailbox({ source: src, store }, { ...ctx, since: { inbox: at("2026-10-01T00:00:00Z") }, maxMessages: 10, isOwnCard: isOurs! });
+    eq(rows.map((r) => r.fileName), [`${OUR} de K1ABC.jpg`], "only their card is kept from a reply carrying ours as image001.jpg");
+    ok(rep.rejected.some((x) => x.startsWith("image001.jpg: our own card")), "and the report says why");
+  }
+
   console.log(`\n${pass} passed, ${fail} failed`);
   if (fail > 0) process.exit(1);
 }

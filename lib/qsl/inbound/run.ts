@@ -11,7 +11,7 @@
 // that knows a run happened is the thing that records it. State, not configuration, so these
 // keys are deliberately absent from the settings registry.
 
-import { mkdir, unlink, writeFile } from "node:fs/promises";
+import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import { Prisma } from "@prisma/client";
@@ -21,6 +21,7 @@ import { GraphClient } from "@/lib/mail/graph";
 import { getReceiveProvider, loadGraphConfig, type ReceiveProvider } from "@/lib/mail/providers";
 import { baseCall, isCallsign, isOwnCardFile } from "@/lib/qsl/inbound/classify";
 import { fileAway, FILE_AWAY_MAX_PER_RUN } from "@/lib/qsl/inbound/file-away";
+import { ownCardTest } from "@/lib/qsl/inbound/fingerprint";
 import { GraphMailSource, testGraphMailbox } from "@/lib/qsl/inbound/graph-source";
 import { describeImport, importMailbox, type ImportReport, type InboundStore, type NewReceived } from "@/lib/qsl/inbound/import";
 import { fetchNoticeImage } from "@/lib/qsl/inbound/notice";
@@ -37,6 +38,9 @@ const FLAGS_VERSION = "2-card-reply-split";
 /** Which matching rule unresolved rows were last read under; a change reads them again. */
 const KEY_REMATCH = "qsl.inbound.rematchVersion";
 const REMATCH_VERSION = "1-email-text-and-card-pages";
+/** Whether stored pictures have been compared with our card artwork (fingerprint.ts). */
+const KEY_OWN_ART = "qsl.inbound.ownArtVersion";
+const OWN_ART_VERSION = "1-dhash";
 
 /** A lock older than this belongs to a run that died; it is taken over. */
 const LOCK_STALE_MS = 30 * 60_000;
@@ -131,12 +135,31 @@ export async function refreshEmailCardFlag(qsoId: string, db: Prisma.Transaction
  * the contact still shows that they answered; any other own-card row is removed. Cheap when
  * there is nothing to do: one query on file names.
  */
-export async function dropOwnCardRows(ownCalls: readonly string[]): Promise<number> {
+export async function dropOwnCardRows(
+  ownCalls: readonly string[],
+  isOwnCard?: ((bytes: Uint8Array) => Promise<boolean>) | null,
+): Promise<number> {
   const rows = await prisma.receivedQsl.findMany({
     where: { fileName: { startsWith: "QSL" } },
     select: { id: true, messageId: true, kind: true, fileName: true, imagePath: true, qsoId: true },
   });
   const own = rows.filter((r) => r.fileName && isOwnCardFile(r.fileName, ownCalls));
+  // Once per artwork check: every stored picture compared with our card's artwork, for the
+  // copies quoted back under other names (Outlook's image001.jpg).
+  if (isOwnCard && (await prisma.setting.findUnique({ where: { key: KEY_OWN_ART } }))?.value !== OWN_ART_VERSION) {
+    const seen = new Set(own.map((r) => r.id));
+    const pictured = await prisma.receivedQsl.findMany({
+      where: { imagePath: { not: null }, kind: { in: ["CARD", "REPLY", "NOTICE"] } },
+      select: { id: true, messageId: true, kind: true, fileName: true, imagePath: true, qsoId: true },
+    });
+    for (const r of pictured) {
+      const abs = imageFile(r.imagePath);
+      if (seen.has(r.id) || !abs) continue;
+      const bytes = await readFile(abs).catch(() => null);
+      if (bytes && (await isOwnCard(bytes))) own.push(r);
+    }
+    await putState(KEY_OWN_ART, OWN_ART_VERSION);
+  }
   const touched = new Set<string>();
   const byMessage = new Map<string, typeof own>();
   for (const r of own) byMessage.set(r.messageId, [...(byMessage.get(r.messageId) ?? []), r]);
@@ -393,6 +416,13 @@ async function ownAddresses(mailbox: string): Promise<string[]> {
   return [...out];
 }
 
+/** Our card's artwork as a test (fingerprint.ts), or null when there is no artwork to read. */
+async function ownCardArt(): Promise<((bytes: Uint8Array) => Promise<boolean>) | null> {
+  const rel = (await getSetting("qsl.card.baseImage")) || "data/qsl/card-base.png";
+  const abs = path.isAbsolute(rel) ? rel : path.join(process.cwd(), rel);
+  return ownCardTest(await readFile(abs).catch(() => null));
+}
+
 async function openSource(
   provider: ReceiveProvider,
 ): Promise<{ ok: true; source: MailSource; mailbox: string; graph?: GraphClient } | { ok: false; reason: string }> {
@@ -451,7 +481,8 @@ export async function runInboundImport(opts: { manual?: boolean } = {}): Promise
   let report: ImportReport;
   try {
     // Before reading: our own cards stored by an earlier version come back out first.
-    await dropOwnCardRows(await ownCalls(opened.mailbox));
+    const isOwnCard = await ownCardArt();
+    await dropOwnCardRows(await ownCalls(opened.mailbox), isOwnCard);
     await rereadUnresolved();
     const now = new Date();
     const start = parseStartDate(await getSetting("qsl.inbound.startDate"), now);
@@ -470,6 +501,7 @@ export async function runInboundImport(opts: { manual?: boolean } = {}): Promise
         ownAddresses: await ownAddresses(opened.mailbox),
         since,
         maxMessages: MAX_MESSAGES_PER_RUN,
+        ...(isOwnCard ? { isOwnCard } : {}),
       },
     );
     const next = { ...cursor };

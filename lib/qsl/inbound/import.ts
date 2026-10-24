@@ -87,6 +87,8 @@ export interface ImportOptions {
   since: Record<string, Date>;
   /** Stop after this many messages, so one run cannot go on for an hour. */
   maxMessages: number;
+  /** Is this picture our own card, whatever it is called? See fingerprint.ts. */
+  isOwnCard?: (bytes: Uint8Array) => Promise<boolean>;
   now?: () => Date;
 }
 
@@ -223,6 +225,11 @@ export async function importMailbox(deps: ImportDeps, opts: ImportOptions): Prom
         continue;
       }
       if (a.inline && bytes.length < INLINE_MIN_BYTES) continue;
+      // Quoted back under another name — Outlook's image001.jpg — but the same picture.
+      if (opts.isOwnCard && (await opts.isOwnCard(bytes))) {
+        report.rejected.push(`${a.name}: our own card (the picture is our card artwork), sent back with the reply`);
+        continue;
+      }
       out.push({ name: a.name, key: a.key, bytes, check });
     }
     return out;
