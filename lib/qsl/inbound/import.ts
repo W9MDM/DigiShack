@@ -23,20 +23,23 @@ import {
   callsInFilename,
   classifyMessage,
   extractLinks,
+  fillHints,
   isOwnCall,
   isOwnCardFile,
   MAX_IMAGE_BYTES,
   mightBeImage,
+  parseBodyHints,
   parseCardFilename,
   pickNoticeLink,
   siteOfLink,
   sniffImage,
+  type BodyHints,
   type Classification,
   type FileHints,
   type ImageCheck,
 } from "@/lib/qsl/inbound/classify";
 import { matchQso, type MatchResult, type QsoCandidate, type SentCard } from "@/lib/qsl/inbound/match";
-import type { NoticeImageResult } from "@/lib/qsl/inbound/notice";
+import type { CardPageDetails, NoticeImageResult } from "@/lib/qsl/inbound/notice";
 import type { MailSource, SourceAttachment, SourceMessage } from "@/lib/qsl/inbound/source";
 
 export type ReceivedKind = "CARD" | "REPLY" | "NOTICE" | "BOUNCE";
@@ -266,6 +269,16 @@ export async function importMailbox(deps: ImportDeps, opts: ImportOptions): Prom
     return matchQso({ callsign: call, kind, receivedAt: m.receivedAt, hints, sentCards }, await candidates(call));
   };
 
+  /**
+   * What the email itself says about the contact — its text, then its subject for what the
+   * text leaves out ("KF0VR QSL Card — K9XYZ — 20260920"). One body download per card or reply.
+   */
+  const told = async (m: SourceMessage): Promise<BodyHints> => {
+    const text = stripTags(await deps.source.body(m)).slice(0, 50_000);
+    const body = parseBodyHints(text, opts.ownCalls);
+    return { ...fillHints(body, parseCardFilename(m.summary.subject)), ...(body.callsign ? { callsign: body.callsign } : {}) };
+  };
+
   const handle = async (m: SourceMessage): Promise<void> => {
     let c: Classification = classifyMessage(m.summary, ctx);
     // A bounce whose preview does not quote our card: the body usually does.
@@ -313,8 +326,9 @@ export async function importMailbox(deps: ImportDeps, opts: ImportOptions): Prom
       case "reply": {
         report.replies++;
         const pics = await pictures(m, true);
+        const said = await told(m);
         if (pics.length === 0) {
-          const r = await match(c.callsign, "reply", m, {});
+          const r = await match(c.callsign, "reply", m, said);
           await store({
             ...base(m),
             qsoId: r.qsoId,
@@ -330,7 +344,7 @@ export async function importMailbox(deps: ImportDeps, opts: ImportOptions): Prom
           return;
         }
         for (const p of pics) {
-          const r = await match(c.callsign, "reply", m, parseCardFilename(p.name));
+          const r = await match(c.callsign, "reply", m, fillHints(parseCardFilename(p.name), said));
           await store(
             { ...base(m), qsoId: r.qsoId, callsign: c.callsign, kind: "REPLY", attachmentKey: p.key, fileName: p.name.slice(0, 255), link: null, matchStatus: r.status, matchNote: r.note, confirms: true },
             p,
@@ -345,29 +359,40 @@ export async function importMailbox(deps: ImportDeps, opts: ImportOptions): Prom
         const link = pickNoticeLink(extractLinks(body), c.site);
         const site = c.site !== "other" ? c.site : link ? siteOfLink(link) : "other";
         let pic: { bytes: Uint8Array; check: Extract<ImageCheck, { ok: true }> } | undefined;
+        let page: CardPageDetails | undefined;
         let why = "";
         if (link && (site === "digiqsl" || site === "qslworld") && deps.fetchNoticeImage) {
           const got = await deps.fetchNoticeImage(link);
+          page = got.details;
           if (got.ok) pic = { bytes: got.bytes, check: got.check };
-          else why = ` The card was not fetched: ${got.reason}.`;
+          else why = ` No picture: ${got.reason}.`;
         } else if (site === "eqsl") {
           why = " eQSL cards need your eQSL login, which this importer does not use — the eQSL inbox sync (Settings → eQSL.cc) records those confirmations.";
         }
-        const call = c.callsign;
-        const r = await match(call, "notice", m, {});
+        // The card page says exactly which contact; failing that, the notice's own words
+        // ("our FT8 QSO on the 40m band").
+        const said = await told(m);
+        const forUs = page ? isOwnCall(page.to, opts.ownCalls) : false;
+        const fromPage = page && !isOwnCall(page.callsign, opts.ownCalls) ? page.callsign : undefined;
+        const call = c.callsign ?? fromPage ?? said.callsign ?? null;
+        const hints = page && forUs ? fillHints(page, said) : said;
+        const r = await match(call, "notice", m, hints);
+        const notOurs = page && !forUs ? ` The card is made out to ${page.to}, not this station.` : "";
+        // A notice alone is a promise of a card; with the card in hand — its picture, or the
+        // card page itself made out to us — it is a card.
+        const confirms = Boolean(pic) || forUs;
         await store(
           {
             ...base(m),
             qsoId: r.qsoId,
             callsign: call ?? "",
             kind: "NOTICE",
-            attachmentKey: pic ? "link" : "",
+            attachmentKey: confirms ? "link" : "",
             fileName: null,
             link,
             matchStatus: r.status,
-            matchNote: `${r.note}${link ? "" : " No link was found in the notice."}${why}`,
-            // A notice alone is a promise of a card; with the card in hand it is a card.
-            confirms: Boolean(pic),
+            matchNote: `${r.note}${link ? "" : " No link was found in the notice."}${notOurs}${why}`,
+            confirms,
           },
           pic,
         );
@@ -376,9 +401,11 @@ export async function importMailbox(deps: ImportDeps, opts: ImportOptions): Prom
 
       case "card": {
         const pics = await pictures(m, c.callsign !== null);
+        const said = await told(m);
         const fallbackCall =
           c.callsign ??
           pics.map((p) => callsInFilename(p.name, opts.ownCalls)[0]).find(Boolean) ??
+          said.callsign ??
           callFromAddress(m.summary.from, opts.ownCalls);
         if (!fallbackCall && pics.length === 0) {
           ignore(m, "no callsign and no picture");
@@ -386,7 +413,7 @@ export async function importMailbox(deps: ImportDeps, opts: ImportOptions): Prom
         }
         report.cards++;
         if (pics.length === 0) {
-          const r = await match(fallbackCall, "card", m, {});
+          const r = await match(fallbackCall, "card", m, said);
           await store({
             ...base(m),
             qsoId: r.qsoId,
@@ -405,7 +432,7 @@ export async function importMailbox(deps: ImportDeps, opts: ImportOptions): Prom
           const fromFile = callsInFilename(p.name, opts.ownCalls)[0];
           const call = c.callsign ?? fromFile ?? fallbackCall;
           const safeCall = call && !isOwnCall(call, opts.ownCalls) ? call : null;
-          const r = await match(safeCall, "card", m, parseCardFilename(p.name));
+          const r = await match(safeCall, "card", m, fillHints(parseCardFilename(p.name), said));
           await store(
             { ...base(m), qsoId: r.qsoId, callsign: safeCall ?? "", kind: "CARD", attachmentKey: p.key, fileName: p.name.slice(0, 255), link: null, matchStatus: r.status, matchNote: r.note, confirms: true },
             p,

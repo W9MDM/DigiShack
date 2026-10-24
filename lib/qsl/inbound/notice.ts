@@ -15,9 +15,13 @@
 // importer does not hold; the existing eQSL inbox sync is what reads them. A digiqsl or
 // qslworld page that needs a login simply yields no image, and the notice keeps its link.
 //
-// UNVERIFIED: neither site's page structure was available to test against. The image is
-// looked for as og:image first, then an <img> whose address mentions a card. If that guess
-// is wrong the cost is a notice without a picture, which is what it was before.
+// digiqsl, seen live (October 2026): the card is drawn on a canvas from `window.qslViewerData`,
+// and og:image is the site's stock background, the same on every page — earlier imports kept
+// that as "the card". Now the stock artwork is refused and the page's data is read instead
+// (readCardPage): who sent it, to whom, and the contact's date, time, band and mode.
+//
+// UNVERIFIED for qslworld: its pages were not available to test against. The image is looked
+// for as og:image first, then an <img> whose address mentions a card.
 
 import { MAX_IMAGE_BYTES, sniffImage, type ImageCheck } from "@/lib/qsl/inbound/classify";
 import { readCapped } from "@/lib/qsl/inbound/source";
@@ -65,14 +69,65 @@ async function fetchAllowed(fetchImpl: FetchLike, start: URL, max: number): Prom
   return null;
 }
 
+/** The site's stock artwork, the same on every page: never one station's card. */
+const STOCK_IMAGE = /\/img\/qsl-creator\//i;
+
+/** The contact a card page describes. */
+export interface CardPageDetails {
+  /** The station that sent the card. */
+  callsign: string;
+  /** Who it is made out to — us, if it is ours to credit. */
+  to: string;
+  date?: string;
+  time?: string;
+  band?: string;
+  mode?: string;
+}
+
+/**
+ * The contact behind a digiqsl card page, read from the data the page draws the card from:
+ * `window.qslViewerData = {"contactCallsign":"K9XYZ","qsoDate":"2026-10-22T00:00:00.000Z",
+ * "qsoTime":"15:01","band":"20m","mode":"FT8","myStation":{"stationCallsign":"K1ABC",…},…};`
+ * (seen live, October 2026). The card itself is drawn on a canvas in the browser, so this —
+ * not a picture — is what the page has to give. Pure, for the check. Null for any other shape.
+ */
+export function readCardPage(html: string): CardPageDetails | null {
+  const start = /window\.qslViewerData\s*=\s*/.exec(html);
+  if (!start) return null;
+  const from = start.index + start[0].length;
+  const end = html.indexOf("</script>", from);
+  if (end < 0) return null;
+  let j: unknown;
+  try {
+    j = JSON.parse(html.slice(from, end).trim().replace(/;\s*$/, ""));
+  } catch {
+    return null;
+  }
+  if (!j || typeof j !== "object") return null;
+  const d = j as Record<string, unknown>;
+  const str = (v: unknown) => (typeof v === "string" ? v.trim() : "");
+  const station = d.myStation && typeof d.myStation === "object" ? (d.myStation as Record<string, unknown>) : {};
+  const callsign = str(station.stationCallsign).toUpperCase();
+  const to = str(d.contactCallsign).toUpperCase();
+  if (!callsign || !to) return null;
+  const out: CardPageDetails = { callsign, to };
+  const date = /^(\d{4}-\d{2}-\d{2})/.exec(str(d.qsoDate))?.[1];
+  if (date) out.date = date;
+  const time = /^(\d{2}):?(\d{2})/.exec(str(d.qsoTime));
+  if (date && time && Number(time[1]) < 24 && Number(time[2]) < 60) out.time = `${time[1]}${time[2]}`;
+  if (/^\d+(\.\d+)?c?m$/i.test(str(d.band))) out.band = str(d.band).toUpperCase();
+  if (/^[A-Z0-9]{2,8}$/i.test(str(d.mode))) out.mode = str(d.mode).toUpperCase();
+  return out;
+}
+
 /** The card image's address in a card site's page, or null. Pure, for the check. */
 export function findCardImage(html: string, page: URL): URL | null {
   const candidates: string[] = [];
   const og = /<meta[^>]+property\s*=\s*["']og:image["'][^>]*>/i.exec(html)?.[0];
   const ogContent = og ? /content\s*=\s*["']([^"']+)["']/i.exec(og)?.[1] : undefined;
-  if (ogContent) candidates.push(ogContent);
+  if (ogContent && !STOCK_IMAGE.test(ogContent)) candidates.push(ogContent);
   for (const m of html.matchAll(/<img[^>]+src\s*=\s*["']([^"']+)["']/gi)) {
-    if (m[1] && /qsl|card/i.test(m[1]) && !/logo|icon|avatar|banner/i.test(m[1])) candidates.push(m[1]);
+    if (m[1] && /qsl|card/i.test(m[1]) && !/logo|icon|avatar|banner/i.test(m[1]) && !STOCK_IMAGE.test(m[1])) candidates.push(m[1]);
   }
   for (const c of candidates) {
     try {
@@ -85,7 +140,10 @@ export function findCardImage(html: string, page: URL): URL | null {
   return null;
 }
 
-export type NoticeImageResult = { ok: true; bytes: Uint8Array; check: Extract<ImageCheck, { ok: true }> } | { ok: false; reason: string };
+/** The picture behind a notice, or why not — and, either way, the contact the page describes. */
+export type NoticeImageResult =
+  | { ok: true; bytes: Uint8Array; check: Extract<ImageCheck, { ok: true }>; details?: CardPageDetails }
+  | { ok: false; reason: string; details?: CardPageDetails };
 
 /** Try to fetch the card behind a notice link. Never throws. */
 export async function fetchNoticeImage(link: string, fetchImpl: FetchLike = (u, i) => fetch(u, i)): Promise<NoticeImageResult> {
@@ -97,12 +155,18 @@ export async function fetchNoticeImage(link: string, fetchImpl: FetchLike = (u, 
     // The link may go straight to the picture.
     const direct = sniffImage(page.bytes);
     if (direct.ok) return { ok: true, bytes: page.bytes, check: direct };
-    const img = findCardImage(new TextDecoder().decode(page.bytes), page.url);
-    if (!img) return { ok: false, reason: "no card picture on the page (it may need a login)" };
+    const html = new TextDecoder().decode(page.bytes);
+    const details = readCardPage(html) ?? undefined;
+    const img = findCardImage(html, page.url);
+    if (!img) {
+      return details
+        ? { ok: false, reason: "the site draws the card in the browser, so there is no picture to keep; its details were read", details }
+        : { ok: false, reason: "no card picture on the page (it may need a login)" };
+    }
     const got = await fetchAllowed(fetchImpl, img, MAX_IMAGE_BYTES);
-    if (!got) return { ok: false, reason: "the card picture could not be downloaded" };
+    if (!got) return { ok: false, reason: "the card picture could not be downloaded", details };
     const check = sniffImage(got.bytes);
-    return check.ok ? { ok: true, bytes: got.bytes, check } : { ok: false, reason: `the picture is ${check.reason}` };
+    return check.ok ? { ok: true, bytes: got.bytes, check, details } : { ok: false, reason: `the picture is ${check.reason}`, details };
   } catch (err) {
     return { ok: false, reason: err instanceof Error ? err.message : "fetch failed" };
   }

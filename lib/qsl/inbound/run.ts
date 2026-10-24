@@ -34,6 +34,9 @@ const KEY_LOCK = "qsl.inbound.lock";
 /** Which rule the contacts' email flags were last computed under; a change recomputes them all. */
 const KEY_FLAGS = "qsl.inbound.flagsVersion";
 const FLAGS_VERSION = "2-card-reply-split";
+/** Which matching rule unresolved rows were last read under; a change reads them again. */
+const KEY_REMATCH = "qsl.inbound.rematchVersion";
+const REMATCH_VERSION = "1-email-text-and-card-pages";
 
 /** A lock older than this belongs to a run that died; it is taken over. */
 const LOCK_STALE_MS = 30 * 60_000;
@@ -97,7 +100,9 @@ export async function refreshEmailCardFlag(qsoId: string, db: Prisma.Transaction
     where: {
       qsoId,
       matchStatus: "MATCHED",
-      OR: [{ kind: "CARD" }, { kind: { in: ["REPLY", "NOTICE"] }, imagePath: { not: null } }],
+      // A notice is a card when its picture or its card page made out to us was read: the
+      // importer marks those "link" (digiqsl draws its cards in the browser, so no picture).
+      OR: [{ kind: "CARD" }, { kind: "REPLY", imagePath: { not: null } }, { kind: "NOTICE", attachmentKey: "link" }],
     },
     orderBy: { receivedAt: "asc" },
     select: { receivedAt: true },
@@ -160,6 +165,51 @@ export async function dropOwnCardRows(ownCalls: readonly string[]): Promise<numb
     for (const id of touched) await refreshEmailCardFlag(id);
   }
   return own.length;
+}
+
+/**
+ * Once per matching rule: let what the importer could not settle be read again.
+ *
+ * That is the cards and replies still UNMATCHED or AMBIGUOUS, and every digiqsl notice — whose
+ * "picture" was the site's stock background and whose card page is now read for the contact.
+ * Their rows go (and their pictures), and the folder marks go back to the start date, so the
+ * next runs fetch those messages afresh — everything else already imported is skipped on its
+ * Message-ID without a download.
+ *
+ * Never a message a person has decided on (assigned, or dismissed), nor one whose mail was
+ * filed away, which a re-read of Inbox and Junk would not find.
+ */
+async function rereadUnresolved(): Promise<void> {
+  if ((await prisma.setting.findUnique({ where: { key: KEY_REMATCH } }))?.value === REMATCH_VERSION) return;
+  const rows = await prisma.receivedQsl.findMany({
+    where: {
+      filedAt: null,
+      OR: [
+        { matchStatus: { in: ["UNMATCHED", "AMBIGUOUS"] }, kind: { in: ["CARD", "REPLY"] } },
+        { kind: "NOTICE", link: { contains: "digiqsl.com" } },
+      ],
+    },
+    select: { messageId: true },
+    distinct: ["messageId"],
+  });
+  const ids = rows.map((r) => r.messageId);
+  // Whole messages: one with any row a person decided on is left exactly as it is.
+  const decided = new Set(
+    (
+      await prisma.receivedQsl.findMany({
+        where: { messageId: { in: ids }, OR: [{ matchStatus: "DISMISSED" }, { matchNote: { startsWith: "Assigned by" } }] },
+        select: { messageId: true },
+      })
+    ).map((r) => r.messageId),
+  );
+  const again = ids.filter((id) => !decided.has(id));
+  const gone = await prisma.receivedQsl.findMany({ where: { messageId: { in: again } }, select: { imagePath: true, qsoId: true } });
+  await prisma.receivedQsl.deleteMany({ where: { messageId: { in: again } } });
+  for (const p of gone) if (p.imagePath) await deleteImage(p.imagePath);
+  // Until they are read again, the contacts they were linked to show only what is left.
+  for (const id of new Set(gone.map((g) => g.qsoId).filter((q): q is string => q !== null))) await refreshEmailCardFlag(id);
+  await prisma.setting.deleteMany({ where: { key: KEY_CURSOR } });
+  await putState(KEY_REMATCH, REMATCH_VERSION);
 }
 
 // ---------------------------------------------------------------------------
@@ -402,6 +452,7 @@ export async function runInboundImport(opts: { manual?: boolean } = {}): Promise
   try {
     // Before reading: our own cards stored by an earlier version come back out first.
     await dropOwnCardRows(await ownCalls(opened.mailbox));
+    await rereadUnresolved();
     const now = new Date();
     const start = parseStartDate(await getSetting("qsl.inbound.startDate"), now);
     const cursor = await readCursor();
