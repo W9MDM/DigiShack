@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 
 import { DoNotCallList } from "@/components/digital/DoNotCallList";
 import { LotwCertificate } from "@/components/settings/LotwCertificate";
+import { MailTest } from "@/components/settings/MailTest";
 import { QslCardDesigner } from "@/components/settings/QslCardDesigner";
 import {
   PaCooldownField,
@@ -44,6 +45,8 @@ export const GROUP_EXTRAS: Record<string, (ctx: ExtraContext) => ReactNode> = {
   // values, so the preview shows what Save would produce rather than what is stored.
   qsl: ({ editor }) => <QslCardDesigner draft={editor.values} />,
   lotw: () => <LotwCertificate />,
+  // Test buttons beside the mail settings they test.
+  smtp: ({ editor }) => <MailTest editor={editor} />,
   youtube: () => <YouTubeConnect />,
   ft8battle: () => <UdpBroadcastPreview target="br" />,
   udplog: () => <UdpBroadcastPreview target="udp" />,

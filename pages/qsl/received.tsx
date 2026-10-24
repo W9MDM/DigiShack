@@ -62,6 +62,7 @@ interface ImportReport {
   errors: string[];
   complete: boolean;
   error?: string;
+  filing?: { folder: string; moved: number; failed: number; error?: string };
 }
 
 interface Status {
@@ -193,6 +194,15 @@ function ReportCard({ status, onRan }: { status: Status | undefined; onRan: () =
                 </dl>
               )}
               {!r.complete && !r.error && <p className="mt-2 text-xs text-fg-subtle">More to read — the next run carries on.</p>}
+              {r.filing &&
+                (r.filing.error ? (
+                  <p className="mt-2 text-xs text-warn">Not moved to {r.filing.folder}: {r.filing.error}</p>
+                ) : (
+                  <p className="mt-2 text-xs text-fg-muted">
+                    {plural(r.filing.moved, "message")} moved to {r.filing.folder}
+                    {r.filing.failed > 0 ? `; ${r.filing.failed} to retry next run` : ""}.
+                  </p>
+                ))}
               {r.errors.length > 0 && (
                 <details className="mt-2 text-xs">
                   <summary className="cursor-pointer text-danger">{plural(r.errors.length, "error")}</summary>
@@ -227,7 +237,8 @@ function ReportCard({ status, onRan }: { status: Status | undefined; onRan: () =
           )}
 
           <p className="text-xs text-fg-subtle">
-            Read only — nothing in the mailbox is marked, moved or deleted. Settings live under{" "}
+            Nothing in the mailbox is marked or deleted, and nothing is moved unless a folder is named
+            to file imported mail into. Settings live under{" "}
             <Link href="/settings?tab=qsl&group=qslinbound" className="text-accent-bright hover:underline">
               Settings → QSL
             </Link>

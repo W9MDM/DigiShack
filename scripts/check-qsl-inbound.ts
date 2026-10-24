@@ -675,6 +675,69 @@ async function main(): Promise<void> {
     );
   }
 
+  // -------------------------------------------------------------------------
+  console.log("\n14. filing imported mail into its own folder (opt-in, Mail.ReadWrite)");
+  {
+    const FA = await import("@/lib/qsl/inbound/file-away");
+    const cfg = { tenantId: "contoso.onmicrosoft.com", clientId: "11111111-2222-3333-4444-555555555555", clientSecret: "x", mailbox: MAILBOX };
+    const json = (o: unknown, status = 200) => new Response(JSON.stringify(o), { status });
+    type Call = { url: string; method: string; body: string };
+    function mailbox(opts: { folderExists: boolean; moveStatus?: number }) {
+      const calls: Call[] = [];
+      const f = async (url: string, init?: RequestInit) => {
+        const u = decodeURIComponent(url);
+        calls.push({ url: u, method: init?.method ?? "GET", body: String(init?.body ?? "") });
+        if (u.startsWith("https://login.microsoftonline.com/")) return json({ access_token: "tok", expires_in: 3600 });
+        if (u.includes("/mailFolders?$filter=")) return json({ value: opts.folderExists ? [{ id: "F-DS", displayName: "DigiShack" }] : [] });
+        if (u.endsWith("/mailFolders") && init?.method === "POST") return json({ id: "F-NEW", displayName: "DigiShack" }, 201);
+        if (u.includes("/mailFolders/inbox?")) return json({ id: "F-IN" });
+        if (u.includes("/mailFolders/junkemail?")) return json({ id: "F-JUNK" });
+        if (u.includes("internetMessageId eq '<a@x>'")) return json({ value: [{ id: "m-a", parentFolderId: "F-IN" }] });
+        if (u.includes("internetMessageId eq '<b@x>'")) return json({ value: [{ id: "m-b", parentFolderId: "F-ELSEWHERE" }] });
+        if (u.includes("internetMessageId eq '<o''brien@x>'")) return json({ value: [{ id: "m-o", parentFolderId: "F-JUNK" }] });
+        if (u.includes("internetMessageId eq")) return json({ value: [] });
+        if (u.endsWith("/move")) return opts.moveStatus ? json({ error: { code: "ErrorAccessDenied" } }, opts.moveStatus) : json({ id: "moved" }, 201);
+        return json({ error: { code: "NotFound" } }, 404);
+      };
+      return { calls, client: new G.GraphClient(cfg, { fetch: f, sleep: async () => undefined }) };
+    }
+    {
+      const { calls, client } = mailbox({ folderExists: true });
+      const r = await FA.fileAway(client, "DigiShack", ["<a@x>", "<b@x>", "<gone@x>", "<o'brien@x>", "sha256:abc"]);
+      eq(r.moved, 2, "moves the copies sitting in Inbox and Junk");
+      eq(r.done.sort(), ["<a@x>", "<b@x>", "<gone@x>", "<o'brien@x>", "sha256:abc"].sort(), "every key is settled: moved, filed elsewhere, gone, or unfindable");
+      const moves = calls.filter((c) => c.url.endsWith("/move"));
+      ok(moves.every((c) => JSON.parse(c.body).destinationId === "F-DS"), "into the existing folder, not a new one");
+      ok(!moves.some((c) => c.url.includes("m-b")), "a message already filed elsewhere by hand is left alone");
+      ok(!calls.some((c) => c.method === "POST" && c.url.endsWith("/mailFolders")), "the folder is not created twice");
+      ok(calls.every((c) => c.method !== "DELETE" && c.method !== "PATCH"), "nothing deleted, nothing marked");
+      ok(calls.some((c) => c.url.includes("internetMessageId eq '<o''brien@x>'")), "a quote in a Message-ID is escaped for OData");
+    }
+    {
+      const { calls, client } = mailbox({ folderExists: false });
+      const r = await FA.fileAway(client, "DigiShack", ["<a@x>"]);
+      const made = calls.find((c) => c.method === "POST" && c.url.endsWith("/mailFolders"));
+      ok(made !== undefined && JSON.parse(made.body).displayName === "DigiShack", "creates the folder when there is none");
+      eq(r.moved, 1, "and moves into it");
+    }
+    {
+      const { client } = mailbox({ folderExists: true, moveStatus: 403 });
+      const r = await FA.fileAway(client, "DigiShack", ["<a@x>", "<o'brien@x>"]);
+      ok(/Mail\.ReadWrite/.test(r.error ?? ""), "403 on a move: says Mail.ReadWrite is needed", r.error);
+      eq(r.done, [], "and nothing is marked filed, so a later run tries again");
+    }
+    {
+      const { calls, client } = mailbox({ folderExists: true });
+      const r = await FA.fileAway(client, "Cards/../Inbox", ["<a@x>"]);
+      ok(r.error !== undefined && calls.length === 0, "a folder name with a slash is refused before any request");
+    }
+    {
+      const base = { source: "x", startedAt: "", finishedAt: "", scanned: 5, alreadySeen: 0, own: 0, ignored: 0, cards: 1, replies: 0, notices: 0, bounces: 0, matched: 1, ambiguous: 0, unmatched: 0, images: 1, rejected: [], bounceList: [], ignoredSamples: [], errors: [], newest: {}, complete: true };
+      ok(I.describeImport({ ...base, filing: { folder: "DigiShack", moved: 3, failed: 0 } }).includes("3 moved to DigiShack"), "the summary says what was moved");
+      ok(I.describeImport({ ...base, filing: { folder: "DigiShack", moved: 0, failed: 0, error: "needs Mail.ReadWrite" } }).includes("not moved to DigiShack"), "and when it could not");
+    }
+  }
+
   console.log(`\n${pass} passed, ${fail} failed`);
   if (fail > 0) process.exit(1);
 }

@@ -401,7 +401,7 @@ export const SETTING_GROUPS: SettingGroup[] = [
     docLabel: "How received cards are imported and matched to the log",
     title: "Received cards (email)",
     blurb:
-      "Reads the station mailbox for QSL cards other operators email you — the picture attached, a reply to your card, or a notice that a card is waiting on a website — and links each to the contact it confirms. Read-only: nothing in the mailbox is marked, moved or deleted. Your own outgoing cards and their bounces are recognised and never counted as received.",
+      "Reads the station mailbox for QSL cards other operators email you — the picture attached, a reply to your card, or a notice that a card is waiting on a website — and links each to the contact it confirms. Nothing in the mailbox is marked or deleted, and nothing is moved unless you name a folder below. Your own outgoing cards and their bounces are recognised and never counted as received.",
   },
   {
     id: "auto",
@@ -2223,6 +2223,14 @@ export const SETTINGS: SettingDef[] = [
     group: "qslinbound",
     help: "A date, YYYY-MM-DD. The first run reads from here; later runs carry on from the newest message already read. Blank means the last 30 days.",
     placeholder: "2026-01-01",
+  },
+  {
+    key: "qsl.inbound.fileToFolder",
+    label: "Move imported mail to folder",
+    type: "string",
+    group: "qslinbound",
+    help: "A mail folder name, e.g. DigiShack. After each import, the cards, replies, notices and bounces it recorded are moved out of Inbox / Junk into this folder, created if missing; mail imported earlier is moved too, 200 a run. Your own outgoing cards and anything not about a QSL stay put. Microsoft 365 only, and needs the Mail.ReadWrite application permission on the mail app. Blank leaves the mailbox untouched.",
+    placeholder: "DigiShack",
   },
   {
     key: "qsl.inbound.intervalMinutes",
