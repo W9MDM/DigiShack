@@ -159,6 +159,20 @@ export interface FlexRadioState {
   antennas: AntennaPorts;
 }
 
+/**
+ * One command's answer, or its absence, with how long it took. `late` is a reply that came
+ * after the command had already been given up as timed out - which the caller never sees,
+ * and which is the only record of when the radio finally did answer.
+ */
+export interface FlexReplyTiming {
+  command: string;
+  status: number;
+  message: string;
+  sentAt: number;
+  ms: number;
+  late: boolean;
+}
+
 type Events = {
   connected: [];
   disconnected: [Error | null];
@@ -166,7 +180,11 @@ type Events = {
   transmit: [boolean];
   status: [FlexStatus];
   message: [{ code: string; text: string }];
+  reply: [FlexReplyTiming];
 };
+
+/** Timed-out commands remembered for a late reply. A radio that stops answering for good must not grow this. */
+const LATE_REPLY_MEMORY = 32;
 
 export class FlexClient extends EventEmitter<Events> {
   readonly host: string;
@@ -177,8 +195,10 @@ export class FlexClient extends EventEmitter<Events> {
   private seq = 1;
   private pending = new Map<
     number,
-    { command: string; resolve: (r: FlexReply) => void; timer: NodeJS.Timeout }
+    { command: string; sentAt: number; resolve: (r: FlexReply) => void; timer: NodeJS.Timeout }
   >();
+  /** Commands that timed out, by seq, so a reply that turns up afterwards can be reported. */
+  private timedOut = new Map<number, { command: string; sentAt: number }>();
 
   readonly state: FlexRadioState = {
     connected: false,
@@ -284,13 +304,19 @@ export class FlexClient extends EventEmitter<Events> {
     }
 
     const seq = this.seq++;
+    const sentAt = Date.now();
     return new Promise((resolve) => {
       const timer = setTimeout(() => {
         this.pending.delete(seq);
+        this.timedOut.set(seq, { command: cmd, sentAt });
+        if (this.timedOut.size > LATE_REPLY_MEMORY) {
+          this.timedOut.delete(this.timedOut.keys().next().value as number);
+        }
+        this.emit("reply", { command: cmd, status: -1, message: "Timed out", sentAt, ms: Date.now() - sentAt, late: false });
         resolve({ seq, status: -1, message: "Timed out", command: cmd });
       }, timeoutMs);
 
-      this.pending.set(seq, { command: cmd, resolve, timer });
+      this.pending.set(seq, { command: cmd, sentAt, resolve, timer });
       this.socket!.write(`C${seq}|${cmd}\n`);
     });
   }
@@ -299,7 +325,9 @@ export class FlexClient extends EventEmitter<Events> {
    * Subscribe to a status stream. Read-only: subscriptions ask the radio to
    * report changes, they don't change anything.
    */
-  async subscribe(what: "slice all" | "radio all" | "tx all" | "meter all"): Promise<FlexReply> {
+  async subscribe(
+    what: "slice all" | "radio all" | "tx all" | "meter all" | "atu all" | "amplifier all",
+  ): Promise<FlexReply> {
     return this.command(`sub ${what}`);
   }
 
@@ -366,13 +394,22 @@ export class FlexClient extends EventEmitter<Events> {
         const statusHex = bar2 === -1 ? line.slice(bar1 + 1) : line.slice(bar1 + 1, bar2);
         const message = bar2 === -1 ? "" : line.slice(bar2 + 1);
 
+        const status = parseInt(statusHex, 16) || 0;
         const p = this.pending.get(seq);
-        if (!p) return;
+        if (!p) {
+          const gone = this.timedOut.get(seq);
+          if (gone) {
+            this.timedOut.delete(seq);
+            this.emit("reply", { command: gone.command, status, message, sentAt: gone.sentAt, ms: Date.now() - gone.sentAt, late: true });
+          }
+          return;
+        }
         clearTimeout(p.timer);
         this.pending.delete(seq);
+        this.emit("reply", { command: p.command, status, message, sentAt: p.sentAt, ms: Date.now() - p.sentAt, late: false });
         p.resolve({
           seq,
-          status: parseInt(statusHex, 16) || 0,
+          status,
           message,
           command: p.command,
         });

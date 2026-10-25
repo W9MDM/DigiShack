@@ -154,6 +154,7 @@ import {
   type NoPowerRecoveryConfig,
   type NoPowerVerdict,
 } from "@/lib/radio/power";
+import { TxTrace } from "@/lib/radio/tx-trace";
 import { NoiseFloor } from "@/lib/radio/noise";
 import { UNREAD_RECEIVER, type ReceiverControls } from "@/lib/radio/receiver-controls";
 import { getEqslCredentials, syncEqslInbox } from "@/lib/integrations/eqsl";
@@ -640,6 +641,9 @@ let followScheduleWithStream: (mode: string) => Promise<void> = async () => {};
  * mark it so a carrier that makes nothing is not blamed on DAX. See NoPowerWatch.
  */
 const noPower = new NoPowerWatch();
+/** What the radio said and did during each transmission, logged at the unkey. See lib/radio/tx-trace.ts. */
+const txTrace = new TxTrace();
+const tracedClients = new WeakSet<object>();
 /**
  * The receive noise floor, per running session.
  *
@@ -2245,6 +2249,7 @@ async function startFlexSource(): Promise<() => Promise<void>> {
     // Counted only between the radio's own key and unkey; the watch applies the same floor
     // the tracker uses, because a transmitter that is OFF reads 0 dBm rather than nothing.
     noPower.sample(m.fwdDbm);
+    txTrace.fwd(m.at, m.fwdDbm);
     // Receive only: a level taken while transmitting measures our own signal.
     if (!status.transmitting) noiseFloor.sample(m.dbm);
   });
@@ -2253,6 +2258,7 @@ async function startFlexSource(): Promise<() => Promise<void>> {
   // readings that should stop unattended transmission on their own.
   source.on("telemetry", (t) => {
     lastTelemetry = t;
+    txTrace.health(t);
     if (activeGuards) {
       activeGuards.onTelemetry({
         swr: t.swr,
@@ -2541,6 +2547,21 @@ async function startFlexSource(): Promise<() => Promise<void>> {
 
     flexGuiClient = shared.client;
     flexSliceIndex = shared.sliceIndex;
+    // How long the radio took over every key and unkey, and any command it stopped answering:
+    // the connection that keys is the one that went unanswered on 2026-10-25.
+    if (!tracedClients.has(shared.client)) {
+      tracedClients.add(shared.client);
+      shared.client.on("reply", (r) => {
+        if (!r.command.startsWith("xmit") && r.status !== -1 && !r.late) return;
+        const what = r.late
+          ? `late reply to "${r.command}" after ${r.ms}ms (0x${r.status.toString(16)})`
+          : r.status === -1
+            ? `"${r.command}" unanswered after ${r.ms}ms`
+            : `"${r.command}" -> 0x${r.status.toString(16)} in ${r.ms}ms`;
+        txTrace.note(Date.now(), what);
+        if (r.late) console.warn(`[radio] the radio answered "${r.command}" ${r.ms}ms after it was sent (0x${r.status.toString(16)})`);
+      });
+    }
 
     const tx = new FlexDaxTransmitter({
       host,
@@ -2691,6 +2712,47 @@ async function startFlexSource(): Promise<() => Promise<void>> {
   await rig.connect();
   await rig.subscribe("slice all");
   await rig.subscribe("tx all");
+  // Read-only, for the transmit trace: the ATU and an amplifier both sit in the transmit path
+  // and both can hold or stop it.
+  await rig.subscribe("atu all");
+  await rig.subscribe("amplifier all");
+
+  // EVERYTHING THE RADIO SAYS ABOUT TRANSMITTING, into the trace. The interlock's `reason=` and
+  // `source=`, the ATU, the amplifier: on 2026-10-25 none of it was kept, and once the radio
+  // was idle again none of it could be asked for. See lib/radio/tx-trace.ts.
+  const NORMAL_INTERLOCK = new Set(["READY", "PTT_REQUESTED", "TRANSMITTING", "UNKEY_REQUESTED"]);
+  rig.on("status", (st) => {
+    const obj = st.object.split(/\s+/)[0] ?? st.object;
+    if (obj !== "interlock" && obj !== "atu" && obj !== "amplifier") return;
+    const f = st.fields;
+    // The interlock's static configuration (delays, ACC/RCA enables) comes on its own lines
+    // and only when changed; the state line is the one that matters.
+    if (obj === "interlock" && f.state === undefined && f.tx_allowed === undefined) return;
+    const text = Object.entries(f)
+      .filter(([, v]) => v !== "")
+      .map(([k, v]) => `${k}=${v}`)
+      .join(" ");
+    txTrace.note(Date.now(), `${st.object} ${text}`);
+    // Anything but the four states of an ordinary transmission, or any stated reason, is
+    // worth a line of its own the moment it happens.
+    if (obj === "interlock" && ((f.state && !NORMAL_INTERLOCK.has(f.state)) || f.reason)) {
+      console.warn(`[radio] interlock ${text}`);
+    }
+  });
+  // The radio's own announcements (`M` lines): faults and warnings it volunteers. Never logged
+  // before, and rare enough that every one is.
+  rig.on("message", (m) => {
+    console.warn(`[radio] the radio says (${m.code}): ${m.text}`);
+    txTrace.note(Date.now(), `message ${m.code} ${m.text}`);
+  });
+  // Is the radio answering ANYTHING while keyed? A ping a second on this connection, not the
+  // one that keys: if these stall too, it is the radio or the path to it, not one command.
+  let tracePing: NodeJS.Timeout | null = null;
+  let pingInFlight = false;
+  const stopTracePing = () => {
+    if (tracePing) clearInterval(tracePing);
+    tracePing = null;
+  };
 
   const applySlice = () => {
     const slice = rig.activeSlice();
@@ -2840,7 +2902,20 @@ async function startFlexSource(): Promise<() => Promise<void>> {
     if (tx) {
       txSpanStart = Date.now();
       noPower.keyed(txSpanStart);
+      txTrace.keyed(txSpanStart);
+      stopTracePing();
+      tracePing = setInterval(() => {
+        if (pingInFlight) return;
+        pingInFlight = true;
+        const sent = Date.now();
+        void rig.command("ping", 5_000).then((r) => {
+          pingInFlight = false;
+          txTrace.ping(r.status === 0 ? Date.now() - sent : null);
+        });
+      }, 1_000);
     } else if (txSpanStart !== null) {
+      stopTracePing();
+      const trace = txTrace.unkeyed(Date.now());
       txSpans.push([txSpanStart, Date.now()]);
       if (txSpans.length > 40) txSpans.shift();
       txSpanStart = null;
@@ -2886,6 +2961,10 @@ async function startFlexSource(): Promise<() => Promise<void>> {
                   ? ` - the TX slice is ${sliceMode}, not DIGU/DIGL`
                   : ""),
       );
+      if (trace) {
+        if (verdict?.kind === "no-power" || verdict?.kind === "unmetered") console.error(`[tx-trace] ${trace}`);
+        else console.log(`[tx-trace] ${trace}`);
+      }
       if (warnings !== status.txWarnings) {
         if (verdict?.kind === "powered") {
           console.log(`[radio] forward power is back (keyed ${held}) - the power-out warning is cleared`);

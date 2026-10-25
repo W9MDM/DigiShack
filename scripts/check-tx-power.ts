@@ -18,6 +18,7 @@ import {
   UNMETERED_TAG,
   type NoPowerVerdict,
 } from "@/lib/radio/power";
+import { TxTrace } from "@/lib/radio/tx-trace";
 
 let pass = 0;
 let fail = 0;
@@ -317,6 +318,45 @@ console.log("\nrecovering from a run of no-power transmissions");
   ok(n(Number.NaN, Number.NaN).after === 3 && n(Number.NaN, Number.NaN).windowMs === 30 * 60_000, "an unreadable setting falls back to 3 and 30 min");
   ok(n(3, 1).windowMs === 5 * 60_000 && n(3, 99_999).windowMs === 1_440 * 60_000, "the window is held between 5 min and a day");
   ok(str(run([dead, dead], null, T, n(2, 30))) === "none,restart", "and a run of 2 acts on the second");
+}
+
+console.log("\nThe transmit trace");
+{
+  const K = Date.UTC(2026, 9, 25, 18, 38, 0);
+  const t = new TxTrace();
+  ok(t.unkeyed(K) === null, "no key seen, no line");
+  t.note(K - 10_000, "stale, from the last receive");
+  t.note(K - 40, `"xmit 1" -> 0x0 in 12ms`);
+  t.note(K - 20, "interlock state=PTT_REQUESTED source=SW");
+  t.keyed(K);
+  ok(t.open, "keyed opens a span");
+  t.note(K + 30, "interlock state=TRANSMITTING source=SW");
+  t.fwd(K + 500, 0);
+  t.fwd(K + 600, 0);
+  t.health({ swr: 1.3, paTempC: 41, reflectedDbm: null });
+  t.ping(4);
+  t.ping(null);
+  t.note(K + 22_610, `"xmit 0" unanswered after 10000ms`);
+  const dead = t.unkeyed(K + 27_100) ?? "";
+  ok(dead.startsWith("keyed 18:38:00.000Z for 27.1s"), "it says when and for how long", dead);
+  ok(dead.includes("fwd peak 0.0 W (2 readings, none above 0.05 W)"), "a transmitter that is off reads as no RF, not no readings", dead);
+  ok(dead.includes("swr max 1.30") && dead.includes("pa 41C"), "SWR and PA temperature while keyed");
+  ok(dead.includes("api ping 1/2 answered, max 4ms"), "and whether the radio answered anything else", dead);
+  ok(dead.includes(`-0.04s "xmit 1"`) && dead.includes("-0.02s interlock state=PTT_REQUESTED"), "what led the key is kept", dead);
+  ok(!dead.includes("stale"), "but not anything older than the lead");
+  ok(dead.includes(`+22.61s "xmit 0" unanswered`), "events are timed from the key", dead);
+  ok(!t.open && t.unkeyed(K + 30_000) === null, "the span closes once");
+
+  t.keyed(K + 60_000);
+  t.fwd(K + 61_000, 49.1);
+  t.fwd(K + 72_000, 49.0);
+  const good = t.unkeyed(K + 72_700) ?? "";
+  ok(good.includes("fwd peak 81 W") && good.includes("last RF +12.00s"), "a good one shows its power and when RF stopped", good);
+  ok(good.includes("no radio events") && good.includes("swr: none") && good.includes("api ping: none"), "and says plainly what it did not see", good);
+
+  t.keyed(K + 100_000);
+  for (let i = 0; i < 100; i++) t.note(K + 100_000 + i, `n${i}`);
+  ok((t.unkeyed(K + 101_000) ?? "").includes("(40 more not kept)"), "a span's notes are capped, and says so");
 }
 
 console.log(`\n${pass} passed, ${fail} failed\n`);
