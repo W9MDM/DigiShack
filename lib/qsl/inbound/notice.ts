@@ -20,8 +20,9 @@
 // that as "the card". Now the stock artwork is refused and the page's data is read instead
 // (readCardPage): who sent it, to whom, and the contact's date, time, band and mode.
 //
-// UNVERIFIED for qslworld: its pages were not available to test against. The image is looked
-// for as og:image first, then an <img> whose address mentions a card.
+// qslworld notices carry the contact in their links' own query (from, to, band, mode, date,
+// time — readNoticeUrl), so those are read without a fetch. Its pages remain UNVERIFIED: the
+// image is looked for as og:image first, then an <img> whose address mentions a card.
 
 import { MAX_IMAGE_BYTES, sniffImage, type ImageCheck } from "@/lib/qsl/inbound/classify";
 import { readCapped } from "@/lib/qsl/inbound/source";
@@ -107,17 +108,35 @@ export function readCardPage(html: string): CardPageDetails | null {
   const d = j as Record<string, unknown>;
   const str = (v: unknown) => (typeof v === "string" ? v.trim() : "");
   const station = d.myStation && typeof d.myStation === "object" ? (d.myStation as Record<string, unknown>) : {};
-  const callsign = str(station.stationCallsign).toUpperCase();
-  const to = str(d.contactCallsign).toUpperCase();
-  if (!callsign || !to) return null;
+  return contactFrom({ callsign: str(station.stationCallsign), to: str(d.contactCallsign), date: str(d.qsoDate), time: str(d.qsoTime), band: str(d.band), mode: str(d.mode) });
+}
+
+/** The fields a card site gives, kept only where they are the shape they claim to be. */
+function contactFrom(f: { callsign: string; to: string; date: string; time: string; band: string; mode: string }): CardPageDetails | null {
+  const callsign = f.callsign.toUpperCase();
+  const to = f.to.toUpperCase();
+  const call = /^[A-Z0-9/]{3,15}$/;
+  if (!call.test(callsign) || !call.test(to)) return null;
   const out: CardPageDetails = { callsign, to };
-  const date = /^(\d{4}-\d{2}-\d{2})/.exec(str(d.qsoDate))?.[1];
+  const date = /^(\d{4}-\d{2}-\d{2})/.exec(f.date)?.[1];
   if (date) out.date = date;
-  const time = /^(\d{2}):?(\d{2})/.exec(str(d.qsoTime));
+  const time = /^(\d{2}):?(\d{2})/.exec(f.time);
   if (date && time && Number(time[1]) < 24 && Number(time[2]) < 60) out.time = `${time[1]}${time[2]}`;
-  if (/^\d+(\.\d+)?c?m$/i.test(str(d.band))) out.band = str(d.band).toUpperCase();
-  if (/^[A-Z0-9]{2,8}$/i.test(str(d.mode))) out.mode = str(d.mode).toUpperCase();
+  if (/^\d+(\.\d+)?c?m$/i.test(f.band)) out.band = f.band.toUpperCase();
+  if (/^[A-Z0-9]{2,8}$/i.test(f.mode)) out.mode = f.mode.toUpperCase();
   return out;
+}
+
+/**
+ * The contact a qslworld link spells out in its own query — no fetch needed:
+ * `https://qslworld.com/qso-map/?from=K7HTM&to=K9XYZ&…&band=20m&mode=FT8&date=2026-10-20&time=22%3A11%3A00`
+ * (seen in a notice, October 2026). Pure, for the check. Null for a link without from and to.
+ */
+export function readNoticeUrl(link: string): CardPageDetails | null {
+  const u = allowedNoticeUrl(link);
+  if (!u) return null;
+  const q = (k: string) => (u.searchParams.get(k) ?? "").trim();
+  return contactFrom({ callsign: q("from"), to: q("to"), date: q("date"), time: q("time"), band: q("band"), mode: q("mode") });
 }
 
 /** The card image's address in a card site's page, or null. Pure, for the check. */

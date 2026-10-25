@@ -39,7 +39,7 @@ import {
   type ImageCheck,
 } from "@/lib/qsl/inbound/classify";
 import { matchQso, type MatchResult, type QsoCandidate, type SentCard } from "@/lib/qsl/inbound/match";
-import type { CardPageDetails, NoticeImageResult } from "@/lib/qsl/inbound/notice";
+import { readNoticeUrl, type CardPageDetails, type NoticeImageResult } from "@/lib/qsl/inbound/notice";
 import type { MailSource, SourceAttachment, SourceMessage } from "@/lib/qsl/inbound/source";
 
 export type ReceivedKind = "CARD" | "REPLY" | "NOTICE" | "BOUNCE";
@@ -363,14 +363,16 @@ export async function importMailbox(deps: ImportDeps, opts: ImportOptions): Prom
       case "notice": {
         report.notices++;
         const body = await deps.source.body(m);
-        const link = pickNoticeLink(extractLinks(body), c.site);
+        const links = extractLinks(body);
+        const link = pickNoticeLink(links, c.site);
         const site = c.site !== "other" ? c.site : link ? siteOfLink(link) : "other";
         let pic: { bytes: Uint8Array; check: Extract<ImageCheck, { ok: true }> } | undefined;
-        let page: CardPageDetails | undefined;
+        // qslworld's links spell the contact out in their query; any link in the notice will do.
+        let page: CardPageDetails | undefined = links.map(readNoticeUrl).find((d) => d !== null) ?? undefined;
         let why = "";
         if (link && (site === "digiqsl" || site === "qslworld") && deps.fetchNoticeImage) {
           const got = await deps.fetchNoticeImage(link);
-          page = got.details;
+          page = got.details ?? page;
           if (got.ok) pic = { bytes: got.bytes, check: got.check };
           else why = ` No picture: ${got.reason}.`;
         } else if (site === "eqsl") {

@@ -118,7 +118,9 @@ connection**.
   when the bytes are JPEG, PNG, GIF or WebP, and never over 10 MB.
 - **Notices** keep their link. A digiqsl.com card page is read for the contact it confirms
   (sender, date, time, band, mode); the site draws the card in the browser, so there is no
-  picture to keep, and a page made out to you counts as their card. qslworld.com pictures are
+  picture to keep, and a page made out to you counts as their card. qslworld.com notices
+  carry the contact in their links (`from`, `to`, `band`, `mode`, `date`, `time`), which is read
+  without opening the page; a link made out to you counts as their card, and pictures are
   fetched when the page exposes them. eQSL cards need your eQSL login and come in through the
   eQSL inbox sync instead.
 - A matched card sets the contact's **emailed card received** flag. It is not a paper card,

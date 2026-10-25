@@ -906,6 +906,23 @@ async function main(): Promise<void> {
     const b = rows.find((r) => r.messageId === "<dq-2@x>");
     eq([b?.callsign, b?.confirms], ["K5ABC", false], "a page made out to someone else names the sender but credits nothing");
     ok(/made out to N0OTHER/.test(b?.matchNote ?? ""), "and says so", b?.matchNote);
+
+    // qslworld spells the contact out in the link itself (a real notice, October 2026).
+    eq(
+      N.readNoticeUrl("https://qslworld.com/qso-map/?from=K7HTM&to=K9XYZ&lat1=42.587474&lon1=-114.44661&lat2=41.390489&lon2=-87.177025&g1=DN22SO&g2=EN61aa&band=20m&mode=FT8&date=2026-10-20&time=22%3A11%3A00"),
+      { callsign: "K7HTM", to: "K9XYZ", date: "2026-10-20", time: "2211", band: "20M", mode: "FT8" },
+      "a qslworld link's query is the contact",
+    );
+    eq(N.readNoticeUrl("https://evil.example/qso-map/?from=K7HTM&to=K9XYZ"), null, "only on the card sites");
+    eq(N.readNoticeUrl("https://qslworld.com/unsubscribe"), null, "a link without from and to gives nothing");
+    rows.length = 0;
+    msgs.length = 0;
+    msgs.push({ key: "<qw-1@x>", folder: "inbox", receivedAt: at("2026-10-24T12:00:00Z"), summary: sum({ from: "noreply@qslworld.com", subject: "You received a QSL card" }) });
+    src.body = async () =>
+      `<a href="https://qslworld.com/card/view/123">View card</a> <a href="https://qslworld.com/qso-map/?from=K5ABC&amp;to=${OUR}&amp;band=20m&amp;mode=FT8&amp;date=2026-10-21&amp;time=10%3A02%3A00">Map</a>`;
+    await I.importMailbox({ source: src, store, fetchNoticeImage: async () => ({ ok: false as const, reason: "needs a login" }) }, { ...ctx, since: { inbox: at("2026-10-01T00:00:00Z") }, maxMessages: 10 });
+    const w = rows.find((r) => r.messageId === "<qw-1@x>");
+    eq([w?.callsign, w?.qsoId, w?.matchStatus, w?.confirms], ["K5ABC", "q4", "MATCHED", true], "a qslworld notice is matched from its link, with the page unread");
   }
 
   // -------------------------------------------------------------------------

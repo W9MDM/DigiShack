@@ -37,7 +37,7 @@ const KEY_FLAGS = "qsl.inbound.flagsVersion";
 const FLAGS_VERSION = "2-card-reply-split";
 /** Which matching rule unresolved rows were last read under; a change reads them again. */
 const KEY_REMATCH = "qsl.inbound.rematchVersion";
-const REMATCH_VERSION = "1-email-text-and-card-pages";
+const REMATCH_VERSION = "2-qslworld-links";
 /** Whether stored pictures have been compared with our card artwork (fingerprint.ts). */
 const KEY_OWN_ART = "qsl.inbound.ownArtVersion";
 const OWN_ART_VERSION = "1-dhash";
@@ -193,8 +193,9 @@ export async function dropOwnCardRows(
 /**
  * Once per matching rule: let what the importer could not settle be read again.
  *
- * That is the cards and replies still UNMATCHED or AMBIGUOUS, and every digiqsl notice — whose
- * "picture" was the site's stock background and whose card page is now read for the contact.
+ * That is the cards, replies and notices still UNMATCHED or AMBIGUOUS. (Rule 1 also took every
+ * digiqsl notice, whose "picture" was the site's stock background; rule 2 is qslworld's links,
+ * which carry the contact in their query.)
  * Their rows go (and their pictures), and the folder marks go back to the start date, so the
  * next runs fetch those messages afresh — everything else already imported is skipped on its
  * Message-ID without a download.
@@ -205,13 +206,7 @@ export async function dropOwnCardRows(
 async function rereadUnresolved(): Promise<void> {
   if ((await prisma.setting.findUnique({ where: { key: KEY_REMATCH } }))?.value === REMATCH_VERSION) return;
   const rows = await prisma.receivedQsl.findMany({
-    where: {
-      filedAt: null,
-      OR: [
-        { matchStatus: { in: ["UNMATCHED", "AMBIGUOUS"] }, kind: { in: ["CARD", "REPLY"] } },
-        { kind: "NOTICE", link: { contains: "digiqsl.com" } },
-      ],
-    },
+    where: { filedAt: null, matchStatus: { in: ["UNMATCHED", "AMBIGUOUS"] }, kind: { in: ["CARD", "REPLY", "NOTICE"] } },
     select: { messageId: true },
     distinct: ["messageId"],
   });
