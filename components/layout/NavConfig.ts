@@ -14,6 +14,8 @@ export interface NavLink {
   keywords?: string;
   /** Hidden below this role. Server-side enforcement is independent. */
   minRole?: "OPERATOR" | "ADMIN";
+  /** A QSL page: the station's QSL manager sees it whatever their role. */
+  qsl?: boolean;
   /**
    * Hidden from the MENUS at or above this role, because that role reaches it another way.
    *
@@ -131,6 +133,7 @@ export const NAV: NavEntry[] = [
         description: "QSL email and paper cards",
         keywords: "qsl email cards confirm",
         minRole: "OPERATOR",
+        qsl: true,
       },
       {
         href: "/pota",
@@ -230,7 +233,7 @@ export const NAV: NavEntry[] = [
 /** Pages with no menu entry that the go-to palette still offers. */
 export const ELSEWHERE: NavLink[] = [
   { href: "/account", label: "Account", description: "Change your password", keywords: "password profile" },
-  { href: "/qsl/cards", label: "QSL cards", description: "Paper cards owed, sent and received", minRole: "OPERATOR" },
+  { href: "/qsl/cards", label: "QSL cards", description: "Paper cards owed, sent and received", minRole: "OPERATOR", qsl: true },
   {
     href: "/incomplete",
     label: "Incomplete exchanges",
@@ -254,7 +257,7 @@ export const ELSEWHERE: NavLink[] = [
 
 const RANK: Record<Role, number> = { VIEWER: 0, OPERATOR: 1, ADMIN: 2 };
 
-type Viewer = { role: Role } | null;
+type Viewer = { role: Role; qslManager?: boolean } | null;
 
 /** Whether this user can open the page at all. */
 export function canReach(link: NavLink, user: Viewer, flags: UiFlags | undefined): boolean {
@@ -262,7 +265,8 @@ export function canReach(link: NavLink, user: Viewer, flags: UiFlags | undefined
     // Defaults to hidden when the flags have not arrived, so a page that forgets to pass
     // them fails closed.
     (!link.experimental || flags?.[link.experimental] === true) &&
-    (!link.minRole || (user !== null && RANK[user.role] >= RANK[link.minRole]))
+    (!link.minRole ||
+      (user !== null && (RANK[user.role] >= RANK[link.minRole] || (link.qsl === true && user.qslManager === true))))
   );
 }
 

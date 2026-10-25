@@ -81,4 +81,4 @@ async function patch(req: NextApiRequest, res: NextApiResponse, auth: AuthContex
   sendJson(res, 200, { ok: true });
 }
 
-export default authedRoute({ PATCH: { role: "OPERATOR", handler: patch } });
+export default authedRoute({ PATCH: { role: "OPERATOR", qsl: true, handler: patch } });

@@ -68,6 +68,8 @@ export const createUserSchema = z.object({
   callsign: CALLSIGN.optional(),
   password: PASSWORD,
   role: z.enum(ROLES).default("VIEWER"),
+  /** The station's QSL manager: everything QSL, whatever the role. */
+  qslManager: z.boolean().default(false),
 });
 
 export const updateUserSchema = z.object({
@@ -75,6 +77,7 @@ export const updateUserSchema = z.object({
   name: z.string().trim().min(1).max(120).optional(),
   callsign: CALLSIGN.nullish(),
   role: z.enum(ROLES).optional(),
+  qslManager: z.boolean().optional(),
   active: z.boolean().optional(),
   /** Setting this revokes every existing session for that user. */
   password: PASSWORD.optional(),

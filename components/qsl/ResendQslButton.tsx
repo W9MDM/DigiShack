@@ -2,7 +2,7 @@ import { useState } from "react";
 
 import { Button } from "@/components/ui/primitives";
 import { ApiError, apiPost } from "@/lib/client/api";
-import { useCan } from "@/lib/client/session";
+import { useCanManageQsl } from "@/lib/client/session";
 
 // Send one contact's QSL card again.
 //
@@ -34,7 +34,7 @@ export function ResendQslButton({
   /** After a successful queue, so a list showing the old row can reload. */
   onQueued?: () => void;
 }) {
-  const isAdmin = useCan("ADMIN");
+  const canManage = useCanManageQsl();
   const [state, setState] = useState<"idle" | "busy" | "done" | "failed">("idle");
   const [detail, setDetail] = useState<string | null>(null);
 
@@ -76,7 +76,7 @@ export function ResendQslButton({
 
   // Hidden rather than disabled for a non-admin: a greyed control invites a question about
   // why it is greyed, and the answer is only that this is not their button.
-  if (!isAdmin) return null;
+  if (!canManage) return null;
 
   const note = detail ? (
     <span role="status" className={`text-xs ${state === "done" ? "text-ok" : "text-warn"}`}>

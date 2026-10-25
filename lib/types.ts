@@ -186,6 +186,8 @@ export interface User {
   name: string;
   callsign: string | null;
   role: Role;
+  /** Takes care of everything QSL, whatever the role. */
+  qslManager?: boolean;
   active: boolean;
   lastLoginAt: string | null;
   createdAt: string;

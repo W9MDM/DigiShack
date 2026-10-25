@@ -14,6 +14,7 @@ const USER_SELECT = {
   name: true,
   callsign: true,
   role: true,
+  qslManager: true,
   active: true,
   lastLoginAt: true,
   createdAt: true,
@@ -42,6 +43,7 @@ async function post(req: NextApiRequest, res: NextApiResponse) {
       callsign: input.callsign || null,
       passwordHash: await hashPassword(input.password),
       role: input.role,
+      qslManager: input.qslManager,
     },
     select: USER_SELECT,
   });

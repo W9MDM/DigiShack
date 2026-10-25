@@ -39,6 +39,8 @@ export interface AuthUser {
   name: string;
   callsign: string | null;
   role: Role;
+  /** The station's QSL manager: everything QSL, whatever the role (see canManageQsl). */
+  qslManager?: boolean;
 }
 
 export interface AuthContext {
@@ -228,6 +230,7 @@ export async function getAuth(
           name: true,
           callsign: true,
           role: true,
+          qslManager: true,
           active: true,
         },
       },
@@ -254,6 +257,7 @@ export async function getAuth(
       name: session.user.name,
       callsign: session.user.callsign,
       role: session.user.role,
+      qslManager: session.user.qslManager,
     },
   };
 }
@@ -337,6 +341,11 @@ const RANK: Record<Role, number> = { VIEWER: 0, OPERATOR: 1, ADMIN: 2 };
 
 export function hasRole(user: AuthUser, required: Role): boolean {
   return RANK[user.role] >= RANK[required];
+}
+
+/** May this user take care of QSL — the queue, received cards, the artwork, the QSL settings? */
+export function canManageQsl(user: Pick<AuthUser, "role" | "qslManager">): boolean {
+  return user.role === "ADMIN" || user.qslManager === true;
 }
 
 // ---------------------------------------------------------------------------

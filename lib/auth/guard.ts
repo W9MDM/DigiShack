@@ -15,6 +15,7 @@ import {
   type AuthContext,
   type AuthUser,
   getAuth,
+  canManageQsl,
   hasRole,
   needsSetup,
 } from "@/lib/auth/session";
@@ -36,6 +37,11 @@ export type AuthedHandler = (
 export interface MethodSpec {
   /** Minimum role. VIEWER means "any signed-in user". */
   role: Role;
+  /**
+   * A QSL route: the station's QSL manager passes whatever their role, so one person can
+   * be trusted with the cards without being trusted with the radio or the users.
+   */
+  qsl?: boolean;
   handler: AuthedHandler;
   /**
    * Accept an API key bearer token as well as a session cookie. Only the public
@@ -139,7 +145,7 @@ export function authedRoute(
         return;
       }
 
-      if (!hasRole(auth.user, spec.role)) {
+      if (!hasRole(auth.user, spec.role) && !(spec.qsl && canManageQsl(auth.user))) {
         sendError(
           res,
           403,
@@ -317,6 +323,8 @@ tries again in ${SESSION_RETRY_AFTER_S} seconds.</p>
 export function withPageAuth<P extends Record<string, unknown>>(
   opts: {
     role?: Role;
+    /** A QSL page: the QSL manager is let in whatever their role (see MethodSpec.qsl). */
+    qsl?: boolean;
     inner?: (
       ctx: GetServerSidePropsContext,
       auth: AuthContext,
@@ -352,7 +360,7 @@ export function withPageAuth<P extends Record<string, unknown>>(
       };
     }
 
-    if (opts.role && !hasRole(auth.user, opts.role)) {
+    if (opts.role && !hasRole(auth.user, opts.role) && !(opts.qsl && canManageQsl(auth.user))) {
       return { redirect: { destination: "/", permanent: false } };
     }
 

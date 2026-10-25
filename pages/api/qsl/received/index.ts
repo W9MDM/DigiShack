@@ -4,7 +4,7 @@ import type { Prisma } from "@prisma/client";
 
 import { queryParam, sendJson } from "@/lib/api/respond";
 import { authedRoute } from "@/lib/auth/guard";
-import { hasRole, type AuthContext } from "@/lib/auth/session";
+import { canManageQsl, type AuthContext } from "@/lib/auth/session";
 import { prisma } from "@/lib/db/prisma";
 import { getReceiveProvider, getSendProvider, loadGraphConfig } from "@/lib/mail/providers";
 import { baseCall } from "@/lib/qsl/inbound/classify";
@@ -144,7 +144,7 @@ async function get(req: NextApiRequest, res: NextApiResponse, auth: AuthContext)
     rows: rows.map(present),
     counts: Object.fromEntries(VIEWS.map((v, i) => [v, counts[i] ?? 0])),
     limit: LIMIT,
-    status: await status(hasRole(auth.user, "ADMIN")),
+    status: await status(canManageQsl(auth.user)),
   });
 }
 

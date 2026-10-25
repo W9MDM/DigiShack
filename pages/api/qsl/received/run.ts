@@ -35,4 +35,4 @@ async function post(req: NextApiRequest, res: NextApiResponse) {
   });
 }
 
-export default authedRoute({ POST: { role: "ADMIN", handler: post, rateLimit: API_HEAVY_LIMIT } });
+export default authedRoute({ POST: { role: "ADMIN", qsl: true, handler: post, rateLimit: API_HEAVY_LIMIT } });

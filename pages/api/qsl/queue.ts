@@ -286,6 +286,6 @@ async function post(req: NextApiRequest, res: NextApiResponse, auth: AuthContext
 }
 
 export default authedRoute({
-  GET: { role: "OPERATOR", handler: get },
-  POST: { role: "ADMIN", handler: post },
+  GET: { role: "OPERATOR", qsl: true, handler: get },
+  POST: { role: "ADMIN", qsl: true, handler: post },
 });

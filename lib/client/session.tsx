@@ -8,6 +8,7 @@ export interface SessionUser {
   name: string;
   callsign: string | null;
   role: Role;
+  qslManager?: boolean;
 }
 
 // Populated from getServerSideProps via withPageAuth, so it's available on first
@@ -42,4 +43,10 @@ export function useCan(required: Role): boolean {
   const user = useUser();
   if (!user) return false;
   return RANK[user.role] >= RANK[required];
+}
+
+/** The QSL controls: an admin, or the user made the station's QSL manager. UI only, like useCan. */
+export function useCanManageQsl(): boolean {
+  const user = useUser();
+  return user !== null && (user.role === "ADMIN" || user.qslManager === true);
 }

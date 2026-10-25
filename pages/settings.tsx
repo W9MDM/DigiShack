@@ -12,13 +12,21 @@ import { useUnsavedChangesGuard } from "@/components/settings/useUnsavedChangesG
 import { staysInView } from "@/components/settings/visibility";
 import { ErrorBanner, PageHeader } from "@/components/ui/primitives";
 import { withPageAuth } from "@/lib/auth/guard";
+import { useCan } from "@/lib/client/session";
 import { navGroups } from "@/lib/settings/presentation";
 import { searchSettings, searchTerms } from "@/lib/settings/search";
 
-const NAV_GROUPS = navGroups();
+const ALL_NAV_GROUPS = navGroups();
 
 export default function SettingsPage() {
   const st = useSettingsState();
+  // The QSL manager who is not an admin is sent only the QSL groups, and sees only the QSL
+  // category whatever the URL names.
+  const isAdmin = useCan("ADMIN");
+  const NAV_GROUPS = useMemo(
+    () => (isAdmin ? ALL_NAV_GROUPS : ALL_NAV_GROUPS.filter((g) => st.groups.some((x) => x.id === g.id))),
+    [isAdmin, st.groups],
+  );
   const nav = useSettingsLocation({ ready: st.settings !== null });
   const [query, setQuery] = useState("");
   const deferred = useDeferredValue(query);
@@ -66,7 +74,7 @@ export default function SettingsPage() {
           (g) => g.advancedOnly && !settings.some((s) => s.group === g.id && staysInView(s)),
         ).map((g) => g.id),
       ),
-    [settings],
+    [settings, NAV_GROUPS],
   );
 
   const dirty = st.dirtyKeys.length;
@@ -86,7 +94,7 @@ export default function SettingsPage() {
     <SettingsLayout
       bottomInset={barVisible}
       nav={{
-        activeTab: nav.location.tab,
+        activeTab: isAdmin ? nav.location.tab : "qsl",
         activeGroup: nav.activeGroup,
         groups: NAV_GROUPS,
         dirtyGroups: new Set(dirtyGroups),
@@ -143,7 +151,7 @@ export default function SettingsPage() {
             )}
             <CategoryView
               hidden={searching}
-              tabId={nav.location.tab}
+              tabId={isAdmin ? nav.location.tab : "qsl"}
               groups={st.groups}
               settings={settings}
               byKey={st.byKey}
@@ -188,4 +196,4 @@ export default function SettingsPage() {
   );
 }
 
-export const getServerSideProps = withPageAuth({ role: "ADMIN" });
+export const getServerSideProps = withPageAuth({ role: "ADMIN", qsl: true });

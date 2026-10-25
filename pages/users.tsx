@@ -28,6 +28,9 @@ const ROLE_HELP: Record<Role, string> = {
   ADMIN: "Everything, including user management",
 };
 
+const QSL_MANAGER_HELP =
+  "Takes care of QSL whatever their role: approves and sends the queue, reviews received cards, runs the import, and changes the QSL card and import settings. Not the mail server or other settings.";
+
 export default function UsersPage() {
   const me = useUser();
   const { data, error, reload } = useApi<ListResponse<User>>("/api/users");
@@ -122,6 +125,17 @@ export default function UsersPage() {
                           </option>
                         ))}
                       </Select>
+                      {u.role !== "ADMIN" && (
+                        <label className="mt-1.5 flex items-center gap-1.5 whitespace-nowrap text-xs text-fg-muted" title={QSL_MANAGER_HELP}>
+                          <input
+                            type="checkbox"
+                            checked={u.qslManager === true}
+                            onChange={(e) => void patch(u.id, { qslManager: e.target.checked })}
+                            className="accent-accent"
+                          />
+                          QSL manager
+                        </label>
+                      )}
                     </Td>
                     <Td size="lg">
                       {u.active ? (
@@ -329,6 +343,7 @@ function NewUserCard({
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [role, setRole] = useState<string>("OPERATOR");
+  const [qslManager, setQslManager] = useState(false);
   const [busy, setBusy] = useState(false);
 
   return (
@@ -345,11 +360,13 @@ function NewUserCard({
               email,
               password,
               role,
+              qslManager: role !== "ADMIN" && qslManager,
             });
             setName("");
             setCallsign("");
             setEmail("");
             setPassword("");
+            setQslManager(false);
             onCreated();
           } catch (err) {
             onError(err);
@@ -414,6 +431,20 @@ function NewUserCard({
             ))}
           </Select>
         </Field>
+        {role !== "ADMIN" && (
+          <label className="flex items-start gap-2 text-sm text-fg-muted">
+            <input
+              type="checkbox"
+              checked={qslManager}
+              onChange={(e) => setQslManager(e.target.checked)}
+              className="accent-accent mt-1"
+            />
+            <span>
+              QSL manager
+              <span className="block text-xs text-fg-subtle">{QSL_MANAGER_HELP}</span>
+            </span>
+          </label>
+        )}
         <Button type="submit" variant="primary" disabled={busy}>
           {busy ? "Creating…" : "Create user"}
         </Button>

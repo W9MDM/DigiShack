@@ -115,4 +115,4 @@ async function get(req: NextApiRequest, res: NextApiResponse) {
   }
 }
 
-export default authedRoute({ GET: { role: "OPERATOR", handler: get } });
+export default authedRoute({ GET: { role: "OPERATOR", qsl: true, handler: get } });

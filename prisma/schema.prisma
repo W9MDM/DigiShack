@@ -51,6 +51,9 @@ model User {
   callsign       String?         @db.VarChar(32)
   passwordHash   String          @db.VarChar(255)
   role           Role            @default(VIEWER)
+  /// Takes care of everything QSL — the send queue, received cards, the card artwork and
+  /// the QSL settings — whatever their role. See MethodSpec.qsl in lib/auth/guard.ts.
+  qslManager     Boolean         @default(false)
   /// Disabling a user invalidates their access immediately — sessions are
   /// checked against this on every request, not just at login.
   active         Boolean         @default(true)

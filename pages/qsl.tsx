@@ -18,7 +18,7 @@ import {
 } from "@/components/ui/primitives";
 import { withPageAuth } from "@/lib/auth/guard";
 import { ApiError, apiGet, apiPost, isNetworkFailure, useApi } from "@/lib/client/api";
-import { useCan } from "@/lib/client/session";
+import { useCanManageQsl } from "@/lib/client/session";
 import { isUnconfirmedSend, unconfirmedSendState } from "@/lib/qsl/unconfirmed";
 import { formatUtc, formatUtcDate } from "@/lib/time";
 import { cn } from "@/lib/utils";
@@ -526,7 +526,7 @@ export default function QslPage() {
   const interruptedFilter = tab === "sent" && onlyInterrupted;
   const path = `/api/qsl/queue?status=${tabDef.status}${interruptedFilter ? "&unconfirmed=1" : ""}`;
   const { data, error, loading, reload } = useApi<QueueResponse>(path);
-  const canAct = useCan("ADMIN");
+  const canAct = useCanManageQsl();
 
   const [busy, setBusy] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -1020,4 +1020,4 @@ function EmptyQueue({ tab, sender }: { tab: TabId; sender: QslSenderStatus | und
   );
 }
 
-export const getServerSideProps = withPageAuth({ role: "OPERATOR" });
+export const getServerSideProps = withPageAuth({ role: "OPERATOR", qsl: true });

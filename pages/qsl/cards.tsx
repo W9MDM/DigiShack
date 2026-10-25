@@ -602,4 +602,4 @@ export default function QslCardsPage() {
   );
 }
 
-export const getServerSideProps = withPageAuth({ role: "OPERATOR" });
+export const getServerSideProps = withPageAuth({ role: "OPERATOR", qsl: true });

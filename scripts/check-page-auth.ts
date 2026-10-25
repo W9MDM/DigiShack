@@ -45,7 +45,7 @@ interface FakeSession {
   tokenHash: string;
   expiresAt: Date;
   lastSeenAt: Date;
-  user: { id: string; email: string; name: string; callsign: string | null; role: Role; active: boolean };
+  user: { id: string; email: string; name: string; callsign: string | null; role: Role; qslManager?: boolean; active: boolean };
 }
 const sessions = new Map<string, FakeSession>();
 /** What the next session lookup does instead of answering. */
@@ -127,7 +127,7 @@ const TTL_MS = 7 * 86_400_000;
 
 const SESSION_COOKIE = "digishack_session";
 function addSession(
-  opts: { expired?: boolean; active?: boolean; role?: Role; expiresInMs?: number; lastSeenAgoMs?: number } = {},
+  opts: { expired?: boolean; active?: boolean; role?: Role; qslManager?: boolean; expiresInMs?: number; lastSeenAgoMs?: number } = {},
 ): string {
   const token = randomBytes(32).toString("base64url");
   const tokenHash = createHash("sha256").update(token).digest("hex");
@@ -142,6 +142,7 @@ function addSession(
       name: "Op",
       callsign: "W9XYZ",
       role: opts.role ?? "ADMIN",
+      qslManager: opts.qslManager ?? false,
       active: opts.active ?? true,
     },
   });
@@ -355,6 +356,28 @@ async function main(): Promise<void> {
     const res = fakeRes();
     await apiHandler(fakeReq(token) as never, res as never);
     return res;
+  }
+
+  console.log("the QSL manager: QSL routes and pages whatever the role, nothing else");
+  {
+    const ok200 = (_req: unknown, res: { status: (n: number) => { send: (b: string) => void } }) => void res.status(200).send("{}");
+    const qslRoute = authedRoute({ POST: { role: "ADMIN", qsl: true, handler: ok200 as never } });
+    const adminRoute = authedRoute({ POST: { role: "ADMIN", handler: ok200 as never } });
+    const hit = async (h: typeof qslRoute, token: string) => {
+      const res = fakeRes();
+      await h(fakeReq(token, "POST") as never, res as never);
+      return res.statusCode;
+    };
+    const viewer = addSession({ role: "VIEWER" });
+    const manager = addSession({ role: "VIEWER", qslManager: true });
+    eq(`${await hit(qslRoute, viewer)} ${await hit(qslRoute, manager)}`, "403 200", "a QSL route: refused to a viewer, open to the viewer who is the QSL manager");
+    eq(await hit(adminRoute, manager), 403, "an admin route without qsl stays closed to them");
+    const redirectOf = (r: unknown) => (r as { redirect?: { destination: string } }).redirect?.destination ?? null;
+    const qslPage = withPageAuth({ role: "OPERATOR", qsl: true });
+    const at = async (g: typeof qslPage, token: string) =>
+      redirectOf(await g({ req: fakeReq(token), res: fakeRes(), resolvedUrl: "/qsl", query: {} } as never));
+    eq(`${await at(qslPage, viewer)} ${await at(qslPage, manager)}`, "/ null", "a QSL page: the viewer is sent home, the QSL manager is let in");
+    eq(await at(withPageAuth({ role: "OPERATOR" }), manager), "/", "a page that is not QSL still sends them home");
   }
 
   console.log("a session that is used is extended to a full TTL, and its cookie re-issued");

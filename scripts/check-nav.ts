@@ -97,6 +97,11 @@ async function main() {
         `${l.href}: shown from ${shown}, page admits ${guard}`,
         "a role below the page's guard is shown a link that bounces them to the dashboard",
       );
+      ok(
+        !l.qsl || /\bqsl:\s*true\b/.test(opts),
+        `${l.href}: shown to the QSL manager, and the page lets them in`,
+        "a QSL link the page does not open for the QSL manager bounces them to the dashboard",
+      );
     }
   }
 
@@ -178,6 +183,8 @@ async function main() {
     ok(admin.some((d) => d.href === "/adif"), "admin can jump to ADIF, which the menu leaves to the settings tabs");
     eq([sec("/users"), sec("/stations"), sec("/qsos/new"), sec("/"), sec("/account")], ["Settings", "Settings", "Log", null, null], "sections follow the menu's own highlighting");
     ok(!destinationsFor(as("VIEWER"), ON).some((d) => d.href === "/users" || d.href === "/qsos/new"), "a viewer is offered nothing they cannot open");
+    const manager = destinationsFor({ role: "VIEWER", qslManager: true }, ON).map((d) => d.href);
+    ok(manager.includes("/qsl") && manager.includes("/qsl/cards") && !manager.includes("/qsos/new"), "a viewer who is the QSL manager is offered the QSL pages, and no more");
 
     const top = (q: string) => rankDestinations(admin, q)[0]?.label;
     eq(top("nq"), "New QSO", "initials: nq → New QSO");

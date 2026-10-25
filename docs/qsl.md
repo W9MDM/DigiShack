@@ -4,6 +4,20 @@ DigiShack renders a QSL card as an image and emails it. Everything the recipient
 a template in [Settings](settings.md#qsl-card-and-email), not a string in the code — a
 QSL card makes claims about how you operate, and those are yours to word.
 
+## The QSL manager
+
+One person can look after QSL without being an admin. On **Users**, tick **QSL manager**
+for them (any role). They can then:
+
+- approve, send and resend the email queue, and work the paper cards;
+- review received cards, assign or dismiss them, and run the import;
+- change the card artwork and the **QSL card and email** and **Received cards (email)** settings,
+  reached from the **Settings** link on the QSL pages.
+
+The mail server (SMTP, Microsoft 365), the eQSL and LoTW accounts, and every other setting
+stay with admins, and the server enforces that, not only the page. The change takes effect
+on their next page load; nobody is signed out.
+
 ## The card
 
 Set `qsl.card.baseImage` to your own artwork (under `data/`, kept out of git — it is

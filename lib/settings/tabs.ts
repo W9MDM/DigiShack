@@ -89,6 +89,13 @@ export const SETTINGS_TABS: SettingsTab[] = [
   },
 ];
 
+/**
+ * The settings a QSL manager who is not an admin may read and change: the card and its
+ * emails, and the received-card import. Not the mail server (smtp, ms365) — its passwords
+ * reach far beyond QSL — nor the eQSL and LoTW accounts.
+ */
+export const QSL_MANAGER_GROUPS: readonly string[] = ["qsl", "qslinbound"];
+
 /** Which category a setting group belongs to. Never undefined — see the note above. */
 export function settingsTabFor(groupId: string): SettingsTab {
   for (const t of SETTINGS_TABS) {

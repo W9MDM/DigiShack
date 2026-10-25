@@ -119,4 +119,4 @@ async function post(req: NextApiRequest, res: NextApiResponse, ctx: AuthContext)
   });
 }
 
-export default authedRoute({ POST: { role: "ADMIN", handler: post } });
+export default authedRoute({ POST: { role: "ADMIN", qsl: true, handler: post } });

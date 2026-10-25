@@ -17,7 +17,7 @@ import {
 import { Badge, Button, Card, EmptyState, ErrorBanner, PageHeader } from "@/components/ui/primitives";
 import { withPageAuth } from "@/lib/auth/guard";
 import { ApiError, apiPost, useApi } from "@/lib/client/api";
-import { useCan } from "@/lib/client/session";
+import { useCanManageQsl } from "@/lib/client/session";
 import { formatUtc, formatUtcDate } from "@/lib/time";
 
 // QSL cards OTHER operators emailed us, imported from the station mailbox.
@@ -97,7 +97,7 @@ const PROVIDER_LABEL: Record<string, string> = {
 };
 
 function ReportCard({ status, onRan }: { status: Status | undefined; onRan: () => void }) {
-  const isAdmin = useCan("ADMIN");
+  const canManage = useCanManageQsl();
   const [busy, setBusy] = useState<"import" | "test" | null>(null);
   const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
   const r = status?.lastReport ?? null;
@@ -135,7 +135,7 @@ function ReportCard({ status, onRan }: { status: Status | undefined; onRan: () =
       title="Import"
       className="mb-4"
       actions={
-        isAdmin ? (
+        canManage ? (
           <div className="flex flex-wrap gap-2">
             <Button size="sm" loading={busy === "test"} disabled={busy !== null} onClick={() => void run("test")}>
               Test connection

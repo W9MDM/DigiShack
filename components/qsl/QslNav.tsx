@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { useEffect, useRef, type KeyboardEvent } from "react";
 
+import { useCanManageQsl } from "@/lib/client/session";
 import { cn } from "@/lib/utils";
 
 // Navigation shared by the QSL pages: which page you are on, and which slice of it.
@@ -13,6 +14,8 @@ const SECTIONS = [
 
 /** The one way between the email queue, the paper cards and the received cards, the same on each. */
 export function QslSectionNav({ active }: { active: (typeof SECTIONS)[number]["id"] }) {
+  // The QSL settings, for whoever looks after QSL — the QSL manager reaches Settings no other way.
+  const settings = useCanManageQsl();
   return (
     <nav
       aria-label="QSL"
@@ -35,6 +38,14 @@ export function QslSectionNav({ active }: { active: (typeof SECTIONS)[number]["i
           </Link>
         );
       })}
+      {settings && (
+        <Link
+          href="/settings?tab=qsl"
+          className="nav-target inline-flex items-center rounded-sm px-3 py-1 text-sm text-fg-muted transition-colors hover:bg-surface-2 hover:text-fg"
+        >
+          Settings
+        </Link>
+      )}
     </nav>
   );
 }
