@@ -2611,7 +2611,7 @@ export const SETTINGS: SettingDef[] = [
     label: "Upload contacts automatically",
     type: "boolean",
     group: "uploads",
-    help: "Master switch. When on, each new contact is uploaded shortly after it is logged, and a sweep catches anything missed. Nothing already in the log is touched — see the cutoff below.",
+    help: "Master switch. When on, each new contact is uploaded shortly after it is logged, and a sweep catches anything missed. Saving a logbook service's credentials (QRZ key, eQSL login, Cloudlog URL and key, N3FJP host, or a LoTW certificate) turns this and that service's upload on by itself. Contacts older than the cutoff below are left alone; with no cutoff, the whole log not yet uploaded goes too, a batch per sweep.",
     default: "false",
   },
   {

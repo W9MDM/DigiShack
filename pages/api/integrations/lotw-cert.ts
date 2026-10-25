@@ -2,6 +2,8 @@ import type { NextApiRequest, NextApiResponse } from "next";
 
 import { sendError, sendJson } from "@/lib/api/respond";
 import { authedRoute } from "@/lib/auth/guard";
+import type { AuthContext } from "@/lib/auth/session";
+import { configuredServices, switchOnNewlyConfigured } from "@/lib/integrations/auto-enable";
 import {
   deleteLotwCert,
   LotwCertError,
@@ -64,7 +66,7 @@ async function get(_req: NextApiRequest, res: NextApiResponse) {
   sendJson(res, 200, { certificate: shape(await lotwCertInfo()) });
 }
 
-async function post(req: NextApiRequest, res: NextApiResponse) {
+async function post(req: NextApiRequest, res: NextApiResponse, auth: AuthContext) {
   let body: Buffer;
   try {
     body = await readBody(req);
@@ -85,7 +87,10 @@ async function post(req: NextApiRequest, res: NextApiResponse) {
   const password = typeof header === "string" ? header : "";
 
   try {
+    const before = await configuredServices();
     const info = await saveLotwCert(body, password);
+    // The certificate is what LoTW uploads need, so it switches them on (lib/integrations/auto-enable).
+    await switchOnNewlyConfigured(before, new Set(), auth.user.id);
     sendJson(res, 200, { ok: true, certificate: shape({ ...info, uploadedAt: new Date() }) });
   } catch (err) {
     if (err instanceof LotwCertError) {

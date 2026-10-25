@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.270.0 - public release
+## 1.271.0 - public release
 
 Development happens in a private repository; this is where the public history starts.
 Earlier entries are not reproduced - they quote real operators by callsign, include
@@ -22,6 +22,7 @@ Notes for anyone running this:
 
 ## Release history
 
+- **1.271.0** — Uploads: setting up a logbook service switches it on
 - **1.270.0** — A QSL manager: one person looks after QSL without being an admin
 - **1.269.0** — Received cards: qslworld notices are read from their links
 - **1.268.0** — Received cards: our card is recognised by the picture

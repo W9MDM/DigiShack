@@ -9,6 +9,7 @@ import {
   settingsKeyProblem,
   writeSettings,
 } from "@/lib/settings";
+import { configuredServices, switchOnNewlyConfigured, touchesCredentials } from "@/lib/integrations/auto-enable";
 import { SETTING_GROUPS, SETTINGS } from "@/lib/settings/registry";
 import { QSL_MANAGER_GROUPS } from "@/lib/settings/tabs";
 
@@ -105,7 +106,14 @@ async function patch(
     return;
   }
 
+  const credentials = touchesCredentials(updates.map((u) => u.key));
+  const before = credentials ? await configuredServices() : null;
   const result = await writeSettings(updates, auth.user.id);
+  // A logbook service just set up is switched on, master switch and all (lib/integrations/auto-enable).
+  if (before) {
+    const on = await switchOnNewlyConfigured(before, new Set(updates.map((u) => u.key)), auth.user.id);
+    result.updated.push(...on);
+  }
 
   // Re-describe so the client gets fresh masks and sources without a second
   // round trip.
