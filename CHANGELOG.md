@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.274.2 - public release
+## 1.274.3 - public release
 
 Development happens in a private repository; this is where the public history starts.
 Earlier entries are not reproduced - they quote real operators by callsign, include
@@ -22,6 +22,7 @@ Notes for anyone running this:
 
 ## Release history
 
+- **1.274.3** — Turning a mode on can switch the auto operator off
 - **1.274.2** — A dismissed warning comes back each time its mode is turned on
 - **1.274.1** — Two leaks the publisher caught in 1.273.x
 - **1.273.1** — Proxmox installer: clone the public mirror, fail instead of hanging

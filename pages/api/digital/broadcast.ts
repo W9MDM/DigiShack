@@ -5,6 +5,7 @@ import { sendError, sendJson } from "@/lib/api/respond";
 import { authedRoute } from "@/lib/auth/guard";
 import type { AuthContext } from "@/lib/auth/session";
 import { BROADCAST_SWITCH, type BroadcastTarget } from "@/lib/logging/adif-udp";
+import { stopAutomation } from "@/lib/radio/bridge-client";
 import { getBooleanSetting, writeSettings } from "@/lib/settings";
 
 type Switch = BroadcastTarget;
@@ -54,9 +55,11 @@ async function patch(req: NextApiRequest, res: NextApiResponse, auth: AuthContex
     return;
   }
 
+  const autoOff = parsed.data.br === true ? await stopAutomation() : undefined;
+
   // The STORED values rather than what was sent, so the page renders what the station will
   // actually do.
-  sendJson(res, 200, await state());
+  sendJson(res, 200, { ...(await state()), ...(autoOff === undefined ? {} : { autoOff }) });
 }
 
 export default authedRoute({

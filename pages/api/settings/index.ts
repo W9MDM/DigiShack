@@ -12,6 +12,8 @@ import {
 import { configuredServices, switchOnNewlyConfigured, touchesCredentials } from "@/lib/integrations/auto-enable";
 import { SETTING_GROUPS, SETTINGS } from "@/lib/settings/registry";
 import { QSL_MANAGER_GROUPS } from "@/lib/settings/tabs";
+import { BROADCAST_SWITCH } from "@/lib/logging/adif-udp";
+import { stopAutomation } from "@/lib/radio/bridge-client";
 
 /** The groups this user may see and change: every one for an admin, the QSL ones for the QSL manager. */
 function groupsFor(auth: AuthContext): (group: string) => boolean {
@@ -114,6 +116,8 @@ async function patch(
     const on = await switchOnNewlyConfigured(before, new Set(updates.map((u) => u.key)), auth.user.id);
     result.updated.push(...on);
   }
+  const brOn = updates.some((u) => u.key === BROADCAST_SWITCH.br && u.value === "true");
+  const autoOff = brOn && !result.rejected.some((r) => r.key === BROADCAST_SWITCH.br) ? await stopAutomation() : undefined;
 
   // Re-describe so the client gets fresh masks and sources without a second
   // round trip.
@@ -123,6 +127,7 @@ async function patch(
     ...result,
     settings,
     keyProblem: settingsKeyProblem(),
+    ...(autoOff === undefined ? {} : { autoOff }),
   });
 }
 

@@ -34,6 +34,16 @@ export async function bridgeStatus(): Promise<BridgeAnswer> {
 }
 
 /**
+ * Turn the auto operator off, whatever mode it is in. True when the bridge confirmed it, or
+ * answered 503 - no native transmit path, so there is no auto operator to be running. False
+ * when the bridge could not be asked; the caller says so rather than claiming it stopped.
+ */
+export async function stopAutomation(): Promise<boolean> {
+  const answer = await bridgeCommand("auto", { mode: "off" });
+  return answer.reachable && ((answer.status >= 200 && answer.status < 300) || answer.status === 503);
+}
+
+/**
  * POST a control action with the shared token. `tokenMissing` is distinct from unreachable:
  * the bridge provisions its own token on first run, so a missing one means it has never
  * started on this install.
