@@ -920,6 +920,29 @@ export function QsoForm({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [derivedBand]);
 
+  // A NEW contact defaults to whoever is signed on at the radio (lib/operators/shift.ts), once
+  // per station chosen: clearing the operator afterwards is the operator's choice and stands.
+  const [shiftFilledFor, setShiftFilledFor] = useState<string | null>(null);
+  useEffect(() => {
+    if (qsoId || readOnly || !values.stationId || values.operatorId || shiftFilledFor === values.stationId) return;
+    const stationId = values.stationId;
+    setShiftFilledFor(stationId);
+    let cancelled = false;
+    fetch("/api/operators/current")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((s: { operator: { id: string; stationId: string } | null } | null) => {
+        if (cancelled || !s?.operator || s.operator.stationId !== stationId) return;
+        if (!operators.some((o) => o.id === s.operator!.id)) return;
+        onChange({ ...values, operatorId: s.operator.id });
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+    // Only when the station changes; values are read at that moment.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [values.stationId, qsoId, readOnly]);
+
   const fieldErrors = (name: string) => error?.fieldErrors(name);
 
   async function checkDupe() {

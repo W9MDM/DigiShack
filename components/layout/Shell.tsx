@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { InstallButton } from "@/components/layout/InstallButton";
 import { Ft0Button } from "@/components/layout/Ft0Button";
+import { OperatorButton } from "@/components/layout/OperatorButton";
 import { TxArmButton } from "@/components/layout/TxArmButton";
 import { UtcClock } from "@/components/layout/UtcClock";
 import { ThemeToggle } from "@/components/ui/ThemeToggle";
@@ -149,6 +150,7 @@ export function Shell({
 
           <div className="ml-auto flex items-center gap-1 sm:gap-2 md:gap-3">
             <UtcClock />
+            <OperatorButton />
             <TxArmButton />
             <Ft0Button />
             <ThemeToggle />

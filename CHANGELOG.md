@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.272.0 - public release
+## 1.274.1 - public release
 
 Development happens in a private repository; this is where the public history starts.
 Earlier entries are not reproduced - they quote real operators by callsign, include
@@ -22,6 +22,10 @@ Notes for anyone running this:
 
 ## Release history
 
+- **1.274.1** — Two leaks the publisher caught in 1.273.x
+- **1.273.1** — Proxmox installer: clone the public mirror, fail instead of hanging
+- **1.273.0** — Operator sign-on, and a change cursor for mirroring the log
+- **1.272.1** — Bridge: the interlock's RECEIVE state is not an event
 - **1.272.0** — Bridge: a trace of every transmission
 - **1.271.0** — Uploads: setting up a logbook service switches it on
 - **1.270.0** — A QSL manager: one person looks after QSL without being an admin

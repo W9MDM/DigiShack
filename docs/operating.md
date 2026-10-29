@@ -13,6 +13,20 @@ special-activity fields are there for the awards that need them.
 **References (SIG_INFO)** takes a list — `US-0765, US-2258` — because one contact can
 genuinely be several parks at once. See [POTA](pota.md#n-fers).
 
+## Who is at the radio
+
+On a station several people share, **OP** in the header says who is signed on. Every contact
+the station logs while they are on, automatic or by hand, carries them as its operator; with
+nobody signed on, contacts are logged with no operator, as before.
+
+- **Sign on** (any operator): you become the operator. The first time, DigiShack makes you an
+  Operator from your account's name and callsign, so your account needs a callsign.
+- **Sign me on instead** takes over from whoever is on; **Sign off** ends the shift.
+- Every shift is kept, with its start and end, and with who signed it on.
+- The hand-logging form starts with the signed-on operator selected, and you can change it.
+
+Another program can read who is on from `GET /api/v1/operator`.
+
 ## Which radio
 
 The Radio card on the Digital page (and the picker in the Rig page's header) picks it:

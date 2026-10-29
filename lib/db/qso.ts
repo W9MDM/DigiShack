@@ -70,6 +70,16 @@ export function buildQsoWhere(q: QsoListQuery): Prisma.QsoWhereInput {
     where.AND = where.AND ? [...(where.AND as Prisma.QsoWhereInput[]), search] : [search];
   }
 
+  // The change cursor; see `updatedSince` in lib/validation/qso.ts. Its own AND clause, for
+  // the same reason as the search: `confirmed` may already own the top-level OR.
+  if (q.updatedSince) {
+    const since = q.updatedSince;
+    const cursor: Prisma.QsoWhereInput = q.afterId
+      ? { OR: [{ updatedAt: { gt: since } }, { updatedAt: since, id: { gt: q.afterId } }] }
+      : { updatedAt: { gte: since } };
+    where.AND = where.AND ? [...(where.AND as Prisma.QsoWhereInput[]), cursor] : [cursor];
+  }
+
   return where;
 }
 
@@ -80,7 +90,9 @@ export async function listQsos(q: QsoListQuery) {
     prisma.qso.findMany({
       where,
       include: QSO_INCLUDE,
-      orderBy: [{ [q.sort]: q.dir }, { id: "desc" }],
+      // The cursor's tiebreak runs the same way as the cursor, or a page would end mid-millisecond
+      // on the wrong side of `afterId`.
+      orderBy: [{ [q.sort]: q.dir }, { id: q.sort === "updatedAt" ? q.dir : "desc" }],
       take: q.take,
       skip: q.skip,
     }),

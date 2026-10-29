@@ -57,8 +57,11 @@ function build(): string {
   ];
 
   // Groups in registry order; the page renders them the same way.
-  const byGroup = new Map<string, typeof SETTINGS>();
-  for (const s of SETTINGS) {
+  // A group marked docsOmit is left out everywhere below, its keys included.
+  const omitted = new Set(SETTING_GROUPS.filter((g) => g.docsOmit).map((g) => g.id));
+  const documented = SETTINGS.filter((s) => !omitted.has(s.group));
+  const byGroup = new Map<string, typeof documented>();
+  for (const s of documented) {
     const list = byGroup.get(s.group) ?? [];
     list.push(s);
     byGroup.set(s.group, list);
@@ -104,7 +107,7 @@ function build(): string {
 
   // Anything with an env fallback is a migration path, and worth listing separately —
   // it is the answer to "why is this still working after I emptied the settings table?"
-  const fallbacks = SETTINGS.filter((s) => s.envFallback);
+  const fallbacks = documented.filter((s) => s.envFallback);
   if (fallbacks.length > 0) {
     out.push(
       "## Environment fallbacks",
@@ -122,7 +125,7 @@ function build(): string {
 
   // Renamed keys. Anyone with a documented `.env`, a script, or a memory of the old
   // name needs to be able to find where it went.
-  const renamed = SETTINGS.filter((s) => (s.legacyKeys ?? []).length > 0);
+  const renamed = documented.filter((s) => (s.legacyKeys ?? []).length > 0);
   if (renamed.length > 0) {
     out.push(
       "## Renamed keys",
@@ -146,7 +149,7 @@ function build(): string {
     "Stored encrypted with `SETTINGS_KEY`. The API never returns them — the Settings",
     "page shows whether one is set, not what it is.",
     "",
-    ...SETTINGS.filter((s) => s.type === "secret").map((s) => `- \`${s.key}\` — ${s.label}`),
+    ...documented.filter((s) => s.type === "secret").map((s) => `- \`${s.key}\` — ${s.label}`),
     "",
   );
 

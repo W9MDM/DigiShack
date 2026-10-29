@@ -46,6 +46,9 @@ DISK=12            # GB. The log itself is small; decode CSVs are what grow.
 BRIDGE="vmbr0"
 STORAGE=""         # auto-detected below
 TEMPLATE_STORAGE="local"
+# The public mirror, which anyone can clone. The private remote answers 401 to an anonymous
+# clone, and a fresh container has no credentials: ses1 sat at "Fetching DigiShack" for 45
+# minutes on 2026-10-26. Pass --repo with a token in the URL to install from it instead.
 REPO="https://github.com/W9MDM/DigiShack.git"
 BRANCH="main"
 TIMEZONE="$(cat /etc/timezone 2>/dev/null || echo UTC)"
@@ -67,7 +70,8 @@ Options:
   --disk GB             Root disk in GB (default: ${DISK})
   --bridge NAME         Network bridge (default: ${BRIDGE})
   --storage NAME        Container storage (default: auto-detect)
-  --repo URL            Git remote to clone (default: the public GitHub remote)
+  --repo URL            Git remote to clone (default: the public mirror on GitHub; a
+                        private remote needs its credentials in the URL)
   --branch NAME         Branch to check out (default: ${BRANCH})
   --db-password PASS    MariaDB password for the digishack user (default: generated)
   --root-password PASS  Container root password (default: generated and printed)
@@ -241,6 +245,9 @@ pct exec "$CTID" -- bash -c 'cat > /root/digishack-bootstrap.sh' <<BOOTSTRAP
 #!/usr/bin/env bash
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
+# A remote that wants a login fails at once instead of waiting forever for a username that
+# nobody can type: there is no terminal in here.
+export GIT_TERMINAL_PROMPT=0
 
 echo "==> apt update and base packages"
 apt-get update -qq
@@ -274,7 +281,10 @@ if [ -d /opt/digishack/.git ]; then
   git -C /opt/digishack checkout --quiet "${BRANCH}"
   git -C /opt/digishack pull --quiet --ff-only
 else
-  git clone --quiet --branch "${BRANCH}" "${REPO}" /opt/digishack
+  git clone --quiet --branch "${BRANCH}" "${REPO}" /opt/digishack || {
+    echo "    fail: could not clone ${REPO} (branch ${BRANCH}). A private remote needs a token in --repo." >&2
+    exit 1
+  }
 fi
 cd /opt/digishack
 

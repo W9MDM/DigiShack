@@ -8,6 +8,7 @@ import { computeAwards } from "@/lib/awards/compute";
 
 const querySchema = z.object({
   stationId: z.string().optional(),
+  operatorId: z.string().optional(),
   band: z.string().trim().toUpperCase().optional(),
   mode: z.string().trim().toUpperCase().optional(),
 });

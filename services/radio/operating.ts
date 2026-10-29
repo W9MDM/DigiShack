@@ -50,6 +50,7 @@ import { PskReporterUploader } from "@/lib/pskreporter/upload";
 import type { DigitalSource, DigitalTransmitter } from "@/lib/radio/types";
 import type { RadioKind } from "@/lib/radio/transmit-gate";
 import { getBooleanSetting, getNumberSetting, getSetting } from "@/lib/settings";
+import { operatorIdFor } from "@/lib/operators/shift";
 import { AutoOperator } from "./auto-operator";
 import { QsoController, type QsoLogContext } from "./qso-controller";
 
@@ -324,6 +325,8 @@ export function databaseOperatingData(opts: {
           transcript: ctx.transcript,
           notes: "DigiShack native FT8/FT4",
           stationId: station.id,
+          // Whoever is signed on at the radio. See lib/operators/shift.ts.
+          operatorId: await operatorIdFor(station.id),
         },
       });
       // The mirrored columns above are written by the create; the reference row

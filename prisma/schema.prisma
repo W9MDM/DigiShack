@@ -310,10 +310,28 @@ model Operator {
   user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
   userId    String?
   qsos      Qso[] // back-relation required by Qso.operator
+  shifts    OperatorShift[]
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([callsign])
+}
+
+/// Who is at this station's radio, shift by shift. The open row (endedAt null) is the
+/// operator signed on now, and every contact the station logs until sign-off carries them.
+/// Its own table rather than a Setting: settings are cached for 30 s, and the first
+/// contacts after a shift change would go to the operator who just left.
+model OperatorShift {
+  id         String    @id @default(cuid())
+  operator   Operator  @relation(fields: [operatorId], references: [id], onDelete: Cascade)
+  operatorId String
+  /// The login that signed them on, which is not always the operator (a shift lead).
+  signedOnBy String?   @db.VarChar(32)
+  startedAt  DateTime  @default(now())
+  endedAt    DateTime?
+
+  @@index([endedAt])
+  @@index([operatorId])
 }
 
 model Qso {
@@ -596,6 +614,8 @@ model Qso {
   @@index([iota]) // IOTA
   @@index([continent]) // WAC
   @@index([sigInfo]) // "have I worked this park?"
+  // The change cursor HamHub and other mirrors page through: (updatedAt, id).
+  @@index([updatedAt, id])
   // "How many contacts have I made at THIS park TODAY?" — the ten-contact activation
   // threshold, asked after every single QSO of an activation. Composite and in this
   // order because the query is an equality on the reference and a range on the time;

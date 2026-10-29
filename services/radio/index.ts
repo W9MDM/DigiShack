@@ -155,6 +155,7 @@ import {
   type NoPowerVerdict,
 } from "@/lib/radio/power";
 import { TxTrace } from "@/lib/radio/tx-trace";
+import { operatorIdFor } from "@/lib/operators/shift";
 import { NoiseFloor } from "@/lib/radio/noise";
 import { UNREAD_RECEIVER, type ReceiverControls } from "@/lib/radio/receiver-controls";
 import { getEqslCredentials, syncEqslInbox } from "@/lib/integrations/eqsl";
@@ -1292,6 +1293,8 @@ async function onQsoLogged(msg: QSOLoggedMsg): Promise<void> {
         radio: status.radio?.model ?? null,
         notes: msg.comments || null,
         stationId: station.id,
+        // Whoever is signed on at the radio. See lib/operators/shift.ts.
+        operatorId: await operatorIdFor(station.id),
       },
     });
     // Log the stored mode, not the wire value — "MFSK" here while the log
@@ -2720,7 +2723,8 @@ async function startFlexSource(): Promise<() => Promise<void>> {
   // EVERYTHING THE RADIO SAYS ABOUT TRANSMITTING, into the trace. The interlock's `reason=` and
   // `source=`, the ATU, the amplifier: on 2026-10-25 none of it was kept, and once the radio
   // was idle again none of it could be asked for. See lib/radio/tx-trace.ts.
-  const NORMAL_INTERLOCK = new Set(["READY", "PTT_REQUESTED", "TRANSMITTING", "UNKEY_REQUESTED"]);
+  // RECEIVE is what the radio reports to a connection that is not the transmitting client.
+  const NORMAL_INTERLOCK = new Set(["READY", "RECEIVE", "PTT_REQUESTED", "TRANSMITTING", "UNKEY_REQUESTED"]);
   rig.on("status", (st) => {
     const obj = st.object.split(/\s+/)[0] ?? st.object;
     if (obj !== "interlock" && obj !== "atu" && obj !== "amplifier") return;
@@ -2733,7 +2737,7 @@ async function startFlexSource(): Promise<() => Promise<void>> {
       .map(([k, v]) => `${k}=${v}`)
       .join(" ");
     txTrace.note(Date.now(), `${st.object} ${text}`);
-    // Anything but the four states of an ordinary transmission, or any stated reason, is
+    // Anything but the states of an ordinary transmission, or any stated reason, is
     // worth a line of its own the moment it happens.
     if (obj === "interlock" && ((f.state && !NORMAL_INTERLOCK.has(f.state)) || f.reason)) {
       console.warn(`[radio] interlock ${text}`);

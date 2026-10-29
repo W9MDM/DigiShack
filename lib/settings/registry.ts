@@ -134,6 +134,12 @@ export interface SettingGroup {
   doc?: string;
   /** What the reader will find there. Shown as the icon's tooltip. */
   docLabel?: string;
+  /**
+   * Left out of the generated docs/settings.md; the Settings page still shows it. Set by the
+   * public mirror's build for a group whose notes are being withheld there - see
+   * scripts/public-redactions.ts. Nothing in this tree sets it.
+   */
+  docsOmit?: boolean;
 }
 
 export const SETTING_GROUPS: SettingGroup[] = [
@@ -188,8 +194,7 @@ export const SETTING_GROUPS: SettingGroup[] = [
   // note where `hrdlog.callsign` used to be.
   {
     id: "ft8battle",
-    doc: "ft8battle",
-    docLabel: "BR mode, the broadcast, the tracker, and what the score can and cannot know",
+    docsOmit: true,
     title: "FT8 Battle Royale",
     blurb:
       "BR mode ranks the decode list by what a contact is worth on ft8battle.com and sends " +

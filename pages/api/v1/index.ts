@@ -37,7 +37,8 @@ async function get(
         path: "/api/v1/qsos",
         role: "VIEWER",
         description:
-          "List QSOs. Query: callsign, band, mode, stationId, operatorId, q, from, to, confirmed, take, skip, sort, dir.",
+          "List QSOs. Query: callsign, band, mode, stationId, operatorId, q, from, to, confirmed, take, skip, sort, dir. " +
+          "To mirror the log, page by change: sort=updatedAt&dir=asc&updatedSince=<ISO>, then pass the last row's updatedAt as updatedSince and its id as afterId. Catches confirmations and edits, not deletions.",
       },
       {
         method: "POST",
@@ -91,7 +92,14 @@ async function get(
         path: "/api/v1/awards",
         role: "VIEWER",
         description:
-          "DXCC/WAS/WAZ/WAC/grid/IOTA progress. Query: stationId, band, mode.",
+          "DXCC/WAS/WAZ/WAC/grid/IOTA progress. Query: stationId, operatorId, band, mode.",
+      },
+      {
+        method: "GET",
+        path: "/api/v1/operator",
+        role: "VIEWER",
+        description:
+          "Who is signed on at this station's radio now: { signedOn, operator: { id, name, callsign, stationId, stationCallsign } | null, since, signedOnBy }. Contacts logged while they are on carry their operatorId.",
       },
       {
         method: "GET",

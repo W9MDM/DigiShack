@@ -306,9 +306,19 @@ export const qsoListQuerySchema = z.object({
   from: z.coerce.date().optional(),
   to: z.coerce.date().optional(),
   confirmed: z.enum(["any", "yes", "no"]).default("any"),
+  /**
+   * THE CHANGE CURSOR, for a mirror that keeps its own copy (HamHub's club log). Contacts
+   * changed at or after this instant - a confirmation arriving, an upload being marked - not
+   * only contacts made after it. With `afterId`, it is the exclusive (updatedAt, id) position
+   * of the last row already seen, so a page boundary that falls inside one millisecond
+   * neither repeats nor skips a row. Page with sort=updatedAt&dir=asc, passing the last
+   * row's updatedAt and id back. Deletions are not seen this way.
+   */
+  updatedSince: z.coerce.date().optional(),
+  afterId: z.string().min(1).max(64).optional(),
   take: z.coerce.number().int().min(1).max(500).default(50),
   skip: z.coerce.number().int().min(0).default(0),
-  sort: z.enum(["startTime", "callsign", "band", "mode"]).default("startTime"),
+  sort: z.enum(["startTime", "callsign", "band", "mode", "updatedAt"]).default("startTime"),
   dir: z.enum(["asc", "desc"]).default("desc"),
 });
 

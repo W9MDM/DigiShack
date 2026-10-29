@@ -93,6 +93,8 @@ interface Dimension {
 
 export interface AwardsFilter {
   stationId?: string;
+  /** One operator's contacts: a club station's awards, per person at the key. */
+  operatorId?: string;
   band?: string;
   mode?: string;
 }
@@ -102,6 +104,7 @@ export async function computeAwards(
 ): Promise<AwardsResult> {
   const where = {
     ...(filter.stationId ? { stationId: filter.stationId } : {}),
+    ...(filter.operatorId ? { operatorId: filter.operatorId } : {}),
     ...(filter.band ? { band: filter.band } : {}),
     ...(filter.mode ? { mode: filter.mode } : {}),
   };
