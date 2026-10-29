@@ -13,20 +13,14 @@ export function BattleRoyaleAutoWarning({ autoMode }: { autoMode: string }) {
   const [dismissedFor, setDismissedFor] = useState<string | null>(null);
   useEffect(() => {
     try {
-      setDismissedFor(window.localStorage.getItem(DISMISS_KEY));
+      window.localStorage.removeItem(DISMISS_KEY);
     } catch {
     }
   }, []);
 
   if (dismissedFor === autoMode) return null;
 
-  const dismiss = () => {
-    setDismissedFor(autoMode);
-    try {
-      window.localStorage.setItem(DISMISS_KEY, autoMode);
-    } catch {
-    }
-  };
+  const dismiss = () => setDismissedFor(autoMode);
 
   return (
     <div className="mb-4">
@@ -41,7 +35,7 @@ export function BattleRoyaleAutoWarning({ autoMode }: { autoMode: string }) {
             type="button"
             onClick={dismiss}
             aria-label="Dismiss this warning"
-            title={`Hide this while auto is in ${autoMode}. It comes back if the auto mode changes.`}
+            title={`Hide this while auto is in ${autoMode}. It comes back when BR mode is next turned on, or if the auto mode changes.`}
             className="-my-0.5 shrink-0 rounded-sm px-1.5 text-lg leading-none text-danger hover:bg-danger/15 focus-visible:outline-2 focus-visible:outline-danger"
           >
             ×
