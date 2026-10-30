@@ -94,12 +94,13 @@ console.log("\nOCR on a picture off the air");
     const read = await readSstvPicture(info.width, info.height, data, "KC9QRS", encodePng);
     ok(read.theirCall === "N3CHX", `N3CHX read off the picture (${JSON.stringify(read.text)}, ${Date.now() - started} ms)`, read);
 
-    // A reply as the send box draws one: yellow on a dark band across the bottom, sized to fit.
+    // A reply as the send box draws one: yellow on a dark band across the bottom. Short enough
+    // to fit in any sans font: librsvg on the box ignores textLength and draws wider than here.
     const band = Math.round(info.height / 7);
     const caption = Buffer.from(
       `<svg xmlns="http://www.w3.org/2000/svg" width="${info.width}" height="${info.height}">` +
         `<rect x="0" y="${info.height - band}" width="${info.width}" height="${band}" fill="black" fill-opacity="0.75"/>` +
-        `<text x="${info.width / 2}" y="${info.height - band / 2}" font-family="sans-serif" font-weight="bold" font-size="17" fill="#ff0" stroke="#000" stroke-width="2" paint-order="stroke" text-anchor="middle" dominant-baseline="middle">KC9QRS DE KD9XYZ UR 577 TNX PIC 73</text>` +
+        `<text x="${info.width / 2}" y="${info.height - band / 2}" font-family="sans-serif" font-weight="bold" font-size="17" fill="#ff0" stroke="#000" stroke-width="2" paint-order="stroke" text-anchor="middle" dominant-baseline="middle">KC9QRS DE KD9XYZ UR 577</text>` +
         `</svg>`,
     );
     const replied = await sharp(file).composite([{ input: caption }]).removeAlpha().raw().toBuffer({ resolveWithObject: true });
