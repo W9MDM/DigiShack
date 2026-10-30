@@ -104,10 +104,13 @@ fills in three things:
   snowy. A clean picture reads V9, one at 20 dB in 2.5 kHz reads V7 or V8, one at 10 dB
   reads V2 to V4. With no S-meter reading, S is estimated and the line says so.
 - **Their call** and **Report they gave me**, read off the picture by OCR on the station
-  (tesseract.js, English data shipped in node_modules, nothing fetched). It reads the top
-  and bottom fifths of the picture at twice their size, where captions go, then the whole
-  picture as received. A call after DE is their call, otherwise the first call that is not
-  yours. A number after UR, RSV or RST is the report; a bare 595 counts only on a picture
+  (tesseract.js, English data shipped in node_modules, nothing fetched). OCR reads received
+  pictures poorly: fancy fonts, glows, a photograph behind, HF noise. So each picture is
+  read six ways: the top and bottom fifths at twice their size, where captions go; the
+  whole picture as received; and its light lettering turned black on white, three ways.
+  On seven pictures off the air, any one way found a call on at most two of them, all six
+  on five. A call after DE is their call; otherwise it's the call the most readings agree
+  on. A number after UR, RSV or RST is the report; a bare 595 counts only on a picture
   with your call on it. Your own call is recognised with one character misread. Other
   calls read are offered as buttons, and **Text read** shows everything the OCR saw.
 

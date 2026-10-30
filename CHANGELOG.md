@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.275.2 - public release
+## 1.275.3 - public release
 
 Development happens in a private repository; this is where the public history starts.
 Earlier entries are not reproduced - they quote real operators by callsign, include
@@ -22,6 +22,7 @@ Notes for anyone running this:
 
 ## Release history
 
+- **1.275.3** — SSTV OCR reads real pictures better: six passes, combined
 - **1.275.2** — check:sstv-read's reply caption fits on the box
 - **1.275.1** — check:sstv-read passes in the public mirror
 - **1.275.0** — Reply to an SSTV picture and log the contact, with the report filled in

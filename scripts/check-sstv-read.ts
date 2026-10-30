@@ -7,7 +7,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { SstvDecoder, sstvModeByName, sstvRsv, sstvTestCard, sstvWaveform, type SstvSignal } from "@/lib/digital/sstv";
-import { parseSstvText, readSstvPicture } from "@/lib/digital/sstv-read";
+import { combineSstvReads, parseSstvText, readSstvPicture } from "@/lib/digital/sstv-read";
 import { encodePng } from "@/lib/digital/png";
 import sharp from "sharp";
 
@@ -81,6 +81,14 @@ const h = parseSstvText("KC9ORS DE KD9XYZ UR 577", "KC9QRS");
 ok(h.toUs && h.theirCall === "KD9XYZ" && h.calls.length === 1, "our call misread by one character is still ours", h);
 const g = parseSstvText("sid HELLO 73 KC9QRS", "KC9QRS");
 ok(g.theirCall === null && g.calls.length === 0, "words are not callsigns", g);
+
+console.log("\nseveral passes combined");
+const votes = combineSstvReads([parseSstvText("KC8OHX", "KC9QRS"), parseSstvText("KC8DHX W9ABC", "KC9QRS"), parseSstvText("KC8DHX", "KC9QRS")]);
+ok(votes.theirCall === "KC8DHX" && votes.calls.includes("W9ABC"), "the call most passes read wins; the others stay offered", votes);
+const de = combineSstvReads([parseSstvText("N3CHX N3CHX", "KC9QRS"), parseSstvText("KC9QRS DE K4ABC", "KC9QRS"), parseSstvText("N3CHX", "KC9QRS")]);
+ok(de.theirCall === "K4ABC" && de.toUs, "a call after DE beats the vote", de);
+const one = combineSstvReads([parseSstvText("nothing", "KC9QRS"), parseSstvText("595 KC9QRS", "KC9QRS")]);
+ok(one.reportRcvd === "595" && one.toUs && one.theirCall === null, "a report and our call from one pass are kept", one);
 
 console.log("\nOCR on a picture off the air");
 (async () => {
