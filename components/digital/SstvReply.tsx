@@ -114,15 +114,15 @@ export function SstvReply({
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
         <label className="flex flex-col gap-1">
           <span className="text-fg-muted">Their call</span>
-          <Input value={call} onChange={(e) => setCall(e.target.value.toUpperCase())} placeholder="N3CHX" spellCheck={false} autoCapitalize="characters" />
+          <Input value={call} onChange={(e) => setCall(e.target.value.toUpperCase())} placeholder="Type their call" spellCheck={false} autoCapitalize="characters" />
         </label>
         <label className="flex flex-col gap-1">
           <span className="text-fg-muted">Report I give (RSV)</span>
-          <Input value={sent} onChange={(e) => setSent(e.target.value)} placeholder="595" inputMode="numeric" className="tnum" />
+          <Input value={sent} onChange={(e) => setSent(e.target.value)} placeholder="RSV" inputMode="numeric" className="tnum" />
         </label>
         <label className="flex flex-col gap-1">
           <span className="text-fg-muted">Report they gave me</span>
-          <Input value={rcvd} onChange={(e) => setRcvd(e.target.value)} placeholder="595" inputMode="numeric" className="tnum" />
+          <Input value={rcvd} onChange={(e) => setRcvd(e.target.value)} placeholder="RSV" inputMode="numeric" className="tnum" />
         </label>
         <label className="flex flex-col gap-1">
           <span className="text-fg-muted">Message</span>
