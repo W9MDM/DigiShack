@@ -87,6 +87,46 @@ Before it keys, the bridge checks:
 It sends at **sstv.powerPct** (50% unless set): lowered to that for the picture if your
 power is higher, never raised, and put back afterwards. Sending works on the FlexRadio.
 
+A **Caption** box writes words across the bottom of the picture, yellow on a dark band,
+as large as fit: the usual "N3CHX DE K9XYZ UR 595 TNX PIC 73".
+
+## Replying and logging
+
+SSTV has no text channel. A station's call and the report it gives you are drawn on the
+picture, and you give yours the same way. Under every received picture, **Reply and log**
+fills in three things:
+
+- **Report I give (RSV)**: readability, strength and video, the SSTV form of RST. It is
+  measured while the picture comes in. R comes from the share of line sync pulses found
+  where the timing put them; a picture that loses sync tears. S comes from the radio's
+  S-meter averaged over the picture (S9 = -73 dBm, 6 dB a unit). V comes from how far the
+  frequency wanders off 1200 Hz inside the sync pulses, which is what makes a picture
+  snowy. A clean picture reads V9, one at 20 dB in 2.5 kHz reads V7 or V8, one at 10 dB
+  reads V2 to V4. With no S-meter reading, S is estimated and the line says so.
+- **Their call** and **Report they gave me**, read off the picture by OCR on the station
+  (tesseract.js, English data shipped in node_modules, nothing fetched). It reads the top
+  and bottom fifths of the picture at twice their size, where captions go, then the whole
+  picture as received. A call after DE is their call, otherwise the first call that is not
+  yours. A number after UR, RSV or RST is the report; a bare 595 counts only on a picture
+  with your call on it. Your own call is recognised with one character misread. Other
+  calls read are offered as buttons, and **Text read** shows everything the OCR saw.
+
+Check the fields: OCR misreads a faded caption or a fancy font as readily as it reads a
+clean one. Then:
+
+- **Reply with a picture…** opens the send box with their picture as the source and the
+  caption "THEIRCALL DE YOURCALL UR 595 TNX PIC 73". Change the picture or the words, and
+  send.
+- **Log contact** logs it as mode SSTV on the frequency and at the time the picture was
+  heard, with both reports, the DXCC entity, and the operator signed on. The picture is
+  marked logged and cannot be logged twice; **Open in the log** goes to the contact.
+
+The notes are kept beside each picture as `data/sstv/<picture>.json`. Pictures received
+before 1.275.0 have none: their fields start empty, and logging one uses the frequency the
+radio is on now.
+
 ## Not yet
 
 - Slant correction by hand, and saving a picture that was cut off part way.
+- Logging a contact you started by calling, before any picture came back: log it from
+  the picture they answer with, or by hand in the log.

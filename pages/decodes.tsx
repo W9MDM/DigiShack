@@ -499,7 +499,7 @@ export default function DigitalPage({ wsUrl }: Props) {
           }
           else if (msg.kind === "stream") setStreamStats(msg as unknown as StreamStats);
           else if (msg.kind === "sstv-tx") setSstvTx(msg as unknown as SstvTxState);
-          else if (msg.kind === "sstv-vis" || msg.kind === "sstv-start" || msg.kind === "sstv-rows" || msg.kind === "sstv-image") {
+          else if (msg.kind === "sstv-vis" || msg.kind === "sstv-start" || msg.kind === "sstv-rows" || msg.kind === "sstv-image" || msg.kind === "sstv-read") {
             sstvPanel.current?.receive(msg as SstvMessage);
           }
           else if (msg.kind === "spectrum") {
@@ -1357,7 +1357,7 @@ export default function DigitalPage({ wsUrl }: Props) {
                 </p>
               )}
               {decodingAs === "SSTV" ? (
-                <SstvPanel ref={sstvPanel} stats={sstvStats} myCall={myCall} canSend={canSwitch} tx={sstvTx} />
+                <SstvPanel ref={sstvPanel} stats={sstvStats} myCall={myCall} canSend={canSwitch} tx={sstvTx} dialHz={status?.dialFrequency ?? null} />
               ) : decodingAs === "HELL" ? (
                 <HellPanel
                   ref={hellPanel}

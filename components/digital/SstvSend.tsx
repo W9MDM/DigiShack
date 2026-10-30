@@ -6,7 +6,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { NativeSelect } from "@/components/decodes/controls";
-import { Button } from "@/components/ui/primitives";
+import { Button, Input } from "@/components/ui/primitives";
 import { ApiError, apiPost } from "@/lib/client/api";
 import { sstvImageSeconds, sstvModeByName, sstvTestCard } from "@/lib/digital/sstv";
 
@@ -36,18 +36,23 @@ export function SstvSend({
   canSend,
   galleryFile,
   tx,
+  reply,
 }: {
   myCall: string | null;
   canSend: boolean;
   /** The gallery picture on show, offered as a source. */
   galleryFile: string | null;
   tx: SstvTxState | null;
+  /** A reply from the reply box: opens the send box with its caption and their picture. */
+  reply?: { caption: string; nonce: number } | null;
 }) {
   const [open, setOpen] = useState(false);
   const [modeName, setModeName] = useState("Martin 1");
   const [source, setSource] = useState<CanvasImageSource | "card" | null>(null);
   const [sourceLabel, setSourceLabel] = useState("");
   const [stamp, setStamp] = useState(true);
+  /** Words across the bottom: "N3CHX DE K9XYZ UR 595 TNX PIC 73", as a reply carries. */
+  const [caption, setCaption] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const preview = useRef<HTMLCanvasElement>(null);
@@ -93,7 +98,31 @@ export function SstvSend({
       g.strokeText(myCall, size / 3, size / 4);
       g.fillText(myCall, size / 3, size / 4);
     }
-  }, [mode, source, stamp, myCall]);
+    // The caption: a dark band across the bottom, the words as large as fit its width, so
+    // they survive fading at the far end - a report nobody can read is no report.
+    const words = caption.trim();
+    if (words && source) {
+      const band = Math.round(mode.height / 7);
+      let size = Math.round(band * 0.7);
+      g.font = `bold ${size}px sans-serif`;
+      const room = mode.width * 0.94;
+      const w = g.measureText(words).width;
+      if (w > room) {
+        size = Math.max(10, Math.floor((size * room) / w));
+        g.font = `bold ${size}px sans-serif`;
+      }
+      g.fillStyle = "rgba(0,0,0,0.75)";
+      g.fillRect(0, mode.height - band, mode.width, band);
+      g.textBaseline = "middle";
+      g.textAlign = "center";
+      g.lineWidth = Math.max(2, size / 8);
+      g.strokeStyle = "#000";
+      g.fillStyle = "#ff0";
+      g.strokeText(words, mode.width / 2, mode.height - band / 2);
+      g.fillText(words, mode.width / 2, mode.height - band / 2);
+      g.textAlign = "start";
+    }
+  }, [mode, source, stamp, myCall, caption]);
 
   // A second hand while a picture is going out.
   useEffect(() => {
@@ -112,6 +141,16 @@ export function SstvSend({
     img.onerror = () => setError("That picture could not be read");
     img.src = url;
   }, []);
+
+  // A reply: open with its caption on their picture - the usual answer is the picture sent
+  // back with the report on it. Any other source can still be chosen after.
+  useEffect(() => {
+    if (!reply) return;
+    setOpen(true);
+    setCaption(reply.caption);
+    if (galleryFile) loadUrl(`/api/sstv/${galleryFile}`, "their picture");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reply?.nonce]);
 
   const send = async () => {
     const c = preview.current;
@@ -214,6 +253,17 @@ export function SstvSend({
               <span>{myCall ? `Stamp ${myCall}` : "Stamp callsign (set it in Settings)"}</span>
             </label>
           </div>
+          <label className="flex flex-wrap items-center gap-2 text-xs">
+            <span className="text-fg-muted">Caption</span>
+            <Input
+              value={caption}
+              onChange={(e) => setCaption(e.target.value.toUpperCase())}
+              placeholder="N3CHX DE K9XYZ UR 595 TNX PIC 73"
+              maxLength={60}
+              spellCheck={false}
+              className="flex-1 min-w-[12rem]"
+            />
+          </label>
           <div className="bg-bg border border-line rounded-sm overflow-hidden flex justify-center">
             <canvas ref={preview} className="block w-full max-w-[480px]" aria-label="The picture as it will be sent" />
           </div>

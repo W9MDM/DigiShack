@@ -182,7 +182,8 @@ import {
 import { Js8Sender, type Js8SenderState } from "@/lib/radio/js8-sender";
 import { Js8AutoReplier, type Js8AutoReplyLevel } from "@/lib/radio/js8-autoreply";
 import { encodePng } from "@/lib/digital/png";
-import { sstvModeByName, sstvWaveform } from "@/lib/digital/sstv";
+import { sstvModeByName, sstvRsv, sstvWaveform } from "@/lib/digital/sstv";
+import { readSstvPicture } from "@/lib/digital/sstv-read";
 import { parseLicenceClass, sstvTransmitRefusal } from "@/lib/radio/sstv-licence";
 import type { SstvEvent } from "@/lib/radio/decode-pipeline";
 import { js8SubmodeNow, PERIOD_MS, setJs8Submode } from "@/lib/radio/timing";
@@ -1720,6 +1721,15 @@ function applyJs8Speed(speed: "normal" | "fast" | "turbo" | "slow"): void {
  */
 const SSTV_DIR = path.join(process.cwd(), "data", "sstv");
 let sstvLive: { mode: string; width: number; height: number; rgb: Uint8ClampedArray; rows: number; at: number } | null = null;
+/** The S-meter over the picture coming in, for the S of its RSV report. */
+let sstvSmeter = { sum: 0, n: 0 };
+
+/** An S-meter reading while a picture is coming in. Receive only: our own carrier is not their signal. */
+function sampleSstvSmeter(dbm: number): void {
+  if (!sstvLive || status.transmitting || !Number.isFinite(dbm)) return;
+  sstvSmeter.sum += dbm;
+  sstvSmeter.n++;
+}
 
 function onSstvEvent(e: SstvEvent): void {
   if (e.kind === "vis") {
@@ -1736,6 +1746,7 @@ function onSstvEvent(e: SstvEvent): void {
   }
   if (e.kind === "start") {
     sstvLive = { mode: e.mode, width: e.width, height: e.height, rgb: new Uint8ClampedArray(e.width * e.height * 3), rows: 0, at: e.at };
+    sstvSmeter = { sum: 0, n: 0 };
     console.log(`[sstv] receiving ${e.mode} (${e.width}x${e.height})`);
     broadcast({ kind: "sstv-start", mode: e.mode, width: e.width, height: e.height, at: e.at });
     return;
@@ -1751,14 +1762,37 @@ function onSstvEvent(e: SstvEvent): void {
   const stamp = new Date(e.at).toISOString().replace(/[-:]/g, "").replace(/\..*$/, "").replace("T", "-");
   const file = `${stamp}-${e.mode.replace(/\s+/g, "")}.png`;
   sstvLive = null;
+  // The report we would give them, from the picture's sync pulses and the S-meter over it,
+  // kept beside the picture with where it was heard (pages/api/sstv reads it back, and
+  // /api/sstv/log logs from it). The OCR's reading of the caption follows when it is done.
+  const sMeterDbm = sstvSmeter.n > 0 ? Math.round(sstvSmeter.sum / sstvSmeter.n) : null;
+  const rsv = sstvRsv(e.signal, sMeterDbm);
+  const meta: Record<string, unknown> = {
+    mode: e.mode,
+    at: new Date(e.at).toISOString(),
+    freqHz: status.dialFrequency,
+    band: status.dialFrequency ? freqToBand(status.dialFrequency) : null,
+    signal: e.signal,
+    sMeterDbm,
+    rsv,
+  };
+  const metaPath = path.join(SSTV_DIR, file.replace(/\.png$/, ".json"));
   void fs.promises
     .mkdir(SSTV_DIR, { recursive: true })
     .then(() => fs.promises.writeFile(path.join(SSTV_DIR, file), encodePng(e.width, e.height, e.rgb)))
+    .then(() => fs.promises.writeFile(metaPath, JSON.stringify(meta)))
     .then(() => {
-      console.log(`[sstv] saved ${e.mode} picture as ${file}`);
-      broadcast({ kind: "sstv-image", file, mode: e.mode, at: e.at });
+      console.log(`[sstv] saved ${e.mode} picture as ${file}, RSV ${rsv.report}`);
+      broadcast({ kind: "sstv-image", file, mode: e.mode, at: e.at, rsv: rsv.report });
+      return readSstvPicture(e.width, e.height, e.rgb, status.deCall, encodePng);
     })
-    .catch((err) => console.error(`[sstv] could not save the picture: ${err instanceof Error ? err.message : err}`));
+    .then(async (read) => {
+      meta.read = read;
+      await fs.promises.writeFile(metaPath, JSON.stringify(meta));
+      console.log(`[sstv] read on ${file}: ${read.theirCall ?? "no callsign"}${read.reportRcvd ? `, report ${read.reportRcvd}` : ""}`);
+      broadcast({ kind: "sstv-read", file, read });
+    })
+    .catch((err) => console.error(`[sstv] ${file}: ${err instanceof Error ? err.message : err}`));
 }
 
 /**
@@ -2245,6 +2279,7 @@ async function startFlexSource(): Promise<() => Promise<void>> {
   // no value once it is off the screen.
   source.on("smeter", (m) => {
     broadcast({ kind: "smeter", dbm: m.dbm, fwdDbm: m.fwdDbm, at: m.at });
+    sampleSstvSmeter(m.dbm);
     // The radio's own forward-power meter, which is the only honest answer to
     // "what power was this contact made with". `fwdDbm` is null on receive, so
     // nothing but real transmissions reaches the tracker.
@@ -3369,6 +3404,7 @@ async function startIcomBridge(): Promise<() => Promise<void>> {
     noiseDbm: () => noiseFloor.dbm(),
     onSmeter: (m) => {
       broadcast({ kind: "smeter", dbm: m.dbm, fwdDbm: m.fwdDbm, at: m.at });
+      sampleSstvSmeter(m.dbm);
       // Same path as the FlexRadio: whatever forward power this radio reports.
       activeTxPower?.sample(m.fwdDbm);
       noPower.sample(m.fwdDbm);

@@ -9,6 +9,7 @@ import { useApi } from "@/lib/client/api";
 import { decodeBase64Bins } from "@/lib/spectrum/wire";
 import { useNightMode } from "@/lib/client/use-theme";
 import { SstvSend, type SstvTxState } from "@/components/digital/SstvSend";
+import { SstvReply, type SstvPictureInfo } from "@/components/digital/SstvReply";
 
 export interface SstvStats {
   mode: "SSTV";
@@ -24,17 +25,14 @@ export type SstvMessage =
   | { kind: "sstv-vis"; code: number; name: string; decoded: boolean; at: number }
   | { kind: "sstv-start"; mode: string; width: number; height: number; at: number }
   | { kind: "sstv-rows"; from: number; to: number; width: number; rgb: string }
-  | { kind: "sstv-image"; file: string; mode: string; at: number };
+  | { kind: "sstv-image"; file: string; mode: string; at: number }
+  | { kind: "sstv-read"; file: string };
 
 export interface SstvPanelHandle {
   receive: (msg: SstvMessage) => void;
 }
 
-interface Picture {
-  file: string;
-  mode: string;
-  at: string;
-}
+type Picture = SstvPictureInfo;
 
 const time = (iso: string) => `${iso.slice(11, 16)}Z`;
 
@@ -50,8 +48,8 @@ const DIM_FILTER = "brightness(0.35)";
 
 export const SstvPanel = forwardRef<
   SstvPanelHandle,
-  { stats: SstvStats | null; myCall: string | null; canSend: boolean; tx: SstvTxState | null }
->(function SstvPanel({ stats, myCall, canSend, tx }, ref) {
+  { stats: SstvStats | null; myCall: string | null; canSend: boolean; tx: SstvTxState | null; dialHz: number | null }
+>(function SstvPanel({ stats, myCall, canSend, tx, dialHz }, ref) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const [live, setLive] = useState<{ mode: string; width: number; height: number; rows: number } | null>(null);
   const [picked, setPicked] = useState<Picture | null>(null);
@@ -59,6 +57,8 @@ export const SstvPanel = forwardRef<
   const [lastVis, setLastVis] = useState<{ name: string; decoded: boolean; at: number } | null>(null);
   const { data, reload } = useApi<{ pictures: Picture[]; total: number }>("/api/sstv?limit=48");
   const night = useNightMode();
+  /** A reply's caption for the send box; the nonce opens it again for the same words. */
+  const [reply, setReply] = useState<{ caption: string; nonce: number } | null>(null);
   const [dimPref, setDimPref] = useState(true);
   useEffect(() => {
     try {
@@ -118,7 +118,8 @@ export const SstvPanel = forwardRef<
         setLive((l) => (l ? { ...l, rows: msg.to } : l));
         return;
       }
-      setLive(null);
+      // A finished picture, or the bridge's reading of one: list it again with its notes.
+      if (msg.kind === "sstv-image") setLive(null);
       void reload();
     },
     [reload],
@@ -132,7 +133,8 @@ export const SstvPanel = forwardRef<
   }, [reload]);
 
   const pictures = data?.pictures ?? [];
-  const showing = picked ?? (live ? null : pictures[0] ?? null);
+  // The picked one from the latest list, so its reading and logged state stay current.
+  const showing = (picked && (pictures.find((p) => p.file === picked.file) ?? picked)) ?? (live ? null : pictures[0] ?? null);
 
   return (
     <div className="flex flex-col gap-3">
@@ -196,7 +198,18 @@ export const SstvPanel = forwardRef<
         )}
       </div>
 
-      <SstvSend myCall={myCall} canSend={canSend} galleryFile={showing?.file ?? null} tx={tx} />
+      {!live && showing && (
+        <SstvReply
+          picture={showing}
+          myCall={myCall}
+          dialHz={dialHz}
+          canSend={canSend}
+          onReply={(caption) => setReply((r) => ({ caption, nonce: (r?.nonce ?? 0) + 1 }))}
+          onLogged={() => void reload()}
+        />
+      )}
+
+      <SstvSend myCall={myCall} canSend={canSend} galleryFile={showing?.file ?? null} tx={tx} reply={reply} />
 
       {pictures.length > 0 && (
         <div>

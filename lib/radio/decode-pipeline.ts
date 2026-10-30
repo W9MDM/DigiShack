@@ -28,7 +28,7 @@ import { CwDemodulator } from "@/lib/digital/cwdemod";
 import { Psk31Demodulator } from "@/lib/digital/psk31demod";
 import { RttyProbe, type RttySuggestion } from "@/lib/digital/rtty-probe";
 import { OliviaDemodulator } from "@/lib/digital/oliviademod";
-import { SstvDecoder } from "@/lib/digital/sstv";
+import { SstvDecoder, type SstvSignal } from "@/lib/digital/sstv";
 import { HELL_RX_ROWS, HellDemodulator } from "@/lib/digital/hell";
 import { JttyDemodulator, type JttyMessage } from "@/lib/digital/jttydemod";
 import type { OliviaBandwidth, OliviaCode, OliviaTones } from "@/lib/digital/olivia";
@@ -310,7 +310,7 @@ export type SstvEvent =
   | { kind: "vis"; code: number; name: string; decoded: boolean; at: number }
   | { kind: "start"; mode: string; width: number; height: number; at: number }
   | { kind: "rows"; from: number; to: number; width: number; rgb: Uint8ClampedArray }
-  | { kind: "image"; mode: string; width: number; height: number; rgb: Uint8ClampedArray; at: number };
+  | { kind: "image"; mode: string; width: number; height: number; rgb: Uint8ClampedArray; at: number; signal: SstvSignal };
 
 /** What a stream's demodulator needs: the mode names which. */
 export type StreamOptions =
@@ -946,8 +946,8 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
         onStart: (m) => this.emit("sstv", { kind: "start", mode: m.name, width: m.width, height: m.height, at: Date.now() }),
         onRows: (img, from, to) =>
           this.emit("sstv", { kind: "rows", from, to, width: img.width, rgb: img.rgb.slice(from * img.width * 3, to * img.width * 3) }),
-        onImage: (img, m) =>
-          this.emit("sstv", { kind: "image", mode: m.name, width: img.width, height: img.height, rgb: img.rgb, at: Date.now() }),
+        onImage: (img, m, signal) =>
+          this.emit("sstv", { kind: "image", mode: m.name, width: img.width, height: img.height, rgb: img.rgb, at: Date.now(), signal }),
       });
     } else if (opts.mode === "HELL") {
       this.hell = new HellDemodulator({ sampleRate: this.inputRate, centreHz: opts.centreHz });

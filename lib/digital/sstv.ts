@@ -349,6 +349,40 @@ export class SstvFm {
   }
 }
 
+/**
+ * How a picture came through, measured from its sync pulses: what share of them was found
+ * where the timing put them, and how far, on average, the frequency wandered off 1200 Hz
+ * inside the ones that were. A clean pulse reads a steady 1200; noise scatters it.
+ */
+export interface SstvSignal {
+  /** Sync pulses found, as a share of the picture's sync periods, 0..1. */
+  syncFound: number;
+  /** Median RMS wander off 1200 Hz inside a found pulse, Hz. */
+  syncNoiseHz: number;
+}
+
+/**
+ * An RSV report (readability 1-5, strength 1-9, video 1-9), the SSTV form of RST.
+ *
+ * R from the sync pulses found: a picture that lost its sync for a stretch tears. V from
+ * the wander inside them, which is what makes a picture snowy. S from the S-meter
+ * (S9 = -73 dBm, 6 dB a unit) when the radio gave one; without it S is estimated from V,
+ * which is the best the audio alone can say and is marked as such.
+ */
+export function sstvRsv(signal: SstvSignal, sMeterDbm: number | null): { r: number; s: number; v: number; report: string; sMeasured: boolean } {
+  const f = signal.syncFound;
+  const r = f >= 0.95 ? 5 : f >= 0.8 ? 4 : f >= 0.6 ? 3 : f >= 0.35 ? 2 : 1;
+  // Wander thresholds from generated test cards (check:sstv adds the noise): 6-40 Hz clean,
+  // 70-95 at 20 dB in 2.5 kHz, 220-295 at 10 dB where the picture is snowy, and past 300 at
+  // 6 dB where it is mostly lost. The fast modes' wider filter reads higher at the same
+  // signal, and their pictures are noisier for it, so one scale serves them all.
+  const n = signal.syncNoiseHz;
+  const v = n <= 45 ? 9 : n <= 70 ? 8 : n <= 100 ? 7 : n <= 140 ? 6 : n <= 180 ? 5 : n <= 230 ? 4 : n <= 280 ? 3 : n <= 340 ? 2 : 1;
+  const sMeasured = sMeterDbm !== null && Number.isFinite(sMeterDbm);
+  const s = sMeasured ? Math.max(1, Math.min(9, Math.round(9 + (sMeterDbm! + 73) / 6))) : Math.max(1, Math.min(9, v));
+  return { r, s, v, report: `${r}${s}${v}`, sMeasured };
+}
+
 export interface SstvDecodeEvents {
   /** Any header heard, decoded or not: its code and name, once per header. */
   onVis?: (code: number, name: string, decoded: boolean) => void;
@@ -356,8 +390,8 @@ export interface SstvDecodeEvents {
   onStart?: (mode: SstvMode) => void;
   /** Rows finished, from `fromRow` up to but not including `toRow`. */
   onRows?: (img: SstvImage, fromRow: number, toRow: number) => void;
-  /** The picture is complete. */
-  onImage?: (img: SstvImage, mode: SstvMode) => void;
+  /** The picture is complete, with how its signal came through. */
+  onImage?: (img: SstvImage, mode: SstvMode, signal: SstvSignal) => void;
 }
 
 /**
@@ -383,6 +417,9 @@ export class SstvDecoder {
   private drift = 0;
   private readonly samplesPerMs: number;
   private stats = { pictures: 0, visHeard: 0 };
+  /** This picture's sync pulses: how many were found, and the wander inside each. */
+  private syncFound = 0;
+  private syncNoise: number[] = [];
   /** Samples left before the hunt may count another header: one header is one count. */
   private visQuiet = 0;
 
@@ -497,6 +534,8 @@ export class SstvDecoder {
     this.fm.setPixelMs(mode.colour === "ycc-robot" ? mode.scanMs / mode.width : mode.scanMs / mode.width);
     this.rowsDone = 0;
     this.drift = 0;
+    this.syncFound = 0;
+    this.syncNoise = [];
     // The first sync: Scottie sends one before line 0, and its lines then sync at the end;
     // the others open each line with one.
     this.nextSync = 0;
@@ -569,12 +608,15 @@ export class SstvDecoder {
           mode.syncMs,
         );
         const ideal = lineStart + (2 * mode.sepMs + 2 * mode.scanMs) * sp;
+        this.measureSync(midSync, mode.syncMs);
         const found = midSync ?? ideal;
         // The line's own start, from where its sync was found.
         syncAt = found - (2 * mode.sepMs + 2 * mode.scanMs) * sp;
         if (this.rowsDone === 0 && first === null) syncAt = Math.max(0, syncAt);
       } else {
-        syncAt = this.findSync(expected - search, expected + search, mode.syncMs) ?? expected;
+        const found = this.findSync(expected - search, expected + search, mode.syncMs);
+        this.measureSync(found, mode.syncMs);
+        syncAt = found ?? expected;
       }
       // Drift: how far the found sync sits from where the nominal period put it, smoothed.
       if (this.rowsDone > 0) {
@@ -587,8 +629,30 @@ export class SstvDecoder {
     }
     const img = this.img!;
     this.stats.pictures++;
-    this.events.onImage?.(img, mode);
+    const noise = [...this.syncNoise].sort((a, b) => a - b);
+    const signal: SstvSignal = {
+      syncFound: periods > 0 ? this.syncFound / periods : 0,
+      // No pulse found at all is as bad as a reading gets.
+      syncNoiseHz: noise.length > 0 ? noise[Math.floor(noise.length / 2)]! : 400,
+    };
+    this.events.onImage?.(img, mode, signal);
     this.reset();
+  }
+
+  /** Count a sync pulse, found or not, and measure the wander in the middle of one that was. */
+  private measureSync(at: number | null, syncMs: number): void {
+    if (at === null) return;
+    this.syncFound++;
+    const len = syncMs * this.samplesPerMs;
+    const a = Math.floor(at + len * 0.2);
+    const b = Math.min(this.freqN, Math.ceil(at + len * 0.8));
+    if (b - a < 2) return;
+    let s = 0;
+    for (let i = a; i < b; i++) {
+      const d = this.freq![i]! - SSTV_SYNC_HZ;
+      s += d * d;
+    }
+    this.syncNoise.push(Math.sqrt(s / (b - a)));
   }
 
   private decodePeriod(at: number): void {
