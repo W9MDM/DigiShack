@@ -4,7 +4,7 @@ import type { OperatingGuards } from "@/lib/digital/qso";
 import { parseMessage, standardMessages, type MayCallChecks } from "@/lib/digital/qso";
 import { callableFrom, isClosing } from "@/lib/digital/callable";
 import { rankCandidates, type Candidate, type WorkedIndex } from "@/lib/digital/worth";
-import { cqIsForUs } from "@/lib/digital/cq-modifier";
+import { cqIsForUs, normalizeCqModifier } from "@/lib/digital/cq-modifier";
 import type { QsoController } from "./qso-controller";
 import {
   bandHasNobodyToCall,
@@ -163,6 +163,11 @@ export interface AutoOperatorOptions {
      */
     cqFallbackWindows?: number;
   }>;
+  /**
+   * The word sent after CQ ("SES"), read on every CQ so a change applies on the next one.
+   * Absent or unusable means a plain CQ. See `normalizeCqModifier`.
+   */
+  cqModifier?: () => Promise<string | null>;
   /** Current POTA activators on the digital modes. */
   potaSpots: () => Promise<
     { activator: string; freqHz: number; band: string | null; mode: string; reference: string; parkName: string | null }[]
@@ -1923,6 +1928,7 @@ export class AutoOperator {
       myGrid: this.o.identity.myGrid,
       theirCall: "X",
       theirSnr: 0,
+      cqModifier: normalizeCqModifier(await this.o.cqModifier?.()),
     }).tx6;
 
     this.cqedLastWindow = true;

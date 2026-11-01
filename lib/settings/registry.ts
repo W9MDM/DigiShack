@@ -1761,6 +1761,19 @@ export const SETTINGS: SettingDef[] = [
     default: "10",
   },
   {
+    key: "auto.cqModifier",
+    label: "CQ modifier",
+    type: "string",
+    group: "auto",
+    help:
+      "A word sent after CQ when the station calls CQ itself, in Auto CQ and in Hunt's CQ " +
+      "fallback: SES makes it \"CQ SES K9PC EN61\" for a special event station. FT8 and FT4 " +
+      "only carry one to four letters (SES, POTA, DX, NA) or three digits; anything else is " +
+      "ignored and the CQ goes out plain. Blank sends a plain CQ.",
+    placeholder: "SES",
+    default: "",
+  },
+  {
     key: "flex.antenna",
     label: "Antenna port",
     type: "string",

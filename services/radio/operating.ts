@@ -656,6 +656,7 @@ export async function buildOperating(deps: OperatingDeps): Promise<Operating> {
       // Read per window like the rest, so 0 switches the CQ fallback off on the next one.
       cqFallbackWindows: await s.getNumber("auto.huntCqFallbackWindows", 10),
     }),
+    cqModifier: () => s.getString("auto.cqModifier"),
     resolveEntity: data.resolveEntity,
     workedIndex: data.workedIndex,
     potaPrefs: async () => {

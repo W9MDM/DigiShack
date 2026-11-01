@@ -19,7 +19,8 @@
 // worse failure and a harder one to notice. So the permissive cases are asserted as
 // carefully as the refusals.
 
-import { cqIsForUs } from "../lib/digital/cq-modifier";
+import { cqIsForUs, normalizeCqModifier } from "../lib/digital/cq-modifier";
+import { standardMessages } from "../lib/digital/qso";
 
 let failures = 0;
 function check(name: string, cond: boolean, extra?: unknown): void {
@@ -116,6 +117,20 @@ function main(): void {
     check("cq kh is still refused", !cqIsForUs("kh", US).forUs);
     check("cq pota is still answered", cqIsForUs("pota", US).forUs);
     check("a lower-case continent still matches", cqIsForUs("na", US).forUs);
+  }
+
+  console.log("our own CQ modifier (auto.cqModifier)");
+  {
+    check("SES is sent as SES", normalizeCqModifier("ses") === "SES");
+    check("blank is a plain CQ", normalizeCqModifier("  ") === null && normalizeCqModifier(null) === null);
+    check("four letters fit", normalizeCqModifier("POTA") === "POTA");
+    check("five letters do not fit FT8", normalizeCqModifier("EVENT") === null);
+    check("three digits fit", normalizeCqModifier("100") === "100");
+    check("mixed letters and digits do not", normalizeCqModifier("K9") === null);
+    const tx6 = standardMessages({ myCall: "K9PC", myGrid: "EN61fm", theirCall: "X", theirSnr: 0, cqModifier: normalizeCqModifier("ses") }).tx6;
+    check("the CQ reads CQ SES K9PC EN61", tx6 === "CQ SES K9PC EN61", tx6);
+    const plain = standardMessages({ myCall: "K9PC", myGrid: "EN61", theirCall: "X", theirSnr: 0, cqModifier: normalizeCqModifier("EVENT") }).tx6;
+    check("an unusable word leaves the CQ plain", plain === "CQ K9PC EN61", plain);
   }
 
   console.log("");

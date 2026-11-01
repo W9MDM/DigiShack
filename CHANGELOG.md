@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.275.4 - public release
+## 1.276.1 - public release
 
 Development happens in a private repository; this is where the public history starts.
 Earlier entries are not reproduced - they quote real operators by callsign, include
@@ -22,6 +22,8 @@ Notes for anyone running this:
 
 ## Release history
 
+- **1.276.1** — Change an operator's station role from the Stations page
+- **1.276.0** — CQ modifier for special events; installs always get a SETTINGS_KEY
 - **1.275.4** — SSTV reply box: empty fields no longer look filled in
 - **1.275.3** — SSTV OCR reads real pictures better: six passes, combined
 - **1.275.2** — check:sstv-read's reply caption fits on the box

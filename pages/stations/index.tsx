@@ -262,12 +262,39 @@ function StationCard({
                     {op.callsign}
                   </span>
                   <span className="text-fg-muted">{op.name}</span>
-                  <Badge
-                    tone={op.role === "ADMIN" ? "accent" : "neutral"}
-                    className="ml-auto"
-                  >
-                    {op.role}
-                  </Badge>
+                  {/* A label for this person's job at the station, NOT their login's
+                      permissions - those are the Users page. The API always accepted a
+                      change; the page only showed a badge, so a role picked when the
+                      operator was added could only be fixed by deleting them. */}
+                  {canAdmin ? (
+                    <Select
+                      value={op.role}
+                      aria-label={`Station role for ${op.callsign}`}
+                      title="This person's role at the station. Sign-in permissions are set on the Users page."
+                      onChange={async (e) => {
+                        try {
+                          await apiPatch(`/api/operators/${op.id}`, { role: e.target.value });
+                          onChanged();
+                        } catch (err) {
+                          onError(err);
+                        }
+                      }}
+                      className="ml-auto w-32"
+                    >
+                      {ROLES.map((r) => (
+                        <option key={r} value={r}>
+                          {r}
+                        </option>
+                      ))}
+                    </Select>
+                  ) : (
+                    <Badge
+                      tone={op.role === "ADMIN" ? "accent" : "neutral"}
+                      className="ml-auto"
+                    >
+                      {op.role}
+                    </Badge>
+                  )}
                   {canAdmin && (
                     <button
                       type="button"

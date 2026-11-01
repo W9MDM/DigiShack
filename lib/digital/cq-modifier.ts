@@ -119,3 +119,17 @@ export function cqIsForUs(modifier: string | null, who: CqAudience): CqVerdict {
   // because guessing that an unknown word is a restriction would cost real contacts.
   return { forUs: true, reason: null };
 }
+
+/**
+ * The word WE put after CQ ("CQ SES K9PC EN61"), cleaned for the air, or null for a plain CQ.
+ *
+ * FT8 and FT4 carry a directed CQ inside the 28-bit callsign field, and that field has room
+ * for exactly two shapes: one to four letters, or three digits. Anything else either fails
+ * to pack or packs as something the operator did not type, so it is refused here and the
+ * CQ goes out plain rather than garbled.
+ */
+export function normalizeCqModifier(raw: string | null | undefined): string | null {
+  const word = String(raw ?? "").trim().toUpperCase();
+  if (!word) return null;
+  return /^[A-Z]{1,4}$/.test(word) || /^\d{3}$/.test(word) ? word : null;
+}
