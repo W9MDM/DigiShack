@@ -3,6 +3,7 @@ import type { NextApiRequest, NextApiResponse } from "next";
 import { sendJson } from "@/lib/api/respond";
 import { authedRoute } from "@/lib/auth/guard";
 import type { AuthContext } from "@/lib/auth/session";
+import { stationLabel } from "@/lib/station/label";
 
 import pkg from "@/package.json";
 
@@ -21,6 +22,9 @@ async function get(
     name: "DigiShack API",
     version: "v1",
     software: `DigiShack ${pkg.version}`,
+    // Which install this is, for a club system pulling from several that share a
+    // callsign. Both null until set under Settings → General. Added in 1.277.0.
+    station: await stationLabel(),
     authenticatedAs: {
       name: auth.user.name,
       role: auth.user.role,

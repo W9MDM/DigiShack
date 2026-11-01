@@ -474,6 +474,27 @@ export const SETTINGS: SettingDef[] = [
     default: "",
   },
   {
+    key: "station.location",
+    label: "Station location",
+    type: "string",
+    group: "general",
+    help:
+      "Where this install's radio is - \"Trailer\", \"MAAC building\", a home shack. At a special " +
+      "event several installs can all be K9PC, and the callsign cannot tell them apart. Shown in " +
+      "the header next to the logo, and to a club system (HamHub) reading this install's API.",
+    placeholder: "Trailer",
+    default: "",
+  },
+  {
+    key: "station.description",
+    label: "Station description",
+    type: "string",
+    group: "general",
+    help: "The rig, antenna or job, in a few words - \"Flex 6600, 20/40m beam, FT8\". Shown beside the location and over the API.",
+    placeholder: "Flex 6600, 20/40m beam, FT8",
+    default: "",
+  },
+  {
     key: "app.baseUrl",
     label: "Public base URL",
     type: "string",

@@ -4,6 +4,7 @@ import { Ft0Button } from "@/components/layout/Ft0Button";
 import { OperatorButton } from "@/components/layout/OperatorButton";
 import { TxArmButton } from "@/components/layout/TxArmButton";
 import { UtcClock } from "@/components/layout/UtcClock";
+import { StationLabelBadge } from "@/components/layout/StationLabelBadge";
 import { ThemeToggle } from "@/components/ui/ThemeToggle";
 import { useRouter } from "next/router";
 import type { UiFlags } from "@/lib/auth/guard";
@@ -138,6 +139,7 @@ export function Shell({
               Shack
             </span>
           </Link>
+          <StationLabelBadge />
 
           {/* Desktop only; below md the same groups are in the drawer. It takes whatever
               width the right-hand cluster leaves and changes shape to fit it. */}

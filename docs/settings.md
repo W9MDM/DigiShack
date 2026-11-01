@@ -19,7 +19,7 @@ alongside the ones every station sets.
 
 ## Contents
 
-- [General](#general) — 4 settings, 1 advanced
+- [General](#general) — 6 settings, 1 advanced
 - [QRZ.com](#qrz-com) — 3 settings
 - [Logbook of the World](#logbook-of-the-world) — 12 settings, 9 advanced
 - [eQSL.cc](#eqsl-cc) — 5 settings, 3 advanced
@@ -61,6 +61,8 @@ Instance-wide behaviour.
 | Setting | Key | Type | Default | What it does |
 |---|---|---|---|---|
 | Licence class | `station.licenceClass` | select | — | Decides where an image mode (SSTV) may be sent: in the US images share the phone sub-bands, which differ by class - 14.230 needs General or above, 7.171 Advanced or Extra. Licensed outside the US means that licence's own rules apply. Unset, SSTV sending refuses. Stored as us-technician, us-general, us-advanced, us-extra or other. |
+| Station location | `station.location` | text | — | Where this install's radio is - "Trailer", "MAAC building", a home shack. At a special event several installs can all be K9PC, and the callsign cannot tell them apart. Shown in the header next to the logo, and to a club system (HamHub) reading this install's API. |
+| Station description | `station.description` | text | — | The rig, antenna or job, in a few words - "Flex 6600, 20/40m beam, FT8". Shown beside the location and over the API. |
 | Public base URL | `app.baseUrl` | text | from `APP_BASE_URL` | Used for absolute links in outgoing email. |
 | Session lifetime (days) *(advanced)* | `app.sessionTtlDays` | number | `30` | Days of inactivity before a login expires. Each use of a session extends it, so a browser used within this many days stays signed in. Lowering it does not revoke existing sessions — do that from the Users page. |
 | Show the experimental Rig page | `ui.experimental.rig` | on/off | `false` | Off by default, and honestly labelled: the Rig page is the least finished part of DigiShack. The panadapter's dB window is not calibrated, the FlexRadio accepts display settings it never reflects in status, and several controls are reasoned from documentation rather than measured against hardware. It is genuinely useful and it is genuinely a work in progress, which is why a new install does not meet it first. Turning this on adds Rig to the menu; the page itself says the same thing at the top so nobody arrives without the warning. |
