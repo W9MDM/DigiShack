@@ -1,5 +1,6 @@
 import { parseAdif } from "@/lib/adif/parse";
 import { prisma } from "@/lib/db/prisma";
+import { readStationValue, stationWhere, writeStationValue } from "@/lib/station/scope";
 import { getSetting } from "@/lib/settings";
 
 // eQSL.cc.
@@ -235,24 +236,14 @@ export interface EqslLastSync {
 
 /** When the inbox sync last ran, and what it found. Null `at` means never. */
 export async function getEqslLastSync(): Promise<EqslLastSync> {
-  const rows = await prisma.setting.findMany({
-    where: { key: { in: [KEY_LAST_SYNC, KEY_LAST_RESULT] } },
-    select: { key: true, value: true },
-  });
-  const get = (k: string) => rows.find((r) => r.key === k)?.value || null;
-  return { at: get(KEY_LAST_SYNC), result: get(KEY_LAST_RESULT) };
+  const [at, result] = await Promise.all([readStationValue(KEY_LAST_SYNC), readStationValue(KEY_LAST_RESULT)]);
+  return { at: at || null, result: result || null };
 }
 
 async function recordEqslSync(result: string): Promise<void> {
-  const put = async (key: string, value: string) =>
-    prisma.setting.upsert({
-      where: { key },
-      create: { key, value, encrypted: false },
-      update: { value },
-    });
   try {
-    await put(KEY_LAST_SYNC, new Date().toISOString());
-    await put(KEY_LAST_RESULT, result.slice(0, 300));
+    await writeStationValue(KEY_LAST_SYNC, new Date().toISOString());
+    await writeStationValue(KEY_LAST_RESULT, result.slice(0, 300));
   } catch {
     /* a status note must never be able to fail a sync */
   }
@@ -444,6 +435,8 @@ async function runEqslInboxSync(
   const WINDOW_MS = 30 * 60_000;
 
   const local = await prisma.qso.findMany({
+    // This station's contacts: a K9PC eQSL inbox confirms K9PC contacts, not K9XYZ's.
+    where: await stationWhere(),
     select: { id: true, callsign: true, band: true, mode: true, startTime: true, eqslRcvd: true },
   });
   const byCallBand = new Map<string, { id: string; mode: string; t: number; eqslRcvd: boolean }[]>();

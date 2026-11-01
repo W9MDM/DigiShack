@@ -6,6 +6,7 @@ import { boolQuery } from "@/lib/validation/query";
 import { sendError, sendJson } from "@/lib/api/respond";
 import { authedRoute } from "@/lib/auth/guard";
 import { syncLotwConfirmations } from "@/lib/integrations/lotw";
+import { inStationFromQuery } from "@/lib/station/api-scope";
 
 const querySchema = z.object({
   /** Report what would change without writing. Defaults to a dry run. */
@@ -21,7 +22,7 @@ const querySchema = z.object({
 //
 // dryRun defaults to TRUE: the first thing an operator should see is what would
 // change, not a log that has already changed.
-async function post(req: NextApiRequest, res: NextApiResponse) {
+async function postForStation(req: NextApiRequest, res: NextApiResponse) {
   const opts = querySchema.parse(req.query);
   const outcome = await syncLotwConfirmations(opts);
 
@@ -31,6 +32,12 @@ async function post(req: NextApiRequest, res: NextApiResponse) {
   }
 
   sendJson(res, 200, outcome.report);
+}
+
+/** For the station in `?stationId=` (its own accounts and contacts), else the home station. */
+async function post(req: NextApiRequest, res: NextApiResponse) {
+  const r = await inStationFromQuery(req, () => postForStation(req, res));
+  if (!r.ok) sendJson(res, 404, { error: "No such station" });
 }
 
 export default authedRoute({ POST: { role: "ADMIN", handler: post } });

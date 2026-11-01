@@ -8,6 +8,7 @@ import { SearchResults, SettingsSearchBox } from "@/components/settings/Settings
 import { UnreadableBanner } from "@/components/settings/UnreadableBanner";
 import { useSettingsLocation } from "@/components/settings/useSettingsLocation";
 import { useSettingsState } from "@/components/settings/useSettingsState";
+import { StationAccountContext, StationAccountPicker } from "@/components/settings/StationAccountPicker";
 import { useUnsavedChangesGuard } from "@/components/settings/useUnsavedChangesGuard";
 import { staysInView } from "@/components/settings/visibility";
 import { ErrorBanner, PageHeader } from "@/components/ui/primitives";
@@ -19,7 +20,9 @@ import { searchSettings, searchTerms } from "@/lib/settings/search";
 const ALL_NAV_GROUPS = navGroups();
 
 export default function SettingsPage() {
-  const st = useSettingsState();
+  // Which station's accounts the Logbook sync tab is editing; null is the home station.
+  const [stationId, setStationId] = useState<string | null>(null);
+  const st = useSettingsState(stationId);
   // The QSL manager who is not an admin is sent only the QSL groups, and sees only the QSL
   // category whatever the URL names.
   const isAdmin = useCan("ADMIN");
@@ -91,6 +94,7 @@ export default function SettingsPage() {
   const barVisible = dirty > 0 || st.report !== null || st.discarded !== null;
 
   return (
+    <StationAccountContext.Provider value={stationId}>
     <SettingsLayout
       bottomInset={barVisible}
       nav={{
@@ -149,6 +153,17 @@ export default function SettingsPage() {
                 onClear={() => setQuery("")}
               />
             )}
+            {/* Shown wherever account fields can appear - the Logbook sync tab and search
+                results - so a key is never typed without seeing which station it is for. */}
+            {(searching || (isAdmin ? nav.location.tab : "qsl") === "logbooks") && (
+              <StationAccountPicker
+                value={stationId}
+                onChange={(id) => {
+                  if (st.dirtyKeys.length > 0 && !window.confirm("Discard your unsaved changes? They were for the station picked before.")) return;
+                  setStationId(id);
+                }}
+              />
+            )}
             <CategoryView
               hidden={searching}
               tabId={isAdmin ? nav.location.tab : "qsl"}
@@ -193,6 +208,7 @@ export default function SettingsPage() {
         onConfirm={st.confirm}
       />
     </SettingsLayout>
+    </StationAccountContext.Provider>
   );
 }
 

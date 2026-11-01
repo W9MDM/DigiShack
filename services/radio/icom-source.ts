@@ -25,6 +25,7 @@ import type { DigitalTransmitter } from "@/lib/radio/types";
 import { inferDigitalMode } from "@/lib/ham/digital-freqs";
 import { buildOperating, callingFrequencyHz, type Operating } from "./operating";
 import { watchGuardFaults } from "./guard-alerts";
+import { activeStation } from "@/lib/station/scope";
 
 export interface IcomBridgeDeps {
   onDecodedWindow(
@@ -414,7 +415,7 @@ export async function startIcomSource(deps: IcomBridgeDeps): Promise<IcomBridge>
     //
     // Identity comes from the logbook's own station record. The radio knows a callsign
     // but not a grid, and the log is the authority anyway.
-    const station = await prisma.station.findFirst({ orderBy: { createdAt: "asc" } });
+    const station = await activeStation();
     if (!station) {
       console.warn(
         "[radio] Icom automatic modes unavailable: no station exists — create one first",

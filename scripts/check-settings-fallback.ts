@@ -19,7 +19,12 @@ import { randomBytes } from "node:crypto";
 
 import { installFakePrisma, makeReporter } from "./fake-prisma";
 
-const fake = installFakePrisma(["setting"]);
+const fake = installFakePrisma(["setting", "station", "stationSetting"]);
+// No stations: station-scoped keys resolve from the install-wide rows, exactly as before
+// stations had settings of their own. check-station-scope covers the scoped path.
+fake.station.findFirst = async () => null;
+fake.setting.findUnique = async () => null;
+fake.stationSetting.findMany = async () => [];
 const { ok, eq, section, finish } = makeReporter();
 
 interface Row {

@@ -290,6 +290,8 @@ model Station {
   createdAt           DateTime             @default(now())
   updatedAt           DateTime             @updatedAt
   incompleteExchanges IncompleteExchange[]
+  settings            StationSetting[]
+  activeFor           ActiveStation[]
 
   // Deliberately NOT unique: portable/rover operation legitimately produces
   // several rows for one callsign at different grids (K9XYZ/P, etc.).
@@ -965,4 +967,32 @@ enum QslOptOutSource {
   LINK
   /// Their QRZ QSL-route field carries NOQSOCC or NOEQSL — the community convention.
   QRZ_MARKER
+}
+
+/// A setting that belongs to one station rather than the install: its QRZ logbook key, LoTW
+/// account and location, eQSL, Club Log and Cloudlog accounts, and download cursors. See
+/// lib/station/scope.ts for which keys. Same storage rules as Setting - secrets encrypted
+/// under SETTINGS_KEY. A station with no row for a key has no value: nothing falls back to
+/// another station's.
+model StationSetting {
+  stationId String
+  station   Station  @relation(fields: [stationId], references: [id], onDelete: Cascade)
+  key       String   @db.VarChar(64)
+  value     String   @db.Text
+  encrypted Boolean  @default(false)
+  updatedAt DateTime @updatedAt
+
+  @@id([stationId, key])
+}
+
+/// The station the radio is operating as: one row, id 1. A table and not a Setting because
+/// settings are cached for 30 s per process, and the bridge must never transmit or log under
+/// the previous station for half a minute after a switch. Read uncached, every time.
+model ActiveStation {
+  id        Int      @id @default(1)
+  stationId String
+  station   Station  @relation(fields: [stationId], references: [id], onDelete: Cascade)
+  /// The login that switched it.
+  setById   String?  @db.VarChar(32)
+  updatedAt DateTime @updatedAt
 }

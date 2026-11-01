@@ -19,6 +19,7 @@
 
 import { QSO_INCLUDE, toAdifInput } from "@/lib/adif/from-row";
 import { prisma } from "@/lib/db/prisma";
+import { effectiveStationId, scopedStationId, stationWhere, withStation } from "@/lib/station/scope";
 import { uploadQsoToClubLog } from "@/lib/integrations/clublog";
 import { uploadToCloudlog } from "@/lib/integrations/cloudlog";
 import { N3FJP_DEFAULT_PORT, sendToN3fjp } from "@/lib/integrations/n3fjp";
@@ -70,11 +71,23 @@ const FAILURE_LIMIT = 3;
  */
 const CLUBLOG_CONSECUTIVE_FAILURES = 3;
 
+// Keyed by station AND service. One breaker per service was shared by every station, so a
+// station with a bad or missing QRZ key tripped it and the home station's QRZ uploads then
+// stood down too - indefinitely, since nothing of the home station's ran to reset it.
 const breaker: Record<string, { failures: number; lastError: string }> = {};
 
+function breakerKey(service: string): string {
+  return `${scopedStationId() ?? "home"}:${service}`;
+}
+
+/** Clear only the station in scope's breaker - what a success in its own run means. */
+function resetOwnBreaker(service: string): void {
+  delete breaker[breakerKey(service)];
+}
+
+/** Clear every station's breaker for a service (or all): an explicit reset only. */
 export function resetBreaker(service?: string): void {
-  if (service) delete breaker[service];
-  else for (const k of Object.keys(breaker)) delete breaker[k];
+  for (const k of Object.keys(breaker)) if (!service || k.endsWith(`:${service}`)) delete breaker[k];
 }
 
 export function breakerState(): Record<string, { failures: number; lastError: string }> {
@@ -82,14 +95,15 @@ export function breakerState(): Record<string, { failures: number; lastError: st
 }
 
 function tripped(service: string): boolean {
-  return (breaker[service]?.failures ?? 0) >= FAILURE_LIMIT;
+  return (breaker[breakerKey(service)]?.failures ?? 0) >= FAILURE_LIMIT;
 }
 
 function noteFailure(service: string, error: string): void {
-  const b = breaker[service] ?? { failures: 0, lastError: "" };
+  const k = breakerKey(service);
+  const b = breaker[k] ?? { failures: 0, lastError: "" };
   b.failures++;
   b.lastError = error;
-  breaker[service] = b;
+  breaker[k] = b;
 }
 
 export interface UploadPrefs {
@@ -189,7 +203,10 @@ async function loadPending(
   reciprocalOnly = false,
   qsoIds?: string[],
 ) {
-  const where = pendingWhere(service, { since, ignoreCutoff, reciprocalOnly, qsoIds });
+  // Only the station in scope: runUploads works through stations one at a time, each
+  // with its own accounts, so a K9PC run must never pick up a K9XYZ contact. Named
+  // contacts were already split by station before the run.
+  const where = { ...pendingWhere(service, { since, ignoreCutoff, reciprocalOnly, qsoIds }), ...(await stationWhere()) };
   return prisma.qso.findMany({
     where,
     orderBy: { startTime: "asc" },
@@ -255,9 +272,21 @@ export function resolveServices(
  * The DXCC comes from the CERTIFICATE rather than from a setting or a prefix lookup: it is
  * what LoTW issued, and a mismatch between the station record and the certificate is refused.
  */
-async function lotwStationFor(cert: LotwCert): Promise<LotwStation | null> {
-  const station = await prisma.station.findFirst({ select: { callsign: true, grid: true } });
+async function lotwStationFor(cert: LotwCert): Promise<LotwStation | { refused: string } | null> {
+  // The station being uploaded for - runUploads works through stations one at a time, each in
+  // its own scope with its own certificate. Never an unordered findFirst: with two stations
+  // that returned whichever row the database liked, so K9XYZ's contacts could be signed with
+  // K9PC's grid and zones.
+  const sid = await effectiveStationId();
+  const station = sid ? await prisma.station.findUnique({ where: { id: sid }, select: { callsign: true, grid: true } }) : null;
   if (!station?.callsign) return null;
+  // FAIL CLOSED on a certificate for another callsign. The certificate is found by file path,
+  // and a K9PC .p12 uploaded while the settings page pointed at the home station would
+  // otherwise sign K9XYZ's contacts with K9PC's key. Signing under a callsign that is not the
+  // certificate's is not a bug LoTW forgives; it is a licence problem.
+  if (cert.callsign.trim().toUpperCase() !== station.callsign.trim().toUpperCase()) {
+    return { refused: `the LoTW certificate is for ${cert.callsign}, but this station is ${station.callsign}` };
+  }
   return {
     callsign: station.callsign,
     dxcc: cert.dxcc,
@@ -342,7 +371,61 @@ export interface UploadRunResult {
  * `ignoreCutoff` is the back-catalogue path and must only ever be reached from an
  * explicit operator action with the count shown first.
  */
-export async function runUploads(
+/**
+ * Upload for every station, each under its own accounts.
+ *
+ * One station - nearly every install - is exactly the old single run. With several, each
+ * runs inside `withStation`, so every credential the services read is that station's and
+ * every contact picked up is that station's; a station with no accounts of its own simply
+ * finds its services unconfigured. Results are merged per service.
+ */
+export async function runUploads(opts: Parameters<typeof runUploadsForStation>[0] = {}): Promise<UploadRunResult> {
+  const stations = await prisma.station.findMany({ orderBy: { createdAt: "asc" }, select: { id: true, callsign: true } });
+  if (stations.length <= 1) return runUploadsForStation(opts);
+
+  const owners = opts.qsoIds
+    ? await prisma.qso.findMany({ where: { id: { in: opts.qsoIds } }, select: { id: true, stationId: true } })
+    : [];
+  const runs: { call: string; result: UploadRunResult }[] = [];
+  for (const st of stations) {
+    const qsoIds = opts.qsoIds ? owners.filter((o) => o.stationId === st.id).map((o) => o.id) : undefined;
+    if (qsoIds && qsoIds.length === 0) continue;
+    runs.push({ call: st.callsign, result: await withStation(st.id, () => runUploadsForStation({ ...opts, qsoIds })) });
+  }
+  return mergeRuns(runs);
+}
+
+export function mergeRuns(runs: { call: string; result: UploadRunResult }[]): UploadRunResult {
+  const ran = runs.filter((r) => r.result.ran);
+  if (ran.length === 0) return runs[0]?.result ?? { ran: false, reason: "No stations", services: [] };
+  const byService = new Map<UploadableService, ServiceResult>();
+  const NOT_CONFIGURED = "Not configured for this station";
+  for (const { call, result } of ran) {
+    for (const s of result.services) {
+      const m = byService.get(s.service);
+      const tag = (t: string) => `${call}: ${t}`;
+      // A station simply not using a service is not news. Reported only when NO station ran
+      // it (then the skip is the whole story); otherwise it would warn on every sweep.
+      if (s.skipped === NOT_CONFIGURED && ran.some((o) => o.result.services.some((x) => x.service === s.service && x.skipped !== NOT_CONFIGURED))) {
+        if (!m) byService.set(s.service, { ...s, skipped: null, errors: [] });
+        continue;
+      }
+      if (!m) {
+        byService.set(s.service, { ...s, errors: s.errors.map(tag), skipped: s.skipped ? tag(s.skipped) : null });
+        continue;
+      }
+      m.attempted += s.attempted;
+      m.uploaded += s.uploaded;
+      m.duplicates += s.duplicates;
+      m.failed += s.failed;
+      m.errors.push(...s.errors.map(tag));
+      m.skipped = [m.skipped, s.skipped ? tag(s.skipped) : null].filter(Boolean).join("; ") || null;
+    }
+  }
+  return { ran: true, reason: null, services: [...byService.values()] };
+}
+
+async function runUploadsForStation(
   opts: {
     ignoreCutoff?: boolean;
     limit?: number;
@@ -387,7 +470,15 @@ export async function runUploads(
     // business refusing a person who has clicked reprocess on one contact — they may well
     // be clicking it because they have just fixed whatever tripped it.
     if (tripped(service) && !opts.qsoIds) {
-      r.skipped = `${FAILURE_LIMIT} consecutive failures — last: ${breaker[service]?.lastError ?? "?"}`;
+      r.skipped = `${FAILURE_LIMIT} consecutive failures — last: ${breaker[breakerKey(service)]?.lastError ?? "?"}`;
+      services.push(r);
+      continue;
+    }
+
+    // Not configured for this station: skipped, and never counted as a failure. A second
+    // station without a QRZ account is normal, not a fault, and must not trip anything.
+    if (!opts.qsoIds && !(await isConfigured(service))) {
+      r.skipped = "Not configured for this station";
       services.push(r);
       continue;
     }
@@ -440,7 +531,7 @@ export async function runUploads(
         }
       }
       if (done.length > 0) await markUploaded(service as UploadService, done);
-      if (r.uploaded > 0 || r.duplicates > 0) resetBreaker(service);
+      if (r.uploaded > 0 || r.duplicates > 0) resetOwnBreaker(service);
     } else if (service === "eqsl") {
       // One GET per contact — eQSL's API takes a single record in the query string and
       // has no batch form, so this is its shape rather than a choice.
@@ -480,7 +571,7 @@ export async function runUploads(
         }
       }
       if (done.length > 0) await markUploaded(service as UploadService, done);
-      if (r.uploaded > 0 || r.duplicates > 0) resetBreaker(service);
+      if (r.uploaded > 0 || r.duplicates > 0) resetOwnBreaker(service);
     } else if (service === "lotw") {
       // ONE SIGNED FILE FOR THE WHOLE BATCH, which is LoTW's shape rather than a choice:
       // the certificate signs each contact, the contacts travel together in a .tq8, and the
@@ -510,8 +601,8 @@ export async function runUploads(
       }
 
       const st = await lotwStationFor(cert);
-      if (!st) {
-        r.skipped = "no station callsign is set";
+      if (!st || "refused" in st) {
+        r.skipped = st ? st.refused : "no station callsign is set";
         services.push(r);
         continue;
       }
@@ -542,7 +633,7 @@ export async function runUploads(
           .map((q) => q.id);
         r.uploaded = sent.length;
         await markUploaded(service as UploadService, sent);
-        resetBreaker(service);
+        resetOwnBreaker(service);
       } else {
         r.failed = built.included;
         r.errors.push(out.detail);
@@ -572,7 +663,7 @@ export async function runUploads(
         // Progress was made, so the breaker resets even if some records were refused.
         // Otherwise a handful of permanently-bad records would eventually stop a service
         // that is working for everything else.
-        resetBreaker(service);
+        resetOwnBreaker(service);
       }
     } else if (service === "n3fjp") {
       // One connection for the whole batch — this is a program on a desk on the same
@@ -596,7 +687,7 @@ export async function runUploads(
       r.failed = rows.length - res.sent;
       for (const e of res.errors.slice(0, 5)) r.errors.push(e);
       if (res.ok) {
-        resetBreaker(service);
+        resetOwnBreaker(service);
       } else {
         r.errors.push(res.detail);
         // A closed logging program is the ordinary case rather than a fault, but it still
@@ -647,7 +738,7 @@ export async function runUploads(
       // service down would let one bad row in an imported log stop uploads for the whole
       // log — which is exactly the shape of fault this sweep now exists to isolate.
       if (r.uploaded > 0) {
-        resetBreaker(service);
+        resetOwnBreaker(service);
       } else if (r.failed > 0) {
         noteFailure(service, r.errors[r.errors.length - 1] ?? "failed");
       }
@@ -713,6 +804,13 @@ export async function isConfigured(service: UploadableService): Promise<boolean>
  * Returns null when there is no such contact.
  */
 export async function qsoDestinations(qsoId: string): Promise<QsoDestination[] | null> {
+  // "Configured" means configured for the station this contact was made as.
+  const owner = await prisma.qso.findUnique({ where: { id: qsoId }, select: { stationId: true } });
+  if (!owner) return null;
+  return withStation(owner.stationId, () => destinationsFor(qsoId));
+}
+
+async function destinationsFor(qsoId: string): Promise<QsoDestination[] | null> {
   const q = await prisma.qso.findUnique({
     where: { id: qsoId },
     select: {
@@ -793,7 +891,7 @@ export async function baselineAsUploaded(
   before: Date,
 ): Promise<number> {
   const { count } = await prisma.qso.updateMany({
-    where: { [SENT_FIELD[service]]: false, startTime: { lt: before } },
+    where: { [SENT_FIELD[service]]: false, startTime: { lt: before }, ...(await stationWhere()) },
     data: { [SENT_FIELD[service]]: true },
   });
   return count;

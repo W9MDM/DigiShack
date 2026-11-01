@@ -12,6 +12,7 @@
 // cheerfully send everything again.
 
 import { prisma } from "@/lib/db/prisma";
+import { stationWhere } from "@/lib/station/scope";
 
 /** Services that accept uploads and never confirm. */
 export type UploadService =
@@ -101,7 +102,7 @@ export async function pendingForUpload(
   limit = 500,
 ): Promise<{ id: string; callsign: string; band: string; mode: string; startTime: Date }[]> {
   return prisma.qso.findMany({
-    where: { [SENT_FIELD[service]]: false },
+    where: { [SENT_FIELD[service]]: false, ...(await stationWhere()) },
     select: { id: true, callsign: true, band: true, mode: true, startTime: true },
     orderBy: { startTime: "asc" },
     take: limit,
@@ -151,7 +152,9 @@ export interface MatchResult {
  * more uploaded than it is.
  */
 export async function matchRemoteToLocal(remote: RemoteQso[]): Promise<MatchResult> {
+  // What THIS station's account holds is matched against THIS station's contacts.
   const local = await prisma.qso.findMany({
+    where: await stationWhere(),
     select: { id: true, callsign: true, band: true, mode: true, startTime: true },
   });
   return matchLists(remote, local);

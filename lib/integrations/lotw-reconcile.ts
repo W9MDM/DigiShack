@@ -1,5 +1,6 @@
 import { parseAdif } from "@/lib/adif/parse";
 import { prisma } from "@/lib/db/prisma";
+import { stationWhere } from "@/lib/station/scope";
 import { fetchLotwQsls, getLotwCredentials } from "@/lib/integrations/lotw";
 
 // Check that LoTW actually kept what we sent it.
@@ -111,7 +112,7 @@ export async function reconcileLotwSent(
   // missing and un-mark it. Those are left alone; a full reconciliation of pre-existing
   // flags is a different job with a different blast radius.
   const local = await prisma.qso.findMany({
-    where: { lotwSent: true, lotwSentAt: { gte: opts.since } },
+    where: { lotwSent: true, lotwSentAt: { gte: opts.since }, ...(await stationWhere()) },
     select: { id: true, callsign: true, band: true, startTime: true },
   });
 

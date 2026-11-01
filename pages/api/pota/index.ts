@@ -5,6 +5,7 @@ import { authedRoute } from "@/lib/auth/guard";
 import { prisma } from "@/lib/db/prisma";
 import { fetchPotaProfile, type PotaProfile } from "@/lib/pota/profile";
 import { fetchPotaSpots, type PotaSpot } from "@/lib/pota/spots";
+import { activeStation } from "@/lib/station/scope";
 
 // GET /api/pota — everything the POTA page needs, in one request.
 //
@@ -59,10 +60,7 @@ export interface PotaReport {
 }
 
 async function get(req: NextApiRequest, res: NextApiResponse) {
-  const station = await prisma.station.findFirst({
-    orderBy: { createdAt: "asc" },
-    select: { callsign: true },
-  });
+  const station = await activeStation();
   const callsign =
     typeof req.query.callsign === "string" && req.query.callsign.trim()
       ? req.query.callsign.trim().toUpperCase()

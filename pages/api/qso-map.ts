@@ -12,6 +12,7 @@ import { authedRoute } from "@/lib/auth/guard";
 import { API_MAP_LIMIT } from "@/lib/auth/throttle";
 import { prisma } from "@/lib/db/prisma";
 import { bearingDeg, distanceKm, gridToLatLon } from "@/lib/propagation";
+import { activeStation } from "@/lib/station/scope";
 
 const querySchema = z.object({
   band: z.string().trim().max(12).optional(),
@@ -73,10 +74,7 @@ const MAX_POINTS = 4_000;
 async function get(req: NextApiRequest, res: NextApiResponse) {
   const q = querySchema.parse(req.query);
 
-  const station = await prisma.station.findFirst({
-    orderBy: { createdAt: "asc" },
-    select: { grid: true },
-  });
+  const station = await activeStation();
   const home = station?.grid ? gridToLatLon(station.grid) : null;
   if (!home || !station?.grid) {
     // Everything here is measured FROM somewhere. Without a station grid there is no

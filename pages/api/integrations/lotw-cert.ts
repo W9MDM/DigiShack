@@ -10,6 +10,8 @@ import {
   lotwCertInfo,
   saveLotwCert,
 } from "@/lib/integrations/lotw-cert";
+import { prisma } from "@/lib/db/prisma";
+import { withStation } from "@/lib/station/scope";
 
 // The LoTW callsign certificate: upload, inspect, remove.
 //
@@ -56,14 +58,29 @@ function shape(info: Awaited<ReturnType<typeof lotwCertInfo>>) {
     qsoStart: info.qsoStart?.toISOString() ?? null,
     qsoEnd: info.qsoEnd?.toISOString() ?? null,
     uploadedAt: info.uploadedAt.toISOString(),
+    /** Shared from the home station's file (same callsign): nothing of this station's to remove. */
+    borrowed: info.borrowed,
     expired: info.validTo.getTime() < Date.now(),
     /** Days left, so the page can warn before uploads start being refused. */
     daysLeft: Math.floor((info.validTo.getTime() - Date.now()) / 86_400_000),
   };
 }
 
-async function get(_req: NextApiRequest, res: NextApiResponse) {
-  sendJson(res, 200, { certificate: shape(await lotwCertInfo()) });
+/**
+ * `?stationId=` works on that station's certificate (one per callsign, as LoTW issues them)
+ * instead of the home station's. An unknown id is refused, never taken to mean home.
+ */
+async function inScope<T>(req: NextApiRequest, fn: () => Promise<T>): Promise<T | "no-station"> {
+  const raw = req.query.stationId;
+  if (typeof raw !== "string" || raw === "") return fn();
+  const st = await prisma.station.findUnique({ where: { id: raw }, select: { id: true } });
+  return st ? withStation(st.id, fn) : "no-station";
+}
+
+async function get(req: NextApiRequest, res: NextApiResponse) {
+  const info = await inScope(req, () => lotwCertInfo());
+  if (info === "no-station") return sendJson(res, 404, { error: "No such station" });
+  sendJson(res, 200, { certificate: shape(info) });
 }
 
 async function post(req: NextApiRequest, res: NextApiResponse, auth: AuthContext) {
@@ -87,11 +104,15 @@ async function post(req: NextApiRequest, res: NextApiResponse, auth: AuthContext
   const password = typeof header === "string" ? header : "";
 
   try {
-    const before = await configuredServices();
-    const info = await saveLotwCert(body, password);
-    // The certificate is what LoTW uploads need, so it switches them on (lib/integrations/auto-enable).
-    await switchOnNewlyConfigured(before, new Set(), auth.user.id);
-    sendJson(res, 200, { ok: true, certificate: shape({ ...info, uploadedAt: new Date() }) });
+    const saved = await inScope(req, async () => {
+      const before = await configuredServices();
+      const info = await saveLotwCert(body, password);
+      // The certificate is what LoTW uploads need, so it switches them on (lib/integrations/auto-enable).
+      await switchOnNewlyConfigured(before, new Set(), auth.user.id);
+      return info;
+    });
+    if (saved === "no-station") return sendError(res, 404, "No such station");
+    sendJson(res, 200, { ok: true, certificate: shape({ ...saved, uploadedAt: new Date(), borrowed: false }) });
   } catch (err) {
     if (err instanceof LotwCertError) {
       // 400 with the real reason. Every message in LotwCertError is written to be read by
@@ -104,8 +125,9 @@ async function post(req: NextApiRequest, res: NextApiResponse, auth: AuthContext
   }
 }
 
-async function del(_req: NextApiRequest, res: NextApiResponse) {
-  const removed = await deleteLotwCert();
+async function del(req: NextApiRequest, res: NextApiResponse) {
+  const removed = await inScope(req, () => deleteLotwCert());
+  if (removed === "no-station") return sendError(res, 404, "No such station");
   sendJson(res, 200, { ok: true, removed });
 }
 

@@ -27,6 +27,8 @@ export const DEFAULT_CONTROL_TIMEOUT_MS = 5_000;
 const SLOW_ACTIONS: Readonly<Record<string, number>> = {
   atu: 25_000,
   source: 25_000,
+  // Operating as another station restarts the radio source, the same work as `source`.
+  station: 25_000,
   ft0: 25_000,
   stream: 25_000,
   "time/sync": 15_000,

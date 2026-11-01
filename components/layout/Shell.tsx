@@ -5,6 +5,7 @@ import { OperatorButton } from "@/components/layout/OperatorButton";
 import { TxArmButton } from "@/components/layout/TxArmButton";
 import { UtcClock } from "@/components/layout/UtcClock";
 import { StationLabelBadge } from "@/components/layout/StationLabelBadge";
+import { StationSwitcher } from "@/components/layout/StationSwitcher";
 import { ThemeToggle } from "@/components/ui/ThemeToggle";
 import { useRouter } from "next/router";
 import type { UiFlags } from "@/lib/auth/guard";
@@ -139,6 +140,7 @@ export function Shell({
               Shack
             </span>
           </Link>
+          <StationSwitcher />
           <StationLabelBadge />
 
           {/* Desktop only; below md the same groups are in the drawer. It takes whatever

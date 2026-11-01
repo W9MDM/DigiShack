@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 
 import { HelpTip } from "@/components/ui/HelpTip";
+import { useStationQuery } from "@/components/settings/StationAccountPicker";
 
 // Uploading the LoTW callsign certificate.
 //
@@ -24,6 +25,8 @@ interface CertInfo {
   qsoStart: string | null;
   qsoEnd: string | null;
   uploadedAt: string;
+  /** Shared from the home station's certificate (same callsign): not this station's to remove. */
+  borrowed: boolean;
   expired: boolean;
   daysLeft: number;
 }
@@ -33,6 +36,9 @@ function day(iso: string | null): string {
 }
 
 export function LotwCertificate() {
+  // One certificate per station: the panel shows and replaces the one for the station picked
+  // above the Logbook sync settings.
+  const stationQuery = useStationQuery();
   const [cert, setCert] = useState<CertInfo | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [password, setPassword] = useState("");
@@ -41,10 +47,16 @@ export function LotwCertificate() {
   const [note, setNote] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
 
+  // Only the latest station's answer may land: switching the picker while a slow request is
+  // out must not show the previous station's certificate under the new one.
+  const requestId = useRef(0);
+
   async function refresh() {
+    const id = ++requestId.current;
     try {
-      const res = await fetch("/api/integrations/lotw-cert");
+      const res = await fetch(`/api/integrations/lotw-cert${stationQuery}`);
       const body = (await res.json().catch(() => null)) as { certificate?: CertInfo | null } | null;
+      if (id !== requestId.current) return;
       setCert(body?.certificate ?? null);
     } catch {
       // A failed read is not worth an error banner: the upload form below still works, and
@@ -55,8 +67,13 @@ export function LotwCertificate() {
   }
 
   useEffect(() => {
+    setCert(null);
+    setLoaded(false);
+    setProblem(null);
+    setNote(null);
     void refresh();
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- refresh reads stationQuery
+  }, [stationQuery]);
 
   async function upload(file: File) {
     setBusy(true);
@@ -65,7 +82,7 @@ export function LotwCertificate() {
     try {
       // The password travels in a HEADER, not the query string: query strings reach access
       // logs and referrers, and this one opens a private key.
-      const res = await fetch("/api/integrations/lotw-cert", {
+      const res = await fetch(`/api/integrations/lotw-cert${stationQuery}`, {
         method: "POST",
         headers: {
           "Content-Type": "application/x-pkcs12",
@@ -100,9 +117,14 @@ export function LotwCertificate() {
     setBusy(true);
     setProblem(null);
     try {
-      const res = await fetch("/api/integrations/lotw-cert", { method: "DELETE" });
+      const res = await fetch(`/api/integrations/lotw-cert${stationQuery}`, { method: "DELETE" });
       if (!res.ok) {
         setProblem(`Could not remove it (${res.status})`);
+        return;
+      }
+      const body = (await res.json().catch(() => null)) as { removed?: boolean } | null;
+      if (body && body.removed === false) {
+        setNote("Nothing was removed: this station has no certificate file of its own.");
         return;
       }
       setCert(null);
@@ -160,16 +182,23 @@ export function LotwCertificate() {
               before then, or uploads will start being refused.
             </div>
           ) : null}
-          <div>
-            <button
-              type="button"
-              onClick={() => void remove()}
-              disabled={busy}
-              className="mt-1 text-xs text-danger hover:underline disabled:opacity-50"
-            >
-              Remove this certificate
-            </button>
-          </div>
+          {cert.borrowed ? (
+            <div className="text-xs text-fg-muted">
+              Shared from the home station&apos;s {cert.callsign} certificate. Upload a certificate here to give this
+              station its own; remove it from the home station.
+            </div>
+          ) : (
+            <div>
+              <button
+                type="button"
+                onClick={() => void remove()}
+                disabled={busy}
+                className="mt-1 text-xs text-danger hover:underline disabled:opacity-50"
+              >
+                Remove this certificate
+              </button>
+            </div>
+          )}
         </div>
       ) : loaded ? (
         <p className="text-sm text-fg-subtle">

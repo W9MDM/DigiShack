@@ -18,6 +18,7 @@ import { describeImport } from "@/lib/qsl/inbound/import";
 import { getInboundLastRun, IMAP_COMING_NEXT } from "@/lib/qsl/inbound/run";
 import { inboundDetail } from "@/lib/qsl/inbound/status";
 import { getBooleanSetting, getNumberSetting, getSetting } from "@/lib/settings";
+import { inStationFromQuery } from "@/lib/station/api-scope";
 
 // Read-only credential checks.
 //
@@ -133,7 +134,7 @@ interface ServiceStatus {
   capabilities: string[];
 }
 
-async function get(_req: NextApiRequest, res: NextApiResponse) {
+async function getForStation(_req: NextApiRequest, res: NextApiResponse) {
   const [
     qrzKey,
     qrzUser,
@@ -307,6 +308,12 @@ async function get(_req: NextApiRequest, res: NextApiResponse) {
     sendProvider: await getSendProvider(),
     note: "Every check here is read-only. Nothing on this page writes to a remote logbook.",
   });
+}
+
+/** For the station in `?stationId=` (its own accounts and contacts), else the home station. */
+async function get(req: NextApiRequest, res: NextApiResponse) {
+  const r = await inStationFromQuery(req, () => getForStation(req, res));
+  if (!r.ok) sendJson(res, 404, { error: "No such station" });
 }
 
 export default authedRoute({ GET: { role: "ADMIN", handler: get } });

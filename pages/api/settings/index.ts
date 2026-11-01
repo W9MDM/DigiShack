@@ -14,6 +14,23 @@ import { SETTING_GROUPS, SETTINGS } from "@/lib/settings/registry";
 import { QSL_MANAGER_GROUPS } from "@/lib/settings/tabs";
 import { BROADCAST_SWITCH } from "@/lib/logging/adif-udp";
 import { stopAutomation } from "@/lib/radio/bridge-client";
+import { prisma } from "@/lib/db/prisma";
+import { homeStationId, withStation } from "@/lib/station/scope";
+
+/**
+ * `?stationId=` reads and writes one station's accounts (QRZ, LoTW, eQSL, Club Log, Cloudlog)
+ * instead of the home station's. Install-wide settings are unaffected by it. An unknown id is
+ * refused rather than quietly meaning "home", which would write K9PC's key into K9XYZ's slot.
+ */
+async function stationScope(
+  req: NextApiRequest,
+): Promise<{ run: <T>(fn: () => Promise<T>) => Promise<T>; isHome: boolean } | { error: string }> {
+  const raw = req.query.stationId;
+  if (typeof raw !== "string" || raw === "") return { run: (fn) => fn(), isHome: true };
+  const st = await prisma.station.findUnique({ where: { id: raw }, select: { id: true } });
+  if (!st) return { error: "No such station" };
+  return { run: (fn) => withStation(st.id, fn), isHome: st.id === (await homeStationId()) };
+}
 
 /** The groups this user may see and change: every one for an admin, the QSL ones for the QSL manager. */
 function groupsFor(auth: AuthContext): (group: string) => boolean {
@@ -44,9 +61,11 @@ const patchSchema = z.object({
 // ADMIN-only, both directions, except the QSL groups for the QSL manager. Even reading is
 // restricted: the masked values and the list of which services are wired up is itself
 // useful reconnaissance.
-async function get(_req: NextApiRequest, res: NextApiResponse, auth: AuthContext) {
+async function get(req: NextApiRequest, res: NextApiResponse, auth: AuthContext) {
   const may = groupsFor(auth);
-  const settings = (await describeSettings()).filter((s) => may(s.group));
+  const scope = await stationScope(req);
+  if ("error" in scope) return sendJson(res, 404, { error: scope.error });
+  const settings = (await scope.run(() => describeSettings())).filter((s) => may(s.group));
 
   sendJson(res, 200, {
     groups: SETTING_GROUPS.filter((g) => may(g.id)),
@@ -109,11 +128,16 @@ async function patch(
   }
 
   const credentials = touchesCredentials(updates.map((u) => u.key));
-  const before = credentials ? await configuredServices() : null;
-  const result = await writeSettings(updates, auth.user.id);
+  const scope = await stationScope(req);
+  if ("error" in scope) return sendJson(res, 404, { error: scope.error });
+  // The upload switches (uploads.qrz and the rest) are install-wide. Entering K9PC's QRZ key
+  // must not switch QRZ uploading on for K9XYZ too, so only the home station's accounts
+  // auto-enable; a second station's are switched on deliberately on the Integrations page.
+  const before = credentials && scope.isHome ? await scope.run(() => configuredServices()) : null;
+  const result = await scope.run(() => writeSettings(updates, auth.user.id));
   // A logbook service just set up is switched on, master switch and all (lib/integrations/auto-enable).
   if (before) {
-    const on = await switchOnNewlyConfigured(before, new Set(updates.map((u) => u.key)), auth.user.id);
+    const on = await scope.run(() => switchOnNewlyConfigured(before, new Set(updates.map((u) => u.key)), auth.user.id));
     result.updated.push(...on);
   }
   const brOn = updates.some((u) => u.key === BROADCAST_SWITCH.br && u.value === "true");
@@ -121,7 +145,9 @@ async function patch(
 
   // Re-describe so the client gets fresh masks and sources without a second
   // round trip.
-  const settings = (await describeSettings()).filter((s) => may(s.group));
+  // Described in the same scope it was saved in, or the page shows the home station's
+  // accounts under the K9PC picker straight after saving K9PC's.
+  const settings = (await scope.run(() => describeSettings())).filter((s) => may(s.group));
 
   sendJson(res, result.rejected.length > 0 ? 207 : 200, {
     ...result,

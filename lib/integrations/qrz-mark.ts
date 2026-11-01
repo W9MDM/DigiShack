@@ -12,6 +12,7 @@
 
 import { dupeKey, parseAdifRecords, recordsToQsos } from "@/lib/adif/parse";
 import { prisma } from "@/lib/db/prisma";
+import { readStationValue, stationWhere, writeStationValue } from "@/lib/station/scope";
 
 /** How many callsigns to look up, and how many rows to update, at a time. */
 const CHUNK = 500;
@@ -154,7 +155,8 @@ export async function markFromQrzAdif(
 
   for (let i = 0; i < callsigns.length; i += CHUNK) {
     const rows = await prisma.qso.findMany({
-      where: { callsign: { in: callsigns.slice(i, i + CHUNK) } },
+      // This station's contacts only: a K9PC logbook download must never mark K9XYZ's.
+      where: { callsign: { in: callsigns.slice(i, i + CHUNK) }, ...(await stationWhere()) },
       select: {
         id: true,
         callsign: true,
@@ -217,8 +219,7 @@ export const KEY_QRZ_CURSOR = "qrz.lastLogId";
  * Zero means the beginning of the logbook, which is also what a first run does.
  */
 export async function getQrzCursor(): Promise<number> {
-  const row = await prisma.setting.findUnique({ where: { key: KEY_QRZ_CURSOR } });
-  const n = Number.parseInt(row?.value ?? "", 10);
+  const n = Number.parseInt((await readStationValue(KEY_QRZ_CURSOR)) ?? "", 10);
   return Number.isFinite(n) && n > 0 ? n : 0;
 }
 
@@ -233,9 +234,5 @@ export async function setQrzCursor(logId: number): Promise<void> {
   if (!Number.isFinite(logId) || logId <= 0) return;
   const current = await getQrzCursor();
   if (logId <= current) return;
-  await prisma.setting.upsert({
-    where: { key: KEY_QRZ_CURSOR },
-    create: { key: KEY_QRZ_CURSOR, value: String(logId), encrypted: false },
-    update: { value: String(logId) },
-  });
+  await writeStationValue(KEY_QRZ_CURSOR, String(logId));
 }

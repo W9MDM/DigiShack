@@ -2,6 +2,8 @@ import Link from "next/link";
 import { SettingsLayout } from "@/components/settings/SettingsLayout";
 import { useState } from "react";
 
+import { StationAccountPicker } from "@/components/settings/StationAccountPicker";
+
 import {
   Badge,
   Button,
@@ -101,7 +103,10 @@ interface SyncReport {
 }
 
 export default function IntegrationsPage() {
-  const { data, error, reload } = useApi<StatusResponse>("/api/integrations/status");
+  // Each station has its own accounts; the status, tests and LoTW sync below are for this one.
+  const [stationId, setStationId] = useState<string | null>(null);
+  const stationQ = stationId ? `stationId=${encodeURIComponent(stationId)}` : "";
+  const { data, error, reload } = useApi<StatusResponse>(`/api/integrations/status${stationQ ? `?${stationQ}` : ""}`);
   const { data: uploads, reload: reloadUploads } = useApi<UploadsResponse>("/api/uploads");
   const isAdmin = useCan("ADMIN");
   const [uploadBusy, setUploadBusy] = useState<string | null>(null);
@@ -164,7 +169,7 @@ export default function IntegrationsPage() {
     setUploadNote(null);
     try {
       const preview = await apiGet<{ count: number; before: string }>(
-        `/api/uploads/baseline?service=${encodeURIComponent(service)}`,
+        `/api/uploads/baseline?service=${encodeURIComponent(service)}${stationQ ? `&${stationQ}` : ""}`,
       );
       if (preview.count === 0) {
         setUploadNote(`${service} has nothing left to mark.`);
@@ -180,7 +185,7 @@ export default function IntegrationsPage() {
       ) {
         return;
       }
-      const r = await apiPost<{ marked: number }>("/api/uploads/baseline", {
+      const r = await apiPost<{ marked: number }>(`/api/uploads/baseline${stationQ ? `?${stationQ}` : ""}`, {
         service,
         before: preview.before,
         expected: preview.count,
@@ -209,6 +214,7 @@ export default function IntegrationsPage() {
       const q = new URLSearchParams({
         dryRun: kind === "check" ? "true" : "false",
         full: kind === "full" ? "true" : "false",
+        ...(stationId ? { stationId } : {}),
       });
       setReport((await apiPost(`/api/integrations/lotw-sync?${q}`, {})) as SyncReport);
       await reload();
@@ -270,6 +276,8 @@ export default function IntegrationsPage() {
       />
 
       {error && <ErrorBanner>{error.message}</ErrorBanner>}
+
+      <StationAccountPicker value={stationId} onChange={setStationId} />
 
       <div className="grid gap-6 lg:grid-cols-2">
         <Card title="Logbook of the World">

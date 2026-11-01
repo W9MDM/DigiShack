@@ -4,6 +4,8 @@ import { z } from "zod";
 import { sendError, sendJson } from "@/lib/api/respond";
 import { authedRoute } from "@/lib/auth/guard";
 import { prisma } from "@/lib/db/prisma";
+import { inStationFromQuery } from "@/lib/station/api-scope";
+import { stationWhere } from "@/lib/station/scope";
 import {
   SENT_FIELD_FOR,
   UPLOADABLE,
@@ -38,8 +40,10 @@ import {
 
 /** Contacts this would mark, for a cutoff. The number the operator is shown. */
 async function affected(service: UploadableService, before: Date): Promise<number> {
+  // The same set baselineAsUploaded marks: this station's contacts. Counting the whole log
+  // and marking one station's would confirm a number that is not what happens.
   return prisma.qso.count({
-    where: { [SENT_FIELD_FOR(service)]: false, startTime: { lt: before } },
+    where: { [SENT_FIELD_FOR(service)]: false, startTime: { lt: before }, ...(await stationWhere()) },
   });
 }
 
@@ -49,7 +53,7 @@ const querySchema = z.object({
   before: z.string().datetime().optional(),
 });
 
-async function get(req: NextApiRequest, res: NextApiResponse) {
+async function getForStation(req: NextApiRequest, res: NextApiResponse) {
   const parsed = querySchema.safeParse(req.query);
   if (!parsed.success) {
     sendError(res, 400, "Which service?", parsed.error.flatten().fieldErrors);
@@ -76,7 +80,7 @@ const bodySchema = z.object({
   expected: z.number().int().min(0),
 });
 
-async function post(req: NextApiRequest, res: NextApiResponse) {
+async function postForStation(req: NextApiRequest, res: NextApiResponse) {
   const parsed = bodySchema.safeParse(req.body ?? {});
   if (!parsed.success) {
     sendError(res, 400, "Bad baseline request", parsed.error.flatten().fieldErrors);
@@ -97,6 +101,17 @@ async function post(req: NextApiRequest, res: NextApiResponse) {
 
   const marked = await baselineAsUploaded(service, before);
   sendJson(res, 200, { service, before: before.toISOString(), marked });
+}
+
+/** Both for the station in `?stationId=` (its own contacts), else the home station. */
+async function get(req: NextApiRequest, res: NextApiResponse) {
+  const r = await inStationFromQuery(req, () => getForStation(req, res));
+  if (!r.ok) sendError(res, 404, "No such station");
+}
+
+async function post(req: NextApiRequest, res: NextApiResponse) {
+  const r = await inStationFromQuery(req, () => postForStation(req, res));
+  if (!r.ok) sendError(res, 404, "No such station");
 }
 
 export default authedRoute({

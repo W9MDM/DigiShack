@@ -11,6 +11,7 @@ import {
 } from "@/lib/propagation";
 import { getSetting } from "@/lib/settings";
 import { computeBandActivity } from "@/lib/stats/band-activity";
+import { activeStation } from "@/lib/station/scope";
 
 // GET /api/stats/bands — band conditions from three independent angles.
 //
@@ -37,10 +38,7 @@ async function get(req: NextApiRequest, res: NextApiResponse) {
 
   const heard = await computeBandActivity(current);
 
-  const station = await prisma.station.findFirst({
-    orderBy: { createdAt: "asc" },
-    select: { callsign: true, grid: true },
-  });
+  const station = await activeStation();
   const contact =
     (await getSetting("pskreporter.contact")) ?? (await getSetting("smtp.from")) ?? "digishack";
 

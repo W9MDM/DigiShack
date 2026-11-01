@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.277.0 - public release
+## 1.278.0 - public release
 
 Development happens in a private repository; this is where the public history starts.
 Earlier entries are not reproduced - they quote real operators by callsign, include
@@ -22,6 +22,8 @@ Notes for anyone running this:
 
 ## Release history
 
+- **1.278.0** — check:station-scope: neutral test ids
+- **1.277.1** — Wrong-callsign fixes and the missing received-QSL migration
 - **1.277.0** — Station location and description for installs sharing a callsign
 - **1.276.1** — Change an operator's station role from the Stations page
 - **1.276.0** — CQ modifier for special events; installs always get a SETTINGS_KEY

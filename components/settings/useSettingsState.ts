@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type {
   ClientSetting,
@@ -61,6 +61,8 @@ export interface SaveReport {
  * whatever the form contains by then.
  */
 export interface PendingConfirmation {
+  /** The settings path (and so the station) the refused save was for. */
+  path: string;
   updates: SettingUpdate[];
   items: (NamedSetting & { message: string })[];
 }
@@ -73,8 +75,19 @@ export interface PendingConfirmation {
  * anything typed while a save was in flight was silently thrown away when it landed. Here
  * a save removes exactly the edits it wrote, and an edit made meanwhile survives it.
  */
-export function useSettingsState() {
-  const { data, error, reload } = useApi<SettingsResponse>("/api/settings");
+/**
+ * `stationId` reads and saves one station's accounts (QRZ, LoTW, eQSL, Club Log, Cloudlog)
+ * rather than the home station's. Install-wide settings are the same whichever is passed.
+ */
+export function useSettingsState(stationId?: string | null) {
+  const path = stationId ? `/api/settings?stationId=${encodeURIComponent(stationId)}` : "/api/settings";
+  const { data: fetched, dataPath, error, reload } = useApi<SettingsResponse>(path);
+  // The previous station's settings stay in useApi until this station's arrive. Shown under
+  // the new picker they would read as this station's accounts, so until then: nothing.
+  const data = dataPath === path ? fetched : null;
+  // What `path` is NOW, for a save that resolves after the picker moved on.
+  const pathRef = useRef(path);
+  pathRef.current = path;
 
   // The PATCH answers with freshly described settings, so a save needs no second GET.
   // A GET that lands later is newer still, and replaces it.
@@ -98,6 +111,19 @@ export function useSettingsState() {
     cleared: ReadonlySet<string>;
     count: number;
   } | null>(null);
+
+  // A draft belongs to the station it was typed for. Switching the account picker drops it,
+  // undo included - restoring K9PC's half-typed key into K9XYZ's form is the exact mistake
+  // station profiles exist to prevent.
+  useEffect(() => {
+    setEdits({});
+    setCleared(new Set());
+    setReport(null);
+    setSaveError(null);
+    setDiscarded(null);
+    setConfirming(null);
+    setFresh(null);
+  }, [stationId]);
 
   const dirtyKeys = useMemo(
     () => (settings ?? []).filter((s) => isDirtyFor(s, edits, cleared)).map((s) => s.key),
@@ -217,21 +243,26 @@ export function useSettingsState() {
    * `acknowledge` names the keys whose consequence has been accepted — per key, so agreeing
    * to one dangerous setting cannot carry consent to another in the same save.
    */
-  async function send(updates: SettingUpdate[], acknowledge?: string[]): Promise<void> {
+  async function send(updates: SettingUpdate[], acknowledge?: string[], sendPath = path): Promise<void> {
     setSaving(true);
     setSaveError(null);
     try {
-      const res = await apiPatch<PatchResponse>("/api/settings", {
+      const res = await apiPatch<PatchResponse>(sendPath, {
         updates,
         ...(acknowledge ? { acknowledge } : {}),
       });
+      // The picker moved while this was in flight: it was saved for the station it was
+      // typed for, and its reply must not be shown as the new station's.
+      if (pathRef.current !== sendPath) return;
       setConfirming(null);
       applySaved(updates, res);
     } catch (err) {
       // 409 with per-key details is the server asking rather than refusing. Nothing was
       // written — see the route — so there is no half-applied save to reconcile.
+      if (pathRef.current !== sendPath) return;
       if (err instanceof ApiError && err.status === 409 && err.details) {
         setConfirming({
+          path: sendPath,
           updates,
           items: Object.entries(err.details).map(([key, msgs]) => ({
             ...name(key),
@@ -254,10 +285,12 @@ export function useSettingsState() {
   }
 
   function confirm() {
-    if (!confirming) return;
+    // Only for the station it was asked about; a switch since then has already cleared it.
+    if (!confirming || confirming.path !== path) return;
     void send(
       confirming.updates,
       confirming.items.map((c) => c.key),
+      confirming.path,
     );
   }
 

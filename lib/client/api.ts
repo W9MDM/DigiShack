@@ -167,6 +167,9 @@ const RETRY_STEPS_MS = [3_000, 6_000, 12_000, 24_000, 30_000];
  */
 export function useApi<T>(path: string | null) {
   const [data, setData] = useState<T | null>(null);
+  /** The path `data` was fetched from. A caller whose path just changed can tell the
+   *  previous path's data (still shown until the new request lands) from its own. */
+  const [dataPath, setDataPath] = useState<string | null>(null);
   const [error, setError] = useState<ApiError | null>(null);
   const [loading, setLoading] = useState(path !== null);
 
@@ -195,6 +198,7 @@ export function useApi<T>(path: string | null) {
       const result = await apiGet<T>(path);
       if (id === requestId.current) {
         setData(result);
+        setDataPath(path);
         setError(null);
         failures.current = 0;
       }
@@ -246,5 +250,5 @@ export function useApi<T>(path: string | null) {
     };
   }, [path, error, reload]);
 
-  return { data, error, loading, reload };
+  return { data, dataPath, error, loading, reload };
 }

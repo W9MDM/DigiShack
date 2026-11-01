@@ -13,6 +13,7 @@ import {
   MIN_QUERY_INTERVAL_MS,
   type ReceptionReport,
 } from "@/lib/pskreporter/retrieve";
+import { activeStation } from "@/lib/station/scope";
 
 /**
  * How far either side of a contact a report may fall and still belong to it.
@@ -151,10 +152,7 @@ export async function collectReceptionReports(opts?: {
 
   // The oldest station, which is how every other caller in the radio path picks one.
   // A query needs a callsign to ask about and there is nothing sensible to guess.
-  const station = await prisma.station.findFirst({
-    orderBy: { createdAt: "asc" },
-    select: { callsign: true },
-  });
+  const station = await activeStation();
   const callsign = station?.callsign?.toUpperCase() ?? null;
   if (!callsign) {
     result.skipped = "no station callsign is set";

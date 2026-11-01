@@ -4,6 +4,8 @@ import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { decryptSecret, encryptSecret } from "@/lib/settings/crypto";
+import { prisma } from "@/lib/db/prisma";
+import { effectiveStationId, homeStationId } from "@/lib/station/scope";
 
 // The LoTW callsign certificate: reading it, storing it, and describing it.
 //
@@ -34,7 +36,29 @@ import { decryptSecret, encryptSecret } from "@/lib/settings/crypto";
 // a MySQL column. Same effect as plaintext, since the passphrase is in the source. Rejected.
 
 const DIR = "data/lotw";
-const FILE = join(DIR, "cert.json");
+
+/**
+ * Where the certificate for the station in scope lives. One certificate per callsign is how
+ * LoTW works, so one file per station: the home station keeps the original data/lotw/cert.json
+ * (so an existing install's certificate carries on with no move), every other station has
+ * data/lotw/stations/<id>/cert.json. A station with no file has no certificate - it is never
+ * handed the home station's.
+ */
+async function certPath(): Promise<{ dir: string; file: string; legacy: boolean }> {
+  const sid = await effectiveStationId();
+  const home = await homeStationId();
+  if (!sid || sid === home) return { dir: DIR, file: join(DIR, "cert.json"), legacy: true };
+  const dir = join(DIR, "stations", sid.replace(/[^a-zA-Z0-9_-]/g, ""));
+  return { dir, file: join(dir, "cert.json"), legacy: false };
+}
+
+/** The callsign of the station in scope, for matching a certificate against it. */
+async function scopedCallsign(): Promise<string | null> {
+  const sid = await effectiveStationId();
+  if (!sid) return null;
+  const st = await prisma.station.findUnique({ where: { id: sid }, select: { callsign: true } });
+  return st?.callsign.trim().toUpperCase() ?? null;
+}
 
 /** OIDs LoTW puts its own metadata in. Registered under ARRL's arc, 1.3.6.1.4.1.12348.1. */
 const OID_QSO_FIRST = "1.3.6.1.4.1.12348.1.2";
@@ -363,6 +387,15 @@ export async function saveLotwCert(
   const { certPem, keyPem } = await readP12(p12, password);
   const info = certInfoFromPem(certPem);
 
+  // A certificate is stored for the station it was issued to and no other. Uploading K9PC's
+  // .p12 while the page points at K9XYZ is refused here, before it can sign anything.
+  const mine = await scopedCallsign();
+  if (mine && info.callsign.trim().toUpperCase() !== mine) {
+    throw new LotwCertError(
+      `That certificate is for ${info.callsign}, but you are editing station ${mine}. Pick ${info.callsign} in "Accounts for station" and upload it there.`,
+    );
+  }
+
   if (info.validTo.getTime() < now.getTime()) {
     throw new LotwCertError(
       `That certificate for ${info.callsign} expired on ${info.validTo.toISOString().slice(0, 10)}. LoTW refuses anything signed with it, so uploads would fail silently -- renew it in TQSL first.`,
@@ -377,26 +410,50 @@ export async function saveLotwCert(
     uploadedAt: now.toISOString(),
   };
 
-  await mkdir(DIR, { recursive: true });
-  await writeFile(FILE, JSON.stringify(stored, null, 2), { encoding: "utf8", mode: 0o600 });
+  const { dir, file } = await certPath();
+  await mkdir(dir, { recursive: true });
+  await writeFile(file, JSON.stringify(stored, null, 2), { encoding: "utf8", mode: 0o600 });
   // Explicit, because an existing file keeps its old mode through writeFile.
-  await chmod(FILE, 0o600);
+  await chmod(file, 0o600);
   return info;
 }
 
+/**
+ * The certificate for the station in scope, and whether it is borrowed.
+ *
+ * ONE RULE FOR EVERY FILE: a certificate counts only for a station whose callsign it was
+ * issued to. The station's own file first; a station without one may borrow the original
+ * data/lotw/cert.json (K9XYZ at a second grid shares K9XYZ's). The home station's own file
+ * is held to the same rule - a K9PC certificate saved there before this check existed is
+ * "no certificate" for K9XYZ, not one the status page reports as signing.
+ */
+async function readWithSource(): Promise<{ stored: Stored; borrowed: boolean } | null> {
+  const mine = await scopedCallsign();
+  const ok = (s: Stored | null) => Boolean(s && (!mine || s.info?.callsign?.trim().toUpperCase() === mine));
+  const load = async (file: string): Promise<Stored | null> => {
+    try {
+      return JSON.parse(await readFile(file, "utf8")) as Stored;
+    } catch {
+      return null;
+    }
+  };
+  const p = await certPath();
+  const own = await load(p.file);
+  if (own) return ok(own) ? { stored: own, borrowed: false } : null;
+  if (p.legacy) return null;
+  const legacy = await load(join(DIR, "cert.json"));
+  return legacy && ok(legacy) ? { stored: legacy, borrowed: true } : null;
+}
+
 async function read(): Promise<Stored | null> {
-  try {
-    return JSON.parse(await readFile(FILE, "utf8")) as Stored;
-  } catch {
-    return null;
-  }
+  return (await readWithSource())?.stored ?? null;
 }
 
 /** What is on file, without decrypting the key. Safe to hand to the UI. */
-export async function lotwCertInfo(): Promise<(LotwCertInfo & { uploadedAt: Date }) | null> {
-  const s = await read();
-  if (!s?.info) return null;
-  return { ...fromStoredInfo(s.info), uploadedAt: new Date(s.uploadedAt) };
+export async function lotwCertInfo(): Promise<(LotwCertInfo & { uploadedAt: Date; borrowed: boolean }) | null> {
+  const r = await readWithSource();
+  if (!r?.stored.info) return null;
+  return { ...fromStoredInfo(r.stored.info), uploadedAt: new Date(r.stored.uploadedAt), borrowed: r.borrowed };
 }
 
 /** The certificate AND the key, for signing. Only the uploader should call this. */
@@ -416,7 +473,14 @@ export async function loadLotwCert(): Promise<LotwCert | null> {
 }
 
 export async function deleteLotwCert(): Promise<boolean> {
-  if (!(await read())) return false;
-  await rm(FILE, { force: true });
+  // Only this station's own file. A station borrowing the original certificate (same
+  // callsign, another grid) has nothing of its own to delete, and must not delete that.
+  const { file } = await certPath();
+  try {
+    await readFile(file);
+  } catch {
+    return false;
+  }
+  await rm(file, { force: true });
   return true;
 }

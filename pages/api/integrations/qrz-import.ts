@@ -6,6 +6,7 @@ import { boolQuery } from "@/lib/validation/query";
 import { sendError, sendJson } from "@/lib/api/respond";
 import { authedRoute } from "@/lib/auth/guard";
 import { importQrzLogbook } from "@/lib/integrations/qrz-import";
+import { inStationFromQuery } from "@/lib/station/api-scope";
 
 const querySchema = z.object({
   stationId: z.string().min(1, "stationId is required"),
@@ -23,7 +24,7 @@ const querySchema = z.object({
 });
 
 // Read-only against QRZ: only FETCH is called. Writes go to the local log.
-async function post(req: NextApiRequest, res: NextApiResponse) {
+async function postForStation(req: NextApiRequest, res: NextApiResponse) {
   const opts = querySchema.parse(req.query);
   const report = await importQrzLogbook(opts);
 
@@ -33,6 +34,12 @@ async function post(req: NextApiRequest, res: NextApiResponse) {
   }
 
   sendJson(res, 200, report);
+}
+
+/** For the station in `?stationId=` (its own accounts and contacts), else the home station. */
+async function post(req: NextApiRequest, res: NextApiResponse) {
+  const r = await inStationFromQuery(req, () => postForStation(req, res));
+  if (!r.ok) sendJson(res, 404, { error: "No such station" });
 }
 
 export default authedRoute({ POST: { role: "ADMIN", handler: post } });

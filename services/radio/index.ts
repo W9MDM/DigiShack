@@ -160,6 +160,7 @@ import { NoiseFloor } from "@/lib/radio/noise";
 import { UNREAD_RECEIVER, type ReceiverControls } from "@/lib/radio/receiver-controls";
 import { getEqslCredentials, syncEqslInbox } from "@/lib/integrations/eqsl";
 import { reconcileLotwSent } from "@/lib/integrations/lotw-reconcile";
+import { forEachStation } from "@/lib/station/scope";
 import { startFt8brTracker } from "@/lib/contest/ft8battle-tracker";
 import { runUploads } from "@/lib/integrations/upload-runner";
 import { locksFor } from "@/lib/radio/api";
@@ -214,6 +215,7 @@ import {
   type QSOLoggedMsg,
   type StatusMsg,
 } from "@/lib/wsjtx/protocol";
+import { activeStation } from "@/lib/station/scope";
 
 // ---------------------------------------------------------------------------
 // State
@@ -1262,15 +1264,22 @@ async function onQsoLogged(msg: QSOLoggedMsg): Promise<void> {
 
   // Attribution: prefer a station whose callsign matches the decoder's own, so a
   // multi-station install logs to the right one.
+  // The active station first when the decoder is calling as it, so two stations sharing a
+  // callsign (K9PC at two grids) log to the one actually on the air.
   const myCall = (msg.myCall ?? status.deCall ?? "").toUpperCase();
+  const active = await activeStation();
+  // A decoder calling as a callsign no station has is NOT logged to the active station
+  // anyway - that would put somebody else's contact in this station's log and upload it with
+  // this station's accounts. Only a decoder that names no callsign falls back to the active one.
   const station =
-    (myCall
-      ? await prisma.station.findFirst({ where: { callsign: myCall } })
-      : null) ?? (await prisma.station.findFirst({ orderBy: { createdAt: "asc" } }));
+    (active && (!myCall || active.callsign.toUpperCase() === myCall) ? active : null) ??
+    (myCall ? await prisma.station.findFirst({ where: { callsign: myCall }, orderBy: { createdAt: "asc" } }) : active);
 
   if (!station) {
     console.warn(
-      `[bridge] cannot auto-log ${msg.dxCall}: no station exists — create one first`,
+      myCall
+        ? `[bridge] not auto-logging ${msg.dxCall}: the decoder is calling as ${myCall}, which no station here is — add a ${myCall} station or fix the decoder's callsign`
+        : `[bridge] cannot auto-log ${msg.dxCall}: no station exists — create one first`,
     );
     return;
   }
@@ -1780,7 +1789,18 @@ function onSstvEvent(e: SstvEvent): void {
   void fs.promises
     .mkdir(SSTV_DIR, { recursive: true })
     .then(() => fs.promises.writeFile(path.join(SSTV_DIR, file), encodePng(e.width, e.height, e.rgb)))
-    .then(() => fs.promises.writeFile(metaPath, JSON.stringify(meta)))
+    // The station on the air when the picture came in. Logging it later from the page goes
+    // to THIS station, not whichever is active by the time somebody clicks Log.
+    // Best effort: a database hiccup must not cost the picture or its notes. Unrecorded, the
+    // log falls back to the active station, as it did for every picture before this.
+    .then(() => activeStation().catch(() => null))
+    .then((st) => {
+      if (st) {
+        meta.stationId = st.id;
+        meta.stationCallsign = st.callsign;
+      }
+      return fs.promises.writeFile(metaPath, JSON.stringify(meta));
+    })
     .then(() => {
       console.log(`[sstv] saved ${e.mode} picture as ${file}, RSV ${rsv.report}`);
       broadcast({ kind: "sstv-image", file, mode: e.mode, at: e.at, rsv: rsv.report });
@@ -2575,7 +2595,7 @@ async function startFlexSource(): Promise<() => Promise<void>> {
 
     // Identity comes from the logbook's own station record — the radio knows
     // its callsign but not the grid, and the log is the authority anyway.
-    const station = await prisma.station.findFirst({ orderBy: { createdAt: "asc" } });
+    const station = await activeStation();
     if (!station) {
       console.warn("[radio] transmit unavailable: no station exists — create one first");
       return;
@@ -2828,7 +2848,11 @@ async function startFlexSource(): Promise<() => Promise<void>> {
         txSliceBlockers({ slices: [...rig.state.slices.values()], operatingSliceIndex: flexSliceIndex }),
       );
     }
-    status.deCall = rig.state.callsign;
+    // NOT `status.deCall = rig.state.callsign`. That is the callsign typed into the Flex's own
+    // settings, and it overwrote the station identity set when the transmitter attached - so
+    // JS8, SSTV, the JS8 auto-replier and the cluster self-filter all ran under whatever the
+    // radio was configured with, whichever station the log was operating as. The identity is
+    // the station record's, set in attachTransmitter, and nothing else writes it in Flex mode.
     // What the radio calls itself, from `info` — "FLEX-6400". Set here rather than at
     // connect because readInfo() is what fills it in.
     status.radio = { vendor: "flex", model: rig.state.model ?? "FlexRadio", host };
@@ -3813,10 +3837,11 @@ function retrySourceInBackground(): void {
  */
 async function switchSource(
   kind: "flex" | "icom" | "wsjtx",
+  opts: { restart?: boolean } = {},
 ): Promise<{ ok: boolean; error?: string }> {
-  if (kind === status.source) return { ok: true };
+  if (kind === status.source && !opts.restart) return { ok: true };
 
-  console.log(`[bridge] switching source: ${status.source} -> ${kind}`);
+  console.log(`[bridge] ${opts.restart ? "restarting" : "switching"} source: ${status.source} -> ${kind}`);
   activeAuto()?.setMode("off");
   autoResumeMode = null;
   await persistAutoMode("off");
@@ -3851,7 +3876,7 @@ async function switchSource(
   // flowing, so every listener hears the new rate before the new radio's first sample.
   announceAudioFormat();
 
-  const user = await prisma.user.findFirst({ select: { id: true } });
+  const user = opts.restart ? null : await prisma.user.findFirst({ select: { id: true } });
   if (user) {
     await writeSettings([{ key: "digital.source", value: kind }], user.id);
     invalidateSettingsCache();
@@ -3873,6 +3898,45 @@ async function switchSource(
     retrySourceInBackground();
     return { ok: false, error };
   }
+}
+
+/**
+ * Operate as another station: K9XYZ -> K9PC.
+ *
+ * The station is the callsign on the air, the grid in every CQ, the station every contact is
+ * logged to, and - through lib/station/scope.ts - the accounts those contacts upload to. So a
+ * switch is treated like a change of radio, not a setting:
+ *
+ *   - REFUSED while transmitting. A contact half-sent under one call and finished under
+ *     another is a contact nobody can log honestly.
+ *   - Automation stops and stays stopped (switchSource does that), so nothing calls CQ under
+ *     the new callsign until a person turns it back on deliberately.
+ *   - ActiveStation is written before the restart, read uncached by attachTransmitter and the
+ *     Icom source, so the rebuilt operating layer can only come up as the new station.
+ *   - The source is torn down and restarted, dropping the old identity everywhere at once:
+ *     the QSO controller, the auto-operator, PSKReporter, JS8 and SSTV all rebuild from it.
+ */
+async function switchStation(stationId: string, actorId: string | null): Promise<{ ok: boolean; error?: string; callsign?: string }> {
+  const target = await prisma.station.findUnique({ where: { id: stationId } });
+  if (!target) return { ok: false, error: "No such station" };
+  if (status.transmitting) return { ok: false, error: "Transmitting - wait for the transmission to end, then switch." };
+  const current = await activeStation();
+  if (current?.id === target.id) return { ok: true, callsign: target.callsign };
+
+  await prisma.activeStation.upsert({
+    where: { id: 1 },
+    update: { stationId: target.id, setById: actorId },
+    create: { id: 1, stationId: target.id, setById: actorId },
+  });
+  console.log(`[bridge] operating as ${target.callsign} (${target.grid}) - was ${current?.callsign ?? "none"}`);
+  status.deCall = target.callsign;
+  status.deGrid = target.grid;
+  // The JS8 auto-replier keeps its own copy of the identity, and on the Icom nothing
+  // reconfigures it during the restart. Anything it had queued was addressed as the old call.
+  js8Replier.configure({ mycall: target.callsign, mygrid: target.grid });
+  js8ReplyQueue.length = 0;
+  const r = await switchSource(status.source as "flex" | "icom" | "wsjtx", { restart: true });
+  return { ...r, callsign: target.callsign };
 }
 
 async function main(): Promise<void> {
@@ -5463,6 +5527,19 @@ async function main(): Promise<void> {
         return;
       }
 
+      // POST /station — operate as another station. See switchStation.
+      if (url.pathname === "/station") {
+        const body = await readJson(req);
+        const r = await switchStation(String(body.stationId ?? ""), body.actorId ? String(body.actorId) : null);
+        broadcast({ kind: "status", status });
+        sendJson(res, r.ok ? 200 : 409, {
+          ok: r.ok,
+          error: r.error,
+          detail: r.ok ? `Operating as ${r.callsign}. Any automatic mode was stopped - turn it back on deliberately.` : undefined,
+        });
+        return;
+      }
+
       // POST /source — change radios without restarting the process.
       if (url.pathname === "/source") {
         const body = await readJson(req);
@@ -6583,8 +6660,8 @@ async function main(): Promise<void> {
     // The first run on a station with no marker downloads the whole history year by
     // year, and a bridge in a restart loop must not point that at ARRL every time it
     // comes up.
-    setTimeout(() => void lotwTick(), 5 * 60_000);
-    setInterval(() => void lotwTick(), Math.max(15, lotwMinutes) * 60_000);
+    setTimeout(() => void forEachStation(lotwTick), 5 * 60_000);
+    setInterval(() => void forEachStation(lotwTick), Math.max(15, lotwMinutes) * 60_000);
     console.log(`[lotw] automatic sync every ${Math.max(15, lotwMinutes)} min`);
   }
 
@@ -6628,8 +6705,8 @@ async function main(): Promise<void> {
     // Twenty minutes after start, well clear of the confirmation sync's five: both hit the
     // same rate-limited endpoint, and although every report request is now serialised, a
     // reconciliation waiting behind a full history download would sit there for minutes.
-    setTimeout(() => void reconcileTick(), 20 * 60_000);
-    setInterval(() => void reconcileTick(), hours * 3_600_000);
+    setTimeout(() => void forEachStation(reconcileTick), 20 * 60_000);
+    setInterval(() => void forEachStation(reconcileTick), hours * 3_600_000);
     console.log(`[lotw] upload verification every ${hours} h`);
   }
 
@@ -6694,8 +6771,8 @@ async function main(): Promise<void> {
     // Six minutes after start, offset from the LoTW sync's five. Both fetch a whole
     // history on a station with no marker, and a bridge in a restart loop should not aim
     // two of those at two volunteer-funded services in the same second.
-    setTimeout(() => void eqslTick(), 6 * 60_000);
-    setInterval(() => void eqslTick(), eqslMinutes * 60_000);
+    setTimeout(() => void forEachStation(eqslTick), 6 * 60_000);
+    setInterval(() => void forEachStation(eqslTick), eqslMinutes * 60_000);
     console.log(`[eqsl] automatic inbox sync every ${eqslMinutes} min`);
   }
 

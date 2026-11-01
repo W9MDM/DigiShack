@@ -20,6 +20,9 @@ export interface SstvMeta {
   rsv: { r: number; s: number; v: number; report: string; sMeasured: boolean };
   read?: SstvRead;
   logged?: { qsoId: string; callsign: string; at: string };
+  /** The station on the air when it was received (1.278+). Absent on older pictures. */
+  stationId?: string;
+  stationCallsign?: string;
 }
 
 const metaPath = (file: string) => path.join(SSTV_DIR, file.replace(/\.png$/, ".json"));

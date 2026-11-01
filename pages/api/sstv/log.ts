@@ -16,6 +16,7 @@ import { readSstvMeta, SSTV_PICTURE_NAME, writeSstvMeta } from "@/lib/digital/ss
 import { resolveDxcc } from "@/lib/dxcc/resolve";
 import { freqToBand } from "@/lib/ham/bands";
 import { operatorIdFor } from "@/lib/operators/shift";
+import { activeStation } from "@/lib/station/scope";
 
 const bodySchema = z.object({
   file: z.string().regex(SSTV_PICTURE_NAME).nullish(),
@@ -49,8 +50,15 @@ async function post(req: NextApiRequest, res: NextApiResponse) {
     sendError(res, 400, "No frequency for this contact: tune to SSTV first");
     return;
   }
-  // The station the bridge logs to.
-  const station = await prisma.station.findFirst({ orderBy: { createdAt: "asc" }, select: { id: true } });
+  // The station that was on the air when the picture was received, else (an older picture)
+  // the one the bridge logs to now.
+  // A picture recorded against a station that has since been deleted is refused, not quietly
+  // handed to whichever station is on the air now.
+  const station = meta?.stationId ? await prisma.station.findUnique({ where: { id: meta.stationId } }) : await activeStation();
+  if (meta?.stationId && !station) {
+    sendError(res, 409, `This picture was received as ${meta.stationCallsign ?? "a station"} that no longer exists; it cannot be logged to another station.`);
+    return;
+  }
   if (!station) {
     sendError(res, 409, "Set up a station first (Settings → Station)");
     return;

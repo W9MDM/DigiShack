@@ -29,6 +29,8 @@ function withOperator(s: Row): Row {
 }
 
 const stub = {
+  // No ActiveStation row: the operating station is the oldest, as before station profiles.
+  activeStation: { findUnique: async () => null },
   station: {
     findFirst: async () => [...t.station!].sort((a, b) => (a.createdAt as number) - (b.createdAt as number))[0] ?? null,
     findUnique: async ({ where }: { where: Row }) => t.station!.find((s) => s.id === where.id) ?? null,

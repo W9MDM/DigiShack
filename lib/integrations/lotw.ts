@@ -1,5 +1,6 @@
 import { parseAdif, dupeKey } from "@/lib/adif/parse";
 import { prisma } from "@/lib/db/prisma";
+import { readStationValue, stationWhere, writeStationValue } from "@/lib/station/scope";
 import { getSetting } from "@/lib/settings";
 
 // Logbook of the World.
@@ -39,24 +40,17 @@ export interface LotwLastRun {
 }
 
 export async function getLotwLastRun(): Promise<LotwLastRun> {
-  const rows = await prisma.setting.findMany({
-    where: { key: { in: [KEY_LAST_RUN, KEY_LAST_RESULT, KEY_LAST_QSL] } },
-    select: { key: true, value: true },
-  });
-  const get = (k: string) => rows.find((r) => r.key === k)?.value || null;
-  return { at: get(KEY_LAST_RUN), result: get(KEY_LAST_RESULT), marker: get(KEY_LAST_QSL) };
+  // Per station: each LoTW account has its own history and its own marker.
+  const [at, result, marker] = await Promise.all([
+    readStationValue(KEY_LAST_RUN), readStationValue(KEY_LAST_RESULT), readStationValue(KEY_LAST_QSL),
+  ]);
+  return { at: at || null, result: result || null, marker: marker || null };
 }
 
 async function recordRun(result: string): Promise<void> {
-  const put = async (key: string, value: string) =>
-    prisma.setting.upsert({
-      where: { key },
-      create: { key, value, encrypted: false },
-      update: { value },
-    });
   try {
-    await put(KEY_LAST_RUN, new Date().toISOString());
-    await put(KEY_LAST_RESULT, result.slice(0, 300));
+    await writeStationValue(KEY_LAST_RUN, new Date().toISOString());
+    await writeStationValue(KEY_LAST_RESULT, result.slice(0, 300));
   } catch {
     /* a status note must never be able to fail a sync */
   }
@@ -411,7 +405,7 @@ async function runLotwSync(opts: {
   // returns only QSLs received since then, so a "full" sync that left the
   // parameter off quietly returned a handful of recent records and looked like a
   // complete history.
-  const marker = (await prisma.setting.findUnique({ where: { key: KEY_LAST_QSL } }))?.value;
+  const marker = await readStationValue(KEY_LAST_QSL);
 
   /**
    * Are we asking for the whole history rather than a small increment?
@@ -437,8 +431,10 @@ async function runLotwSync(opts: {
   // Incremental syncs are a single request; they are small by definition.
   const windows: { start?: string; end?: string }[] = [];
 
+  const onlyThisStationForHistory = await stationWhere();
   if (wholeHistory) {
     const earliest = await prisma.qso.findFirst({
+      where: onlyThisStationForHistory,
       orderBy: { startTime: "asc" },
       select: { startTime: true },
     });
@@ -501,6 +497,7 @@ async function runLotwSync(opts: {
   let enriched = 0;
   const unmatchedSamples: LotwSyncReport["unmatchedSamples"] = [];
 
+  const onlyThisStation = await stationWhere();
   for (const confirmation of qsos) {
     // Narrow by the indexed columns, then match on the minute-precision key.
     const candidates = await prisma.qso.findMany({
@@ -508,6 +505,8 @@ async function runLotwSync(opts: {
         callsign: confirmation.callsign,
         band: confirmation.band,
         mode: confirmation.mode,
+        // Confirmations from THIS station's LoTW account mark only this station's contacts.
+        ...onlyThisStation,
       },
       select: {
         id: true,
@@ -596,11 +595,7 @@ async function runLotwSync(opts: {
 
   // Advance the incremental marker only on a real run that succeeded.
   if (!opts.dryRun && fetched.lastQsl) {
-    await prisma.setting.upsert({
-      where: { key: KEY_LAST_QSL },
-      create: { key: KEY_LAST_QSL, value: fetched.lastQsl, encrypted: false },
-      update: { value: fetched.lastQsl },
-    });
+    await writeStationValue(KEY_LAST_QSL, fetched.lastQsl);
   }
 
   return {

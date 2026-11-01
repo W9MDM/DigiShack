@@ -13,6 +13,7 @@
 import type { Prisma } from "@prisma/client";
 
 import { prisma } from "@/lib/db/prisma";
+import { activeStation } from "@/lib/station/scope";
 
 const SHIFT_INCLUDE = {
   operator: {
@@ -56,7 +57,7 @@ export async function operatorIdFor(stationId: string): Promise<string | null> {
 
 /** The station sign-on applies to when none is named: the one the bridge logs to. */
 async function defaultStation(): Promise<{ id: string } | null> {
-  return prisma.station.findFirst({ orderBy: { createdAt: "asc" }, select: { id: true } });
+  return activeStation();
 }
 
 export class SignOnError extends Error {}

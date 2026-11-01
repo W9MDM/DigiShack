@@ -45,11 +45,14 @@ const bodySchema = z.object({
     "hell",
     "jtty",
     "transmit-gate",
+    "station",
   ]),
   /** Arm (true) or disarm (false) the selected radio's transmit gate, for action "transmit-gate". */
   armed: z.boolean().optional(),
   /** Which radio to drive. Changing it stops any automatic mode. */
   kind: z.enum(["flex", "icom", "wsjtx"]).optional(),
+  /** The station to operate as, for action "station". */
+  stationId: z.string().min(1).max(40).optional(),
   /** Band to tune to, for action "tune". */
   band: z.string().trim().toUpperCase().min(2).max(8).optional(),
   // Rig control (CAT panel). Each is optional; only what is sent gets changed.
@@ -163,7 +166,9 @@ async function post(req: NextApiRequest, res: NextApiResponse, auth: AuthContext
       ? { mode: autoMode }
       : action === "transmit-gate"
         ? { armed: rest.armed, actorId: auth.user.id }
-        : rest;
+        : action === "station"
+          ? { stationId: rest.stationId, actorId: auth.user.id }
+          : rest;
 
   // The shared secret between the web app and DigiShack's own radio service.
   // Self-provisioned by the radio service on startup — nothing to configure; if

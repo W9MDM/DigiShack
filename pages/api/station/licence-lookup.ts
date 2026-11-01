@@ -4,6 +4,7 @@ import { sendError, sendJson } from "@/lib/api/respond";
 import { authedRoute } from "@/lib/auth/guard";
 import { prisma } from "@/lib/db/prisma";
 import { lookupHamdb } from "@/lib/ham/hamdb";
+import { activeStation } from "@/lib/station/scope";
 
 // Fill the operator's licence class from their callsign, via HamDB.
 //
@@ -16,10 +17,7 @@ async function get(req: NextApiRequest, res: NextApiResponse) {
   const override = typeof req.query.call === "string" ? req.query.call.trim() : "";
   let call = override;
   if (!call) {
-    const station = await prisma.station.findFirst({
-      orderBy: { createdAt: "asc" },
-      select: { callsign: true },
-    });
+    const station = await activeStation();
     call = station?.callsign ?? "";
   }
   if (!call) {

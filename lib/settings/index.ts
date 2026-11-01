@@ -13,6 +13,8 @@ import {
   isSecret,
 } from "@/lib/settings/registry";
 
+import { effectiveStationId, homeStationId, isStationScoped } from "@/lib/station/scope";
+
 export { settingsKeyAvailable, settingsKeyProblem };
 
 // Resolution order for every setting:
@@ -63,6 +65,42 @@ async function load(force = false): Promise<Map<string, CacheEntry>> {
 
 export function invalidateSettingsCache(): void {
   globalForSettings.__digishackSettings = undefined;
+  globalForStations.__digishackStationSettings = undefined;
+}
+
+// Station-scoped settings (credentials, LoTW location, download cursors) live in
+// StationSetting, one set per station - see lib/station/scope.ts. Cached like the rest.
+const globalForStations = globalThis as unknown as {
+  __digishackStationSettings?: Map<string, { rows: Map<string, CacheEntry>; loadedAt: number }>;
+};
+
+async function loadStation(stationId: string, force = false): Promise<Map<string, CacheEntry>> {
+  const all = (globalForStations.__digishackStationSettings ??= new Map());
+  const hit = all.get(stationId);
+  if (!force && hit && Date.now() - hit.loadedAt < CACHE_TTL_MS) return hit.rows;
+  const rows = await prisma.stationSetting.findMany({
+    where: { stationId },
+    select: { key: true, value: true, encrypted: true },
+  });
+  const map = new Map<string, CacheEntry>(rows.map((r) => [r.key, { value: r.value, encrypted: r.encrypted }]));
+  all.set(stationId, { rows: map, loadedAt: Date.now() });
+  return map;
+}
+
+/**
+ * Where `key` is read from right now. A station-scoped key reads the effective station's
+ * rows; the .env fallback applies only to the home station, because a QRZ_LOGBOOK_API_KEY in
+ * .env was put there for the station this install always was, never for K9PC.
+ */
+async function rowsFor(key: string, force = false): Promise<{ rows: Map<string, CacheEntry>; allowEnv: boolean }> {
+  if (isStationScoped(key)) {
+    const sid = await effectiveStationId();
+    if (sid) {
+      const allowEnv = sid === (await homeStationId());
+      return { rows: await loadStation(sid, force), allowEnv };
+    }
+  }
+  return { rows: await load(force), allowEnv: true };
 }
 
 /**
@@ -136,6 +174,7 @@ function resolve(
   rows: Map<string, CacheEntry>,
   key: string,
   quiet = false,
+  allowEnv = true,
 ): Resolution {
   const def = getSettingDef(key);
   for (const k of [key, ...(def?.legacyKeys ?? [])]) {
@@ -146,7 +185,7 @@ function resolve(
     if (stored.kind === "unreadable") return { status: "unreadable", storedKey: k };
   }
 
-  if (def?.envFallback) {
+  if (allowEnv && def?.envFallback) {
     const fromEnv = process.env[def.envFallback];
     if (fromEnv !== undefined && fromEnv !== "") {
       return { status: "value", value: fromEnv, source: "env", encrypted: false };
@@ -168,13 +207,15 @@ function resolve(
  * two apart.
  */
 export async function getSetting(key: string): Promise<string | null> {
-  const r = resolve(await load(), key);
+  const { rows, allowEnv } = await rowsFor(key);
+  const r = resolve(rows, key, false, allowEnv);
   return r.status === "value" ? r.value : null;
 }
 
 /** Like `getSetting`, but says whether a stored value was there and unreadable. */
 export async function getSettingState(key: string): Promise<SettingState> {
-  const r = resolve(await load(), key);
+  const { rows, allowEnv } = await rowsFor(key);
+  const r = resolve(rows, key, false, allowEnv);
   if (r.status !== "value") return r;
   return { status: "value", value: r.value, source: r.source };
 }
@@ -242,8 +283,32 @@ export async function writeSettings(
       continue;
     }
 
+    // A station-scoped key is written for the effective station (the one in scope, else
+    // home) and nowhere else. No stations at all means there is nothing to own it.
+    const scopedTo = isStationScoped(key) ? await effectiveStationId() : null;
+    if (isStationScoped(key) && !scopedTo) {
+      result.rejected.push({ key, reason: "Create a station first; this setting belongs to one" });
+      continue;
+    }
+    const put = async (stored: string, encrypted: boolean) => {
+      if (scopedTo) {
+        await prisma.stationSetting.upsert({
+          where: { stationId_key: { stationId: scopedTo, key } },
+          create: { stationId: scopedTo, key, value: stored, encrypted },
+          update: { value: stored, encrypted },
+        });
+      } else {
+        await prisma.setting.upsert({
+          where: { key },
+          create: { key, value: stored, encrypted, updatedById },
+          update: { value: stored, encrypted, updatedById },
+        });
+      }
+    };
+
     if (value === null) {
-      await prisma.setting.deleteMany({ where: { key } });
+      if (scopedTo) await prisma.stationSetting.deleteMany({ where: { stationId: scopedTo, key } });
+      else await prisma.setting.deleteMany({ where: { key } });
       result.cleared.push(key);
       continue;
     }
@@ -264,12 +329,7 @@ export async function writeSettings(
         });
         continue;
       }
-      const ciphertext = encryptSecret(value);
-      await prisma.setting.upsert({
-        where: { key },
-        create: { key, value: ciphertext, encrypted: true, updatedById },
-        update: { value: ciphertext, encrypted: true, updatedById },
-      });
+      await put(encryptSecret(value), true);
       result.updated.push(key);
       continue;
     }
@@ -283,11 +343,7 @@ export async function writeSettings(
       continue;
     }
 
-    await prisma.setting.upsert({
-      where: { key },
-      create: { key, value: normalized, encrypted: false, updatedById },
-      update: { value: normalized, encrypted: false, updatedById },
-    });
+    await put(normalized, false);
     result.updated.push(key);
   }
 
@@ -367,7 +423,8 @@ export async function describeSettings(): Promise<SettingView[]> {
   const views: SettingView[] = [];
 
   for (const def of SETTINGS) {
-    const r = resolve(rows, def.key, true);
+    const own = isStationScoped(def.key) ? await rowsFor(def.key, true) : { rows, allowEnv: true };
+    const r = resolve(own.rows, def.key, true, own.allowEnv);
     const secret = isSecret(def.key);
 
     let source: SettingSource = "unset";

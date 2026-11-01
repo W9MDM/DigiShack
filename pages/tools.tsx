@@ -14,6 +14,7 @@ import { withPageAuth } from "@/lib/auth/guard";
 import { prisma } from "@/lib/db/prisma";
 import { classFromSetting } from "@/lib/ham/tools/privileges";
 import { getSetting } from "@/lib/settings";
+import { activeStation } from "@/lib/station/scope";
 
 // The ham toolkit: calculators and references, all computed in the browser and none of it
 // needing the radio, the bridge or the internet. The station's grid and licence class are
@@ -80,10 +81,7 @@ export const getServerSideProps = withPageAuth<Props>({
     let myGrid: string | null = null;
     let licence: LicenceDefault = { cls: null, status: "unset" };
     try {
-      const station = await prisma.station.findFirst({
-        orderBy: { createdAt: "asc" },
-        select: { grid: true },
-      });
+      const station = await activeStation();
       myGrid = station?.grid?.trim() || null;
     } catch {
       /* no station */

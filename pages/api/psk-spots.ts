@@ -18,6 +18,7 @@ import { freqToBand } from "@/lib/ham/bands";
 import { distanceKm, gridToLatLon } from "@/lib/propagation";
 import { lastReceptionQuery } from "@/lib/pskreporter/collect";
 import { getBooleanSetting, getNumberSetting } from "@/lib/settings";
+import { activeStation } from "@/lib/station/scope";
 
 const querySchema = z.object({
   /** How far back to look. A day at most: this is a live view, not a history. */
@@ -90,7 +91,7 @@ async function bridgeUp(): Promise<boolean> {
 async function collectorState(): Promise<CollectorState> {
   const [enabled, station, lastQuery, running] = await Promise.all([
     getBooleanSetting("pskreporter.enabled", false),
-    prisma.station.findFirst({ orderBy: { createdAt: "asc" }, select: { callsign: true } }),
+    activeStation(),
     lastReceptionQuery(),
     bridgeUp(),
   ]);
@@ -132,10 +133,7 @@ async function get(req: NextApiRequest, res: NextApiResponse) {
 
   const collector = await collectorState();
 
-  const station = await prisma.station.findFirst({
-    orderBy: { createdAt: "asc" },
-    select: { grid: true },
-  });
+  const station = await activeStation();
   const home = station?.grid ? gridToLatLon(station.grid) : null;
 
   const rows = await prisma.pskSpot.findMany({

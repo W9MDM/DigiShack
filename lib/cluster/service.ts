@@ -23,6 +23,7 @@ import {
   getSetting,
   invalidateSettingsCache,
 } from "@/lib/settings";
+import { activeStation } from "@/lib/station/scope";
 
 const CONFIG_POLL_MS = 15_000;
 /**
@@ -56,10 +57,7 @@ async function readConfig(): Promise<ClusterConfig> {
   let login = normaliseLogin(await getSetting("cluster.login"));
   if (!login && enabled) {
     // The station, as everywhere else in the bridge: the first one created.
-    const station = await prisma.station.findFirst({
-      orderBy: { createdAt: "asc" },
-      select: { callsign: true },
-    });
+    const station = await activeStation();
     login = normaliseLogin(station?.callsign);
   }
   return { enabled, host, port, login };
