@@ -38,7 +38,7 @@ alongside the ones every station sets.
 - [Digital modes](#digital-modes) — 11 settings, 9 advanced
 - [DigiShack bridge](#digishack-bridge) — 4 settings, 4 advanced
 - [External decoder (WSJT-X)](#external-decoder-wsjt-x) — 3 settings, 2 advanced
-- [FlexRadio (direct)](#flexradio-direct) — 14 settings, 11 advanced
+- [FlexRadio (direct)](#flexradio-direct) — 15 settings, 12 advanced
 - [Operating schedule](#operating-schedule) — 5 settings
 - [Bridge watchdog](#bridge-watchdog) — 5 settings, 5 advanced
 - [Icom (network)](#icom-network) — 13 settings, 7 advanced
@@ -281,6 +281,7 @@ Used when the digital source is `flex`. DigiShack connects to the radio's SmartS
 | Setting | Key | Type | Default | What it does |
 |---|---|---|---|---|
 | Radio address | `flex.host` | text | — | Leave blank to discover the radio automatically on the LAN. |
+| Radio serial number *(advanced)* | `flex.serial` | text | — | Pins discovery to one FlexRadio by its serial number (shown in SmartSDR and in the discovery error), for a network with more than one Flex. With the address blank and this blank, discovery uses the radio only when exactly one answers, and refuses to guess when several do. A serial that does not answer is an error, never a fallback. |
 | Decoder depth *(advanced)* | `flex.decodeDepth` | number | `2` | 1-4. Leave it at 2. MEASURED on a Xeon E5-2630 v3 with a 3 kHz passband: depth 1 takes 1312-2021 ms and depth 2 takes 1435-1795 ms — the SAME, sometimes worse, so lowering it buys nothing and only decodes less. Depth 3 is 3910-6692 ms, three to four times the cost, and 4 is far beyond the 15 s cycle. Cost barely changes with how busy the band is: one signal and twenty measure about the same, because it is a search over the passband rather than work per station. An earlier version of this text claimed ~0.55 s for depth 2; that was never true on this hardware. |
 | DAX IQ / audio channel *(advanced)* | `flex.daxChannel` | number | `1` | Which DAX channel carries the audio to decode. Used by the native decode path. |
 | RF panadapter *(advanced)* | `flex.panadapter` | on/off | `true` | Show tens of kHz of RF spectrum from the radio's own panadapter, alongside the audio waterfall rather than instead of it. The audio waterfall stays because the FT8 decoder searches a 3 kHz passband and the display has to show the same 3 kHz. Costs about 60 kB/s from the radio at the defaults below, comparable to the audio stream. FlexRadio only so far — see docs/panadapter.md for why the Icom's scope is not enabled yet. |

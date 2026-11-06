@@ -671,11 +671,11 @@ async function endToEnd() {
  * the rule under test can move the radio — a hop caused by PSKReporter would pass this
  * check while proving nothing.
  */
-function bench(o: { allow: boolean; messages: string[] }) {
+function bench(o: { allow: boolean; messages: string[]; start?: string; bands?: string[]; hop?: boolean }) {
   const listeners: Record<string, ((p: unknown) => void)[]> = {};
   const retuned: string[] = [];
   const logs: string[] = [];
-  let band = "17M";
+  let band = o.start ?? "17M";
   let now = 2_000_000;
   const live = { active: false };
 
@@ -729,8 +729,8 @@ function bench(o: { allow: boolean; messages: string[] }) {
     },
     tuneHz: async () => true,
     bandHop: async () => ({
-      enabled: true,
-      bands: ["17M", "20M"],
+      enabled: o.hop ?? true,
+      bands: o.bands ?? ["17M", "20M"],
       toBusiest: false,
       whenBetterRatio: 0,
     }),
@@ -922,9 +922,49 @@ function warmupIsAHearing(): void {
   );
 }
 
+/**
+ * 2026-11-04 to 06: 10 m keyed with no power out, so 10 m came off the hop list. The dial
+ * stayed on 28.074, and each morning the schedule started hunt there, keyed with no power
+ * again and turned auto off. Off the list has to mean the station does not transmit there.
+ */
+async function startingOffTheList() {
+  console.log("\na mode that starts on a band taken off the hop list leaves it first");
+  {
+    const b = bench({ allow: true, messages: TRICKLE, start: "10M", bands: ["40M", "20M"] });
+    b.auto.setMode("hunt");
+    await b.feed();
+    ok(["40M", "20M"].includes(b.retuned[0] ?? ""), "the first window moves to a listed band", String(b.retuned));
+    eq(b.retuned.length, 1, "once");
+    ok(
+      b.logs.some((l) => l.includes("10M is not on the hop list")),
+      "and the log says why",
+      b.logs.join(" | "),
+    );
+  }
+  {
+    const b = bench({ allow: true, messages: TRICKLE, start: "20M", bands: ["40M", "20M"] });
+    b.auto.setMode("hunt");
+    for (let i = 0; i < 3; i++) await b.feed();
+    eq(b.retuned.length, 0, "a listed band stays put");
+  }
+  {
+    const b = bench({ allow: true, messages: TRICKLE, start: "10M", bands: ["40M", "20M"], hop: false });
+    b.auto.setMode("hunt");
+    for (let i = 0; i < 3; i++) await b.feed();
+    eq(b.retuned.length, 0, "with hopping off the dial is the operator's, listed or not");
+  }
+  {
+    const b = bench({ allow: true, messages: TRICKLE, start: "10M", bands: ["40M", "20M"] });
+    b.auto.setMode("off");
+    await b.feed();
+    eq(b.retuned.length, 0, "off moves nothing");
+  }
+}
+
 void (async () => {
   await endToEnd();
   await nobodyToCall();
+  await startingOffTheList();
   warmupIsAHearing();
   console.log(`\n${pass} passed, ${fail} failed\n`);
   if (fail > 0) process.exit(1);

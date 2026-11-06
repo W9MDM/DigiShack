@@ -161,6 +161,9 @@ import { UNREAD_RECEIVER, type ReceiverControls } from "@/lib/radio/receiver-con
 import { getEqslCredentials, syncEqslInbox } from "@/lib/integrations/eqsl";
 import { reconcileLotwSent } from "@/lib/integrations/lotw-reconcile";
 import { forEachStation } from "@/lib/station/scope";
+import { pickDiscoveredFlex } from "@/lib/radio/identity";
+import { writeRadioState } from "@/lib/radio/state";
+import { BRIDGE_RADIO_ID } from "@/lib/radio/identity";
 import { startFt8brTracker } from "@/lib/contest/ft8battle-tracker";
 import { runUploads } from "@/lib/integrations/upload-runner";
 import { locksFor } from "@/lib/radio/api";
@@ -703,13 +706,7 @@ async function persistAutoMode(mode: AutoMode): Promise<void> {
   // a fictional name against a change nobody made. These two keys are deliberately
   // NOT in the settings registry either, so they never appear on the Settings page:
   // they are state, not configuration.
-  const put = async (key: string, value: string) => {
-    await prisma.setting.upsert({
-      where: { key },
-      create: { key, value, encrypted: false },
-      update: { value },
-    });
-  };
+  const put = (key: string, value: string) => writeRadioState(key, value);
   try {
     if (mode === "off") {
       await put(KEY_AUTO_MODE, "");
@@ -731,11 +728,7 @@ async function persistAutoMode(mode: AutoMode): Promise<void> {
 /** Record the schedule's applied answer — same direct write, same reasoning. */
 async function persistScheduleApplied(mode: AutoMode): Promise<void> {
   try {
-    await prisma.setting.upsert({
-      where: { key: KEY_SCHED_LAST },
-      create: { key: KEY_SCHED_LAST, value: mode, encrypted: false },
-      update: { value: mode },
-    });
+    await writeRadioState(KEY_SCHED_LAST, mode);
     invalidateSettingsCache();
   } catch (err) {
     console.error(
@@ -955,12 +948,7 @@ async function onNoPowerVerdict(verdict: NoPowerVerdict | null): Promise<void> {
     const value = new Date(now).toISOString();
     let recorded = false;
     await atMost(
-      prisma.setting
-        .upsert({
-          where: { key: KEY_NO_POWER_RESTART_AT },
-          create: { key: KEY_NO_POWER_RESTART_AT, value, encrypted: false },
-          update: { value },
-        })
+      writeRadioState(KEY_NO_POWER_RESTART_AT, value)
         .then(() => {
           recorded = true;
           invalidateSettingsCache();
@@ -1475,12 +1463,7 @@ function saveLastTune(hz: number | null, sliceMode: string | null): void {
     lastTuneTimer = null;
     const t: LastTune = { hz, sliceMode, sticky: stickyMode, at: Date.now() };
     const value = JSON.stringify(t);
-    void prisma.setting
-      .upsert({
-        where: { key: KEY_LAST_TUNE },
-        create: { key: KEY_LAST_TUNE, value, encrypted: false },
-        update: { value },
-      })
+    void writeRadioState(KEY_LAST_TUNE, value)
       .then(() => {
         lastTuneSaved = next;
       })
@@ -2132,13 +2115,15 @@ async function startFlexSource(): Promise<() => Promise<void>> {
   // broadcast whose answer was then ignored.
   let host = (await getSetting("flex.host")) ?? "";
   if (!host) {
+    // Pinned by serial, or exactly one radio answering - never whichever answered first.
+    // See lib/radio/identity.ts.
     const found = await discoverRadios({ timeoutMs: 8_000 });
-    host = found[0]?.ip || found[0]?.address || "";
-    if (found[0]) {
-      console.log(
-        `[bridge] discovered ${found[0].model} (${found[0].callsign ?? "?"}) at ${host}`,
-      );
-    }
+    const pick = pickDiscoveredFlex(found, await getSetting("flex.serial"));
+    if (!pick.ok) throw new Error(pick.error);
+    host = pick.radio.ip || pick.radio.address;
+    console.log(
+      `[bridge] discovered ${pick.radio.model} (${pick.radio.callsign ?? "?"}, serial ${pick.radio.serial ?? "?"}) at ${host}`,
+    );
   }
 
   if (!host) {
@@ -4673,6 +4658,9 @@ async function main(): Promise<void> {
       if (req.method === "GET" && url.pathname === "/status") {
         refreshLinkStatus();
         sendJson(res, 200, {
+          // Which radio this bridge drives. Always "main" for now; with several radios the
+          // web checks it so a page meant for one radio never shows another's state.
+          radioId: BRIDGE_RADIO_ID,
           status,
           recentDecodes: recentDecodes.slice(-50),
           qso: activeQso()?.state ?? null,
@@ -4742,6 +4730,14 @@ async function main(): Promise<void> {
       // Constant time: a plain !== returns sooner the earlier the first wrong character.
       if (!tokensEqual(provided, token)) {
         sendJson(res, 401, { error: "Bad or missing X-Bridge-Token" });
+        return;
+      }
+
+      // A request addressed to a different radio is refused, never acted on here. Absent
+      // means this one, for every caller written before radios had ids.
+      const addressed = (req.headers["x-radio-id"] as string | undefined)?.trim();
+      if (addressed && addressed !== BRIDGE_RADIO_ID) {
+        sendJson(res, 409, { error: `This bridge drives radio "${BRIDGE_RADIO_ID}", not "${addressed}"` });
         return;
       }
 

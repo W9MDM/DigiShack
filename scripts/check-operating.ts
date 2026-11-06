@@ -770,7 +770,8 @@ console.log("\nwhat makes it hop, and what makes it hop again");
       tuneHz: async () => true,
       settings: new FakeSettings({
         "auto.bandHop": "true",
-        "auto.hopBands": "40M,30M,80M",
+        // 20M first: the dial is on 20M, and a band off the list is left before any CQ.
+        "auto.hopBands": "20M,40M,30M,80M",
         "auto.maxUnansweredCqs": "2",
       }),
       wasWorked: async () => false,

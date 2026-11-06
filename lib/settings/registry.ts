@@ -1413,6 +1413,19 @@ export const SETTINGS: SettingDef[] = [
     help: "Leave blank to discover the radio automatically on the LAN.",
     placeholder: "192.0.2.10",
   },
+  {
+    key: "flex.serial",
+    label: "Radio serial number",
+    type: "string",
+    group: "flex",
+    advanced: true,
+    help:
+      "Pins discovery to one FlexRadio by its serial number (shown in SmartSDR and in the " +
+      "discovery error), for a network with more than one Flex. With the address blank and " +
+      "this blank, discovery uses the radio only when exactly one answers, and refuses to " +
+      "guess when several do. A serial that does not answer is an error, never a fallback.",
+    placeholder: "1219-1101-6600-1234",
+  },
   // `flex.autoDiscover` was here. It was the same decision as a blank address above, asked
   // twice: a configured address always won over whatever discovery found, so the switch
   // only decided whether to spend up to 8 s listening for a broadcast whose answer was then

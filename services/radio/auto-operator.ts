@@ -556,6 +556,15 @@ export class AutoOperator {
   /** Guard refusals during the streak — see BandOffering.refused. */
   private nobodyRefused = 0;
   private hopping = false;
+  /**
+   * Set by setMode: the first window of a mode checks the band is on the hop list.
+   *
+   * Taking a band off the list stopped hops TO it, not a mode starting ON it. 10 m was
+   * taken off on 2026-11-04 after it keyed with no power out, but the dial was left there,
+   * and the schedule woke hunt on 28.074 each morning for two days: no power, auto off,
+   * nothing transmitted until 2026-11-06.
+   */
+  private checkBandListed = false;
   /** POTA chase: who we retuned for, and when to give up on them. */
   private chasing: { activator: string; since: number; reference: string } | null = null;
   private chaseTried = new Map<string, number>();
@@ -697,6 +706,8 @@ export class AutoOperator {
     this.cqOffsetHz = null;
     this.cqedLastWindow = false;
     this.hopping = false;
+    // Chase leaves the band on purpose, and comes back to where it started.
+    this.checkBandListed = mode !== "off" && mode !== "pota-chase";
     // The band-comparison timer starts NOW, so a fresh mode listens for its first
     // interval before it will move on somebody else's figures.
     this.lastBetterCheck = Date.now();
@@ -1032,6 +1043,16 @@ export class AutoOperator {
     // `answers` is already filtered to `p.to === me`, so this only ever remembers
     // somebody genuinely calling US.
     this.noteCallbacks(answers, windowStartMs);
+
+    // Checked synchronously first, for the same reason as the callback queue below: this
+    // runs on every window and awaits only on the first one of a mode.
+    if (this.checkBandListed) {
+      this.checkBandListed = false;
+      if (await this.leaveUnlistedBand()) {
+        this.broadcastState();
+        return;
+      }
+    }
 
     // A same-band move to FT8 is not finished until the DECODER is on FT8. Nothing
     // transmits until it is: every path below that could key is skipped, because
@@ -2803,6 +2824,20 @@ export class AutoOperator {
    * poor. "nowhere" means every other band is blocked and NOTHING moved - the caller
    * decides what staying means. "failed" means the radio refused the retune.
    */
+  /**
+   * A mode starting on a band that is not on the hop list moves to one that is, before it
+   * transmits. Only with hopping on: with it off the list means nothing, and the dial is
+   * the operator's. True when the radio moved.
+   */
+  private async leaveUnlistedBand(): Promise<boolean> {
+    const hop = await this.o.bandHop();
+    if (!hop.enabled || hop.bands.length === 0) return false;
+    const { band } = this.o.getBandMode();
+    if (!band || hop.bands.some((b) => b.toUpperCase() === band.toUpperCase())) return false;
+    this.o.log(`[auto] ${band} is not on the hop list (${hop.bands.join(",")}) — moving before transmitting`);
+    return (await this.hopNext()) === "moved";
+  }
+
   private async hopNext(bands?: string[]): Promise<"moved" | "nowhere" | "failed"> {
     const hop = await this.o.bandHop();
     const cfg = bands ?? hop.bands;

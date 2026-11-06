@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.278.0 - public release
+## 1.279.2 - public release
 
 Development happens in a private repository; this is where the public history starts.
 Earlier entries are not reproduced - they quote real operators by callsign, include
@@ -22,6 +22,9 @@ Notes for anyone running this:
 
 ## Release history
 
+- **1.279.2** — check:flex-discovery uses documentation addresses
+- **1.279.1** — Auto never starts transmitting on a band taken off the hop list
+- **1.279.0** — Multi-radio groundwork: Flex discovery never guesses, radio state in one place
 - **1.278.0** — check:station-scope: neutral test ids
 - **1.277.1** — Wrong-callsign fixes and the missing received-QSL migration
 - **1.277.0** — Station location and description for installs sharing a callsign
