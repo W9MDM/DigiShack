@@ -13,6 +13,22 @@ a bar that does the typing and the logging.
 | Rcvd | The report they gave you. |
 | Name, QTH, Grid | Optional, logged if filled in. |
 
+## Who they are, looked up
+
+A moment after you stop typing their call, it is looked up and Name, QTH and Grid are filled
+in, but only where they are still empty, so nothing you typed is replaced. The line under the
+bar says who they are and where it came from.
+
+- **QRZ**, when Settings has a QRZ username and password (an XML subscription gives the
+  fullest records). Name is their first name, as an exchange uses it; QTH is town and state
+  in the US, town and country elsewhere.
+- **HamDB**, free and needing no account, when there is no QRZ login or QRZ does not have the
+  call. It covers US calls only.
+- A portable call (KD9XYZ/P, W1/KD9XYZ) is looked up as its base call. Each call is
+  remembered for an hour, so retyping it does not ask again.
+
+F4 thanks them by name when there is one: KD9XYZ DE K9XYZ TNX QSO TOM 73 SK.
+
 ## F1-F8
 
 Each key sends a line with your call (%M), theirs (%H), your report (%R) and their name
@@ -25,7 +41,7 @@ the bar is showing.
 | F1 | CQ CQ CQ DE %M %M %M K |
 | F2 | %H %H DE %M %M %M K |
 | F3 | %H DE %M TNX FER CALL UR %R %R %R BK |
-| F4 | %H DE %M TNX QSO 73 SK |
+| F4 | %H DE %M TNX QSO %N 73 SK |
 | F5 | %H DE %M PSE AGN K |
 | F6 | %H DE %M K |
 | F7 | %H DE %M R R TNX UR %R %R BK |

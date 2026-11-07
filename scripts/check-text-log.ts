@@ -7,6 +7,8 @@
 import { fillMacro, QSO_MACROS } from "@/components/digital/QsoBar";
 import { fromAdifMode, toAdifMode } from "@/lib/adif/fields";
 import { isDigitalMode, isLoggableMode, rstStyleFor, TEXT_LOG_MODES } from "@/lib/ham/modes";
+import { parseHamdb } from "@/lib/ham/hamdb";
+import { qthLine } from "@/pages/api/callsign-lookup";
 
 let failed = 0;
 function ok(cond: boolean, label: string, detail = ""): void {
@@ -59,6 +61,17 @@ console.log("\neach mode logs as ADIF knows it");
     ok(rstStyleFor(mode) === "RST", `  reported as RST (599)`);
   }
   ok(!TEXT_LOG_MODES.includes("JTTY"), "JTTY is not logged from the bar: it has no ADIF mode yet");
+}
+
+console.log("\nwho they are, filled in from a lookup");
+{
+  ok(qthLine("Elkhart", "IN", "United States") === "Elkhart, IN", "a US QTH is town and state");
+  ok(qthLine("Toronto", "ON", "Canada") === "Toronto, Canada", "elsewhere, town and country");
+  ok(qthLine(null, "IN", null) === "IN" && qthLine(null, null, null) === null, "with whatever parts there are");
+  const h = parseHamdb({ hamdb: { messages: { status: "OK" }, callsign: { call: "KD9XYZ", fname: "Thomas J", name: "Smith", addr2: "Goshen", state: "IN", country: "United States", grid: "EN61", class: "G" } } }, "KD9XYZ");
+  ok(h?.firstName === "Thomas" && h?.city === "Goshen", `HamDB gives the first name alone and the town (${h?.firstName}, ${h?.city})`);
+  ok(fillMacro(QSO_MACROS.find((m) => m.key === "F4")!.text, { my: "KC9QRS", their: "KD9XYZ", report: "599", name: "TOM" }) === "KD9XYZ DE KC9QRS TNX QSO TOM 73 SK", "F4 thanks them by name");
+  ok(fillMacro(QSO_MACROS.find((m) => m.key === "F4")!.text, { my: "KC9QRS", their: "KD9XYZ", report: "599", name: "" }) === "KD9XYZ DE KC9QRS TNX QSO 73 SK", "and reads right without one");
 }
 
 console.log("");

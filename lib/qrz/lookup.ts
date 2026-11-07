@@ -20,6 +20,10 @@ const XML_URL = "https://xmldata.qrz.com/xml/current/";
 export interface QrzCallsignInfo {
   callsign: string;
   name: string | null;
+  /** Their first name alone, as an exchange uses it ("TNX TOM"). */
+  firstName: string | null;
+  /** Their town (QRZ addr2). */
+  city: string | null;
   email: string | null;
   grid: string | null;
   country: string | null;
@@ -138,6 +142,8 @@ export async function lookupCallsign(callsign: string): Promise<QrzLookupResult>
       info: {
         callsign: found.toUpperCase(),
         name: [fname, lname].filter(Boolean).join(" ") || null,
+        firstName: fname ? fname.split(/\s+/)[0]! : null,
+        city: tag(xml, "addr2"),
         email: tag(xml, "email"),
         grid: tag(xml, "grid"),
         country: tag(xml, "country"),

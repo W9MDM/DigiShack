@@ -16,6 +16,10 @@ export interface HamdbLookup {
   licenceClass: LicenceClass;
   grid: string | null;
   name: string | null;
+  /** Their first name alone. */
+  firstName: string | null;
+  /** Their town (HamDB addr2). */
+  city: string | null;
   state: string | null;
   country: string | null;
 }
@@ -70,6 +74,8 @@ export function parseHamdb(data: unknown, expectedCall: string): HamdbLookup | n
     licenceClass: licenceClassFromHamdb(typeof cs.class === "string" ? cs.class : "", country),
     grid: clean(cs.grid),
     name,
+    firstName: clean(cs.fname)?.split(/\s+/)[0] ?? null,
+    city: clean(cs.addr2),
     state: clean(cs.state),
     country,
   };

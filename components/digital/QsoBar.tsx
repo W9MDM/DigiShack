@@ -8,7 +8,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { Button, Input } from "@/components/ui/primitives";
-import { ApiError, apiPost } from "@/lib/client/api";
+import { ApiError, apiGet, apiPost } from "@/lib/client/api";
 
 export interface QsoMacro {
   key: string;
@@ -23,7 +23,7 @@ export const QSO_MACROS: readonly QsoMacro[] = [
   { key: "F1", label: "CQ", text: "CQ CQ CQ DE %M %M %M K" },
   { key: "F2", label: "Answer", text: "%H %H DE %M %M %M K" },
   { key: "F3", label: "Report", text: "%H DE %M TNX FER CALL UR %R %R %R BK" },
-  { key: "F4", label: "73", text: "%H DE %M TNX QSO 73 SK", ends: true },
+  { key: "F4", label: "73", text: "%H DE %M TNX QSO %N 73 SK", ends: true },
   { key: "F5", label: "Repeat?", text: "%H DE %M PSE AGN K" },
   { key: "F6", label: "Over", text: "%H DE %M K" },
   { key: "F7", label: "Thanks, report", text: "%H DE %M R R TNX UR %R %R BK" },
@@ -96,6 +96,37 @@ export function QsoBar({
   }, [call]);
 
   const valid = CALL.test(call);
+
+  // Who they are, from QRZ (or HamDB without a QRZ login), once the call has stopped
+  // changing. Fills only what is still empty, so nothing typed is overwritten, and the
+  // first name rather than the whole one, because that is what goes in an exchange.
+  const [lookedUp, setLookedUp] = useState<string | null>(null);
+  useEffect(() => {
+    setLookedUp(null);
+    if (!valid) return;
+    let live = true;
+    const t = setTimeout(() => {
+      void apiGet<{ found: boolean; source: string | null; firstName: string | null; name: string | null; qth: string | null; grid: string | null; note: string | null }>(
+        `/api/callsign-lookup?call=${encodeURIComponent(call)}`,
+      )
+        .then((r) => {
+          if (!live) return;
+          if (!r.found) {
+            setLookedUp(r.note ? `Not found (${r.note})` : "Not found on QRZ or HamDB");
+            return;
+          }
+          setName((v) => v || r.firstName || r.name || "");
+          setQth((v) => v || r.qth || "");
+          setGrid((v) => v || r.grid || "");
+          setLookedUp(`${r.name ?? call}${r.qth ? `, ${r.qth}` : ""} · from ${r.source === "qrz" ? "QRZ" : "HamDB"}`);
+        })
+        .catch(() => live && setLookedUp(null));
+    }, 700);
+    return () => {
+      live = false;
+      clearTimeout(t);
+    };
+  }, [call, valid]);
 
   const log = useCallback(async () => {
     if (!valid || freqHz === null) return;
@@ -226,6 +257,7 @@ export function QsoBar({
           </span>
         )}
       </div>
+      {lookedUp && <p className="text-fg-muted">{lookedUp}</p>}
       {canSend && <p className="text-fg-subtle">F1–F8 on the keyboard send these too. %M is your call, %H theirs, %R the report you give.</p>}
     </div>
   );

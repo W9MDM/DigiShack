@@ -36,7 +36,7 @@ eq(licenceClassFromHamdb("", "United States"), "other", "unknown letter -> other
 console.log("\nparsing a response");
 eq(
   parseHamdb(hit({ call: "K9XYZ", class: "G", grid: "EN61aa", fname: "Matthew", name: "Melton", state: "IN", country: "United States" }), "k9xyz"),
-  { call: "K9XYZ", classLetter: "G", licenceClass: "us-general", grid: "EN61aa", name: "Matthew Melton", state: "IN", country: "United States" },
+  { call: "K9XYZ", classLetter: "G", licenceClass: "us-general", grid: "EN61aa", name: "Matthew Melton", firstName: "Matthew", city: null, state: "IN", country: "United States" },
   "a clean US hit maps and is case-insensitive on the requested call",
 );
 eq(
@@ -48,7 +48,7 @@ eq(parseHamdb({ hamdb: { messages: { status: "OK" } } }, "K9XYZ"), null, "no cal
 eq(parseHamdb({}, "K9XYZ"), null, "empty body -> null");
 eq(
   parseHamdb(hit({ call: "KX9X", class: "E", grid: "NOT_FOUND", fname: "NOT_FOUND", name: "NOT_FOUND", country: "United States" }), "kx9x"),
-  { call: "KX9X", classLetter: "E", licenceClass: "us-extra", grid: null, name: null, state: null, country: "United States" },
+  { call: "KX9X", classLetter: "E", licenceClass: "us-extra", grid: null, name: null, firstName: null, city: null, state: null, country: "United States" },
   "partial NOT_FOUND fields are scrubbed to null, the class still maps",
 );
 eq(

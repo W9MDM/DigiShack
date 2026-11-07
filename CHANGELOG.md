@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.281.1 - public release
+## 1.282.0 - public release
 
 Development happens in a private repository; this is where the public history starts.
 Earlier entries are not reproduced - they quote real operators by callsign, include
@@ -22,6 +22,7 @@ Notes for anyone running this:
 
 ## Release history
 
+- **1.282.0** — The text-mode log bar looks up who you are working
 - **1.281.1** — Feld Hell from a FlexRadio no longer arrives as dots
 - **1.281.0** — Hell shows what we send and scrolls like tape; every keyboard mode gets F-keys and a proper log
 - **1.280.1** — PSK Hell paints cleanly
