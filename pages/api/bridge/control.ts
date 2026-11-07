@@ -97,6 +97,8 @@ const bodySchema = z.object({
   /** Olivia size for action "olivia": tones and bandwidth, one of the listed pairs. */
   tones: z.number().int().min(2).max(256).optional(),
   bandwidth: z.number().int().min(125).max(2000).optional(),
+  /** Which Hell mode, for action "hell". */
+  variant: z.enum(["feld", "fm105", "fm245", "hell80", "slow", "psk"]).optional(),
   /** Olivia or Contestia, for action "olivia". */
   code: z.enum(["olivia", "contestia"]).optional(),
   theirCall: z.string().trim().toUpperCase().max(16).optional(),

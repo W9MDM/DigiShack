@@ -29,7 +29,8 @@ import {
   MAX_TRANSMIT_MS,
   type TxMode,
 } from "@/lib/radio/waveform";
-import type { RadioIdentity, RadioTransmitter, TransmitOutcome } from "@/lib/radio/types";
+import type { DigitalMode, RadioIdentity, RadioTransmitter, TransmitOutcome } from "@/lib/radio/types";
+import { maxTextMs, textWaveform, type TextTransmitRequest } from "@/lib/radio/text-waveform";
 
 const ICOM_TX_RATE = 48_000;
 
@@ -112,6 +113,10 @@ export class IcomTransmitter implements RadioTransmitter {
     js8?: { frame: string; txType: number };
     /** A period boundary in UTC ms. The mode's start offset is applied here. */
     startAt?: number;
+    /** Audio built already (a line of text, a picture), sent instead of one built from `message`. */
+    wave?: Float32Array;
+    /** The cap for `wave`, ms. Default MAX_TRANSMIT_MS. */
+    maxMs?: number;
   }): Promise<TransmitOutcome> {
     const refuse = (reason: string): TransmitOutcome => ({
       sent: false,
@@ -150,7 +155,9 @@ export class IcomTransmitter implements RadioTransmitter {
     // Generate first. A message that fails to encode must never leave the radio keyed.
     let wave: Float32Array;
     try {
-      wave = req.js8
+      wave = req.wave
+        ? req.wave
+        : req.js8
         ? buildJs8Waveform(req.js8, req.offsetHz, ICOM_TX_RATE)
         : buildWaveform(req.message, req.mode, req.offsetHz, ICOM_TX_RATE);
     } catch (err) {
@@ -158,7 +165,7 @@ export class IcomTransmitter implements RadioTransmitter {
     }
 
     const durationMs = (wave.length / ICOM_TX_RATE) * 1000;
-    if (durationMs > MAX_TRANSMIT_MS) {
+    if (durationMs > (req.maxMs ?? MAX_TRANSMIT_MS)) {
       return refuse(`Waveform is ${(durationMs / 1000).toFixed(1)}s, over the cap`);
     }
 
@@ -272,6 +279,35 @@ export class IcomTransmitter implements RadioTransmitter {
     } finally {
       this.busy = false;
     }
+  }
+
+  /**
+   * Send a line of text now: RTTY, PSK31, Olivia, Hell or JTTY, built at the Icom's rate
+   * and sent through the same gate, key, stream and unkey as a framed transmission, with no
+   * window to wait for. CW is refused: the Icom's own keyer is not driven from here yet.
+   */
+  async transmitText(req: TextTransmitRequest): Promise<TransmitOutcome> {
+    if (req.mode === "CW") {
+      return { sent: false, reason: "CW is not sent from DigiShack on the Icom yet - use the radio's keyer", startedAt: null };
+    }
+    let wave: Float32Array;
+    try {
+      wave = textWaveform(req, ICOM_TX_RATE);
+    } catch (err) {
+      return { sent: false, reason: err instanceof Error ? err.message : "Could not encode the text", startedAt: null };
+    }
+    return this.transmit({ message: req.text, mode: req.mode, offsetHz: req.centreHz, wave, maxMs: maxTextMs(req) });
+  }
+
+  /** Prepared audio now (an SSTV picture): built at 48 kHz, capped at `maxMs`, gated as any other. */
+  async transmitAudio(build: (sampleRate: number) => Float32Array, label: string, mode: DigitalMode, maxMs: number): Promise<TransmitOutcome> {
+    let wave: Float32Array;
+    try {
+      wave = build(ICOM_TX_RATE);
+    } catch (err) {
+      return { sent: false, reason: err instanceof Error ? err.message : "Could not build the audio", startedAt: null };
+    }
+    return this.transmit({ message: label, mode, offsetHz: 0, wave, maxMs });
   }
 
   /**

@@ -29,7 +29,7 @@ import { Psk31Demodulator } from "@/lib/digital/psk31demod";
 import { RttyProbe, type RttySuggestion } from "@/lib/digital/rtty-probe";
 import { OliviaDemodulator } from "@/lib/digital/oliviademod";
 import { SstvDecoder, type SstvSignal } from "@/lib/digital/sstv";
-import { HELL_RX_ROWS, HellDemodulator } from "@/lib/digital/hell";
+import { HELL_RX_ROWS, HellDemodulator, type HellVariant } from "@/lib/digital/hell";
 import { JttyDemodulator, type JttyMessage } from "@/lib/digital/jttydemod";
 import type { OliviaBandwidth, OliviaCode, OliviaTones } from "@/lib/digital/olivia";
 import { HashCallBook as Ft2HashCallBook } from "@/lib/digital/pack77";
@@ -282,7 +282,8 @@ function streamConfigurationKey(opts: StreamOptions, includeTuning = true): stri
       tuning = [];
       break;
     case "HELL":
-      configuration = [opts.mode];
+      // A mode change is a new receiver: the clock, the filters and the detector are per mode.
+      configuration = [opts.mode, opts.variant ?? "feld"];
       tuning = [opts.centreHz];
       break;
     case "JTTY":
@@ -358,10 +359,12 @@ export type StreamOptions =
       mode: "SSTV";
     }
   | {
-      /** Feld Hell: painted, not decoded. See lib/digital/hell.ts. */
+      /** Hell: painted, not decoded. See lib/digital/hell.ts. */
       mode: "HELL";
-      /** The carrier, Hz audio. */
+      /** The carrier, Hz audio: the centre between the tones in the FSK modes. */
       centreHz: number;
+      /** Which Hell mode. Default Feld Hell. */
+      variant?: HellVariant;
     }
   | {
       /** JTTY: every station in the passband. See lib/digital/jttydemod.ts. */
@@ -950,7 +953,7 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
           this.emit("sstv", { kind: "image", mode: m.name, width: img.width, height: img.height, rgb: img.rgb, at: Date.now(), signal }),
       });
     } else if (opts.mode === "HELL") {
-      this.hell = new HellDemodulator({ sampleRate: this.inputRate, centreHz: opts.centreHz });
+      this.hell = new HellDemodulator({ sampleRate: this.inputRate, centreHz: opts.centreHz, variant: opts.variant });
     } else if (opts.mode === "JTTY") {
       this.jtty = new JttyDemodulator(this.inputRate, {
         onMessage: (m) => this.emit("jtty", { ...m, at: Date.now() }),

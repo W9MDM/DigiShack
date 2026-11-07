@@ -20,7 +20,7 @@ export interface RigStatus {
   /** The Olivia centre, size and code while on Olivia. */
   olivia?: { centreHz: number; tones: number; bandwidth: number; code?: "olivia" | "contestia" } | null;
   /** The Feld Hell carrier while on Hell. */
-  hell?: { centreHz: number } | null;
+  hell?: { centreHz: number; variant?: "feld" | "fm105" | "fm245" | "hell80" | "slow" | "psk" } | null;
   /** Where JTTY transmits while on JTTY. */
   jtty?: { txHz: number } | null;
   /** A JS8 message going out, or the last one. */

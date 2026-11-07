@@ -239,6 +239,11 @@ const HELL: [number, string, (1 | 2 | 3)?][] = [
   [21_062_000, "15M"],
   [28_062_000, "10M"],
   [50_285_000, "6M"],
+  // The FM Hell-105 nets' dials (lib/ham/hell-nets.ts), after the calling frequencies so the
+  // HELL chip still tunes to those. 80 m's net shares the calling frequency.
+  [7_068_500, "40M"],
+  [10_141_500, "30M"],
+  [10_133_500, "30M"],
 ];
 
 /**

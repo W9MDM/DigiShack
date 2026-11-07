@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.279.2 - public release
+## 1.280.1 - public release
 
 Development happens in a private repository; this is where the public history starts.
 Earlier entries are not reproduced - they quote real operators by callsign, include
@@ -22,6 +22,8 @@ Notes for anyone running this:
 
 ## Release history
 
+- **1.280.1** — PSK Hell paints cleanly
+- **1.280.0** — The stream modes on the Icom, and Hell in six modes with the North American nets
 - **1.279.2** — check:flex-discovery uses documentation addresses
 - **1.279.1** — Auto never starts transmitting on a band taken off the hop list
 - **1.279.0** — Multi-radio groundwork: Flex discovery never guesses, radio state in one place

@@ -9,7 +9,10 @@ import {
   HELL_COLUMN_ELEMENTS,
   HELL_COLUMN_RATE,
   HELL_RX_ROWS,
+  HELL_SIGNAL_DB,
+  HELL_VARIANTS,
   HellDemodulator,
+  type HellVariant,
   hellColumns,
   hellDurationMs,
   hellGlyphColumns,
@@ -40,8 +43,8 @@ function noiseSource(seed: number): () => number {
  * How much of the text comes back as sent: the painted rows laid end to end, lined up
  * with the elements sent at the best lag, and each element read as ink or paper.
  */
-function receive(text: string, rate: number, opts: { offsetHz?: number; snrDb?: number; chunk?: number; seed?: number } = {}): { accuracy: number; inkGrey: number; paperGrey: number; signal: boolean } {
-  const wave = hellWaveform(text, { sampleRate: rate, centreHz: 1000 + (opts.offsetHz ?? 0), amplitude: 0.5 });
+function receive(text: string, rate: number, opts: { offsetHz?: number; snrDb?: number; chunk?: number; seed?: number; variant?: HellVariant } = {}): { accuracy: number; inkGrey: number; paperGrey: number; signal: boolean } {
+  const wave = hellWaveform(text, { sampleRate: rate, centreHz: 1000 + (opts.offsetHz ?? 0), amplitude: 0.5, variant: opts.variant });
   const lead = Math.round(rate * 0.7);
   const audio = new Float32Array(lead + wave.length + lead);
   audio.set(wave, lead);
@@ -53,19 +56,22 @@ function receive(text: string, rate: number, opts: { offsetHz?: number; snrDb?: 
     const g = noiseSource(opts.seed ?? 7);
     for (let i = 0; i < audio.length; i++) audio[i] = audio[i]! + sigma * g();
   }
-  const d = new HellDemodulator({ sampleRate: rate, centreHz: 1000 });
+  const d = new HellDemodulator({ sampleRate: rate, centreHz: 1000, variant: opts.variant });
   const step = opts.chunk ?? 512;
   const rows: number[] = [];
+  let heard = false;
   for (let i = 0; i < audio.length; i += step) {
     d.feed(audio.subarray(i, i + step));
+    heard ||= d.statistics.signal;
     const c = d.takeColumns();
     if (c) rows.push(...c);
   }
   const sent = hellColumns(text).flat();
   // Best lag, in painted rows, over the lead-in and a column of slack.
-  const leadRows = Math.round(0.7 * HELL_COLUMN_RATE * HELL_RX_ROWS);
+  const colRate = HELL_VARIANTS.find((v) => v.id === (opts.variant ?? "feld"))!.columnRate;
+  const leadRows = Math.round(0.7 * colRate * HELL_RX_ROWS);
   let best = { lag: 0, score: -Infinity };
-  for (let lag = leadRows - 3 * HELL_RX_ROWS; lag < leadRows + 3 * HELL_RX_ROWS; lag++) {
+  for (let lag = Math.max(0, leadRows - 3 * HELL_RX_ROWS); lag < leadRows + 3 * HELL_RX_ROWS; lag++) {
     let s = 0;
     for (let j = 0; j < sent.length; j++) {
       const v = ((rows[lag + 2 * j] ?? 0) + (rows[lag + 2 * j + 1] ?? 0)) / 2;
@@ -89,7 +95,7 @@ function receive(text: string, rate: number, opts: { offsetHz?: number; snrDb?: 
       paperN++;
     }
   }
-  return { accuracy: right / sent.length, inkGrey: ink / Math.max(1, inkN), paperGrey: paper / Math.max(1, paperN), signal: d.statistics.signal };
+  return { accuracy: right / sent.length, inkGrey: ink / Math.max(1, inkN), paperGrey: paper / Math.max(1, paperN), signal: heard };
 }
 
 console.log("the font and the timing");
@@ -176,6 +182,64 @@ for (const [snr, want] of [
   const before = d.statistics.columns;
   d.feed(new Float32Array(rate));
   ok(d.statistics.columns > before, "and a retune keeps it painting");
+}
+
+// The other five modes. Figures measured 2026-11-06 at 24 kHz, seed 11:
+//   clean        feld 100, fm105 99.1, fm245 99.1, hell80 97.7, slow 100, psk 93.8 %
+//   0 dB         94.3, 98.9, 100, 99.1, 96.9, 96.7 %; level 39, 28, 25, 19, 53, 20 dB
+//   noise alone  under 17 dB in every mode, painted mean 39-93 of 255
+console.log("\nthe other Hell modes");
+{
+  const rate = 24_000;
+  const ids = HELL_VARIANTS.map((v) => v.id).join(",");
+  ok(ids === "feld,fm105,fm245,hell80,slow,psk", `six modes: ${ids}`);
+  const fm105 = HELL_VARIANTS.find((v) => v.id === "fm105")!;
+  ok(fm105.columnRate === 17.5 && fm105.shiftHz === 55 && fm105.keying === "fsk", "FM Hell-105 is fldigi's: Feld timing, 55 Hz FSK");
+  ok(HELL_VARIANTS.find((v) => v.id === "hell80")!.columnRate === 35, "Hell 80 runs twice as fast, 35 columns a second");
+  ok(Math.abs(hellDurationMs("CQ", "slow") - 8 * hellDurationMs("CQ")) < 1e-6, "Slow Hell is Feld Hell at an eighth of the speed");
+
+  // FSK keeps a carrier on throughout, so its envelope never drops out mid-line; ink is
+  // the lower tone. Checked on "H" columns: a full upright, then two of space.
+  const w = hellWaveform("HH", { sampleRate: rate, centreHz: 1000, variant: "fm105" });
+  const mid = w.subarray(Math.round(w.length * 0.2), Math.round(w.length * 0.8));
+  ok(Math.max(...mid.map(Math.abs)) > 0.99 && mid.every((x, i) => i < 60 || Math.max(Math.abs(x), ...Array.from(mid.subarray(Math.max(0, i - 30), i)).map(Math.abs)) > 0.5), "FM Hell's carrier never stops mid-line");
+  const tone = (wave: Float32Array, f: number) => {
+    let re = 0;
+    let im = 0;
+    for (let i = 0; i < wave.length; i++) {
+      re += wave[i]! * Math.cos((2 * Math.PI * f * i) / rate);
+      im += wave[i]! * Math.sin((2 * Math.PI * f * i) / rate);
+    }
+    return re * re + im * im;
+  };
+  const ink = hellWaveform("#####", { sampleRate: rate, centreHz: 1000, variant: "hell80" });
+  const blank = hellWaveform("     ", { sampleRate: rate, centreHz: 1000, variant: "hell80" });
+  ok(tone(ink, 850) / tone(ink, 1150) > 2 * (tone(blank, 850) / tone(blank, 1150)), "ink in Hell 80 is the lower tone, 150 Hz under the centre");
+
+  for (const v of HELL_VARIANTS) {
+    if (v.id === "feld") continue;
+    // A neutral call: the public mirror replaces K9XYZ, and a different text moved PSK Hell by 2%.
+    const text = v.id === "slow" ? "CQ DE KC9QRS" : "CQ CQ DE KC9QRS KC9QRS K";
+    const clean = receive(text, rate, { variant: v.id });
+    ok(clean.accuracy > 0.92, `${v.label} clean: ${(clean.accuracy * 100).toFixed(1)}%`);
+    const near = receive(text, rate, { variant: v.id, offsetHz: v.id === "slow" ? 5 : 10 });
+    ok(near.accuracy > 0.92, `${v.label} a little off frequency: ${(near.accuracy * 100).toFixed(1)}%`);
+    const noisy = receive(text, rate, { variant: v.id, snrDb: 0, seed: 11 });
+    ok(noisy.accuracy > 0.9 && noisy.signal, `${v.label} at 0 dB: ${(noisy.accuracy * 100).toFixed(1)}%, and it reads as a signal`);
+
+    const g = noiseSource(3);
+    const d = new HellDemodulator({ sampleRate: rate, centreHz: 1000, variant: v.id });
+    const audio = new Float32Array(rate * 20);
+    for (let i = 0; i < audio.length; i++) audio[i] = 0.05 * g();
+    let worst = -Infinity;
+    for (let i = 0; i < audio.length; i += 512) {
+      d.feed(audio.subarray(i, i + 512));
+      if (i > rate * 3) worst = Math.max(worst, d.statistics.levelDb);
+    }
+    const cols = d.takeColumns()!;
+    const mean = cols.reduce((a, b) => a + b, 0) / cols.length;
+    ok(worst < HELL_SIGNAL_DB && mean < 110, `${v.label} on noise alone: never a signal (peak ${worst.toFixed(1)} dB), page mostly paper (mean ${mean.toFixed(0)})`);
+  }
 }
 
 console.log("");

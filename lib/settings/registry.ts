@@ -1178,10 +1178,27 @@ export const SETTINGS: SettingDef[] = [
     help: "Where JTTY transmits: its lowest tone, Hz above the dial, as WSJT-X's Tx frequency. 1500 is WSJT-X's default. The receiver decodes every station in the passband whatever this is; a click on the waterfall or on a station's tag moves it for the session.",
     default: "1500",
   },
-  // --- Feld Hell ---
+  // --- Hell ---
+  {
+    key: "hell.variant",
+    label: "Hell mode",
+    type: "select",
+    options: [
+      { value: "feld", label: "Feld Hell" },
+      { value: "fm105", label: "FM Hell-105 (the North American nets)" },
+      { value: "fm245", label: "FM Hell-245" },
+      { value: "hell80", label: "Hell 80" },
+      { value: "slow", label: "Slow Hell" },
+      { value: "psk", label: "PSK Hell" },
+    ],
+    group: "digital",
+    advanced: true,
+    help: "Which Hell mode the HELL chip starts in. Feld Hell keys a carrier on and off; FM Hell-105 shifts it 55 Hz, as fldigi does, and is what the North American nets run. The panel's picker, and the Tune buttons on its list of nets, change it for the session.",
+    default: "feld",
+  },
   {
     key: "hell.centreHz",
-    label: "Feld Hell carrier (Hz audio)",
+    label: "Hell carrier (Hz audio)",
     type: "number",
     group: "digital",
     advanced: true,

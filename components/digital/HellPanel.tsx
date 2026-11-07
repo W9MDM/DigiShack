@@ -1,5 +1,5 @@
-// The Feld Hell panel on the decodes page: the page as it is painted, column by column,
-// the carrier's controls, and a line to send.
+// The Hell panel on the decodes page: the page as it is painted, column by column, which
+// Hell mode, the carrier's controls, where Hell is on the air, and a line to send.
 //
 // Nothing here is decoded. The bridge sends painted columns over the socket (kind
 // "hell-cols", 28 bytes a column, bottom row first, 0 paper to 255 ink), and this draws
@@ -12,6 +12,8 @@ import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useSta
 
 import { Nudge } from "@/components/decodes/controls";
 import { Badge, Button, Input } from "@/components/ui/primitives";
+import { HELL_VARIANTS, hellVariant, type HellVariant } from "@/lib/digital/hell";
+import { HELL_CALLING, HELL_NETS, nextNetStart, type HellSpot } from "@/lib/ham/hell-nets";
 import { decodeBase64Bins } from "@/lib/spectrum/wire";
 import { useNightMode } from "@/lib/client/use-theme";
 
@@ -66,7 +68,9 @@ export const HellPanel = forwardRef<
   HellPanelHandle,
   {
     stats: HellStats | null;
-    hell: { centreHz: number } | null;
+    hell: { centreHz: number; variant?: HellVariant } | null;
+    /** The band the radio is on, to pick out that band's frequencies. */
+    band: string | null;
     /** The [TX] lines, from the stream text. */
     text: string;
     canTune: boolean;
@@ -74,11 +78,15 @@ export const HellPanel = forwardRef<
     myCall: string | null;
     transmitting: boolean;
     error?: string | null;
-    onTune: (centreHz: number) => void;
+    onTune: (centreHz: number, variant?: HellVariant) => void;
+    /** Put the radio on a frequency or net: the dial a carrier below it, in its mode. */
+    onTuneSpot: (spot: HellSpot) => void;
     onSend: (text: string) => void;
     onClear: () => void;
   }
->(function HellPanel({ stats, hell, text, canTune, canSend, myCall, transmitting, error, onTune, onSend, onClear }, ref) {
+>(function HellPanel({ stats, hell, band, text, canTune, canSend, myCall, transmitting, error, onTune, onTuneSpot, onSend, onClear }, ref) {
+  const mode = hellVariant(hell?.variant);
+  const cps = mode.columnRate / 7;
   const canvas = useRef<HTMLCanvasElement>(null);
   const cursor = useRef({ col: 0, line: 0, rows: 28 });
   const [draft, setDraft] = useState("");
@@ -181,7 +189,7 @@ export const HellPanel = forwardRef<
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-fg-muted">
         {hell ? (
           <span className="tnum">
-            carrier <span className="text-fg">{hell.centreHz}</span> Hz · Feld Hell
+            carrier <span className="text-fg">{hell.centreHz}</span> Hz · {mode.label}
             {stats && (
               <>
                 {" "}
@@ -208,6 +216,21 @@ export const HellPanel = forwardRef<
       </div>
       {canTune && (
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
+          <label className="flex items-center gap-1 text-fg-muted">
+            Mode
+            <select
+              className="rounded-sm border border-line bg-bg px-1 py-0.5 text-fg"
+              value={mode.id}
+              disabled={!hell}
+              onChange={(e) => hell && onTune(hell.centreHz, e.target.value as HellVariant)}
+            >
+              {HELL_VARIANTS.map((v) => (
+                <option key={v.id} value={v.id}>
+                  {v.label}
+                </option>
+              ))}
+            </select>
+          </label>
           <Nudge
             step={10}
             disabled={!hell}
@@ -228,13 +251,14 @@ export const HellPanel = forwardRef<
         />
         {!painted && (
           <p className="absolute inset-0 flex items-center justify-center p-4 text-center text-xs text-fg-subtle">
-            Nothing painted yet. Tune to a Feld Hell signal and click it on the waterfall: text appears here as it is sent, twice over.
+            Nothing painted yet. Tune to a {mode.label} signal and click it on the waterfall: text appears here as it is sent, twice over.
           </p>
         )}
       </div>
       <p className="text-xs text-fg-subtle">
         Read whichever copy is whole. Lines that slope mean the two stations' clocks differ; the text still reads.
       </p>
+      {canTune && <HellWhere band={band} onTuneSpot={onTuneSpot} />}
 
       {error && <p className="text-xs text-danger">{error}</p>}
 
@@ -252,7 +276,7 @@ export const HellPanel = forwardRef<
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             maxLength={96}
-            placeholder="Type a line; Enter sends it (2.5 characters a second, sent in capitals)"
+            placeholder={`Type a line; Enter sends it (${cps < 1 ? cps.toFixed(2) : cps.toFixed(1)} characters a second, sent in capitals)`}
             aria-label="Hell text to send"
           />
           <Button type="submit" size="sm" disabled={!draft.trim() || transmitting}>
@@ -275,3 +299,57 @@ export const HellPanel = forwardRef<
     </div>
   );
 });
+
+/**
+ * Where Hell is on the air in North America: the weekly nets, soonest first, with when they
+ * next meet in local time and UTC, and Feld Hell's calling frequencies. Tune puts the radio
+ * on one in its mode. See lib/ham/hell-nets.ts for the sources.
+ */
+function HellWhere({ band, onTuneSpot }: { band: string | null; onTuneSpot: (spot: HellSpot) => void }) {
+  const [now, setNow] = useState<number | null>(null);
+  useEffect(() => {
+    setNow(Date.now());
+    const t = setInterval(() => setNow(Date.now()), 60_000);
+    return () => clearInterval(t);
+  }, []);
+  const nets = now === null ? [] : HELL_NETS.map((n) => ({ n, at: nextNetStart(n, now) })).sort((a, b) => a.at - b.at);
+  const mhz = (hz: number) => (hz / 1e6).toFixed(4).replace(/0$/, "");
+  const when = (at: number) => {
+    const d = new Date(at);
+    const local = d.toLocaleString(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" });
+    const utc = `${d.toUTCString().slice(0, 3)} ${d.toISOString().slice(11, 16)}Z`;
+    const mins = Math.round((at - (now ?? at)) / 60_000);
+    const soon = mins <= 0 ? " · on now" : mins < 120 ? ` · in ${mins} min` : "";
+    return `${local} (${utc})${soon}`;
+  };
+  return (
+    <details className="text-xs">
+      <summary className="cursor-pointer text-fg-muted">Where Hell is: North American nets and calling frequencies</summary>
+      <div className="mt-2 flex flex-col gap-1">
+        {nets.map(({ n, at }) => (
+          <div key={n.label} className="flex flex-wrap items-center gap-x-3 gap-y-1">
+            <Button size="sm" onClick={() => onTuneSpot(n)}>
+              Tune
+            </Button>
+            <span className="tnum text-fg">{mhz(n.hz)} MHz</span>
+            <span className="text-fg-muted">
+              {n.label} · {hellVariant(n.variant).label} · {n.coordinator} · next {when(at)}
+              {n.altHz ? ` · ${mhz(n.altHz)} if busy` : ""}
+            </span>
+          </div>
+        ))}
+        <div className="mt-1 flex flex-wrap items-center gap-1 text-fg-muted">
+          Feld Hell calling:
+          {HELL_CALLING.map((c) => (
+            <Button key={c.hz} size="sm" variant={c.band === band ? "primary" : "ghost"} title={c.label} onClick={() => onTuneSpot(c)}>
+              {c.band.toLowerCase()} {mhz(c.hz)}
+            </Button>
+          ))}
+        </div>
+        <p className="text-fg-subtle">
+          The nets run FM Hell-105, so Tune switches the mode too. Times are the nets' own, in Eastern time, shown in yours.
+        </p>
+      </div>
+    </details>
+  );
+}

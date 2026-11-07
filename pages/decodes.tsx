@@ -44,6 +44,7 @@ import { Badge, Button, Card, EmptyState, ErrorBanner, PageHeader } from "@/comp
 import { withPageAuth } from "@/lib/auth/guard";
 import { bridgeWsUrl } from "@/lib/bridge/ws-url";
 import { ApiError, apiGet, apiPatch, apiPost, useApi } from "@/lib/client/api";
+import { hellVariant } from "@/lib/digital/hell";
 import { useCan } from "@/lib/client/session";
 import { CONNECT_TIMEOUT_MS, FIRST_BACKOFF_MS, linkLabel, nextBackoff } from "@/lib/client/socket-retry";
 import { useDistanceUnit } from "@/lib/client/use-distance-unit";
@@ -90,7 +91,7 @@ const PANEL_TITLE: Record<string, string> = {
   OLIVIA: "Olivia",
   JTTY: "JTTY",
   SSTV: "SSTV",
-  HELL: "Feld Hell",
+  HELL: "Hell",
 };
 
 interface SpectrumMsg {
@@ -699,11 +700,20 @@ export default function DigitalPage({ wsUrl }: Props) {
       ];
     }
     if (status?.subMode === "HELL" && status.hell) {
-      // About 250 Hz wide at its strongest; a click inside the edges is close enough.
+      const v = hellVariant(status.hell.variant);
+      // FSK: the two tones, ink below and paper above. On and off, and PSK: the carrier and
+      // the edges of where it is strongest; a click inside them is close enough.
+      if (v.keying === "fsk") {
+        return [
+          { hz: status.hell.centreHz, label: `${v.label} centre`, emphasis: true },
+          { hz: status.hell.centreHz - v.shiftHz / 2, label: "ink", emphasis: false },
+          { hz: status.hell.centreHz + v.shiftHz / 2, label: "paper", emphasis: false },
+        ];
+      }
       return [
-        { hz: status.hell.centreHz, label: "Hell carrier", emphasis: true },
-        { hz: status.hell.centreHz - 125, label: "edge", emphasis: false },
-        { hz: status.hell.centreHz + 125, label: "edge", emphasis: false },
+        { hz: status.hell.centreHz, label: `${v.label} carrier`, emphasis: true },
+        { hz: status.hell.centreHz - v.bandwidthHz / 2, label: "edge", emphasis: false },
+        { hz: status.hell.centreHz + v.bandwidthHz / 2, label: "edge", emphasis: false },
       ];
     }
     if (rows.length === 0) return [];
@@ -838,12 +848,22 @@ export default function DigitalPage({ wsUrl }: Props) {
     }
   }, []);
   /** Move the Feld Hell carrier: a click on the waterfall or the ± buttons. */
-  const tuneHell = useCallback(async (centreHz: number) => {
+  const tuneHell = useCallback(async (centreHz: number, variant?: string) => {
     try {
-      await apiPost("/api/bridge/control", { action: "hell", centreHz });
+      await apiPost("/api/bridge/control", { action: "hell", centreHz, variant });
       setRttyError(null);
     } catch (err) {
       setRttyError(err instanceof ApiError ? err.message : "Could not move the Hell carrier");
+    }
+  }, []);
+  /** Put the radio on a Hell net or calling frequency: its mode first, then the dial a carrier below the signal. */
+  const tuneHellSpot = useCallback(async (spot: { hz: number; variant: string }, centreHz: number) => {
+    try {
+      await apiPost("/api/bridge/control", { action: "hell", centreHz, variant: spot.variant });
+      await apiPost("/api/bridge/control", { action: "rig", freqHz: spot.hz - centreHz });
+      setRttyError(null);
+    } catch (err) {
+      setRttyError(err instanceof ApiError ? err.message : "Could not tune there");
     }
   }, []);
   /** Move the Olivia tone set (a click on the waterfall or the ± buttons), change the size, or switch to Contestia. */
@@ -1363,13 +1383,15 @@ export default function DigitalPage({ wsUrl }: Props) {
                   ref={hellPanel}
                   stats={hellStats}
                   hell={status?.hell ?? null}
+                  band={status?.band ?? null}
                   text={streamText}
                   canTune={canSwitch}
                   canSend={canSwitch}
                   myCall={myCall}
                   transmitting={transmitting}
                   error={rttyError}
-                  onTune={(hz) => void tuneHell(hz)}
+                  onTune={(hz, variant) => void tuneHell(hz, variant)}
+                  onTuneSpot={(spot) => void tuneHellSpot(spot, status?.hell?.centreHz ?? 1000)}
                   onSend={(text) => void sendRtty(text)}
                   onClear={clearStream}
                 />

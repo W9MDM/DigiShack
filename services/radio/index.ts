@@ -172,7 +172,7 @@ import { RTTY_CENTRE_HZ, RTTY_SHIFT_HZ, rttyDurationMs, rttyTones } from "@/lib/
 import { cwDurationMs } from "@/lib/digital/cw";
 import { PSK31_CENTRE_HZ, psk31DurationMs, type PskSpeed } from "@/lib/digital/psk31";
 import { OLIVIA_MODES, oliviaDurationMs, type OliviaBandwidth, type OliviaCode, type OliviaTones } from "@/lib/digital/olivia";
-import { HELL_CENTRE_HZ, HELL_COLUMN_RATE, hellDurationMs } from "@/lib/digital/hell";
+import { HELL_CENTRE_HZ, HELL_COLUMN_RATE, HELL_VARIANTS, hellDurationMs, isHellVariant, type HellVariant } from "@/lib/digital/hell";
 import { JTTY_DEFAULT_HZ, jttyDurationMs } from "@/lib/digital/jtty";
 import { isStreamMode, type Js8DecodeExtra } from "@/lib/radio/decode-pipeline";
 import {
@@ -189,7 +189,7 @@ import { encodePng } from "@/lib/digital/png";
 import { sstvModeByName, sstvRsv, sstvWaveform } from "@/lib/digital/sstv";
 import { readSstvPicture } from "@/lib/digital/sstv-read";
 import { parseLicenceClass, sstvTransmitRefusal } from "@/lib/radio/sstv-licence";
-import type { SstvEvent } from "@/lib/radio/decode-pipeline";
+import type { SstvEvent, StreamOptions } from "@/lib/radio/decode-pipeline";
 import { js8SubmodeNow, PERIOD_MS, setJs8Submode } from "@/lib/radio/timing";
 import { sequencerOffFrequency, gateAutomation, hopModeFor, NO_SEQUENCER_MODES, noSequencerReason } from "@/lib/radio/automation-gate";
 import type { SchedulableAuto } from "@/lib/radio/schedule-runner";
@@ -258,7 +258,7 @@ interface RigStatus {
   /** The Olivia centre, size and code, while on Olivia. */
   olivia: { centreHz: number; tones: OliviaTones; bandwidth: OliviaBandwidth; code: OliviaCode } | null;
   /** The Feld Hell carrier, while on Hell. */
-  hell: { centreHz: number } | null;
+  hell: { centreHz: number; variant: HellVariant } | null;
   /** Where JTTY transmits (the lowest tone), while on JTTY. The receiver hears the whole passband. */
   jtty: { txHz: number } | null;
   /** A JS8 message going out, or the last one, with the offset it uses. See lib/radio/js8-sender.ts. */
@@ -665,6 +665,8 @@ const noiseFloor = new NoiseFloor();
  * stop, and both radios stop the same way.
  */
 let activeTx: DigitalTransmitter | null = null;
+/** Set once the Icom path is wired: the decoder moved to another mode. */
+let icomModeChanged: (mode: string) => void = () => {};
 /**
  * Auto mode to restore after a radio reconnect, and the run it belonged to.
  *
@@ -1499,7 +1501,7 @@ const oliviaTuning: { centreHz: number; tones: OliviaTones; bandwidth: OliviaBan
 let oliviaApply: (() => void) | null = null;
 
 /** Feld Hell: the carrier the receiver paints and the transmitter keys. */
-const hellTuning = { centreHz: HELL_CENTRE_HZ };
+const hellTuning: { centreHz: number; variant: HellVariant } = { centreHz: HELL_CENTRE_HZ, variant: "feld" };
 let hellApply: (() => void) | null = null;
 
 /** JTTY: where the transmitter puts its lowest tone. */
@@ -1526,6 +1528,102 @@ function onHellColumns(e: { rows: number; data: Uint8Array; at: number }): void 
 /** The last few thousand characters of stream text, replayed to a page that connects. */
 const STREAM_TEXT_MAX = 8_000;
 let streamText = "";
+
+/** What the stream modes need from a radio source: their options. The FlexRadio and the Icom both have them. */
+interface StreamTuningTarget {
+  setRttyOptions(opts: Extract<StreamOptions, { mode: "RTTY" }>): void;
+  setCwOptions(opts: Extract<StreamOptions, { mode: "CW" }>): void;
+  setPskOptions(opts: Extract<StreamOptions, { mode: "PSK31" }>): void;
+  setOliviaOptions(opts: Extract<StreamOptions, { mode: "OLIVIA" }>): void;
+  setHellOptions(opts: Extract<StreamOptions, { mode: "HELL" }>): void;
+}
+
+/**
+ * Point the stream modes' apply hooks at a source. Was written inline in the FlexRadio's
+ * start-up, so on the Icom every hook stayed null: the carrier was never reported, the
+ * demodulators kept their defaults, and Send refused for want of a tuning.
+ */
+function wireStreamTuning(source: StreamTuningTarget, cwPitchFromRadio: () => number | null): void {
+  rttyApply = () => {
+    const sideband: "USB" | "LSB" = /LSB|DIGL/i.test(status.mode ?? "") ? "LSB" : "USB";
+    const normal = rttyTones(rttyTuning.centreHz, rttyTuning.shiftHz, sideband);
+    // Reverse swaps the two: for a station whose mark is the lower tone.
+    const tones = rttyTuning.reverse ? { markHz: normal.spaceHz, spaceHz: normal.markHz } : normal;
+    source.setRttyOptions({ mode: "RTTY", ...tones, ...rttyCode, baud: rttyTuning.baud });
+    status.rtty = {
+      centreHz: rttyTuning.centreHz,
+      shiftHz: rttyTuning.shiftHz,
+      sideband,
+      ...tones,
+      reverse: rttyTuning.reverse,
+      baud: rttyTuning.baud,
+    };
+  };
+  // The CW decoder listens where the radio's sidetone is. The pitch arrives in the
+  // transmit status when the radio reports it; the setting stands in until then.
+  cwApply = () => {
+    const fromRadio = cwPitchFromRadio();
+    const pitchHz = fromRadio ?? cwTuning.pitchHz;
+    source.setCwOptions({ mode: "CW", pitchHz, wpm: cwTuning.wpm, thresholdDb: cwTuning.thresholdDb });
+    status.cw = { pitchHz, wpm: cwTuning.wpm, pitchFromRadio: fromRadio !== null };
+  };
+  pskApply = () => {
+    source.setPskOptions({ mode: "PSK31", centreHz: pskTuning.centreHz, speed: pskTuning.speed, squelch: pskTuning.squelch });
+    status.psk = { centreHz: pskTuning.centreHz, speed: pskTuning.speed };
+  };
+  oliviaApply = () => {
+    source.setOliviaOptions({
+      mode: "OLIVIA",
+      centreHz: oliviaTuning.centreHz,
+      tones: oliviaTuning.tones,
+      bandwidth: oliviaTuning.bandwidth,
+      code: oliviaTuning.code,
+      syncThreshold: oliviaTuning.threshold,
+    });
+    status.olivia = {
+      centreHz: oliviaTuning.centreHz,
+      tones: oliviaTuning.tones,
+      bandwidth: oliviaTuning.bandwidth,
+      code: oliviaTuning.code,
+    };
+  };
+  hellApply = () => {
+    source.setHellOptions({ mode: "HELL", centreHz: hellTuning.centreHz, variant: hellTuning.variant });
+    status.hell = { centreHz: hellTuning.centreHz, variant: hellTuning.variant };
+  };
+}
+
+/** Call the apply hook for the stream mode now in force, if it is one. */
+function applyStreamTuning(mode: string | null): void {
+  if (mode === "RTTY") rttyApply?.();
+  if (mode === "CW") cwApply?.();
+  if (mode === "PSK31") pskApply?.();
+  if (mode === "OLIVIA") oliviaApply?.();
+  if (mode === "HELL") hellApply?.();
+  if (mode === "JTTY") jttyApply();
+}
+
+/**
+ * The stream modes' events, from either radio: text as it completes, the heartbeat (the
+ * liveness beat while streaming, since no window arrives), SSTV, Hell's columns and JTTY's
+ * station tags.
+ */
+function wireStreamEvents(source: Pick<NodeJS.EventEmitter, "on">, beat: () => void): void {
+  source.on("text", (t: { mode: string; text: string; at: number }) => {
+    streamText = (streamText + t.text).slice(-STREAM_TEXT_MAX);
+    broadcast({ kind: "text", mode: t.mode, text: t.text, at: t.at });
+  });
+  source.on("stream", (h: Record<string, unknown>) => {
+    beat();
+    broadcast({ kind: "stream", ...h });
+  });
+  source.on("sstv", (e: SstvEvent) => onSstvEvent(e));
+  source.on("hell", (e: { rows: number; data: Uint8Array; at: number }) => onHellColumns(e));
+  // Each JTTY message as a station tag for the waterfall; its text came as `text`.
+  source.on("jtty", (m: { hz: number; snr: number; text: string; complete: boolean; at: number }) =>
+    broadcast({ kind: "jtty-msg", hz: m.hz, snr: m.snr, text: m.text, complete: m.complete, at: m.at }),
+  );
+}
 
 /** JS8 frames joined into messages, per frequency, as a receiver must. */
 const js8Assembler = new Js8MessageAssembler();
@@ -2406,6 +2504,10 @@ async function startFlexSource(): Promise<() => Promise<void>> {
   }
   oliviaTuning.threshold = await getNumberSetting("olivia.threshold", 4);
   hellTuning.centreHz = await getNumberSetting("hell.centreHz", HELL_CENTRE_HZ);
+  {
+    const v = await getSetting("hell.variant");
+    hellTuning.variant = isHellVariant(v) ? v : "feld";
+  }
   jttyTuning.txHz = await getNumberSetting("jtty.txHz", JTTY_DEFAULT_HZ);
   {
     const speed = ((await getSetting("js8.speed")) ?? "normal").toLowerCase();
@@ -2428,53 +2530,7 @@ async function startFlexSource(): Promise<() => Promise<void>> {
     });
     if (level !== "off") console.log(`[js8] automatic replies: ${level === "hb" ? "heartbeat acknowledgements" : "acknowledgements and SNR?, GRID?, INFO?"}`);
   }
-  rttyApply = () => {
-    const sideband: "USB" | "LSB" = /LSB|DIGL/i.test(status.mode ?? "") ? "LSB" : "USB";
-    const normal = rttyTones(rttyTuning.centreHz, rttyTuning.shiftHz, sideband);
-    // Reverse swaps the two: for a station whose mark is the lower tone.
-    const tones = rttyTuning.reverse ? { markHz: normal.spaceHz, spaceHz: normal.markHz } : normal;
-    source.setRttyOptions({ mode: "RTTY", ...tones, ...rttyCode, baud: rttyTuning.baud });
-    status.rtty = {
-      centreHz: rttyTuning.centreHz,
-      shiftHz: rttyTuning.shiftHz,
-      sideband,
-      ...tones,
-      reverse: rttyTuning.reverse,
-      baud: rttyTuning.baud,
-    };
-  };
-  // The CW decoder listens where the radio's sidetone is. The pitch arrives in the
-  // transmit status when the radio reports it; the setting stands in until then.
-  cwApply = () => {
-    const fromRadio = rig.state.cwPitchHz;
-    const pitchHz = fromRadio ?? cwTuning.pitchHz;
-    source.setCwOptions({ mode: "CW", pitchHz, wpm: cwTuning.wpm, thresholdDb: cwTuning.thresholdDb });
-    status.cw = { pitchHz, wpm: cwTuning.wpm, pitchFromRadio: fromRadio !== null };
-  };
-  pskApply = () => {
-    source.setPskOptions({ mode: "PSK31", centreHz: pskTuning.centreHz, speed: pskTuning.speed, squelch: pskTuning.squelch });
-    status.psk = { centreHz: pskTuning.centreHz, speed: pskTuning.speed };
-  };
-  oliviaApply = () => {
-    source.setOliviaOptions({
-      mode: "OLIVIA",
-      centreHz: oliviaTuning.centreHz,
-      tones: oliviaTuning.tones,
-      bandwidth: oliviaTuning.bandwidth,
-      code: oliviaTuning.code,
-      syncThreshold: oliviaTuning.threshold,
-    });
-    status.olivia = {
-      centreHz: oliviaTuning.centreHz,
-      tones: oliviaTuning.tones,
-      bandwidth: oliviaTuning.bandwidth,
-      code: oliviaTuning.code,
-    };
-  };
-  hellApply = () => {
-    source.setHellOptions({ mode: "HELL", centreHz: hellTuning.centreHz });
-    status.hell = { centreHz: hellTuning.centreHz };
-  };
+  wireStreamTuning(source, () => rig.state.cwPitchHz);
 
   source.on("window", (w) => {
     // The liveness heartbeat. A window arrives once per T/R period whether or not
@@ -2529,18 +2585,7 @@ async function startFlexSource(): Promise<() => Promise<void>> {
   // Stream modes: text as it completes, and a heartbeat once a second of audio carrying
   // the tone levels for the page's tuning display. The heartbeat is the liveness beat
   // here, since no window will ever arrive while streaming.
-  source.on("text", (t) => {
-    streamText = (streamText + t.text).slice(-STREAM_TEXT_MAX);
-    broadcast({ kind: "text", mode: t.mode, text: t.text, at: t.at });
-  });
-  source.on("stream", (s) => {
-    watchdog?.beat();
-    broadcast({ kind: "stream", ...s });
-  });
-  source.on("sstv", (e) => onSstvEvent(e));
-  source.on("hell", (e) => onHellColumns(e));
-  // Each JTTY message as a station tag for the waterfall; its text came as `text`.
-  source.on("jtty", (m) => broadcast({ kind: "jtty-msg", hz: m.hz, snr: m.snr, text: m.text, complete: m.complete, at: m.at }));
+  wireStreamEvents(source, () => watchdog?.beat());
   source.on("decodes", (d) => onDecodedWindow(d, "flex.decodeDepth"));
 
   // The partner's slice, about a second ahead of the rest of the band.
@@ -2898,12 +2943,7 @@ async function startFlexSource(): Promise<() => Promise<void>> {
     // Landing on a WSPR frequency with an automatic mode running would mean an FT8
     // sequencer listening to beacons and CQing over them. The retune was the operator's;
     // stopping auto is the only safe reading of it.
-    if (status.subMode === "RTTY") rttyApply?.();
-    if (status.subMode === "CW") cwApply?.();
-    if (status.subMode === "PSK31") pskApply?.();
-    if (status.subMode === "OLIVIA") oliviaApply?.();
-    if (status.subMode === "HELL") hellApply?.();
-    if (status.subMode === "JTTY") jttyApply();
+    applyStreamTuning(status.subMode);
     if (status.subMode && NO_SEQUENCER_MODES.has(status.subMode)) {
       const a = activeAuto();
       if (a && a.state.mode !== "off") {
@@ -3393,6 +3433,7 @@ async function startIcomBridge(): Promise<() => Promise<void>> {
 
   const bridge = await startIcomSource({
     onLost,
+    onModeChanged: (mode) => icomModeChanged(mode),
     onDecodedWindow,
     broadcast,
     status,
@@ -3472,6 +3513,18 @@ async function startIcomBridge(): Promise<() => Promise<void>> {
   activeTxPower = op?.txPower ?? null;
   activeTx = bridge.transmitter;
   if (op?.pskUploader) pskUploader = op.pskUploader;
+
+  // The stream modes, which the Icom never had: RTTY, CW, PSK31, Olivia, SSTV, Hell and
+  // JTTY. The Icom reports no CW pitch, so the setting stands. The Icom hears itself
+  // transmit, so the stream decoder is not fed while it is keyed.
+  wireStreamTuning(bridge.source, () => null);
+  wireStreamEvents(bridge.source, () => watchdog?.beat());
+  bridge.source.muteStreamWhile(() => bridge.transmitter?.transmitting ?? false);
+  icomModeChanged = (mode) => {
+    status.subMode = mode;
+    applyStreamTuning(mode);
+  };
+  icomModeChanged(bridge.source.mode);
   if (!op) {
     console.warn(
       "[radio] Icom automatic modes are unavailable — see the transmit warning above",
@@ -5341,7 +5394,7 @@ async function main(): Promise<void> {
           streamMode === "JTTY"
             ? { mode: "JTTY" as const, text, centreHz: jttyTuning.txHz, shiftHz: 0, sideband: "USB" as const }
             : streamMode === "HELL"
-            ? { mode: "HELL" as const, text, centreHz: hellTuning.centreHz, shiftHz: 0, sideband: "USB" as const }
+            ? { mode: "HELL" as const, text, centreHz: hellTuning.centreHz, shiftHz: 0, sideband: "USB" as const, hellVariant: hellTuning.variant }
             : streamMode === "OLIVIA"
             ? {
                 mode: "OLIVIA" as const,
@@ -5387,7 +5440,7 @@ async function main(): Promise<void> {
               : streamMode === "OLIVIA"
                 ? oliviaDurationMs(text, { tones: oliviaTuning.tones, bandwidth: oliviaTuning.bandwidth, code: oliviaTuning.code })
                 : streamMode === "HELL"
-                  ? hellDurationMs(text)
+                  ? hellDurationMs(text, hellTuning.variant)
                   : streamMode === "JTTY"
                     ? jttyDurationMs(text)
                     : rttyDurationMs(text, { baud: rttyTuning.baud });
@@ -5442,8 +5495,8 @@ async function main(): Promise<void> {
         return;
       }
 
-      // POST /hell — move the Feld Hell carrier (Hz audio). Takes effect at once; the
-      // starting value lives in Settings (hell.centreHz).
+      // POST /hell — move the Hell carrier (Hz audio), or change the Hell mode. Takes effect
+      // at once; the starting values live in Settings (hell.centreHz, hell.variant).
       if (url.pathname === "/hell") {
         const body = await readJson(req);
         const centre = body.centreHz === undefined ? hellTuning.centreHz : Number(body.centreHz);
@@ -5451,6 +5504,11 @@ async function main(): Promise<void> {
           sendJson(res, 400, { error: "centreHz must be between 300 and 2800" });
           return;
         }
+        if (body.variant !== undefined && !isHellVariant(body.variant)) {
+          sendJson(res, 400, { error: `variant must be one of ${HELL_VARIANTS.map((v) => v.id).join(", ")}` });
+          return;
+        }
+        if (isHellVariant(body.variant)) hellTuning.variant = body.variant;
         hellTuning.centreHz = Math.round(centre);
         hellApply?.();
         broadcast({ kind: "status", status });

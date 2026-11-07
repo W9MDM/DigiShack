@@ -28,6 +28,8 @@ import { watchGuardFaults } from "./guard-alerts";
 import { activeStation } from "@/lib/station/scope";
 
 export interface IcomBridgeDeps {
+  /** The decoder moved to another mode, so the bridge can tune and report that mode. */
+  onModeChanged?(mode: string): void;
   onDecodedWindow(
     d: {
       windowStart: Date;
@@ -271,6 +273,7 @@ export async function startIcomSource(deps: IcomBridgeDeps): Promise<IcomBridge>
               ? ` (${guess.matched?.band} calling frequency)`
               : " (no known calling frequency nearby — defaulting to FT8)"),
         );
+        deps.onModeChanged?.(guess.mode);
       }
     }
     status.mode = source.mode;

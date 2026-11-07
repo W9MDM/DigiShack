@@ -167,7 +167,7 @@ export interface DigitalTransmitter {
   /** Prepared audio now (an SSTV picture): built at the transmitter's rate, capped, gated. */
   transmitAudio?(build: (sampleRate: number) => Float32Array, label: string, mode: DigitalMode, maxMs: number): Promise<TransmitOutcome>;
   transmitText?(req: {
-    /** RTTY, PSK31, Olivia and Feld Hell go out as audio; CW is handed to the radio's own keyer. */
+    /** RTTY, PSK31, Olivia, Hell and JTTY go out as audio; CW is handed to the radio's own keyer. */
     mode: "RTTY" | "CW" | "PSK31" | "OLIVIA" | "HELL" | "JTTY";
     text: string;
     centreHz: number;
@@ -185,6 +185,8 @@ export interface DigitalTransmitter {
     tones?: 2 | 4 | 8 | 16 | 32 | 64 | 128 | 256;
     bandwidth?: 125 | 250 | 500 | 1000 | 2000;
     code?: "olivia" | "contestia";
+    /** Hell: which of the Hell modes. Default Feld Hell. */
+    hellVariant?: "feld" | "fm105" | "fm245" | "hell80" | "slow" | "psk";
   }): Promise<TransmitOutcome>;
   unkey(): Promise<void>;
 }

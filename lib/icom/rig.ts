@@ -65,7 +65,14 @@ import { type LinkState } from "@/lib/radio/link-latency";
 import { fromCivMode, toCivMode } from "@/lib/radio/modes";
 import { IcomPorts } from "@/lib/icom/control-packets";
 import { IcomSerialStream } from "@/lib/icom/serial-stream";
-import { type Decode, DecodePipeline } from "@/lib/radio/decode-pipeline";
+import {
+  type Decode,
+  type DecodePipelineEvents,
+  DecodePipeline,
+  isStreamMode,
+  STREAM_HEARTBEAT_MS,
+  type StreamOptions,
+} from "@/lib/radio/decode-pipeline";
 import { UNREAD_RECEIVER, type ReceiverControls } from "@/lib/radio/receiver-controls";
 import {
   type SpectrumProfile,
@@ -114,6 +121,12 @@ export type IcomSourceEvents = {
    * difference between "wrong password" and "wrong port".
    */
   identified: [{ radioName: string; audioName: string }];
+  /** The stream modes, from the shared pipeline, as the FlexRadio path has them. */
+  text: DecodePipelineEvents["text"];
+  stream: DecodePipelineEvents["stream"];
+  sstv: DecodePipelineEvents["sstv"];
+  hell: DecodePipelineEvents["hell"];
+  jtty: DecodePipelineEvents["jtty"];
   /** From the shared pipeline, identical in shape to the FlexRadio path's. */
   decodes: [{ windowStart: Date; decodes: Decode[]; rms: number; decodeMs: number }];
   window: [
@@ -279,18 +292,113 @@ export class IcomSource
     this.pipeline.on("decodes", (d) => this.emit("decodes", d));
     this.pipeline.on("window", (w) => this.emit("window", w));
     this.pipeline.on("error", (e) => this.emit("error", e));
+    this.pipeline.on("text", (t) => this.emit("text", t));
+    this.pipeline.on("stream", (h) => this.emit("stream", h));
+    this.pipeline.on("sstv", (e) => this.emit("sstv", e));
+    this.pipeline.on("hell", (e) => this.emit("hell", e));
+    this.pipeline.on("jtty", (e) => this.emit("jtty", e));
+    this.digitalMode = opts.mode ?? "FT8";
   }
 
+  // THE STREAM MODES. RTTY, CW, PSK31, Olivia, SSTV, Hell and JTTY are decoded as a stream,
+  // not in windows, and until 1.280 only the FlexRadio source switched the pipeline over:
+  // here setMode handed every mode to the window schedule, so choosing Hell on an IC-7300
+  // set the label and ran nothing. The options are the same ones the FlexRadio source
+  // keeps, set by the bridge, and take effect at once while that mode is streaming.
+  private digitalMode: DigitalMode;
+  private rttyOptions: Extract<StreamOptions, { mode: "RTTY" }> = { mode: "RTTY", markHz: 2295, spaceHz: 2125 };
+  private cwOptions: Extract<StreamOptions, { mode: "CW" }> = { mode: "CW", pitchHz: 600 };
+  private pskOptions: Extract<StreamOptions, { mode: "PSK31" }> = { mode: "PSK31", centreHz: 1000 };
+  private oliviaOptions: Extract<StreamOptions, { mode: "OLIVIA" }> = { mode: "OLIVIA", centreHz: 1500, tones: 16, bandwidth: 500 };
+  private hellOptions: Extract<StreamOptions, { mode: "HELL" }> = { mode: "HELL", centreHz: 1000 };
+  /** While this says the radio is keyed, the stream decoder is not fed: it would read us. */
+  private keyedNow: () => boolean = () => false;
+
   get mode(): DigitalMode {
-    return this.pipeline.currentMode;
+    return this.digitalMode;
   }
 
   setMode(mode: DigitalMode): boolean {
-    return this.pipeline.setMode(mode);
+    if (mode === this.digitalMode) return false;
+    this.digitalMode = mode;
+    const opts = this.streamOptionsFor(mode);
+    if (opts) {
+      this.pipeline.setStream(opts);
+    } else {
+      this.pipeline.setStream(null);
+      this.pipeline.setMode(mode);
+      this.pipeline.start();
+    }
+    return true;
+  }
+
+  private streamOptionsFor(mode: DigitalMode): StreamOptions | null {
+    switch (mode) {
+      case "RTTY":
+        return this.rttyOptions;
+      case "CW":
+        return this.cwOptions;
+      case "PSK31":
+        return this.pskOptions;
+      case "OLIVIA":
+        return this.oliviaOptions;
+      case "HELL":
+        return this.hellOptions;
+      case "SSTV":
+        return { mode: "SSTV" };
+      case "JTTY":
+        return { mode: "JTTY" };
+      default:
+        return null;
+    }
+  }
+
+  setRttyOptions(opts: Extract<StreamOptions, { mode: "RTTY" }>): void {
+    this.rttyOptions = opts;
+    if (this.pipeline.streaming === "RTTY") this.pipeline.setStream(opts);
+  }
+
+  setCwOptions(opts: Extract<StreamOptions, { mode: "CW" }>): void {
+    this.cwOptions = opts;
+    if (this.pipeline.streaming === "CW") this.pipeline.setStream(opts);
+  }
+
+  setPskOptions(opts: Extract<StreamOptions, { mode: "PSK31" }>): void {
+    this.pskOptions = opts;
+    if (this.pipeline.streaming === "PSK31") this.pipeline.setStream(opts);
+  }
+
+  setOliviaOptions(opts: Extract<StreamOptions, { mode: "OLIVIA" }>): void {
+    this.oliviaOptions = opts;
+    if (this.pipeline.streaming === "OLIVIA") this.pipeline.setStream(opts);
+  }
+
+  setHellOptions(opts: Extract<StreamOptions, { mode: "HELL" }>): void {
+    this.hellOptions = opts;
+    if (this.pipeline.streaming === "HELL") this.pipeline.setStream(opts);
+  }
+
+  /**
+   * The Icom hears its own transmission (DAX goes silent on a FlexRadio, the Icom's audio
+   * stream does not), so a line of RTTY sent from here came back as received text. The
+   * stream decoder skips audio while this says we are keyed.
+   */
+  muteStreamWhile(keyed: () => boolean): void {
+    this.keyedNow = keyed;
+  }
+
+  /** Received audio, from the audio stream. A method so check:icom-streams can drive it without a radio. */
+  private takeAudio(samples: Float32Array, at: number): void {
+    this.emit("audio", { samples, at });
+    // The pipeline drops the guard-time tail of a window it has already taken; the
+    // display has no windows and a gap in it reads as a dead receiver. So both are
+    // fed and each decides for itself.
+    if (!(this.pipeline.streaming && this.keyedNow())) this.pipeline.push(samples);
+    this.spectrum.push(samples);
   }
 
   get periodMs(): number {
-    return this.pipeline.periodMs;
+    return isStreamMode(this.digitalMode) ? STREAM_HEARTBEAT_MS : this.pipeline.periodMs;
   }
 
   /**
@@ -437,14 +545,7 @@ export class IcomSource
     serial.on("error", (err) => this.emit("error", err));
     serial.on("frame", (f) => this.onCivFrame(f));
     audio.on("error", (err) => this.emit("error", err));
-    audio.on("audio", ({ samples, at }) => {
-      this.emit("audio", { samples, at });
-      // The pipeline drops the guard-time tail of a window it has already taken; the
-      // display has no windows and a gap in it reads as a dead receiver. So both are
-      // fed and each decides for itself.
-      this.pipeline.push(samples);
-      this.spectrum.push(samples);
-    });
+    audio.on("audio", ({ samples, at }) => this.takeAudio(samples, at));
 
     for (const s of [serial, audio]) {
       s.on("closed", ({ reason }) => {
