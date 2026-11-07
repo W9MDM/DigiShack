@@ -8,6 +8,7 @@ import {
   HELL_CHAR_COLUMNS,
   HELL_COLUMN_ELEMENTS,
   HELL_COLUMN_RATE,
+  HELL_PAPER_LEVEL,
   HELL_RX_ROWS,
   HELL_SIGNAL_DB,
   HELL_VARIANTS,
@@ -122,7 +123,23 @@ console.log("\nthe keyed carrier");
   const w = hellWaveform("RYRYRY EEE", { sampleRate: rate, centreHz: 1000 });
   ok(Math.abs(w.length / rate - hellDurationMs("RYRYRY EEE") / 1000) < 0.01, "the audio is as long as the columns");
   ok(Math.max(...w.map(Math.abs)) <= 1.0001, "and never over full scale");
-  ok(Math.abs(w[0]!) < 1e-6 && Math.abs(w[w.length - 1]!) < 1e-6, "silent at both ends: a space of paper either side");
+  ok(Math.abs(w[0]!) <= 2 * HELL_PAPER_LEVEL && Math.abs(w[w.length - 1]!) <= 2 * HELL_PAPER_LEVEL, "paper at both ends: a space either side, at the paper level");
+  // The FlexRadio skips an all-zero DAX packet (128 samples at 24 kHz) as "no audio", so a
+  // line with a packet's worth of exact silence in it stops the stream to the radio mid-line.
+  // That garbled K9XYZ's Feld Hell on 2026-11-06: dots every 16 ms in every column.
+  for (const id of ["feld", "fm105", "hell80", "slow", "psk"] as const) {
+    const line = hellWaveform("CQ  CQ DE KC9QRS . . K", { sampleRate: rate, centreHz: 1000, variant: id });
+    let zeroPackets = 0;
+    for (let p = 0; p + 128 <= line.length; p += 128) {
+      let allZero = true;
+      for (let k = p; k < p + 128 && allZero; k++) if (line[k] !== 0) allZero = false;
+      if (allZero) zeroPackets++;
+    }
+    ok(zeroPackets === 0, `${id}: no DAX packet of the line is all zeros (${zeroPackets})`);
+  }
+  const paper = hellWaveform("   ", { sampleRate: rate, centreHz: 1000 });
+  const paperPeak = Math.max(...paper.map(Math.abs));
+  ok(paperPeak > 0 && 20 * Math.log10(paperPeak) <= -79, `and paper is 80 dB down, not off (${(20 * Math.log10(paperPeak)).toFixed(0)} dBFS)`);
   // Width: the power more than 300 Hz from the carrier, through a plain DFT at a few points.
   const power = (f: number) => {
     let re = 0;

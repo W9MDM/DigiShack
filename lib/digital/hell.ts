@@ -207,6 +207,9 @@ export function isHellVariant(id: unknown): id is HellVariant {
   return typeof id === "string" && HELL_VARIANTS.some((v) => v.id === id);
 }
 
+/** The on-and-off modes' paper, as a fraction of full carrier: 80 dB down. See hellWaveform. */
+export const HELL_PAPER_LEVEL = 1e-4;
+
 export interface HellWaveformOptions {
   sampleRate: number;
   /** Carrier, Hz audio. Default 1000. FSK modes shift either side of it. */
@@ -276,9 +279,20 @@ export function hellWaveform(text: string, opts: HellWaveformOptions): Float32Ar
   const edge = (i: number) => (i < ramp ? 0.5 - 0.5 * Math.cos((Math.PI * i) / ramp) : i >= n - ramp ? 0.5 - 0.5 * Math.cos((Math.PI * (n - 1 - i)) / ramp) : 1);
 
   if (v.keying === "am") {
+    // Paper is not silence: the carrier sits HELL_PAPER_LEVEL (80 dB) down instead of off.
+    //
+    // The FlexRadio transmitter skips a DAX packet that is all zeros, because the radio reads
+    // a stream of digital zeros as "no audio" (lib/flex/tx.ts, streamAudio). Every other mode
+    // keeps its carrier up, but Feld Hell's paper is silence, and any run of two elements or
+    // more outlasts a 5.3 ms packet. So mid-line the stream to the radio stopped and started
+    // dozens of times a second, and each restart cost the radio's buffer a refill. On
+    // 2026-11-06 MikeShack received K9XYZ's Feld Hell as columns of dots about 16 ms apart,
+    // the right character speed with the insides gone; Slow Hell, whose elements are eight
+    // times longer, read fine. At 80 dB down paper is still paper on any receiver - a
+    // microwatt at 100 W - and the stream never stops.
     const key = shapedKeying(elements, rate, fs, n, (ink) => (ink ? 1 : 0));
     const w = (2 * Math.PI * fc) / fs;
-    for (let i = 0; i < n; i++) out[i] = amp * key[i]! * Math.sin(w * i);
+    for (let i = 0; i < n; i++) out[i] = amp * Math.max(key[i]!, HELL_PAPER_LEVEL) * Math.sin(w * i);
     return out;
   }
   if (v.keying === "fsk") {
@@ -491,7 +505,11 @@ export class HellDemodulator {
     return "";
   }
 
-  private endRowAm(m: number): void {
+  private endRowAm(level: number): void {
+    // Below -80 dBFS is silence, not signal. Real receive audio never gets that quiet (band
+    // noise is tens of dB above it), but a channel of digital silence does, and there the
+    // peak follower scaled our own -80 dB paper (HELL_PAPER_LEVEL) up to full ink.
+    const m = level < HELL_PAPER_LEVEL ? 0 : level;
     // Peak: up at once, down slowly. Floor: down fast, up slowly - it settles low in the
     // spread of the paper between elements, which is most of a page of text. Not at the
     // minimum: noise dips deep now and then, and a floor on the dips made noise alone read
