@@ -37,9 +37,18 @@ export const LOGGABLE_MODES: readonly string[] = [
   "OLIVIA",
   "CONTESTI",
   "HELL",
+  // Submodes stored as modes, as FT4 is, so each exports as its own ADIF SUBMODE.
+  ...["PSK63","PSK125","FSKH105","FSKH245","HELL80","SLOWHELL","PSKHELL"],
   "SSTV",
   "DIGITALVOICE",
 ];
+
+/**
+ * The modes the text-mode log bar logs (pages/api/digital/log.ts): the keyboard modes,
+ * with each Hell mode and PSK speed as its own ADIF submode. Not JTTY, which has no ADIF
+ * mode yet, and not SSTV, which logs from its picture.
+ */
+export const TEXT_LOG_MODES: readonly string[] = ["RTTY", "CW", "PSK31", "OLIVIA", "CONTESTI", "HELL", ...["PSK63","PSK125","FSKH105","FSKH245","HELL80","SLOWHELL","PSKHELL"]];
 
 const RST_STYLE_BY_MODE = new Map<string, RstStyle>([
   ["SSB", "RS"],
@@ -53,6 +62,13 @@ const RST_STYLE_BY_MODE = new Map<string, RstStyle>([
   ["OLIVIA", "RST"],
   ["CONTESTI", "RST"],
   ["HELL", "RST"],
+  ["PSK63", "RST"],
+  ["PSK125", "RST"],
+  ["FSKH105", "RST"],
+  ["FSKH245", "RST"],
+  ["HELL80", "RST"],
+  ["SLOWHELL", "RST"],
+  ["PSKHELL", "RST"],
   ["FT8", "DB"],
   ["FT4", "DB"],
   ["FT2", "DB"],
@@ -75,6 +91,13 @@ const DIGITAL_MODES = new Set([
   "OLIVIA",
   "CONTESTI",
   "HELL",
+  "PSK63",
+  "PSK125",
+  "FSKH105",
+  "FSKH245",
+  "HELL80",
+  "SLOWHELL",
+  "PSKHELL",
 ]);
 
 export function isLoggableMode(mode: string): boolean {

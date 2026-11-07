@@ -45,6 +45,7 @@ import { withPageAuth } from "@/lib/auth/guard";
 import { bridgeWsUrl } from "@/lib/bridge/ws-url";
 import { ApiError, apiGet, apiPatch, apiPost, useApi } from "@/lib/client/api";
 import { hellVariant } from "@/lib/digital/hell";
+import { QsoBar } from "@/components/digital/QsoBar";
 import { useCan } from "@/lib/client/session";
 import { CONNECT_TIMEOUT_MS, FIRST_BACKOFF_MS, linkLabel, nextBackoff } from "@/lib/client/socket-retry";
 import { useDistanceUnit } from "@/lib/client/use-distance-unit";
@@ -968,6 +969,38 @@ export default function DigitalPage({ wsUrl }: Props) {
     }
   }, []);
   const decodingAs = status?.subMode ?? status?.mode ?? "—";
+
+  /**
+   * The keyboard modes' log: the mode as the log stores it, so each exports as its own ADIF
+   * submode, and the signal's frequency, dial plus carrier, as fldigi logs it. Null for the
+   * modes the bar does not cover (JTTY has no ADIF mode yet; the windowed modes log
+   * themselves; SSTV logs from its picture).
+   */
+  const textLog = useMemo((): { mode: string; label: string; freqHz: number | null } | null => {
+    const dial = status?.dialFrequency ?? null;
+    const at = (offset: number | undefined) => (dial === null ? null : dial + (offset ?? 0));
+    switch (decodingAs) {
+      case "HELL": {
+        const v = hellVariant(status?.hell?.variant);
+        const mode = { feld: "HELL", fm105: "FSKH105", fm245: "FSKH245", hell80: "HELL80", slow: "SLOWHELL", psk: "PSKHELL" }[v.id];
+        return { mode, label: v.label, freqHz: at(status?.hell?.centreHz) };
+      }
+      case "RTTY":
+        return { mode: "RTTY", label: "RTTY", freqHz: at(status?.rtty?.centreHz) };
+      case "CW":
+        return { mode: "CW", label: "CW", freqHz: dial };
+      case "PSK31": {
+        const speed = status?.psk?.speed ?? 31;
+        return { mode: `PSK${speed === 31 ? 31 : speed === 63 ? 63 : 125}`, label: `PSK${speed}`, freqHz: at(status?.psk?.centreHz) };
+      }
+      case "OLIVIA":
+        return status?.olivia?.code === "contestia"
+          ? { mode: "CONTESTI", label: "Contestia", freqHz: at(status?.olivia?.centreHz) }
+          : { mode: "OLIVIA", label: "Olivia", freqHz: at(status?.olivia?.centreHz) };
+      default:
+        return null;
+    }
+  }, [decodingAs, status?.dialFrequency, status?.hell, status?.rtty, status?.psk, status?.olivia]);
   // The band buttons keep the operator on the mode being decoded; FT8 until the radio says.
   const tuneMode: DigitalMode = (DIGITAL_MODES as readonly string[]).includes(decodingAs)
     ? (decodingAs as DigitalMode)
@@ -1379,6 +1412,7 @@ export default function DigitalPage({ wsUrl }: Props) {
               {decodingAs === "SSTV" ? (
                 <SstvPanel ref={sstvPanel} stats={sstvStats} myCall={myCall} canSend={canSwitch} tx={sstvTx} dialHz={status?.dialFrequency ?? null} />
               ) : decodingAs === "HELL" ? (
+                <>
                 <HellPanel
                   ref={hellPanel}
                   stats={hellStats}
@@ -1395,7 +1429,20 @@ export default function DigitalPage({ wsUrl }: Props) {
                   onSend={(text) => void sendRtty(text)}
                   onClear={clearStream}
                 />
+                {textLog && (
+                  <QsoBar
+                    logMode={textLog.mode}
+                    modeLabel={textLog.label}
+                    freqHz={textLog.freqHz}
+                    myCall={myCall}
+                    canSend={canSwitch}
+                    transmitting={transmitting}
+                    onSend={(text) => void sendRtty(text)}
+                  />
+                )}
+                </>
               ) : STREAM_MODES.has(decodingAs) ? (
+                <>
                 <StreamPanel
                   mode={decodingAs}
                   text={streamText}
@@ -1418,6 +1465,18 @@ export default function DigitalPage({ wsUrl }: Props) {
                   onSend={(text) => void sendRtty(text)}
                   onClear={clearStream}
                 />
+                {textLog && (
+                  <QsoBar
+                    logMode={textLog.mode}
+                    modeLabel={textLog.label}
+                    freqHz={textLog.freqHz}
+                    myCall={myCall}
+                    canSend={canSwitch}
+                    transmitting={transmitting}
+                    onSend={(text) => void sendRtty(text)}
+                  />
+                )}
+                </>
               ) : (
                 <>
                   {/* JS8: the frames are the rows below; the messages they join into sit above,

@@ -111,6 +111,7 @@ console.log("\nno timer in the bridge is unaccounted for");
     "60 * 60_000": "listed as decode-prune",
     "MIN_QUERY_INTERVAL_MS": "listed as pskreporter",
     "5_000": "WSJT-X heartbeat watch — reacts to a connection going quiet, not scheduled work",
+    "200": "Hell transmit echo — paints the line being sent, and only exists while one is",
   };
 
   const src = readFileSync("services/radio/index.ts", "utf8");

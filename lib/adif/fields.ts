@@ -24,12 +24,21 @@ const TO_ADIF: Record<string, AdifMode> = {
   JS8: { mode: "JS8" },
   RTTY: { mode: "RTTY" },
   PSK31: { mode: "PSK", submode: "PSK31" },
+  PSK63: { mode: "PSK", submode: "PSK63" },
+  PSK125: { mode: "PSK", submode: "PSK125" },
   JT65: { mode: "JT65" },
   JT9: { mode: "JT9" },
   MSK144: { mode: "MSK144" },
   OLIVIA: { mode: "OLIVIA" },
   CONTESTI: { mode: "CONTESTI" },
+  // Feld Hell is plain HELL; the others are ADIF's HELL submodes. fldigi's FSK-Hell-105
+  // and -245 (the North American nets' FM Hell-105) are FSKH105 and FSKH245.
   HELL: { mode: "HELL" },
+  FSKH105: { mode: "HELL", submode: "FSKH105" },
+  FSKH245: { mode: "HELL", submode: "FSKH245" },
+  HELL80: { mode: "HELL", submode: "HELL80" },
+  SLOWHELL: { mode: "HELL", submode: "SLOWHELL" },
+  PSKHELL: { mode: "HELL", submode: "PSKHELL" },
   SSTV: { mode: "SSTV" },
   DIGITALVOICE: { mode: "DIGITALVOICE" },
 };
@@ -55,6 +64,8 @@ export function fromAdifMode(mode: string, submode?: string): string {
     if (s === "FT4") return "FT4";
     if (s === "FT2") return "FT2";
     if (s === "PSK31") return "PSK31";
+    if (s === "PSK63" || s === "PSK125") return s;
+    if (m === "HELL" && ["FSKH105", "FSKH245", "HELL80", "SLOWHELL", "PSKHELL"].includes(s)) return s;
     if (s === "JS8") return "JS8";
     if (s === "USB" || s === "LSB") return "SSB";
   }

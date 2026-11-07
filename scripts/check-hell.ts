@@ -17,6 +17,7 @@ import {
   hellDurationMs,
   hellGlyphColumns,
   hellHasGlyph,
+  hellPaintedColumns,
   hellWaveform,
 } from "@/lib/digital/hell";
 
@@ -240,6 +241,34 @@ console.log("\nthe other Hell modes");
     const mean = cols.reduce((a, b) => a + b, 0) / cols.length;
     ok(worst < HELL_SIGNAL_DB && mean < 110, `${v.label} on noise alone: never a signal (peak ${worst.toFixed(1)} dB), page mostly paper (mean ${mean.toFixed(0)})`);
   }
+}
+
+console.log("\nwhat we send, painted in line with what we receive");
+{
+  // The bridge paints our own line with hellPaintedColumns. It has to look like the
+  // receiver's painting of that line, or the tape would read as two different hands.
+  const text = "CQ DE KC9QRS";
+  const echo = hellPaintedColumns(text);
+  ok(echo.length === hellColumns(text).length * HELL_RX_ROWS, `${HELL_RX_ROWS} rows a column, a column for every column sent`);
+  ok(echo.every((v) => v === 0 || v === 255), "full ink or paper, nothing between");
+  const rate = 24_000;
+  const d = new HellDemodulator({ sampleRate: rate, centreHz: 1000 });
+  d.feed(hellWaveform(text, { sampleRate: rate, centreHz: 1000, amplitude: 0.5 }));
+  const heard = d.takeColumns()!;
+  // Best alignment of the received page against the echo, within a column.
+  let best = 0;
+  for (let lag = -HELL_RX_ROWS; lag <= HELL_RX_ROWS; lag++) {
+    let agree = 0;
+    let n = 0;
+    for (let i = 0; i < echo.length; i++) {
+      const h = heard[i + lag];
+      if (h === undefined) continue;
+      n++;
+      if (h >= 128 === (echo[i] === 255)) agree++;
+    }
+    best = Math.max(best, n ? agree / n : 0);
+  }
+  ok(best > 0.95, `and it matches what the receiver paints from the same line (${(best * 100).toFixed(1)}% of rows)`);
 }
 
 console.log("");

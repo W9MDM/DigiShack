@@ -25,43 +25,48 @@ export interface HellStats {
   signal: boolean;
 }
 
-export type HellMessage = { kind: "hell-cols"; rows: number; data: string } | { kind: "hell-backlog"; rows: number; data: string };
+/** `tx` marks what we sent: on a live message, all of it; on the backlog, a byte a column. */
+export type HellMessage =
+  | { kind: "hell-cols"; rows: number; data: string; tx?: boolean }
+  | { kind: "hell-backlog"; rows: number; data: string; tx?: string };
 
 export interface HellPanelHandle {
   receive: (msg: HellMessage) => void;
 }
 
-/** Columns along a line: twelve seconds, thirty characters. */
-const LINE_COLS = 210;
+/**
+ * Columns along a line, by the Size picker. Fewer columns a line means each is wider on the
+ * screen, so the letters grow: 210 is twelve seconds of Feld Hell, thirty characters.
+ */
+const LINE_COLS_BY_SIZE = { S: 210, M: 150, L: 105 } as const;
+type HellSize = keyof typeof LINE_COLS_BY_SIZE;
 /** Lines on the page. */
 const LINES = 6;
-/** Canvas pixels across per column: a 5x7 glyph comes out about as wide as it is tall. */
-const COL_PX = 3;
+/**
+ * Canvas pixels across per column. A glyph is 5 columns by 24 painted rows, so 5 makes it
+ * about square. It was 3, and on another station's page the letters read as a picket fence.
+ */
+const COL_PX = 5;
+
+/** Per-viewer preferences, kept in this browser. */
+const PREFS_KEY = "digishack.hellPage";
 /** Paper between lines. */
 const GAP_PX = 4;
 
 /**
  * Ink colour for a column value (0 paper .. 255 ink). By day a warm white, as it always was;
  * at night amber on black — red and green only — so the page does not light up the room.
- * The red channel is the ink value in both, which is what lets recolourHell swap a painted
- * page from one to the other without the column data.
  */
 export function hellInk(v: number, night: boolean): [number, number, number] {
   return night ? [v, Math.round(v * 0.45), 0] : [v, v, Math.round(v * 0.9)];
 }
 
-function recolourHell(c: HTMLCanvasElement, night: boolean): void {
-  const g = c.getContext("2d");
-  if (!g || c.width === 0 || c.height === 0) return;
-  const img = g.getImageData(0, 0, c.width, c.height);
-  const d = img.data;
-  for (let i = 0; i < d.length; i += 4) {
-    const [r, gg, b] = hellInk(d[i]!, night);
-    d[i] = r;
-    d[i + 1] = gg;
-    d[i + 2] = b;
-  }
-  g.putImageData(img, 0, 0);
+/**
+ * What we sent, painted in red-orange among what we received, so the tape reads as the
+ * conversation. The same by day and at night: red keeps a dark room dark.
+ */
+export function hellTxInk(v: number): [number, number, number] {
+  return [v, Math.round(v * 0.18), Math.round(v * 0.08)];
 }
 
 export const HellPanel = forwardRef<
@@ -86,88 +91,158 @@ export const HellPanel = forwardRef<
   }
 >(function HellPanel({ stats, hell, band, text, canTune, canSend, myCall, transmitting, error, onTune, onTuneSpot, onSend, onClear }, ref) {
   const mode = hellVariant(hell?.variant);
+  const [size, setSize] = useState<HellSize>("M");
+  /** 0..100: how much of the faint end is pushed down to paper. */
+  const [contrast, setContrast] = useState(30);
+  const lineCols = useRef<number>(LINE_COLS_BY_SIZE.M);
+  const floor = useRef(0.18);
+  useEffect(() => {
+    try {
+      const p = JSON.parse(localStorage.getItem(PREFS_KEY) ?? "null") as { size?: HellSize; contrast?: number } | null;
+      if (p?.size && p.size in LINE_COLS_BY_SIZE) setSize(p.size);
+      if (typeof p?.contrast === "number") setContrast(Math.max(0, Math.min(100, p.contrast)));
+    } catch {
+      /* no saved preferences */
+    }
+  }, []);
+  useEffect(() => {
+    floor.current = (contrast / 100) * 0.6;
+    try {
+      localStorage.setItem(PREFS_KEY, JSON.stringify({ size, contrast }));
+    } catch {
+      /* this session only */
+    }
+  }, [size, contrast]);
   const cps = mode.columnRate / 7;
   const canvas = useRef<HTMLCanvasElement>(null);
-  const cursor = useRef({ col: 0, line: 0, rows: 28 });
   const [draft, setDraft] = useState("");
   const [painted, setPainted] = useState(false);
   const night = useNightMode();
   const nightRef = useRef(night);
-  // A theme change re-inks what is already on the page.
-  useEffect(() => {
-    if (nightRef.current === night) return;
-    nightRef.current = night;
-    if (canvas.current) recolourHell(canvas.current, night);
-  }, [night]);
+
+  // THE TAPE. The page is one strip of paper wrapped into LINES lines: a new column goes in
+  // at the bottom right and everything before it slides left, the start of each line
+  // wrapping up onto the end of the one above. Text never jumps to a new line; it moves
+  // through the page as tape moves through a printer. MikeShack does this, and against it
+  // the old page - written left to right, a line at a time - read as a stutter.
+  //
+  // So the page keeps the COLUMNS, not pixels, and is redrawn from them: which is also why
+  // contrast and the day and night inks apply to the whole page at once.
+  const tape = useRef<{ rows: number; cols: Uint8Array[]; tx: boolean[] }>({ rows: 28, cols: [], tx: [] });
+  const frame = useRef<number | null>(null);
 
   const lineHeight = (rows: number) => rows * 2 + GAP_PX;
 
-  const clear = useCallback(() => {
+  const redraw = useCallback(() => {
+    frame.current = null;
     const c = canvas.current;
     const g = c?.getContext("2d");
     if (!c || !g) return;
-    const rows = cursor.current.rows;
-    c.width = LINE_COLS * COL_PX;
-    c.height = LINES * lineHeight(rows);
-    g.fillStyle = "#000";
-    g.fillRect(0, 0, c.width, c.height);
-    cursor.current = { col: 0, line: 0, rows };
-    setPainted(false);
+    const { rows, cols, tx } = tape.current;
+    const per = lineCols.current;
+    const lh = lineHeight(rows);
+    const w = per * COL_PX;
+    const h = LINES * lh;
+    if (c.width !== w || c.height !== h) {
+      c.width = w;
+      c.height = h;
+    }
+    const img = g.createImageData(w, h);
+    const d = img.data;
+    for (let i = 3; i < d.length; i += 4) d[i] = 255;
+    const k = floor.current;
+    const nightNow = nightRef.current;
+    // The newest column sits at the very end of the last line; column j back from it is
+    // j places to the left, wrapping up a line at the left edge.
+    const shown = Math.min(cols.length, per * LINES);
+    for (let j = 0; j < shown; j++) {
+      const idx = cols.length - 1 - j;
+      const col = cols[idx]!;
+      const sent = tx[idx]!;
+      const slot = per * LINES - 1 - j;
+      const line = Math.floor(slot / per);
+      const x0 = (slot % per) * COL_PX;
+      const y0 = line * lh;
+      for (let r = 0; r < rows; r++) {
+        // Contrast: the faint end, mostly noise, goes to paper and the rest is stretched
+        // back to full. What we sent is clean and drawn as it is.
+        const raw = col[r]!;
+        const v = sent ? raw : Math.round(Math.max(0, Math.min(1, (raw / 255 - k) / (1 - k))) * 255);
+        if (v === 0) continue;
+        const [ir, ig, ib] = sent ? hellTxInk(v) : hellInk(v, nightNow);
+        // Bottom row at the bottom, twice over, one copy above the other.
+        for (const copy of [0, 1]) {
+          const y = y0 + copy * rows + (rows - 1 - r);
+          let i = (y * w + x0) * 4;
+          for (let x = 0; x < COL_PX; x++, i += 4) {
+            d[i] = ir;
+            d[i + 1] = ig;
+            d[i + 2] = ib;
+          }
+        }
+      }
+    }
+    g.putImageData(img, 0, 0);
   }, []);
 
+  /** At most once a frame: columns arrive in handfuls several times a second. */
+  const schedule = useCallback(() => {
+    if (frame.current === null) frame.current = requestAnimationFrame(redraw);
+  }, [redraw]);
+
+  useEffect(() => () => {
+    if (frame.current !== null) cancelAnimationFrame(frame.current);
+  }, []);
+
+  const clear = useCallback(() => {
+    tape.current = { rows: tape.current.rows, cols: [], tx: [] };
+    setPainted(false);
+    schedule();
+  }, [schedule]);
+
   useEffect(() => clear(), [clear]);
+  // A new size is a new width of paper; the tape is kept and simply rewraps.
+  useEffect(() => {
+    lineCols.current = LINE_COLS_BY_SIZE[size];
+    schedule();
+  }, [size, schedule]);
+  // Contrast and the theme redraw what is already there.
+  useEffect(() => {
+    nightRef.current = night;
+    schedule();
+  }, [night, contrast, schedule]);
 
   const paint = useCallback(
-    (rows: number, data: Uint8Array) => {
-      const c = canvas.current;
-      const g = c?.getContext("2d");
-      if (!c || !g) return;
-      if (rows !== cursor.current.rows) {
-        cursor.current.rows = rows;
-        clear();
+    (rows: number, data: Uint8Array, tx: (column: number) => boolean = () => false) => {
+      const t = tape.current;
+      if (rows !== t.rows) tape.current = { rows, cols: [], tx: [] };
+      const keep = LINE_COLS_BY_SIZE.S * LINES;
+      for (let off = 0, c = 0; off + rows <= data.length; off += rows, c++) {
+        tape.current.cols.push(data.slice(off, off + rows));
+        tape.current.tx.push(tx(c));
       }
-      const lh = lineHeight(rows);
-      const img = g.createImageData(COL_PX, rows * 2);
-      for (let off = 0; off + rows <= data.length; off += rows) {
-        const cur = cursor.current;
-        if (cur.col >= LINE_COLS) {
-          cur.col = 0;
-          if (cur.line < LINES - 1) cur.line++;
-          else {
-            // The page is full: everything up a line, a clean line at the bottom.
-            g.drawImage(c, 0, -lh);
-            g.fillStyle = "#000";
-            g.fillRect(0, (LINES - 1) * lh, c.width, lh);
-          }
-        }
-        // The column, bottom row at the bottom, twice over.
-        for (let r = 0; r < rows; r++) {
-          const [ir, ig, ib] = hellInk(data[off + r]!, nightRef.current);
-          for (const copy of [0, 1]) {
-            const y = copy * rows + (rows - 1 - r);
-            for (let x = 0; x < COL_PX; x++) {
-              const i = (y * COL_PX + x) * 4;
-              img.data[i] = ir;
-              img.data[i + 1] = ig;
-              img.data[i + 2] = ib;
-              img.data[i + 3] = 255;
-            }
-          }
-        }
-        g.putImageData(img, cur.col * COL_PX, cur.line * lh);
-        cur.col++;
+      const extra = tape.current.cols.length - keep;
+      if (extra > 0) {
+        tape.current.cols.splice(0, extra);
+        tape.current.tx.splice(0, extra);
       }
       setPainted(true);
+      schedule();
     },
-    [clear],
+    [schedule],
   );
 
   useImperativeHandle(
     ref,
     () => ({
       receive: (msg: HellMessage) => {
-        if (msg.kind === "hell-backlog") clear();
-        paint(msg.rows, decodeBase64Bins(msg.data));
+        if (msg.kind === "hell-backlog") {
+          clear();
+          const flags = msg.tx ? decodeBase64Bins(msg.tx) : null;
+          paint(msg.rows, decodeBase64Bins(msg.data), (c) => flags?.[c] === 1);
+        } else {
+          paint(msg.rows, decodeBase64Bins(msg.data), () => msg.tx === true);
+        }
       },
     }),
     [clear, paint],
@@ -255,8 +330,23 @@ export const HellPanel = forwardRef<
           </p>
         )}
       </div>
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-fg-muted">
+        <span className="flex items-center gap-1">
+          Size
+          {(Object.keys(LINE_COLS_BY_SIZE) as HellSize[]).map((z) => (
+            <Button key={z} size="sm" variant={size === z ? "primary" : "ghost"} onClick={() => setSize(z)} title={`${LINE_COLS_BY_SIZE[z]} columns a line`}>
+              {z}
+            </Button>
+          ))}
+        </span>
+        <label className="flex items-center gap-2">
+          Contrast
+          <input type="range" min={0} max={100} value={contrast} onChange={(e) => setContrast(Number(e.target.value))} aria-label="Contrast: how much faint noise is drawn as paper" />
+        </label>
+        <span className="text-fg-subtle">The page scrolls like tape: the newest column is at the bottom right.</span>
+      </div>
       <p className="text-xs text-fg-subtle">
-        Read whichever copy is whole. Lines that slope mean the two stations' clocks differ; the text still reads.
+        Read whichever copy is whole. Lines that slope mean the two stations' clocks differ; the text still reads. What you send is painted in red as it goes out.
       </p>
       {canTune && <HellWhere band={band} onTuneSpot={onTuneSpot} />}
 

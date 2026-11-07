@@ -35,7 +35,7 @@ alongside the ones every station sets.
 - [PSK31](#psk31) — 3 settings, 3 advanced
 - [CW](#cw) — 3 settings, 3 advanced
 - [WSPR](#wspr) — 1 setting
-- [Digital modes](#digital-modes) — 11 settings, 9 advanced
+- [Digital modes](#digital-modes) — 12 settings, 10 advanced
 - [DigiShack bridge](#digishack-bridge) — 4 settings, 4 advanced
 - [External decoder (WSJT-X)](#external-decoder-wsjt-x) — 3 settings, 2 advanced
 - [FlexRadio (direct)](#flexradio-direct) — 15 settings, 12 advanced
@@ -242,7 +242,8 @@ Where decodes and rig status come from. `wsjtx` takes them from an external deco
 | Setting | Key | Type | Default | What it does |
 |---|---|---|---|---|
 | JTTY transmit offset (Hz audio) *(advanced)* | `jtty.txHz` | number | `1500` | Where JTTY transmits: its lowest tone, Hz above the dial, as WSJT-X's Tx frequency. 1500 is WSJT-X's default. The receiver decodes every station in the passband whatever this is; a click on the waterfall or on a station's tag moves it for the session. |
-| Feld Hell carrier (Hz audio) *(advanced)* | `hell.centreHz` | number | `1000` | Where the Hell receiver paints and the transmitter keys when the HELL chip is pressed, Hz above the dial. 1000 puts a 14.062 dial on the Feld Hell Club calling frequency, 14.063. A click on the waterfall moves it for the session. |
+| Hell mode *(advanced)* | `hell.variant` | select | `feld` | Which Hell mode the HELL chip starts in. Feld Hell keys a carrier on and off; FM Hell-105 shifts it 55 Hz, as fldigi does, and is what the North American nets run. The panel's picker, and the Tune buttons on its list of nets, change it for the session. |
+| Hell carrier (Hz audio) *(advanced)* | `hell.centreHz` | number | `1000` | Where the Hell receiver paints and the transmitter keys when the HELL chip is pressed, Hz above the dial. 1000 puts a 14.062 dial on the Feld Hell Club calling frequency, 14.063. A click on the waterfall moves it for the session. |
 | SSTV transmit power (%) | `sstv.powerPct` | number | `50` | RF power for sending an SSTV picture, which is one to five minutes of steady carrier. Lowered to this for the picture if set higher, never raised, and put back afterwards. |
 | Decode source | `digital.source` | select | `wsjtx` | An external decoder over the WSJT-X UDP protocol ("wsjtx"), direct to a FlexRadio ("flex"), or direct to a networked Icom over RS-BA1 ("icom"). The bridge reads this at startup. "omega" is still accepted and means "wsjtx" — that was a reference to one particular fork of WSJT-X, never to anything DigiShack does. |
 | Time server *(advanced)* | `time.ntpServer` | text | `pool.ntp.org` | Where to ask what time it is, over SNTP. FT8 tolerates about a second of clock error before decoding degrades and other stations stop decoding you — and DigiShack cannot set the system clock (that needs elevation, and in a container it is the host's clock anyway), so instead it measures the difference and compensates internally. Blank disables the check entirely, which leaves you relying on the decode-median estimate that needs eight decodes before it can say anything. |

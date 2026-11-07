@@ -32,7 +32,8 @@ and a backup moves the whole installation.
 | [PSK31](psk31.md) | PSK31: a decoder with AFC and a squelch on the stream pipeline, and sending |
 | [Olivia](olivia.md) | Olivia: the MFSK keyboard mode with its block code, on the stream pipeline, and sending |
 | [SSTV](sstv.md) | SSTV: receiving pictures in nine modes, live on the page, saved to a gallery |
-| [Feld Hell](hell.md) | Feld Hell: Hellschreiber painted live on the page, column by column, and sending |
+| [Hell](hell.md) | Hellschreiber in six modes (Feld, FM Hell-105 and -245, Hell 80, Slow, PSK), painted live as a scrolling tape, the North American nets, and sending |
+| [Text-mode exchange and log](text-mode-log.md) | F1-F8 lines with the calls filled in, and logging RTTY, CW, PSK, Olivia and Hell with their proper ADIF modes |
 | [JTTY](jtty.md) | JTTY: the WSJT keyboard mode for RTTY contesters, every station in the passband, and sending |
 | [Icom protocol](icom-protocol.md) | The RS-BA1 wire format, for anyone working on the driver |
 | [LoTW upload](lotw-upload.md) | Signing and uploading to LoTW from the callsign certificate, without TQSL |

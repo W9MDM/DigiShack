@@ -127,6 +127,20 @@ export function hellGlyphColumns(ch: string): boolean[][] {
   return cols;
 }
 
+/**
+ * A line as the page paints it: HELL_RX_ROWS bytes a column, bottom row first, two rows an
+ * element, 255 ink and 0 paper. The bridge paints what we send with this, so it lines up
+ * with what the receiver paints.
+ */
+export function hellPaintedColumns(text: string): Uint8Array {
+  const cols = hellColumns(text);
+  const out = new Uint8Array(cols.length * HELL_RX_ROWS);
+  cols.forEach((col, c) => {
+    for (let r = 0; r < HELL_RX_ROWS; r++) out[c * HELL_RX_ROWS + r] = col[Math.floor(r / 2)] ? 255 : 0;
+  });
+  return out;
+}
+
 /** Whether the font has this character; others are sent as a question mark. */
 export function hellHasGlyph(ch: string): boolean {
   return ch.toUpperCase() in GLYPHS;

@@ -77,7 +77,11 @@ put the carrier between the two edge markers. FSK: the markers are the two tones
 and paper above; put the signal's tones on them. A station 60 Hz off still paints in Feld
 Hell; FSK wants to be within about 10 Hz.
 
-**The page.** Each column is painted twice, one copy above the other. The two stations'
+**The page.** It scrolls like tape: the newest column comes in at the bottom right and
+everything before it slides left, wrapping up a line at the left edge. **Size** (S, M, L)
+sets how many columns a line holds, so the letters grow; **Contrast** draws the faint end,
+mostly noise, as paper. Both apply to the whole page at once and are kept in this browser.
+Each column is painted twice, one copy above the other. The two stations'
 clocks are not the same, so a character can start part way up a column; between the two
 copies there is always a whole one. Read whichever copy is complete. Lines that slope mean
 the clocks differ, and the text still reads.
@@ -95,8 +99,15 @@ when clean, and 94-100% at 0 dB S/N in 2.5 kHz.
 A line at a time, and Enter sends it. Feld Hell and FM Hell run at 2.5 characters a second,
 Hell 80 at 5 and Slow Hell at about one every three seconds. Lowercase goes out as capitals.
 The line goes through the same gate, key, stream and unkey as RTTY and PSK31. A line longer
-than 40 seconds of air (two minutes in Slow Hell) is refused before anything keys. **CQ** and
-**73** send the usual lines with your callsign.
+than 40 seconds of air (two minutes in Slow Hell) is refused before anything keys.
+
+What you send is painted into the page in red as it goes out, at the mode's speed, in line
+with what you receive, so the page reads as the conversation. Received columns are held back
+while you transmit: a FlexRadio's receive audio is silent then, and the Icom's receiver is
+not fed.
+
+Under the panel, F1-F8 send the usual exchange with both calls and your report filled in, and
+the contact logs as its own ADIF Hell submode. See [text-mode-log.md](text-mode-log.md).
 
 On the Icom the receiver is not fed while the radio transmits, because the Icom hears its
 own signal and would paint it.
@@ -112,6 +123,5 @@ own signal and would paint it.
 ## Not yet
 
 - A slant control to straighten lines from a station whose clock is off.
-- Logging a contact from the panel: Hell is logged as mode HELL, by hand.
 - Printing to a receipt printer, as the original machines printed to tape.
 - An on-air test against a real station in any mode.

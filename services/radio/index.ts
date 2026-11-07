@@ -172,7 +172,16 @@ import { RTTY_CENTRE_HZ, RTTY_SHIFT_HZ, rttyDurationMs, rttyTones } from "@/lib/
 import { cwDurationMs } from "@/lib/digital/cw";
 import { PSK31_CENTRE_HZ, psk31DurationMs, type PskSpeed } from "@/lib/digital/psk31";
 import { OLIVIA_MODES, oliviaDurationMs, type OliviaBandwidth, type OliviaCode, type OliviaTones } from "@/lib/digital/olivia";
-import { HELL_CENTRE_HZ, HELL_COLUMN_RATE, HELL_VARIANTS, hellDurationMs, isHellVariant, type HellVariant } from "@/lib/digital/hell";
+import {
+  HELL_CENTRE_HZ,
+  HELL_COLUMN_RATE,
+  HELL_RX_ROWS,
+  HELL_VARIANTS,
+  hellDurationMs,
+  hellPaintedColumns,
+  isHellVariant,
+  type HellVariant,
+} from "@/lib/digital/hell";
 import { JTTY_DEFAULT_HZ, jttyDurationMs } from "@/lib/digital/jtty";
 import { isStreamMode, type Js8DecodeExtra } from "@/lib/radio/decode-pipeline";
 import {
@@ -1514,15 +1523,60 @@ function jttyApply(): void {
  * on the page so far rather than a blank one. 17.5 columns a second, 28 bytes each.
  */
 const HELL_BACKLOG_COLUMNS = Math.round(HELL_COLUMN_RATE * 90);
-let hellBacklog: { rows: number; data: Buffer } | null = null;
+/** `tx` has a byte a column: 1 where the column is one we sent, painted in its own colour. */
+let hellBacklog: { rows: number; data: Buffer; tx: Buffer } | null = null;
 
-function onHellColumns(e: { rows: number; data: Uint8Array; at: number }): void {
+/**
+ * Columns for the page, received or sent. While we transmit, received columns are dropped
+ * and the page gets ours instead, so the tape reads as the conversation: a FlexRadio's DAX
+ * is silent while keyed, and the Icom's receiver is not fed, so nothing is lost.
+ */
+function onHellColumns(e: { rows: number; data: Uint8Array; at: number }, tx = false): void {
+  if (!tx && hellEcho) return;
   const add = Buffer.from(e.data);
-  const prev = hellBacklog && hellBacklog.rows === e.rows ? hellBacklog.data : Buffer.alloc(0);
-  const all = Buffer.concat([prev, add]);
+  const flags = Buffer.alloc(Math.floor(add.length / e.rows), tx ? 1 : 0);
+  const same = hellBacklog && hellBacklog.rows === e.rows;
+  const all = Buffer.concat([same ? hellBacklog!.data : Buffer.alloc(0), add]);
+  const allTx = Buffer.concat([same ? hellBacklog!.tx : Buffer.alloc(0), flags]);
   const keep = HELL_BACKLOG_COLUMNS * e.rows;
-  hellBacklog = { rows: e.rows, data: all.length > keep ? all.subarray(all.length - keep) : all };
-  broadcast({ kind: "hell-cols", rows: e.rows, data: add.toString("base64"), at: e.at });
+  hellBacklog = {
+    rows: e.rows,
+    data: all.length > keep ? all.subarray(all.length - keep) : all,
+    tx: allTx.length > HELL_BACKLOG_COLUMNS ? allTx.subarray(allTx.length - HELL_BACKLOG_COLUMNS) : allTx,
+  };
+  broadcast({ kind: "hell-cols", rows: e.rows, data: add.toString("base64"), at: e.at, ...(tx ? { tx: true } : {}) });
+}
+
+/** Painting a line we are sending, or null. */
+let hellEcho: NodeJS.Timeout | null = null;
+
+/**
+ * Paint what we send, as we send it: the line's own columns, at the mode's speed, into the
+ * same page as what is received. Two rows an element, full ink or paper, the same 28 rows a
+ * column the receiver paints.
+ */
+function startHellEcho(text: string, variant: HellVariant): void {
+  stopHellEcho();
+  const painted = hellPaintedColumns(text);
+  const rows = HELL_RX_ROWS;
+  const total = painted.length / rows;
+  const rate = HELL_VARIANTS.find((v) => v.id === variant)?.columnRate ?? HELL_COLUMN_RATE;
+  const t0 = Date.now();
+  let sent = 0;
+  const tick = () => {
+    const due = Math.min(total, Math.floor(((Date.now() - t0) / 1000) * rate));
+    if (due > sent) {
+      onHellColumns({ rows, data: painted.slice(sent * rows, due * rows), at: Date.now() }, true);
+      sent = due;
+    }
+    if (sent >= total) stopHellEcho();
+  };
+  hellEcho = setInterval(tick, 200);
+}
+
+function stopHellEcho(): void {
+  if (hellEcho) clearInterval(hellEcho);
+  hellEcho = null;
 }
 
 /** The last few thousand characters of stream text, replayed to a page that connects. */
@@ -5421,16 +5475,24 @@ async function main(): Promise<void> {
                 usos: rttyCode.usos,
                 baud: rtty.baud,
               };
-        const tag = streamMode.toLowerCase();
+        // Hell names its mode in the log: a Feld Hell receiver paints FM Hell as columns of
+        // ripple, and on 2026-11-06 a garbled line could not be traced to one or the other.
+        const tag = streamMode === "HELL" ? `hell ${hellTuning.variant}` : streamMode.toLowerCase();
+        if (streamMode === "HELL") startHellEcho(text, hellTuning.variant);
         void tx.transmitText(req2).then(
           (r) => {
+            // Stopped short (refused, halted): the page stops where the radio did.
+            if (!r.sent) stopHellEcho();
             const line = r.sent ? `\n[TX] ${text}\n` : `\n[TX refused: ${r.reason ?? "unknown"}]\n`;
             streamText = (streamText + line).slice(-STREAM_TEXT_MAX);
             broadcast({ kind: "text", mode: streamMode, text: line, at: Date.now(), tx: true });
             if (r.sent) console.log(`[${tag}] sent ${text.length} chars${r.packetsSent ? ` (${r.packetsSent} packets)` : ""}`);
             else console.warn(`[${tag}] not sent: ${r.reason}`);
           },
-          (err) => console.error(`[${tag}] send failed: ${err instanceof Error ? err.message : String(err)}`),
+          (err) => {
+            stopHellEcho();
+            console.error(`[${tag}] send failed: ${err instanceof Error ? err.message : String(err)}`);
+          },
         );
         const durationMs =
           streamMode === "CW"
@@ -6507,7 +6569,7 @@ async function main(): Promise<void> {
         if (streamText) ws.send(JSON.stringify({ kind: "text-backlog", mode: status.subMode ?? "RTTY", text: streamText }));
         // The Hell page so far, so a page opened mid-QSO shows what has been painted.
         if (status.subMode === "HELL" && hellBacklog && hellBacklog.data.length > 0) {
-          ws.send(JSON.stringify({ kind: "hell-backlog", rows: hellBacklog.rows, data: hellBacklog.data.toString("base64") }));
+          ws.send(JSON.stringify({ kind: "hell-backlog", rows: hellBacklog.rows, data: hellBacklog.data.toString("base64"), tx: hellBacklog.tx.toString("base64") }));
         }
         // An SSTV picture half way in: the start and every row so far, so a page opened
         // mid-picture draws it rather than saying it is waiting - which it did for the first
