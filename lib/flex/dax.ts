@@ -240,6 +240,7 @@ type Events = {
   sstv: DecodePipelineEvents["sstv"];
   hell: DecodePipelineEvents["hell"];
   jtty: DecodePipelineEvents["jtty"];
+  rsid: DecodePipelineEvents["rsid"];
   /**
    * The QSO partner's slice, decoded ahead of the band. Forwarded, not interpreted.
    *
@@ -646,6 +647,7 @@ export class FlexDaxSource extends EventEmitter<Events> {
     this.pipeline.on("sstv", (e) => this.emit("sstv", e));
     this.pipeline.on("hell", (e) => this.emit("hell", e));
     this.pipeline.on("jtty", (e) => this.emit("jtty", e));
+    this.pipeline.on("rsid", (e) => this.emit("rsid", e));
     if (this.opts.mode === "RTTY") this.pipeline.setStream(this.rttyOptions);
     if (this.opts.mode === "CW") this.pipeline.setStream(this.cwOptions);
     if (this.opts.mode === "PSK31") this.pipeline.setStream(this.pskOptions);

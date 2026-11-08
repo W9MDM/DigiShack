@@ -35,7 +35,7 @@ alongside the ones every station sets.
 - [PSK31](#psk31) — 3 settings, 3 advanced
 - [CW](#cw) — 3 settings, 3 advanced
 - [WSPR](#wspr) — 1 setting
-- [Digital modes](#digital-modes) — 12 settings, 10 advanced
+- [Digital modes](#digital-modes) — 14 settings, 12 advanced
 - [DigiShack bridge](#digishack-bridge) — 4 settings, 4 advanced
 - [External decoder (WSJT-X)](#external-decoder-wsjt-x) — 3 settings, 2 advanced
 - [FlexRadio (direct)](#flexradio-direct) — 15 settings, 12 advanced
@@ -242,6 +242,8 @@ Where decodes and rig status come from. `wsjtx` takes them from an external deco
 | Setting | Key | Type | Default | What it does |
 |---|---|---|---|---|
 | JTTY transmit offset (Hz audio) *(advanced)* | `jtty.txHz` | number | `1500` | Where JTTY transmits: its lowest tone, Hz above the dial, as WSJT-X's Tx frequency. 1500 is WSJT-X's default. The receiver decodes every station in the passband whatever this is; a click on the waterfall or on a station's tag moves it for the session. |
+| When an RSID is heard *(advanced)* | `rsid.receive` | select | `switch` | RSID is the two-second burst fldigi sends before a transmission to name its mode. In the keyboard modes (RTTY, CW, PSK, Olivia, Contestia, Hell) DigiShack listens for it across the whole passband. Switch puts the decoder on that mode at that frequency, as fldigi does with RxID on; the decodes page shows what was heard either way. A mode DigiShack does not have yet (MT63, Thor and so on) is shown, not switched to. |
+| Send an RSID before each line *(advanced)* | `rsid.transmit` | on/off | `false` | Send fldigi's RSID before each line in RTTY, PSK, Olivia, Contestia and the Hell modes fldigi has, so stations with RxID on switch to your mode and frequency by themselves. Adds 2.3 s to each transmission. The decodes page has the same switch. |
 | Hell mode *(advanced)* | `hell.variant` | select | `feld` | Which Hell mode the HELL chip starts in. Feld Hell keys a carrier on and off; FM Hell-105 shifts it 55 Hz, as fldigi does, and is what the North American nets run. The panel's picker, and the Tune buttons on its list of nets, change it for the session. |
 | Hell carrier (Hz audio) *(advanced)* | `hell.centreHz` | number | `1000` | Where the Hell receiver paints and the transmitter keys when the HELL chip is pressed, Hz above the dial. 1000 puts a 14.062 dial on the Feld Hell Club calling frequency, 14.063. A click on the waterfall moves it for the session. |
 | SSTV transmit power (%) | `sstv.powerPct` | number | `50` | RF power for sending an SSTV picture, which is one to five minutes of steady carrier. Lowered to this for the picture if set higher, never raised, and put back afterwards. |

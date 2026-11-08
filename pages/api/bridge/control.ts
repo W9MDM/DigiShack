@@ -43,6 +43,7 @@ const bodySchema = z.object({
     "psk",
     "olivia",
     "hell",
+    "rsid",
     "jtty",
     "transmit-gate",
     "station",
@@ -97,6 +98,10 @@ const bodySchema = z.object({
   /** Olivia size for action "olivia": tones and bandwidth, one of the listed pairs. */
   tones: z.number().int().min(2).max(256).optional(),
   bandwidth: z.number().int().min(125).max(2000).optional(),
+  /** RSID, for action "rsid": what to do when one is heard, whether to send one, or switch to the last heard. */
+  receive: z.enum(["switch", "notify", "off"]).optional(),
+  transmit: z.boolean().optional(),
+  apply: z.literal(true).optional(),
   /** Which Hell mode, for action "hell". */
   variant: z.enum(["feld", "fm105", "fm245", "hell80", "slow", "psk"]).optional(),
   /** Olivia or Contestia, for action "olivia". */

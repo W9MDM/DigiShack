@@ -127,6 +127,7 @@ export type IcomSourceEvents = {
   sstv: DecodePipelineEvents["sstv"];
   hell: DecodePipelineEvents["hell"];
   jtty: DecodePipelineEvents["jtty"];
+  rsid: DecodePipelineEvents["rsid"];
   /** From the shared pipeline, identical in shape to the FlexRadio path's. */
   decodes: [{ windowStart: Date; decodes: Decode[]; rms: number; decodeMs: number }];
   window: [
@@ -297,6 +298,7 @@ export class IcomSource
     this.pipeline.on("sstv", (e) => this.emit("sstv", e));
     this.pipeline.on("hell", (e) => this.emit("hell", e));
     this.pipeline.on("jtty", (e) => this.emit("jtty", e));
+    this.pipeline.on("rsid", (e) => this.emit("rsid", e));
     this.digitalMode = opts.mode ?? "FT8";
   }
 

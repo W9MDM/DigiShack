@@ -170,6 +170,8 @@ import { locksFor } from "@/lib/radio/api";
 import { postWsprSpots, wsprSpotOf, type WsprSpotReport } from "@/lib/wsprnet/upload";
 import { RTTY_CENTRE_HZ, RTTY_SHIFT_HZ, rttyDurationMs, rttyTones } from "@/lib/digital/rtty";
 import { cwDurationMs } from "@/lib/digital/cw";
+import { RSID_DURATION_MS, type RsidHeard } from "@/lib/digital/rsid";
+import { textRsidCode } from "@/lib/radio/text-waveform";
 import { PSK31_CENTRE_HZ, psk31DurationMs, type PskSpeed } from "@/lib/digital/psk31";
 import { OLIVIA_MODES, oliviaDurationMs, type OliviaBandwidth, type OliviaCode, type OliviaTones } from "@/lib/digital/olivia";
 import {
@@ -268,6 +270,12 @@ interface RigStatus {
   olivia: { centreHz: number; tones: OliviaTones; bandwidth: OliviaBandwidth; code: OliviaCode } | null;
   /** The Feld Hell carrier, while on Hell. */
   hell: { centreHz: number; variant: HellVariant } | null;
+  /** RSID: the settings, and the last one heard (its mode, where, and whether we switched). */
+  rsid: {
+    receive: "switch" | "notify" | "off";
+    transmit: boolean;
+    last: { name: string; hz: number; at: number; supported: boolean; switched: boolean } | null;
+  };
   /** Where JTTY transmits (the lowest tone), while on JTTY. The receiver hears the whole passband. */
   jtty: { txHz: number } | null;
   /** A JS8 message going out, or the last one, with the offset it uses. See lib/radio/js8-sender.ts. */
@@ -414,6 +422,7 @@ const status: RigStatus = {
   psk: null,
   olivia: null,
   hell: null,
+  rsid: { receive: "switch", transmit: false, last: null },
   jtty: null,
   js8: null,
   js8Speed: "normal",
@@ -1513,6 +1522,15 @@ let oliviaApply: (() => void) | null = null;
 const hellTuning: { centreHz: number; variant: HellVariant } = { centreHz: HELL_CENTRE_HZ, variant: "feld" };
 let hellApply: (() => void) | null = null;
 
+/**
+ * RSID, fldigi's mode identifier: what to do when one is heard, and whether to send one
+ * before each line. Starting values from Settings (rsid.receive, rsid.transmit).
+ */
+const rsidTuning: { receive: "switch" | "notify" | "off"; transmit: boolean } = { receive: "switch", transmit: false };
+/** The last RSID heard, for the page; and the last one sent, so our own is never obeyed. */
+let rsidLast: (RsidHeard & { at: number; switched: boolean }) | null = null;
+let rsidSent: { code: number; at: number } | null = null;
+
 /** JTTY: where the transmitter puts its lowest tone. */
 const jttyTuning = { txHz: JTTY_DEFAULT_HZ };
 function jttyApply(): void {
@@ -1555,16 +1573,17 @@ let hellEcho: NodeJS.Timeout | null = null;
  * same page as what is received. Two rows an element, full ink or paper, the same 28 rows a
  * column the receiver paints.
  */
-function startHellEcho(text: string, variant: HellVariant): void {
+function startHellEcho(text: string, variant: HellVariant, delayMs = 0): void {
   stopHellEcho();
   const painted = hellPaintedColumns(text);
   const rows = HELL_RX_ROWS;
   const total = painted.length / rows;
   const rate = HELL_VARIANTS.find((v) => v.id === variant)?.columnRate ?? HELL_COLUMN_RATE;
-  const t0 = Date.now();
+  // After the RSID, when one goes first: the line starts when its own audio does.
+  const t0 = Date.now() + delayMs;
   let sent = 0;
   const tick = () => {
-    const due = Math.min(total, Math.floor(((Date.now() - t0) / 1000) * rate));
+    const due = Math.max(0, Math.min(total, Math.floor(((Date.now() - t0) / 1000) * rate)));
     if (due > sent) {
       onHellColumns({ rows, data: painted.slice(sent * rows, due * rows), at: Date.now() }, true);
       sent = due;
@@ -1677,6 +1696,80 @@ function wireStreamEvents(source: Pick<NodeJS.EventEmitter, "on">, beat: () => v
   source.on("jtty", (m: { hz: number; snr: number; text: string; complete: boolean; at: number }) =>
     broadcast({ kind: "jtty-msg", hz: m.hz, snr: m.snr, text: m.text, complete: m.complete, at: m.at }),
   );
+  source.on("rsid", (h: RsidHeard & { at: number }) => void onRsidHeard(h));
+}
+
+/** Put the settings and the last RSID on the status the page reads. */
+function publishRsid(): void {
+  status.rsid = {
+    receive: rsidTuning.receive,
+    transmit: rsidTuning.transmit,
+    last: rsidLast
+      ? { name: rsidLast.name, hz: rsidLast.hz, at: rsidLast.at, supported: !!rsidLast.mode, switched: rsidLast.switched }
+      : null,
+  };
+}
+
+/**
+ * An RSID heard. Shown on the page whatever the setting; with "switch", and a mode we have,
+ * the decoder goes to that mode at that frequency, as fldigi does with RxID on.
+ */
+async function onRsidHeard(h: RsidHeard & { at: number }): Promise<void> {
+  if (rsidTuning.receive === "off" || h.eot) return;
+  // Never our own: the Icom hears its own transmission, and a FlexRadio's DAX may too.
+  if (status.transmitting) return;
+  if (rsidSent && rsidSent.code === h.code && h.at - rsidSent.at < 60_000) return;
+  rsidLast = { ...h, switched: false };
+  console.log(`[rsid] heard ${h.name} at ${h.hz} Hz${h.mode ? "" : " (a mode DigiShack does not have)"}`);
+  if (rsidTuning.receive === "switch" && h.mode) rsidLast.switched = await applyRsid(h);
+  publishRsid();
+  broadcast({ kind: "rsid", name: h.name, hz: h.hz, at: h.at, supported: !!h.mode, switched: rsidLast.switched });
+  broadcast({ kind: "status", status });
+}
+
+/** Switch to what an RSID announced: its mode, its size or speed, and its frequency. */
+async function applyRsid(h: RsidHeard): Promise<boolean> {
+  const m = h.mode;
+  if (!m) return false;
+  const hz = Math.round(h.hz);
+  if (m.mode !== "CW" && (hz < 300 || hz > 2800)) return false;
+  switch (m.mode) {
+    case "PSK31":
+      pskTuning.speed = m.speed;
+      pskTuning.centreHz = hz;
+      break;
+    case "RTTY":
+      rttyTuning.baud = m.baud;
+      rttyTuning.shiftHz = m.shiftHz;
+      rttyTuning.centreHz = hz;
+      break;
+    case "OLIVIA":
+      oliviaTuning.code = m.code;
+      oliviaTuning.tones = m.tones;
+      oliviaTuning.bandwidth = m.bandwidth;
+      oliviaTuning.centreHz = hz;
+      break;
+    case "HELL":
+      hellTuning.variant = m.variant;
+      hellTuning.centreHz = hz;
+      break;
+    case "CW":
+      break;
+  }
+  const dial = status.dialFrequency;
+  if (dial === null) return false;
+  if (m.mode === "CW") {
+    // CW sends at the dial: put the signal on the pitch, as a click on it does.
+    const r = await tuneTo(Math.round(dial + hz - cwTuning.pitchHz), "CW");
+    return r.ok;
+  }
+  if (status.subMode === m.mode) {
+    applyStreamTuning(m.mode);
+    return true;
+  }
+  // Another mode: chosen by name where the dial is, as the mode picker chooses one.
+  const r = await tuneTo(dial, m.mode);
+  return r.ok;
 }
 
 /** JS8 frames joined into messages, per frequency, as a receiver must. */
@@ -1768,6 +1861,17 @@ async function tuneToCalling(
 ): Promise<{ ok: true; hz: number } | { ok: false; code: number; error: string; hz?: number }> {
   const hz = callingFrequencyHz(band, mode, ituRegionFromGrid(status.deGrid));
   if (hz === null) return { ok: false, code: 404, error: `No ${mode} calling frequency is listed for ${band}` };
+  return tuneTo(hz, mode);
+}
+
+/**
+ * The radio to `hz`, decoding `mode`: the mode chosen by name, the slice in the
+ * modulation the mode needs. The mode picker's tune, and an RSID's switch.
+ */
+async function tuneTo(
+  hz: number,
+  mode: DigitalMode,
+): Promise<{ ok: true; hz: number } | { ok: false; code: number; error: string; hz?: number }> {
   // Chosen by name: holds while the dial moves where nothing has a calling frequency.
   stickyMode = mode;
 
@@ -2532,37 +2636,7 @@ async function startFlexSource(): Promise<() => Promise<void>> {
   // The RTTY tone pair follows the slice's sideband: mark is the higher radio frequency,
   // so the higher audio tone on USB and the lower on LSB. Recomputed on every slice update
   // while on RTTY and on every /rtty request; the pipeline keeps its state across a retune.
-  rttyTuning.centreHz = await getNumberSetting("rtty.centreHz", RTTY_CENTRE_HZ);
-  rttyTuning.shiftHz = await getNumberSetting("rtty.shiftHz", RTTY_SHIFT_HZ);
-  rttyCode = {
-    figures: ((await getSetting("rtty.figures")) ?? "us").toLowerCase() === "ita2" ? "ita2" : "us",
-    usos: await getBooleanSetting("rtty.usos", true),
-    squelch: await getNumberSetting("rtty.squelch", 0.7),
-  };
-  cwTuning.pitchHz = await getNumberSetting("cw.pitchHz", 600);
-  cwTuning.wpm = await getNumberSetting("cw.wpm", 20);
-  cwTuning.thresholdDb = await getNumberSetting("cw.thresholdDb", 16);
-  pskTuning.centreHz = await getNumberSetting("psk31.centreHz", PSK31_CENTRE_HZ);
-  {
-    const speed = await getNumberSetting("psk31.speed", 31);
-    pskTuning.speed = speed === 63 ? 63 : speed === 125 ? 125 : 31;
-  }
-  pskTuning.squelch = await getNumberSetting("psk31.squelch", 0.5);
-  oliviaTuning.centreHz = await getNumberSetting("olivia.centreHz", 1500);
-  {
-    const tones = await getNumberSetting("olivia.tones", 16);
-    const bandwidth = await getNumberSetting("olivia.bandwidth", 500);
-    const size = OLIVIA_MODES.find((m) => m.tones === tones && m.bandwidth === bandwidth) ?? { tones: 16, bandwidth: 500 };
-    oliviaTuning.tones = size.tones;
-    oliviaTuning.bandwidth = size.bandwidth;
-  }
-  oliviaTuning.threshold = await getNumberSetting("olivia.threshold", 4);
-  hellTuning.centreHz = await getNumberSetting("hell.centreHz", HELL_CENTRE_HZ);
-  {
-    const v = await getSetting("hell.variant");
-    hellTuning.variant = isHellVariant(v) ? v : "feld";
-  }
-  jttyTuning.txHz = await getNumberSetting("jtty.txHz", JTTY_DEFAULT_HZ);
+  await loadStreamTuning();
   {
     const speed = ((await getSetting("js8.speed")) ?? "normal").toLowerCase();
     applyJs8Speed(speed === "fast" || speed === "turbo" || speed === "slow" ? speed : "normal");
@@ -2571,7 +2645,6 @@ async function startFlexSource(): Promise<() => Promise<void>> {
     source.rearmWindows();
     if (watchdog) watchdog.retime(windowTimeoutMs(source.periodMs, watchdogPeriods));
   };
-  oliviaTuning.code = ((await getSetting("olivia.code")) ?? "olivia").toLowerCase() === "contestia" ? "contestia" : "olivia";
   {
     const levelRaw = ((await getSetting("js8.autoreply")) ?? "off").toLowerCase();
     const level: Js8AutoReplyLevel = levelRaw === "hb" || levelRaw === "all" ? levelRaw : "off";
@@ -3403,6 +3476,52 @@ async function startFlexSource(): Promise<() => Promise<void>> {
  * also makes the list of things the bridge actually shares with a radio driver visible
  * in one place, which the FlexRadio path has never had.
  */
+/**
+ * The keyboard modes' starting tuning, from Settings. Both radios: it was loaded only in the
+ * FlexRadio's start-up, so on the Icom every carrier, size and Hell mode set in Settings
+ * was ignored and the decoders ran on their defaults.
+ */
+async function loadStreamTuning(): Promise<void> {
+  rttyTuning.centreHz = await getNumberSetting("rtty.centreHz", RTTY_CENTRE_HZ);
+  rttyTuning.shiftHz = await getNumberSetting("rtty.shiftHz", RTTY_SHIFT_HZ);
+  rttyCode = {
+    figures: ((await getSetting("rtty.figures")) ?? "us").toLowerCase() === "ita2" ? "ita2" : "us",
+    usos: await getBooleanSetting("rtty.usos", true),
+    squelch: await getNumberSetting("rtty.squelch", 0.7),
+  };
+  cwTuning.pitchHz = await getNumberSetting("cw.pitchHz", 600);
+  cwTuning.wpm = await getNumberSetting("cw.wpm", 20);
+  cwTuning.thresholdDb = await getNumberSetting("cw.thresholdDb", 16);
+  pskTuning.centreHz = await getNumberSetting("psk31.centreHz", PSK31_CENTRE_HZ);
+  {
+    const speed = await getNumberSetting("psk31.speed", 31);
+    pskTuning.speed = speed === 63 ? 63 : speed === 125 ? 125 : 31;
+  }
+  pskTuning.squelch = await getNumberSetting("psk31.squelch", 0.5);
+  oliviaTuning.centreHz = await getNumberSetting("olivia.centreHz", 1500);
+  {
+    const tones = await getNumberSetting("olivia.tones", 16);
+    const bandwidth = await getNumberSetting("olivia.bandwidth", 500);
+    const size = OLIVIA_MODES.find((m) => m.tones === tones && m.bandwidth === bandwidth) ?? { tones: 16, bandwidth: 500 };
+    oliviaTuning.tones = size.tones;
+    oliviaTuning.bandwidth = size.bandwidth;
+  }
+  oliviaTuning.threshold = await getNumberSetting("olivia.threshold", 4);
+  hellTuning.centreHz = await getNumberSetting("hell.centreHz", HELL_CENTRE_HZ);
+  {
+    const v = await getSetting("hell.variant");
+    hellTuning.variant = isHellVariant(v) ? v : "feld";
+  }
+  jttyTuning.txHz = await getNumberSetting("jtty.txHz", JTTY_DEFAULT_HZ);
+  oliviaTuning.code = ((await getSetting("olivia.code")) ?? "olivia").toLowerCase() === "contestia" ? "contestia" : "olivia";
+  {
+    const r = ((await getSetting("rsid.receive")) ?? "switch").toLowerCase();
+    rsidTuning.receive = r === "notify" || r === "off" ? r : "switch";
+  }
+  rsidTuning.transmit = await getBooleanSetting("rsid.transmit", false);
+  publishRsid();
+}
+
 async function startIcomBridge(): Promise<() => Promise<void>> {
   const watchdogEnabled = await getBooleanSetting("bridge.watchdog.enabled", true);
   const watchdogPeriods = await getNumberSetting("bridge.watchdog.periods", 8);
@@ -3571,6 +3690,7 @@ async function startIcomBridge(): Promise<() => Promise<void>> {
   // The stream modes, which the Icom never had: RTTY, CW, PSK31, Olivia, SSTV, Hell and
   // JTTY. The Icom reports no CW pitch, so the setting stands. The Icom hears itself
   // transmit, so the stream decoder is not fed while it is keyed.
+  await loadStreamTuning();
   wireStreamTuning(bridge.source, () => null);
   wireStreamEvents(bridge.source, () => watchdog?.beat());
   bridge.source.muteStreamWhile(() => bridge.transmitter?.transmitting ?? false);
@@ -5444,7 +5564,7 @@ async function main(): Promise<void> {
           sendJson(res, 409, { error: "SSTV sends pictures, not text: use Send a picture" });
           return;
         }
-        const req2 =
+        const req1 =
           streamMode === "JTTY"
             ? { mode: "JTTY" as const, text, centreHz: jttyTuning.txHz, shiftHz: 0, sideband: "USB" as const }
             : streamMode === "HELL"
@@ -5475,10 +5595,15 @@ async function main(): Promise<void> {
                 usos: rttyCode.usos,
                 baud: rtty.baud,
               };
+        // fldigi's RSID first, where it is on and the mode has one: CW and JTTY never.
+        const req2 = { ...req1, rsid: rsidTuning.transmit };
+        const rsidCode = textRsidCode(req2);
+        const rsidMs = rsidCode !== null ? RSID_DURATION_MS : 0;
+        if (rsidCode !== null) rsidSent = { code: rsidCode, at: Date.now() };
         // Hell names its mode in the log: a Feld Hell receiver paints FM Hell as columns of
         // ripple, and on 2026-11-06 a garbled line could not be traced to one or the other.
         const tag = streamMode === "HELL" ? `hell ${hellTuning.variant}` : streamMode.toLowerCase();
-        if (streamMode === "HELL") startHellEcho(text, hellTuning.variant);
+        if (streamMode === "HELL") startHellEcho(text, hellTuning.variant, rsidMs);
         void tx.transmitText(req2).then(
           (r) => {
             // Stopped short (refused, halted): the page stops where the radio did.
@@ -5506,7 +5631,7 @@ async function main(): Promise<void> {
                   : streamMode === "JTTY"
                     ? jttyDurationMs(text)
                     : rttyDurationMs(text, { baud: rttyTuning.baud });
-        sendJson(res, 202, { ok: true, mode: streamMode, chars: text.length, durationMs: Math.round(durationMs) });
+        sendJson(res, 202, { ok: true, mode: streamMode, chars: text.length, durationMs: Math.round(durationMs + rsidMs), rsid: rsidCode !== null });
         return;
       }
 
@@ -5554,6 +5679,38 @@ async function main(): Promise<void> {
         jttyApply();
         broadcast({ kind: "status", status });
         sendJson(res, 200, { ok: true, jtty: status.jtty });
+        return;
+      }
+
+      // POST /rsid — what to do when an RSID is heard (switch, notify, off), whether to send
+      // one before each line, or { apply: true } to switch to the last one heard. For the
+      // session; the starting values live in Settings (rsid.*).
+      if (url.pathname === "/rsid") {
+        const body = await readJson(req);
+        if (body.receive !== undefined) {
+          const r = String(body.receive).toLowerCase();
+          if (r !== "switch" && r !== "notify" && r !== "off") {
+            sendJson(res, 400, { error: "receive must be switch, notify or off" });
+            return;
+          }
+          rsidTuning.receive = r;
+        }
+        if (body.transmit !== undefined) rsidTuning.transmit = body.transmit === true;
+        if (body.apply === true) {
+          if (!rsidLast?.mode) {
+            sendJson(res, 409, { error: rsidLast ? `${rsidLast.name} is not a mode DigiShack has yet` : "No RSID has been heard" });
+            return;
+          }
+          rsidLast.switched = await applyRsid(rsidLast);
+          if (!rsidLast.switched) {
+            publishRsid();
+            sendJson(res, 502, { error: `Could not switch to ${rsidLast.name}` });
+            return;
+          }
+        }
+        publishRsid();
+        broadcast({ kind: "status", status });
+        sendJson(res, 200, { ok: true, rsid: status.rsid });
         return;
       }
 

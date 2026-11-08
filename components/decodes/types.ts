@@ -21,6 +21,8 @@ export interface RigStatus {
   olivia?: { centreHz: number; tones: number; bandwidth: number; code?: "olivia" | "contestia" } | null;
   /** The Feld Hell carrier while on Hell. */
   hell?: { centreHz: number; variant?: "feld" | "fm105" | "fm245" | "hell80" | "slow" | "psk" } | null;
+  /** RSID: what to do when one is heard, whether one is sent, and the last heard. */
+  rsid?: import("@/components/digital/RsidBar").RsidStatus;
   /** Where JTTY transmits while on JTTY. */
   jtty?: { txHz: number } | null;
   /** A JS8 message going out, or the last one. */

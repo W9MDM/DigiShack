@@ -34,6 +34,7 @@ import { JttyDemodulator, type JttyMessage } from "@/lib/digital/jttydemod";
 import type { OliviaBandwidth, OliviaCode, OliviaTones } from "@/lib/digital/olivia";
 import { HashCallBook as Ft2HashCallBook } from "@/lib/digital/pack77";
 import { js8SubmodeNow, PERIOD_MS, TRANSMISSION_MS } from "@/lib/radio/timing";
+import { RsidDetector, type RsidHeard } from "@/lib/digital/rsid";
 import type { TxMode } from "@/lib/radio/waveform";
 
 /** What every decoder here is fed, whatever the radio delivered. */
@@ -462,6 +463,8 @@ export type DecodePipelineEvents = {
   hell: [{ rows: number; data: Uint8Array; at: number }];
   /** JTTY: a message ended - its station's frequency, S/N and text. The text also goes out as `text`. */
   jtty: [JttyMessage & { at: number }];
+  /** An RSID heard, in any of the keyboard modes: the mode a station announced, and where. */
+  rsid: [RsidHeard & { at: number }];
   /** A stream mode's heartbeat, once per second of audio, with what its decoder measures for a tuning display. */
   stream: [StreamHeartbeat];
   /**
@@ -691,6 +694,8 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
     return this.rtty ?? this.cw ?? this.psk ?? this.olivia ?? this.hell ?? this.jtty ?? (this.sstv ? this.sstvStream : null);
   }
   private streamMode: StreamMode | null = null;
+  /** fldigi's mode identifier, listened for across the passband in the keyboard modes. Made on first use. */
+  private rsid: RsidDetector | null = null;
   private streamConfiguration: StreamOptions | null = null;
   private pskSpeed: 31 | 63 | 125 = 31;
   private rttyBaud = 45.45;
@@ -988,6 +993,12 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
     const demod = this.stream;
     const mode = this.streamMode;
     if (!demod || !mode) return;
+    // RSID: in the keyboard modes, where a station switching mode announces it. Not in
+    // SSTV (its own VIS header names the mode) nor JTTY (whole-passband already).
+    if (mode !== "SSTV" && mode !== "JTTY") {
+      this.rsid ??= new RsidDetector(this.inputRate, (h) => this.emit("rsid", { ...h, at: Date.now() }));
+      this.rsid.feed(samples);
+    }
     const text = demod.feed(samples);
     if (text) this.emit("text", { mode, text, at: Date.now() });
     if (this.rtty) this.rttyProbe?.feed(samples);

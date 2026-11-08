@@ -39,6 +39,7 @@ import { SstvPanel, type SstvMessage, type SstvPanelHandle, type SstvStats } fro
 import type { SstvTxState } from "@/components/digital/SstvSend";
 import { StreamPanel, type StreamStats } from "@/components/digital/StreamPanel";
 import { Waterfall, type WaterfallMarker, type WaterfallTag } from "@/components/digital/Waterfall";
+import { RsidBar } from "@/components/digital/RsidBar";
 import { InlineSpectrum, useInlineView, useLiveSpectrum, ViewSwitch } from "@/components/spectrum/InlineSpectrum";
 import { Badge, Button, Card, EmptyState, ErrorBanner, PageHeader } from "@/components/ui/primitives";
 import { withPageAuth } from "@/lib/auth/guard";
@@ -862,6 +863,15 @@ export default function DigitalPage({ wsUrl }: Props) {
       setRttyError(err instanceof ApiError ? err.message : "Could not move the dial");
     }
   }, []);
+  /** RSID: what to do when one is heard, whether to send one, or switch to the last heard. */
+  const setRsid = useCallback(async (patch: { receive?: "switch" | "notify" | "off"; transmit?: boolean; apply?: true }) => {
+    try {
+      await apiPost("/api/bridge/control", { action: "rsid", ...patch });
+      setRttyError(null);
+    } catch (err) {
+      setRttyError(err instanceof ApiError ? err.message : "Could not change RSID");
+    }
+  }, []);
   /** Move the Feld Hell carrier: a click on the waterfall or the ± buttons. */
   const tuneHell = useCallback(async (centreHz: number, variant?: string) => {
     try {
@@ -1453,6 +1463,9 @@ export default function DigitalPage({ wsUrl }: Props) {
                   onClear={clearStream}
                 />
                 {textLog && (
+                  <RsidBar rsid={status?.rsid} canSwitch={canSwitch} onSet={(patch) => void setRsid(patch)} />
+                )}
+                {textLog && (
                   <QsoBar
                     logMode={textLog.mode}
                     modeLabel={textLog.label}
@@ -1488,6 +1501,9 @@ export default function DigitalPage({ wsUrl }: Props) {
                   onSend={(text) => void sendRtty(text)}
                   onClear={clearStream}
                 />
+                {textLog && (
+                  <RsidBar rsid={status?.rsid} canSwitch={canSwitch} onSet={(patch) => void setRsid(patch)} />
+                )}
                 {textLog && (
                   <QsoBar
                     logMode={textLog.mode}

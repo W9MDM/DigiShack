@@ -1178,6 +1178,30 @@ export const SETTINGS: SettingDef[] = [
     help: "Where JTTY transmits: its lowest tone, Hz above the dial, as WSJT-X's Tx frequency. 1500 is WSJT-X's default. The receiver decodes every station in the passband whatever this is; a click on the waterfall or on a station's tag moves it for the session.",
     default: "1500",
   },
+  // --- RSID ---
+  {
+    key: "rsid.receive",
+    label: "When an RSID is heard",
+    type: "select",
+    options: [
+      { value: "switch", label: "Switch to its mode and frequency" },
+      { value: "notify", label: "Say so, and offer to switch" },
+      { value: "off", label: "Ignore it" },
+    ],
+    group: "digital",
+    advanced: true,
+    help: "RSID is the two-second burst fldigi sends before a transmission to name its mode. In the keyboard modes (RTTY, CW, PSK, Olivia, Contestia, Hell) DigiShack listens for it across the whole passband. Switch puts the decoder on that mode at that frequency, as fldigi does with RxID on; the decodes page shows what was heard either way. A mode DigiShack does not have yet (MT63, Thor and so on) is shown, not switched to.",
+    default: "switch",
+  },
+  {
+    key: "rsid.transmit",
+    label: "Send an RSID before each line",
+    type: "boolean",
+    group: "digital",
+    advanced: true,
+    help: "Send fldigi's RSID before each line in RTTY, PSK, Olivia, Contestia and the Hell modes fldigi has, so stations with RxID on switch to your mode and frequency by themselves. Adds 2.3 s to each transmission. The decodes page has the same switch.",
+    default: "false",
+  },
   // --- Hell ---
   {
     key: "hell.variant",

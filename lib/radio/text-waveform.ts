@@ -13,6 +13,7 @@ import {
   type OliviaTones,
 } from "@/lib/digital/olivia";
 import { psk31DurationMs, psk31Waveform } from "@/lib/digital/psk31";
+import { RSID_DURATION_MS, rsidCodeFor, rsidWaveform, type RsidMode } from "@/lib/digital/rsid";
 import { rttyDurationMs, rttyWaveform } from "@/lib/digital/rtty";
 
 /** How long a line may be on the air: 240 characters of RTTY, about forty seconds. Slow Hell has its own. */
@@ -42,6 +43,37 @@ export interface TextTransmitRequest {
   code?: OliviaCode;
   /** Hell: which of the Hell modes. Default Feld Hell. */
   hellVariant?: HellVariant;
+  /**
+   * Send fldigi's RSID first, so a station with RxID on switches to this mode and this
+   * frequency by itself. Only where fldigi has a code for the mode as it is set.
+   */
+  rsid?: boolean;
+}
+
+/** What the caps and the RSID need of a request: its mode and how it is set, not its text. */
+type TextRequestShape = Pick<TextTransmitRequest, "mode"> & Partial<Omit<TextTransmitRequest, "mode">>;
+
+/** The RSID mode a request is, for looking up its code. */
+function rsidModeOf(req: TextRequestShape): RsidMode | null {
+  switch (req.mode) {
+    case "PSK31":
+      return { mode: "PSK31", speed: req.speed ?? 31 };
+    case "RTTY":
+      return { mode: "RTTY", baud: req.baud ?? 45.45, shiftHz: req.shiftHz ?? 170 };
+    case "OLIVIA":
+      return { mode: "OLIVIA", code: req.code ?? "olivia", tones: req.tones ?? 16, bandwidth: req.bandwidth ?? 500 };
+    case "HELL":
+      return { mode: "HELL", variant: req.hellVariant ?? "feld" };
+    default:
+      return null;
+  }
+}
+
+/** The RSID code this request would send first, or null when it sends none. */
+export function textRsidCode(req: TextRequestShape): number | null {
+  if (!req.rsid) return null;
+  const m = rsidModeOf(req);
+  return m ? rsidCodeFor(m) : null;
 }
 
 /**
@@ -49,8 +81,10 @@ export interface TextTransmitRequest {
  *
  * Slow Hell is the one exception to forty seconds: a character takes 3.2 s.
  */
-export function maxTextMs(req: Pick<TextTransmitRequest, "mode" | "hellVariant">): number {
-  return req.mode === "HELL" ? hellVariant(req.hellVariant).maxSendMs : MAX_TEXT_MS;
+export function maxTextMs(req: TextRequestShape): number {
+  const text = req.mode === "HELL" ? hellVariant(req.hellVariant).maxSendMs : MAX_TEXT_MS;
+  // The RSID goes on top: the cap is on the line, not on the 2.3 s that announces it.
+  return text + (textRsidCode(req) !== null ? RSID_DURATION_MS : 0);
 }
 
 /**
@@ -59,9 +93,21 @@ export function maxTextMs(req: Pick<TextTransmitRequest, "mode" | "hellVariant">
  */
 export function textWaveform(req: TextTransmitRequest, sampleRate: number): Float32Array {
   if (req.mode === "CW") throw new Error("CW is keyed by the radio, not sent as audio");
+  const body = lineWaveform(req, sampleRate);
+  const code = textRsidCode(req);
+  if (code === null) return body;
+  const id = rsidWaveform(code, { sampleRate, centreHz: req.centreHz, amplitude: 0.9 });
+  const out = new Float32Array(id.length + body.length);
+  out.set(id, 0);
+  out.set(body, id.length);
+  return out;
+}
+
+/** The line itself, without an RSID. */
+function lineWaveform(req: TextTransmitRequest, sampleRate: number): Float32Array {
   const text = req.text.trim();
   if (!text) throw new Error("Nothing to send");
-  const cap = maxTextMs(req);
+  const cap = maxTextMs({ ...req, rsid: false });
   if (req.mode === "OLIVIA") {
     const size = { tones: req.tones ?? 16, bandwidth: req.bandwidth ?? 500, code: req.code ?? "olivia" } as const;
     const olMs = oliviaDurationMs(text, size);
