@@ -27,11 +27,14 @@ import { IFKP_BANDWIDTH_HZ, IFKP_CENTRE_HZ, IFKP_SPEEDS, ifkpDurationMs, ifkpWav
 import { IfkpDemodulator } from "@/lib/digital/ifkpdemod";
 import { NAVTEX_CENTRE_HZ, navtexDurationMs, navtexWaveform } from "@/lib/digital/navtex";
 import { NavtexDemodulator } from "@/lib/digital/navtexdemod";
+import { WEFAX_CARRIER_HZ, WEFAX_MAX_LINES, wefaxTestPattern, wefaxWaveform } from "@/lib/digital/wefax";
+import { WefaxDecoder } from "@/lib/digital/wefaxdemod";
+import type { SstvEvent } from "@/lib/radio/decode-pipeline";
 
 /** The registered keyboard modes. A name here with no entry in MODEMS is not offered anywhere. */
-export type ModemId = "MFSK" | "DOMINO" | "MT63" | "THOR" | "THROB" | "FSQ" | "IFKP" | "NAVTEX";
+export type ModemId = "MFSK" | "DOMINO" | "MT63" | "THOR" | "THROB" | "FSQ" | "IFKP" | "NAVTEX" | "WEFAX";
 
-export const MODEM_IDS: readonly ModemId[] = ["MFSK", "DOMINO", "MT63", "THOR", "THROB", "FSQ", "IFKP", "NAVTEX"];
+export const MODEM_IDS: readonly ModemId[] = ["MFSK", "DOMINO", "MT63", "THOR", "THROB", "FSQ", "IFKP", "NAVTEX", "WEFAX"];
 
 /** What every modem's demodulator does. */
 export interface ModemDemodulator {
@@ -80,7 +83,13 @@ export interface ModemSpec {
    * `waveform` may still exist, as a test generator.
    */
   receiveOnly?: boolean;
-  demodulator(opts: { sampleRate: number; centreHz: number; sub: string }): ModemDemodulator;
+  /**
+   * Pictures rather than text (WEFAX): the decoder hands them to `onPicture` as SSTV's events,
+   * and the page shows the picture panel instead of the text panel. The bridge saves them
+   * beside the SSTV pictures.
+   */
+  picture?: boolean;
+  demodulator(opts: { sampleRate: number; centreHz: number; sub: string; onPicture?: (e: SstvEvent) => void }): ModemDemodulator;
   /** `mycall`: the station's callsign, for a mode that heads each over with it (FSQ). */
   waveform(text: string, opts: { sampleRate: number; centreHz: number; sub: string; mycall?: string }): Float32Array;
   durationMs(text: string, sub: string): number;
@@ -300,8 +309,83 @@ const NAVTEX: ModemSpec = {
   durationMs: (text, sub) => navtexDurationMs(text, { sitorB: sub === "SITOR-B", phasingSeconds: 3 }),
 };
 
+/**
+ * WEFAX as a modem: the decoder makes pictures, which go out as SSTV's start, rows and image
+ * events so the SSTV panel draws them and the bridge saves them. feed() prints no text.
+ */
+function wefaxDemodulator(sampleRate: number, centreHz: number, onPicture?: (e: SstvEvent) => void): ModemDemodulator {
+  let centre = centreHz;
+  let mode = "WEFAX";
+  const make = () =>
+    new WefaxDecoder(
+      sampleRate,
+      {
+        onStart: (info) => {
+          mode = `WEFAX ${info.lpm} LPM IOC ${info.ioc}`;
+          // The height is not known until the stop tone: the panel is given room for the most there can be.
+          onPicture?.({ kind: "start", mode, width: info.width, height: WEFAX_MAX_LINES, at: info.at });
+        },
+        onRows: (img, from, to) =>
+          onPicture?.({ kind: "rows", from, to, width: img.width, rgb: img.rgb.slice(from * img.width * 3, to * img.width * 3) }),
+        onImage: (img, info) =>
+          onPicture?.({
+            kind: "image",
+            mode,
+            width: img.width,
+            height: img.height,
+            rgb: img.rgb,
+            at: info.at,
+            // SSTV's report fields, which a fax does not have: aligned is "sync found".
+            signal: { syncFound: info.aligned ? 1 : 0, syncNoiseHz: 0 },
+          }),
+      },
+      { carrierHz: centre },
+    );
+  let dec = make();
+  const stats = { chars: 0, errors: 0, quality: 0, afcHz: 0, open: false, level: 0 };
+  return {
+    feed(samples) {
+      dec.feed(samples);
+      const s = dec.statistics;
+      stats.chars = s.lines;
+      stats.open = s.receiving;
+      stats.level = Math.pow(10, s.levelDb / 20);
+      stats.quality = s.receiving ? 1 : 0;
+      return "";
+    },
+    retune(c) {
+      centre = c;
+      dec = make();
+    },
+    reset() {
+      dec = make();
+    },
+    get statistics() {
+      return stats;
+    },
+  };
+}
+
+const WEFAX: ModemSpec = {
+  id: "WEFAX",
+  label: "WEFAX",
+  // The decoder takes IOC 576 or 288 from the start tone, and the line rate from the phasing.
+  subs: [{ id: "auto", label: "WEFAX (IOC and LPM from the signal)", bandwidthHz: 1000 }],
+  defaultSub: "auto",
+  // Black 1500 Hz, white 2300: with the dial 1.9 kHz below the published frequency.
+  defaultCentreHz: WEFAX_CARRIER_HZ,
+  maxSendMs: 1_500_000,
+  receiveOnly: true,
+  picture: true,
+  demodulator: ({ sampleRate, centreHz, onPicture }) => wefaxDemodulator(sampleRate, centreHz, onPicture),
+  // The test generator, never offered on the air: a 40-line test chart.
+  waveform: (_text, { sampleRate, centreHz }) =>
+    wefaxWaveform(wefaxTestPattern(1809, 40), { sampleRate, ioc: 576, lpm: 120, carrierHz: centreHz, withApt: true }),
+  durationMs: () => 0,
+};
+
 /** The table. Entries are added as each modem lands. */
-export const MODEMS: Partial<Record<ModemId, ModemSpec>> = { MFSK, DOMINO, MT63, THOR, THROB, FSQ, IFKP, NAVTEX };
+export const MODEMS: Partial<Record<ModemId, ModemSpec>> = { MFSK, DOMINO, MT63, THOR, THROB, FSQ, IFKP, NAVTEX, WEFAX };
 
 export function isModemId(mode: string | null | undefined): mode is ModemId {
   return !!mode && (MODEM_IDS as readonly string[]).includes(mode);

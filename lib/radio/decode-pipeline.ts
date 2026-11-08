@@ -1016,7 +1016,7 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
       const spec = modem(opts.mode);
       if (!spec) throw new Error(`${opts.mode} is not a registered modem`);
       this.modemSub = opts.sub;
-      this.modem = spec.demodulator({ sampleRate: this.inputRate, centreHz: opts.centreHz, sub: opts.sub });
+      this.modem = spec.demodulator({ sampleRate: this.inputRate, centreHz: opts.centreHz, sub: opts.sub, onPicture: (e) => this.emit("sstv", e) });
     } else if (opts.mode === "JTTY") {
       this.jtty = new JttyDemodulator(this.inputRate, {
         onMessage: (m) => this.emit("jtty", { ...m, at: Date.now() }),

@@ -62,6 +62,7 @@ for (const m of registeredModems()) {
     // MT63 prints a few characters of the random interleaver fill before the line, as
     // fldigi does; nothing may follow the line.
     const got = text.trim();
+    if (m.picture) continue;
     // A listen-only mode (NAVTEX) prints its message framing round the line: the line must be there.
     if (m.receiveOnly) {
       ok(got.includes(LINE), `${sub.label}: the test signal decodes through the pipeline (${JSON.stringify(got)})`);
@@ -71,6 +72,26 @@ for (const m of registeredModems()) {
     const last = beats[beats.length - 1];
     ok(last?.mode === m.id && last.sub === sub.id && (last.chars ?? 0) >= LINE.length, `  and the heartbeat names it, with the count`, JSON.stringify(last));
     ok(Math.abs((w.length / RATE) * 1000 - m.durationMs(LINE, sub.id)) < 50, `  and the line is as long as its duration says`);
+  }
+
+  // A picture modem (WEFAX): the pipeline turns a fax into SSTV's start, rows and image.
+  if (m.picture) {
+    const pipe = new DecodePipeline({ mode: "FT8", inputSampleRate: RATE });
+    const kinds: string[] = [];
+    let image: { width: number; height: number; mode: string } | null = null;
+    pipe.on("sstv", (e) => {
+      kinds.push(e.kind);
+      if (e.kind === "image") image = { width: e.width, height: e.height, mode: e.mode };
+    });
+    pipe.on("error", () => {});
+    pipe.setStream({ mode: m.id, centreHz: m.defaultCentreHz, sub: m.defaultSub });
+    const w = m.waveform("", { sampleRate: RATE, centreHz: m.defaultCentreHz, sub: m.defaultSub });
+    for (let i = 0; i < w.length; i += 4800) pipe.push(w.subarray(i, Math.min(w.length, i + 4800)));
+    pipe.push(new Float32Array(RATE * 2));
+    const img = image as { width: number; height: number; mode: string } | null;
+    ok(kinds[0] === "start" && kinds.includes("rows") && img !== null, `${m.label}: a fax through the pipeline comes out as a picture (${kinds.filter((k, i) => k !== kinds[i - 1]).join(" > ")})`);
+    ok(img?.width === 1809 && (img?.height ?? 0) > 10 && /^WEFAX 120 LPM IOC 576/.test(img?.mode ?? ""), `  1809 wide, named ${img?.mode}, ${img?.height} lines`);
+    continue;
   }
 
   // A retune keeps the decoder; a size change makes a new one.

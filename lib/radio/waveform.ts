@@ -51,6 +51,7 @@ export const SYMBOL_RATE: Record<TxMode, number> = {
   FSQ: 31.25,
   IFKP: 31.25,
   NAVTEX: 31.25,
+  WEFAX: 31.25,
   /** A picture, not symbols. */
   SSTV: 0,
   HELL: 0,

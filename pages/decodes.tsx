@@ -1474,6 +1474,9 @@ export default function DigitalPage({ wsUrl }: Props) {
               )}
               {decodingAs === "SSTV" ? (
                 <SstvPanel ref={sstvPanel} stats={sstvStats} myCall={myCall} canSend={canSwitch} tx={sstvTx} dialHz={status?.dialFrequency ?? null} />
+              ) : modem(decodingAs)?.picture ? (
+                // WEFAX: pictures, drawn by the SSTV panel. Listen-only, so nothing to send.
+                <SstvPanel ref={sstvPanel} stats={sstvStats} myCall={myCall} canSend={false} tx={sstvTx} dialHz={status?.dialFrequency ?? null} />
               ) : decodingAs === "HELL" ? (
                 <>
                 <HellPanel

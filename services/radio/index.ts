@@ -2079,6 +2079,7 @@ function onSstvEvent(e: SstvEvent): void {
   }
   const stamp = new Date(e.at).toISOString().replace(/[-:]/g, "").replace(/\..*$/, "").replace("T", "-");
   const file = `${stamp}-${e.mode.replace(/\s+/g, "")}.png`;
+  const fax = e.mode.startsWith("WEFAX");
   sstvLive = null;
   // The report we would give them, from the picture's sync pulses and the S-meter over it,
   // kept beside the picture with where it was heard (pages/api/sstv reads it back, and
@@ -2111,11 +2112,18 @@ function onSstvEvent(e: SstvEvent): void {
       return fs.promises.writeFile(metaPath, JSON.stringify(meta));
     })
     .then(() => {
+      // A weather fax has no caption to read and no RSV: it is saved and shown, nothing more.
+      if (fax) {
+        console.log(`[wefax] saved ${e.mode} picture as ${file} (${e.width}x${e.height})`);
+        broadcast({ kind: "sstv-image", file, mode: e.mode, at: e.at, rsv: "" });
+        return null;
+      }
       console.log(`[sstv] saved ${e.mode} picture as ${file}, RSV ${rsv.report}`);
       broadcast({ kind: "sstv-image", file, mode: e.mode, at: e.at, rsv: rsv.report });
       return readSstvPicture(e.width, e.height, e.rgb, status.deCall, encodePng);
     })
     .then(async (read) => {
+      if (!read) return;
       meta.read = read;
       await fs.promises.writeFile(metaPath, JSON.stringify(meta));
       console.log(`[sstv] read on ${file}: ${read.theirCall ?? "no callsign"}${read.reportRcvd ? `, report ${read.reportRcvd}` : ""}`);

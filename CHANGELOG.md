@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.292.0 - public release
+## 1.293.0 - public release
 
 Development happens in a private repository; this is where the public history starts.
 Earlier entries are not reproduced - they quote real operators by callsign, include
@@ -22,6 +22,7 @@ Notes for anyone running this:
 
 ## Release history
 
+- **1.293.0** — WEFAX
 - **1.292.0** — NAVTEX and SITOR-B, listen-only
 - **1.291.0** — FSQ and IFKP
 - **1.290.0** — Throb and ThrobX
@@ -337,4 +338,3 @@ Notes for anyone running this:
 - **1.60.4** — A restart no longer stamps the schedule over the operator mode
 - **1.60.3** — The band picker on one line
 - **1.60.2** — The Work station panel at half height
-- **1.60.1** — Self-update: untracked files do not block, token enterable on /update
