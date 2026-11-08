@@ -313,7 +313,7 @@ export const HellPanel = forwardRef<
             downTitle="Move the carrier 10 Hz down"
             upTitle="Move the carrier 10 Hz up"
           />
-          <span className="text-fg-subtle">or click the signal on the waterfall to centre it</span>
+          <span className="text-fg-subtle">or click their signal on the waterfall: you copy and transmit there, on their frequency</span>
         </div>
       )}
 

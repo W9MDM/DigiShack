@@ -165,7 +165,7 @@ export function Waterfall({
           {onPickHz && (
             <div
               className="absolute inset-0 cursor-crosshair pointer-events-auto"
-              title="Click to listen here"
+              title="Click a signal to work it: listen and transmit there"
               onClick={(e) => {
                 const r = e.currentTarget.getBoundingClientRect();
                 if (r.width > 0) onPickHz(Math.round(((e.clientX - r.left) / r.width) * maxHz));

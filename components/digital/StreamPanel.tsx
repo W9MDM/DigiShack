@@ -237,6 +237,7 @@ export function StreamPanel({
               pitch <span className="text-fg">{cw.pitchHz}</span> Hz
               {cw.pitchFromRadio ? " (radio)" : " (setting)"} · sending at{" "}
               <span className="text-fg">{cw.wpm}</span> wpm
+              <span className="text-fg-subtle"> · click a signal on the waterfall to zero-beat it</span>
               {cwStats && cwStats.chars > 0 && (
                 <>
                   {" "}

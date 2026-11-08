@@ -848,6 +848,20 @@ export default function DigitalPage({ wsUrl }: Props) {
       setRttyError(err instanceof ApiError ? err.message : "Could not move the JTTY offset");
     }
   }, []);
+  /**
+   * CW sends at the dial, so a click on a CW signal moves the dial: the signal lands on the
+   * pitch, where the decoder listens and where my own carrier will be. That is zero beat,
+   * the same frequency as the station I am answering.
+   */
+  const tuneCw = useCallback(async (hz: number, dial: number | null, pitchHz: number | null) => {
+    if (dial === null || pitchHz === null) return;
+    try {
+      await apiPost("/api/bridge/control", { action: "rig", freqHz: Math.round(dial + hz - pitchHz) });
+      setRttyError(null);
+    } catch (err) {
+      setRttyError(err instanceof ApiError ? err.message : "Could not move the dial");
+    }
+  }, []);
   /** Move the Feld Hell carrier: a click on the waterfall or the ± buttons. */
   const tuneHell = useCallback(async (centreHz: number, variant?: string) => {
     try {
@@ -1200,6 +1214,13 @@ export default function DigitalPage({ wsUrl }: Props) {
           <div className="mb-1.5 flex items-center justify-end">
             <ViewSwitch value={wfView} onChange={setWfView} />
           </div>
+          {/* Only the plain waterfall takes a click: on the text modes that click is how you
+              get onto the other station's frequency, so say where it went. */}
+          {wfView !== "waterfall" && canSwitch && ["RTTY", "CW", "PSK31", "OLIVIA", "HELL", "JTTY", "JS8"].includes(decodingAs) && (
+            <p className="text-xs text-warn">
+              To tune by clicking a signal, switch the view to Waterfall: that is the one that takes a click.
+            </p>
+          )}
           {wfView !== "waterfall" ? (
             <InlineSpectrum
               feed={liveAudio.feed}
@@ -1228,6 +1249,8 @@ export default function DigitalPage({ wsUrl }: Props) {
                       ? (hz) => void tuneOlivia(Math.round(hz))
                       : decodingAs === "HELL" && canSwitch
                         ? (hz) => void tuneHell(Math.round(hz))
+                        : decodingAs === "CW" && canSwitch && status?.cw && status.dialFrequency
+                          ? (hz) => void tuneCw(Math.round(hz), status.dialFrequency ?? null, status.cw?.pitchHz ?? null)
                         : decodingAs === "JTTY" && canSwitch
                           ? (hz) => void tuneJtty(Math.round(hz))
                           : undefined
