@@ -35,6 +35,7 @@ and a backup moves the whole installation.
 | [Hell](hell.md) | Hellschreiber in six modes (Feld, FM Hell-105 and -245, Hell 80, Slow, PSK), painted live as a scrolling tape, the North American nets, and sending |
 | [Text-mode exchange and log](text-mode-log.md) | F1-F8 lines with the calls filled in, and logging RTTY, CW, PSK, Olivia and Hell with their proper ADIF modes |
 | [RSID](rsid.md) | Hearing fldigi's mode identifier and switching to the mode and frequency it names, and sending one before each line |
+| [DominoEX](dominoex.md) | DominoEX 4 to 22: the drift-proof chat mode, sent and received |
 | [JTTY](jtty.md) | JTTY: the WSJT keyboard mode for RTTY contesters, every station in the passband, and sending |
 | [Icom protocol](icom-protocol.md) | The RS-BA1 wire format, for anyone working on the driver |
 | [LoTW upload](lotw-upload.md) | Signing and uploading to LoTW from the callsign certificate, without TQSL |

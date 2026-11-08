@@ -12,7 +12,7 @@ import { useMemo, useState } from "react";
 import { Button, Select } from "@/components/ui/primitives";
 import { ApiError, apiPost } from "@/lib/client/api";
 import { DIGITAL_FREQUENCIES, frequenciesForRegion, type DigitalMode } from "@/lib/ham/digital-freqs";
-import { registeredModems } from "@/lib/radio/modems";
+import { isModemId, registeredModems } from "@/lib/radio/modems";
 
 const MODES = [
   "FT8",
@@ -66,13 +66,16 @@ export function BandModePicker({
     currentBand !== null && DIGITAL_FREQUENCIES.some((f) => f.mode === m && f.band === currentBand)
       ? currentBand
       : null;
+  // The modems (MFSK, DominoEX, MT63) have no calling frequencies: they are worked anywhere
+  // in the digital segment, so choosing one decodes it where the dial already is.
+  const here = (m: DigitalMode): boolean => isModemId(m) && bandFor(m) === null;
 
-  async function tune(band: string, mode: DigitalMode) {
+  async function tune(band: string | null, mode: DigitalMode) {
     setBusy("tune");
     setError(null);
     try {
       // Through the bridge, which owns the radio and knows which one it is.
-      await apiPost("/api/bridge/control", { action: "tune", band, mode });
+      await apiPost("/api/bridge/control", band === null ? { action: "tune", mode, here: true } : { action: "tune", band, mode });
       // The decodes on screen belong to the old band.
       onTuned();
     } catch (err) {
@@ -130,14 +133,15 @@ export function BandModePicker({
             const m = e.target.value as DigitalMode;
             const target = bandFor(m);
             if (m !== decodingAs && target) void tune(target, m);
+            else if (m !== decodingAs && here(m)) void tune(null, m);
           }}
         >
           {MODES.map((m) => {
-            const canSwitch = m === decodingAs || bandFor(m) !== null;
+            const canSwitch = m === decodingAs || bandFor(m) !== null || here(m);
             return (
               <option key={m} value={m} disabled={!canSwitch}>
                 {m}
-                {canSwitch ? "" : " (not on this band)"}
+                {canSwitch ? (here(m) && m !== decodingAs ? " (here)" : "") : " (not on this band)"}
               </option>
             );
           })}

@@ -26,10 +26,15 @@ import { inferDigitalMode } from "@/lib/ham/digital-freqs";
 import { buildOperating, callingFrequencyHz, type Operating } from "./operating";
 import { watchGuardFaults } from "./guard-alerts";
 import { activeStation } from "@/lib/station/scope";
+import type { DigitalMode } from "@/lib/radio/types";
 
 export interface IcomBridgeDeps {
   /** The decoder moved to another mode, so the bridge can tune and report that mode. */
   onModeChanged?(mode: string): void;
+  /** Which mode to decode at a frequency: the bridge's rule, shared with the FlexRadio, which honours a mode chosen by name. */
+  decideMode?(hz: number, radioInCw: boolean): { mode: DigitalMode; certain: boolean; matched: { band: string } | null };
+  /** Hands the bridge a way to re-read the dial and the mode now, as after choosing a mode where the dial already is. */
+  setRefresh?(refresh: () => void): void;
   onDecodedWindow(
     d: {
       windowStart: Date;
@@ -252,9 +257,9 @@ export async function startIcomSource(deps: IcomBridgeDeps): Promise<IcomBridge>
   // where the radio actually is, including when the operator turns the knob.
   const configuredMode = ((await getSetting("digital.mode")) ?? "auto").toLowerCase();
 
-  const publishFrequency = () => {
+  const publishFrequency = (force = false) => {
     const hz = source.getFrequencyHz();
-    if (hz === null || hz === status.dialFrequency) return;
+    if (hz === null || (!force && hz === status.dialFrequency)) return;
     status.dialFrequency = hz;
     status.band = deps.freqToBand(hz);
 
@@ -265,7 +270,7 @@ export async function startIcomSource(deps: IcomBridgeDeps): Promise<IcomBridge>
     // full of nothing — the same symptom as a dead band, a wrong antenna or a broken
     // audio path, which is exactly the confusion inferDigitalMode exists to prevent.
     if (configuredMode === "auto") {
-      const guess = inferDigitalMode(hz);
+      const guess = deps.decideMode ? deps.decideMode(hz, /^CW/i.test(source.radioMode ?? "")) : inferDigitalMode(hz);
       if (source.setMode(guess.mode)) {
         console.log(
           `[bridge] ${(hz / 1e6).toFixed(3)} MHz -> decoding ${guess.mode}` +
@@ -286,6 +291,7 @@ export async function startIcomSource(deps: IcomBridgeDeps): Promise<IcomBridge>
   // band it is on" rather than as a brief wait.
   publishFrequency();
   const freqTimer = setInterval(publishFrequency, 500);
+  deps.setRefresh?.(() => publishFrequency(true));
 
   // Do not proceed until all three streams are genuinely CARRYING.
   //

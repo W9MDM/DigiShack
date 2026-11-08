@@ -55,6 +55,8 @@ const bodySchema = z.object({
   kind: z.enum(["flex", "icom", "wsjtx"]).optional(),
   /** The station to operate as, for action "station". */
   stationId: z.string().min(1).max(40).optional(),
+  /** Action "tune": switch to the mode where the dial is, for a mode with no calling frequencies. */
+  here: z.literal(true).optional(),
   /** Band to tune to, for action "tune". */
   band: z.string().trim().toUpperCase().min(2).max(8).optional(),
   // Rig control (CAT panel). Each is optional; only what is sent gets changed.

@@ -1436,6 +1436,37 @@ function sendJson(res: ServerResponse, code: number, body: unknown): void {
  * mode's calling frequency, so FT8 at 14.074 still means FT8.
  */
 let stickyMode: DigitalMode | null = null;
+/** Where a mode was chosen by name: a modem holds while the dial stays near it. */
+let stickyAtHz: number | null = null;
+
+/**
+ * Which mode to decode at `hz`: the one living there, unless the operator chose one by
+ * name. Both radios use it; the Icom inferred from the dial alone, so a mode chosen away
+ * from a calling frequency (RTTY in its segment, a modem anywhere) fell back to FT8.
+ *
+ * A mode chosen by name holds while the dial wanders where nothing has a calling
+ * frequency (an RTTY segment), and lets go when the dial lands on one - unless the
+ * chosen mode shares that frequency. JS8 and FT4 both sit on 18.104 and 50.318, and the
+ * inference prefers FT4 there; a shared frequency is exactly where the choice has to
+ * count, so the chosen mode stays and is certain. A modem (MFSK, DominoEX, MT63) has no
+ * calling frequencies and is worked among the others', so it holds within 5 kHz of where
+ * it was chosen whatever lives there.
+ */
+function decideMode(hz: number, radioInCw: boolean): ModeGuess {
+  let inferred: ModeGuess = radioInCw ? { mode: "CW", certain: true, matched: null } : inferDigitalMode(hz);
+  if (!radioInCw && stickyMode && isModemId(stickyMode) && stickyAtHz !== null && Math.abs(hz - stickyAtHz) <= 5_000) {
+    return { mode: stickyMode, certain: false, matched: null };
+  }
+  if (stickyMode && inferred.certain && inferred.mode !== stickyMode) {
+    const chosen = stickyMode;
+    const shared = DIGITAL_FREQUENCIES.find((f) => f.mode === chosen && Math.abs(f.hz - hz) <= 500);
+    if (shared) inferred = { mode: shared.mode, certain: true, matched: shared };
+    else stickyMode = null;
+  }
+  return stickyMode && !inferred.certain ? { mode: stickyMode, certain: false, matched: null } : inferred;
+}
+/** The Icom's re-read of the dial and the mode, forced: set when its source starts. */
+let icomRefresh: (() => void) | null = null;
 
 /**
  * Where the station was: dial, slice mode, and the mode chosen by name, saved as it
@@ -1907,11 +1938,14 @@ async function tuneTo(
 ): Promise<{ ok: true; hz: number } | { ok: false; code: number; error: string; hz?: number }> {
   // Chosen by name: holds while the dial moves where nothing has a calling frequency.
   stickyMode = mode;
+  stickyAtHz = hz;
 
   if (status.source === "icom") {
     if (!icomSource) return { ok: false, code: 503, error: "The Icom is not connected", hz };
     try {
       await icomSource.setFrequencyHz(hz);
+      // The dial may not have moved (a mode chosen where it is): re-read it now either way.
+      icomRefresh?.();
       // A digital calling frequency implies the mode. The transmitter sets this
       // before every transmission anyway; doing it here means the RECEIVER is
       // right too, which is what decodes depend on.
@@ -3053,23 +3087,7 @@ async function startFlexSource(): Promise<() => Promise<void>> {
     // mode is pinned in Settings it is inferred from where the radio is tuned.
     if (configuredMode === "auto") {
       // A slice in CW mode is CW whatever the dial says: the operator switched the radio.
-      let inferred: ModeGuess = /^CW/i.test(slice.mode ?? "")
-        ? { mode: "CW", certain: true, matched: null }
-        : inferDigitalMode(slice.freqHz);
-      // A mode chosen by name holds while the dial wanders where nothing has a calling
-      // frequency (an RTTY segment), and lets go when the dial lands on one - unless the
-      // chosen mode shares that frequency. JS8 and FT4 both sit on 18.104 and 50.318, and
-      // the inference prefers FT4 there; a shared frequency is exactly where the choice
-      // has to count, so the chosen mode stays and is certain.
-      if (stickyMode && inferred.certain && inferred.mode !== stickyMode) {
-        const chosen = stickyMode;
-        const hz = slice.freqHz ?? NaN;
-        const shared = DIGITAL_FREQUENCIES.find((f) => f.mode === chosen && Math.abs(f.hz - hz) <= 500);
-        if (shared) inferred = { mode: shared.mode, certain: true, matched: shared };
-        else stickyMode = null;
-      }
-      const guess: ModeGuess =
-        stickyMode && !inferred.certain ? { mode: stickyMode, certain: false, matched: null } : inferred;
+      const guess = decideMode(slice.freqHz, /^CW/i.test(slice.mode ?? ""));
       if (source.setMode(guess.mode)) {
         console.log(
           `[bridge] ${(slice.freqHz / 1e6).toFixed(3)} MHz -> decoding ${guess.mode}` +
@@ -3640,6 +3658,10 @@ async function startIcomBridge(): Promise<() => Promise<void>> {
   const bridge = await startIcomSource({
     onLost,
     onModeChanged: (mode) => icomModeChanged(mode),
+    decideMode: (hz, cw) => decideMode(hz, cw),
+    setRefresh: (fn) => {
+      icomRefresh = fn;
+    },
     onDecodedWindow,
     broadcast,
     status,
@@ -5856,6 +5878,21 @@ async function main(): Promise<void> {
         const tunable = ["FT8", "FT4", "FT2", "WSPR", "RTTY", "CW", "JS8", "PSK31", "OLIVIA", "SSTV", "HELL", "JTTY", ...registeredModems().map((m) => m.id)];
         if (!tunable.includes(mode)) {
           sendJson(res, 400, { error: `mode must be one of ${tunable.join(", ")}` });
+          return;
+        }
+        // A modem has no calling frequencies: it is decoded where the dial already is.
+        if (body.here === true) {
+          if (!isModemId(mode)) {
+            sendJson(res, 400, { error: `${mode} has calling frequencies: give a band` });
+            return;
+          }
+          if (status.dialFrequency === null) {
+            sendJson(res, 409, { error: "The radio has not reported a frequency yet" });
+            return;
+          }
+          const r = await tuneTo(status.dialFrequency, mode);
+          if (r.ok) sendJson(res, 200, { ok: true, mode, freqHz: r.hz });
+          else sendJson(res, r.code, { ok: false, mode, freqHz: r.hz, error: r.error });
           return;
         }
         const r = await tuneToCalling(band, mode);
