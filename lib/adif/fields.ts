@@ -39,6 +39,20 @@ const TO_ADIF: Record<string, AdifMode> = {
   HELL80: { mode: "HELL", submode: "HELL80" },
   SLOWHELL: { mode: "HELL", submode: "SLOWHELL" },
   PSKHELL: { mode: "HELL", submode: "PSKHELL" },
+  // MFSK's speeds are ADIF's MFSK submodes, as FT4 is; DominoEX is DOMINO's submode (ADIF
+  // does not carry its speed); MT63 is its own mode; QPSK and the faster BPSK are PSK's.
+  MFSK8: { mode: "MFSK", submode: "MFSK8" },
+  MFSK11: { mode: "MFSK", submode: "MFSK11" },
+  MFSK16: { mode: "MFSK", submode: "MFSK16" },
+  MFSK22: { mode: "MFSK", submode: "MFSK22" },
+  MFSK32: { mode: "MFSK", submode: "MFSK32" },
+  DOMINOEX: { mode: "DOMINO", submode: "DOMINOEX" },
+  MT63: { mode: "MT63" },
+  QPSK31: { mode: "PSK", submode: "QPSK31" },
+  QPSK63: { mode: "PSK", submode: "QPSK63" },
+  QPSK125: { mode: "PSK", submode: "QPSK125" },
+  PSK250: { mode: "PSK", submode: "PSK250" },
+  PSK500: { mode: "PSK", submode: "PSK500" },
   SSTV: { mode: "SSTV" },
   DIGITALVOICE: { mode: "DIGITALVOICE" },
 };
@@ -64,7 +78,9 @@ export function fromAdifMode(mode: string, submode?: string): string {
     if (s === "FT4") return "FT4";
     if (s === "FT2") return "FT2";
     if (s === "PSK31") return "PSK31";
-    if (s === "PSK63" || s === "PSK125") return s;
+    if (s === "PSK63" || s === "PSK125" || s === "PSK250" || s === "PSK500") return s;
+    if (m === "PSK" && (s === "QPSK31" || s === "QPSK63" || s === "QPSK125")) return s;
+    if (m === "DOMINO" && s === "DOMINOEX") return "DOMINOEX";
     if (m === "HELL" && ["FSKH105", "FSKH245", "HELL80", "SLOWHELL", "PSKHELL"].includes(s)) return s;
     if (s === "JS8") return "JS8";
     if (s === "USB" || s === "LSB") return "SSB";

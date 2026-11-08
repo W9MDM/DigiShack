@@ -20,6 +20,7 @@
 import type { AutoMode } from "@/lib/radio/auto-mode";
 import { digitalCallingFrequency } from "@/lib/radio/modes";
 import type { SchedulableAuto } from "@/lib/radio/schedule-runner";
+import { MODEM_IDS } from "@/lib/radio/modems";
 
 /**
  * Whether a running sequencer must stop because the dial is no longer on one of its
@@ -36,7 +37,7 @@ export function sequencerOffFrequency(subMode: string | null, dialHz: number | n
 }
 
 /** Modes with nothing for a sequencer to answer: no automatic mode runs on them and nothing is called. */
-export const NO_SEQUENCER_MODES: ReadonlySet<string> = new Set(["WSPR", "RTTY", "CW", "JS8", "PSK31", "OLIVIA", "SSTV", "HELL", "JTTY"]);
+export const NO_SEQUENCER_MODES: ReadonlySet<string> = new Set(["WSPR", "RTTY", "CW", "JS8", "PSK31", "OLIVIA", "SSTV", "HELL", "JTTY", ...MODEM_IDS]);
 
 export function noSequencerReason(mode: string): string {
   if (mode === "WSPR") return "WSPR is receive-only: tune to an FT8, FT4 or FT2 frequency before starting an automatic mode";

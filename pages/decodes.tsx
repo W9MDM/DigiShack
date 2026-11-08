@@ -40,6 +40,7 @@ import type { SstvTxState } from "@/components/digital/SstvSend";
 import { StreamPanel, type StreamStats } from "@/components/digital/StreamPanel";
 import { Waterfall, type WaterfallMarker, type WaterfallTag } from "@/components/digital/Waterfall";
 import { RsidBar } from "@/components/digital/RsidBar";
+import { isModemId, modem, modemSub, registeredModems } from "@/lib/radio/modems";
 import { InlineSpectrum, useInlineView, useLiveSpectrum, ViewSwitch } from "@/components/spectrum/InlineSpectrum";
 import { Badge, Button, Card, EmptyState, ErrorBanner, PageHeader } from "@/components/ui/primitives";
 import { withPageAuth } from "@/lib/auth/guard";
@@ -82,9 +83,10 @@ const DIGITAL_MODES: readonly DigitalMode[] = [
   "SSTV",
   "HELL",
   "JTTY",
+  ...registeredModems().map((m) => m.id),
 ];
 /** Text modes: a terminal instead of the decode table. */
-const STREAM_MODES = new Set(["RTTY", "CW", "PSK31", "OLIVIA", "JTTY"]);
+const STREAM_MODES = new Set<string>(["RTTY", "CW", "PSK31", "OLIVIA", "JTTY", ...registeredModems().map((m) => m.id)]);
 /** Modes whose panel replaces the decode table, titled by the mode. */
 const PANEL_TITLE: Record<string, string> = {
   RTTY: "RTTY",
@@ -94,6 +96,7 @@ const PANEL_TITLE: Record<string, string> = {
   JTTY: "JTTY",
   SSTV: "SSTV",
   HELL: "Hell",
+  ...Object.fromEntries(registeredModems().map((m) => [m.id, m.label])),
 };
 
 interface SpectrumMsg {
@@ -701,6 +704,14 @@ export default function DigitalPage({ wsUrl }: Props) {
         { hz: status.jtty.txHz + 94, label: "edge", emphasis: false },
       ];
     }
+    if (status?.modem && status.subMode === status.modem.mode) {
+      const half = status.modem.bandwidthHz / 2;
+      return [
+        { hz: status.modem.centreHz, label: status.modem.label, emphasis: true },
+        { hz: status.modem.centreHz - half, label: "edge", emphasis: false },
+        { hz: status.modem.centreHz + half, label: "edge", emphasis: false },
+      ];
+    }
     if (status?.subMode === "HELL" && status.hell) {
       const v = hellVariant(status.hell.variant);
       // FSK: the two tones, ink below and paper above. On and off, and PSK: the carrier and
@@ -723,7 +734,7 @@ export default function DigitalPage({ wsUrl }: Props) {
     return rows
       .filter((r) => r.timestamp === newest)
       .map((r) => ({ hz: r.freqOffset, label: r.message, emphasis: mentionsMe(r.message) }));
-  }, [rows, mentionsMe, status?.subMode, status?.rtty, status?.cw, status?.psk, status?.olivia, status?.hell, status?.jtty]);
+  }, [rows, mentionsMe, status?.subMode, status?.rtty, status?.cw, status?.psk, status?.olivia, status?.hell, status?.jtty, status?.modem]);
 
   const cyclePct = ((now % scale.periodMs) / scale.periodMs) * 100;
 
@@ -861,6 +872,15 @@ export default function DigitalPage({ wsUrl }: Props) {
       setRttyError(null);
     } catch (err) {
       setRttyError(err instanceof ApiError ? err.message : "Could not move the dial");
+    }
+  }, []);
+  /** Move a modem's centre (a click on the waterfall or the ± buttons) or change its size. */
+  const tuneModem = useCallback(async (mode: string, centreHz?: number, sub?: string) => {
+    try {
+      await apiPost("/api/bridge/control", { action: "modem", mode, centreHz, sub });
+      setRttyError(null);
+    } catch (err) {
+      setRttyError(err instanceof ApiError ? err.message : "Could not move the centre");
     }
   }, []);
   /** RSID: what to do when one is heard, whether to send one, or switch to the last heard. */
@@ -1021,10 +1041,14 @@ export default function DigitalPage({ wsUrl }: Props) {
         return status?.olivia?.code === "contestia"
           ? { mode: "CONTESTI", label: "Contestia", freqHz: at(status?.olivia?.centreHz) }
           : { mode: "OLIVIA", label: "Olivia", freqHz: at(status?.olivia?.centreHz) };
-      default:
-        return null;
+      default: {
+        const spec = modem(decodingAs);
+        if (!spec || !status?.modem || status.modem.mode !== decodingAs) return null;
+        const sub = modemSub(spec, status.modem.sub);
+        return { mode: sub.logMode, label: sub.label, freqHz: at(status.modem.centreHz) };
+      }
     }
-  }, [decodingAs, status?.dialFrequency, status?.hell, status?.rtty, status?.psk, status?.olivia]);
+  }, [decodingAs, status?.dialFrequency, status?.hell, status?.rtty, status?.psk, status?.olivia, status?.modem]);
   // The band buttons keep the operator on the mode being decoded; FT8 until the radio says.
   const tuneMode: DigitalMode = (DIGITAL_MODES as readonly string[]).includes(decodingAs)
     ? (decodingAs as DigitalMode)
@@ -1261,6 +1285,8 @@ export default function DigitalPage({ wsUrl }: Props) {
                         ? (hz) => void tuneHell(Math.round(hz))
                         : decodingAs === "CW" && canSwitch && status?.cw && status.dialFrequency
                           ? (hz) => void tuneCw(Math.round(hz), status.dialFrequency ?? null, status.cw?.pitchHz ?? null)
+                        : isModemId(decodingAs) && canSwitch
+                          ? (hz) => void tuneModem(decodingAs, Math.round(hz))
                         : decodingAs === "JTTY" && canSwitch
                           ? (hz) => void tuneJtty(Math.round(hz))
                           : undefined
@@ -1489,6 +1515,8 @@ export default function DigitalPage({ wsUrl }: Props) {
                   olivia={status?.olivia ?? null}
                   jtty={status?.jtty ?? null}
                   onJttyTune={(hz) => void tuneJtty(hz)}
+                  modem={status?.modem ?? null}
+                  onModemTune={(centreHz, sub) => void tuneModem(decodingAs, centreHz, sub)}
                   canTune={canSwitch}
                   canSend={canSwitch}
                   myCall={myCall}

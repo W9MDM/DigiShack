@@ -87,6 +87,7 @@ import type {
   RadioSource,
   RadioTelemetry,
 } from "@/lib/radio/types";
+import { isModemId, modem, type ModemId } from "@/lib/radio/modems";
 
 /**
  * Everything this source emits.
@@ -351,9 +352,26 @@ export class IcomSource
       case "JTTY":
         return { mode: "JTTY" };
       default:
-        return null;
+        return isModemId(mode) ? this.modemOptionsFor(mode) : null;
     }
   }
+
+  /** Each registered modem's centre and sub, as the bridge last set them. */
+  private modemOptions = new Map<ModemId, Extract<StreamOptions, { sub: string }>>();
+
+  /** A modem's options: its last setting, or the table's defaults. */
+  private modemOptionsFor(id: ModemId): StreamOptions | null {
+    const spec = modem(id);
+    if (!spec) return null;
+    return this.modemOptions.get(id) ?? { mode: id, centreHz: spec.defaultCentreHz, sub: spec.defaultSub };
+  }
+
+  /** A modem's centre and sub. Takes effect at once while that modem is streaming. */
+  setModemOptions(opts: Extract<StreamOptions, { sub: string }>): void {
+    this.modemOptions.set(opts.mode, opts);
+    if (this.pipeline.streaming === opts.mode) this.pipeline.setStream(opts);
+  }
+
 
   setRttyOptions(opts: Extract<StreamOptions, { mode: "RTTY" }>): void {
     this.rttyOptions = opts;

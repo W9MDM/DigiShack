@@ -171,6 +171,7 @@ import { postWsprSpots, wsprSpotOf, type WsprSpotReport } from "@/lib/wsprnet/up
 import { RTTY_CENTRE_HZ, RTTY_SHIFT_HZ, rttyDurationMs, rttyTones } from "@/lib/digital/rtty";
 import { cwDurationMs } from "@/lib/digital/cw";
 import { RSID_DURATION_MS, type RsidHeard } from "@/lib/digital/rsid";
+import { isModemId, modem, modemSub, registeredModems, type ModemId } from "@/lib/radio/modems";
 import { textRsidCode } from "@/lib/radio/text-waveform";
 import { PSK31_CENTRE_HZ, psk31DurationMs, type PskSpeed } from "@/lib/digital/psk31";
 import { OLIVIA_MODES, oliviaDurationMs, type OliviaBandwidth, type OliviaCode, type OliviaTones } from "@/lib/digital/olivia";
@@ -270,6 +271,8 @@ interface RigStatus {
   olivia: { centreHz: number; tones: OliviaTones; bandwidth: OliviaBandwidth; code: OliviaCode } | null;
   /** The Feld Hell carrier, while on Hell. */
   hell: { centreHz: number; variant: HellVariant } | null;
+  /** A registered modem's centre and size, while on it: MFSK, DominoEX, MT63. */
+  modem: { mode: ModemId; centreHz: number; sub: string; label: string; bandwidthHz: number } | null;
   /** RSID: the settings, and the last one heard (its mode, where, and whether we switched). */
   rsid: {
     receive: "switch" | "notify" | "off";
@@ -423,6 +426,7 @@ const status: RigStatus = {
   olivia: null,
   hell: null,
   rsid: { receive: "switch", transmit: false, last: null },
+  modem: null,
   jtty: null,
   js8: null,
   js8Speed: "normal",
@@ -1523,6 +1527,21 @@ const hellTuning: { centreHz: number; variant: HellVariant } = { centreHz: HELL_
 let hellApply: (() => void) | null = null;
 
 /**
+ * The registered modems (MFSK, DominoEX, MT63): each one's centre and size, for the
+ * session. A modem not yet set starts at its table defaults.
+ */
+const modemTuning = new Map<ModemId, { centreHz: number; sub: string }>();
+let modemApply: ((id: ModemId) => void) | null = null;
+
+/** A modem's tuning: as last set, or its defaults. */
+function modemTuningFor(id: ModemId): { centreHz: number; sub: string } {
+  const spec = modem(id);
+  const t = modemTuning.get(id) ?? { centreHz: spec?.defaultCentreHz ?? 1500, sub: spec?.defaultSub ?? "" };
+  modemTuning.set(id, t);
+  return t;
+}
+
+/**
  * RSID, fldigi's mode identifier: what to do when one is heard, and whether to send one
  * before each line. Starting values from Settings (rsid.receive, rsid.transmit).
  */
@@ -1609,6 +1628,7 @@ interface StreamTuningTarget {
   setPskOptions(opts: Extract<StreamOptions, { mode: "PSK31" }>): void;
   setOliviaOptions(opts: Extract<StreamOptions, { mode: "OLIVIA" }>): void;
   setHellOptions(opts: Extract<StreamOptions, { mode: "HELL" }>): void;
+  setModemOptions(opts: Extract<StreamOptions, { sub: string }>): void;
 }
 
 /**
@@ -1664,6 +1684,14 @@ function wireStreamTuning(source: StreamTuningTarget, cwPitchFromRadio: () => nu
     source.setHellOptions({ mode: "HELL", centreHz: hellTuning.centreHz, variant: hellTuning.variant });
     status.hell = { centreHz: hellTuning.centreHz, variant: hellTuning.variant };
   };
+  modemApply = (id: ModemId) => {
+    const spec = modem(id);
+    if (!spec) return;
+    const t = modemTuningFor(id);
+    const sub = modemSub(spec, t.sub);
+    source.setModemOptions({ mode: id, centreHz: t.centreHz, sub: sub.id });
+    status.modem = { mode: id, centreHz: t.centreHz, sub: sub.id, label: sub.label, bandwidthHz: sub.bandwidthHz };
+  };
 }
 
 /** Call the apply hook for the stream mode now in force, if it is one. */
@@ -1674,6 +1702,7 @@ function applyStreamTuning(mode: string | null): void {
   if (mode === "OLIVIA") oliviaApply?.();
   if (mode === "HELL") hellApply?.();
   if (mode === "JTTY") jttyApply();
+  if (isModemId(mode)) modemApply?.(mode);
 }
 
 /**
@@ -1754,6 +1783,10 @@ async function applyRsid(h: RsidHeard): Promise<boolean> {
       hellTuning.centreHz = hz;
       break;
     case "CW":
+      break;
+    default:
+      // A registered modem: its size and centre.
+      if (isModemId(m.mode)) modemTuning.set(m.mode, { centreHz: hz, sub: m.sub });
       break;
   }
   const dial = status.dialFrequency;
@@ -5564,8 +5597,9 @@ async function main(): Promise<void> {
           sendJson(res, 409, { error: "SSTV sends pictures, not text: use Send a picture" });
           return;
         }
-        const req1 =
-          streamMode === "JTTY"
+        const req1 = isModemId(streamMode)
+          ? { mode: streamMode, text, centreHz: modemTuningFor(streamMode).centreHz, shiftHz: 0, sideband: "USB" as const, sub: modemTuningFor(streamMode).sub }
+          : streamMode === "JTTY"
             ? { mode: "JTTY" as const, text, centreHz: jttyTuning.txHz, shiftHz: 0, sideband: "USB" as const }
             : streamMode === "HELL"
             ? { mode: "HELL" as const, text, centreHz: hellTuning.centreHz, shiftHz: 0, sideband: "USB" as const, hellVariant: hellTuning.variant }
@@ -5619,8 +5653,10 @@ async function main(): Promise<void> {
             console.error(`[${tag}] send failed: ${err instanceof Error ? err.message : String(err)}`);
           },
         );
-        const durationMs =
-          streamMode === "CW"
+        const modemSpec = modem(streamMode);
+        const durationMs = modemSpec
+          ? modemSpec.durationMs(text, modemSub(modemSpec, modemTuningFor(modemSpec.id).sub).id)
+          : streamMode === "CW"
             ? cwDurationMs(text, cwTuning.wpm)
             : streamMode === "PSK31"
               ? psk31DurationMs(text, { speed: pskTuning.speed })
@@ -5679,6 +5715,33 @@ async function main(): Promise<void> {
         jttyApply();
         broadcast({ kind: "status", status });
         sendJson(res, 200, { ok: true, jtty: status.jtty });
+        return;
+      }
+
+      // POST /modem — a registered modem's centre (Hz audio) and size: { mode: "MFSK",
+      // centreHz?, sub? }. For the session; a modem starts at its table defaults.
+      if (url.pathname === "/modem") {
+        const body = await readJson(req);
+        const id = String(body.mode ?? "").toUpperCase();
+        const spec = modem(id);
+        if (!spec) {
+          sendJson(res, 400, { error: `mode must be one of ${registeredModems().map((m) => m.id).join(", ") || "(none registered)"}` });
+          return;
+        }
+        const t = modemTuningFor(spec.id);
+        const centre = body.centreHz === undefined ? t.centreHz : Number(body.centreHz);
+        if (!Number.isFinite(centre) || centre < 300 || centre > 2800) {
+          sendJson(res, 400, { error: "centreHz must be between 300 and 2800" });
+          return;
+        }
+        if (body.sub !== undefined && !spec.subs.some((x) => x.id === String(body.sub))) {
+          sendJson(res, 400, { error: `sub must be one of ${spec.subs.map((x) => x.id).join(", ")}` });
+          return;
+        }
+        modemTuning.set(spec.id, { centreHz: Math.round(centre), sub: body.sub === undefined ? t.sub : String(body.sub) });
+        if (status.subMode === spec.id) modemApply?.(spec.id);
+        broadcast({ kind: "status", status });
+        sendJson(res, 200, { ok: true, modem: status.modem });
         return;
       }
 
@@ -5790,8 +5853,9 @@ async function main(): Promise<void> {
         const body = await readJson(req);
         const band = String(body.band ?? "").toUpperCase();
         const mode = String(body.mode ?? "FT8").toUpperCase() as DigitalMode;
-        if (!["FT8", "FT4", "FT2", "WSPR", "RTTY", "CW", "JS8", "PSK31", "OLIVIA", "SSTV", "HELL", "JTTY"].includes(mode)) {
-          sendJson(res, 400, { error: "mode must be FT8, FT4, FT2, WSPR, RTTY, CW, JS8, PSK31, OLIVIA, SSTV, HELL or JTTY" });
+        const tunable = ["FT8", "FT4", "FT2", "WSPR", "RTTY", "CW", "JS8", "PSK31", "OLIVIA", "SSTV", "HELL", "JTTY", ...registeredModems().map((m) => m.id)];
+        if (!tunable.includes(mode)) {
+          sendJson(res, 400, { error: `mode must be one of ${tunable.join(", ")}` });
           return;
         }
         const r = await tuneToCalling(band, mode);

@@ -28,6 +28,7 @@
 import type { HellVariant } from "@/lib/digital/hell";
 import type { OliviaBandwidth, OliviaCode, OliviaTones } from "@/lib/digital/olivia";
 import type { PskSpeed } from "@/lib/digital/psk31";
+import { modemForRsid, type ModemId } from "@/lib/radio/modems";
 
 export const RSID_SAMPLE_RATE = 11025;
 /** Samples a symbol at 11025: 92.9 ms. */
@@ -89,7 +90,9 @@ export type RsidMode =
   | { mode: "RTTY"; baud: number; shiftHz: number }
   | { mode: "OLIVIA"; code: OliviaCode; tones: OliviaTones; bandwidth: OliviaBandwidth }
   | { mode: "HELL"; variant: HellVariant }
-  | { mode: "CW" };
+  | { mode: "CW" }
+  /** A registered modem (lib/radio/modems.ts): MFSK, DominoEX, MT63. */
+  | { mode: ModemId; sub: string };
 
 export interface RsidEntry {
   code: number;
@@ -579,6 +582,9 @@ export class RsidDetector {
     // The carrier is seven tones, fourteen bins, above tone 0. fldigi adds fourteen and a
     // half, which reads its own signal 2.7 Hz high; the centre is what a click wants.
     const hz = ((bin + 14) * RSID_SAMPLE_RATE) / FFT_LEN;
-    this.onHeard({ code: entry.code, name: entry.name, mode: entry.mode, hz: Math.round(hz * 10) / 10, eot: entry.code === RSID_EOT });
+    // A modem names its own codes in lib/radio/modems.ts, once it is registered.
+    const m = modemForRsid(entry.code);
+    const mode: RsidMode | undefined = entry.mode ?? (m ? { mode: m.modem, sub: m.sub } : undefined);
+    this.onHeard({ code: entry.code, name: entry.name, mode, hz: Math.round(hz * 10) / 10, eot: entry.code === RSID_EOT });
   }
 }

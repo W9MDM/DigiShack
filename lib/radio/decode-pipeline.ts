@@ -35,6 +35,7 @@ import type { OliviaBandwidth, OliviaCode, OliviaTones } from "@/lib/digital/oli
 import { HashCallBook as Ft2HashCallBook } from "@/lib/digital/pack77";
 import { js8SubmodeNow, PERIOD_MS, TRANSMISSION_MS } from "@/lib/radio/timing";
 import { RsidDetector, type RsidHeard } from "@/lib/digital/rsid";
+import { isModemId, modem, type ModemDemodulator, type ModemId } from "@/lib/radio/modems";
 import type { TxMode } from "@/lib/radio/waveform";
 
 /** What every decoder here is fed, whatever the radio delivered. */
@@ -292,6 +293,11 @@ function streamConfigurationKey(opts: StreamOptions, includeTuning = true): stri
       configuration = [opts.mode];
       tuning = [];
       break;
+    default:
+      // A modem: a size or speed change is a new demodulator, a centre change a retune.
+      configuration = [opts.mode, opts.sub];
+      tuning = [opts.centreHz];
+      break;
   }
   return JSON.stringify(includeTuning ? [...configuration, ...tuning] : configuration);
 }
@@ -301,10 +307,20 @@ function streamConfigurationKey(opts: StreamOptions, includeTuning = true): stri
  * the line idles on mark between keystrokes and the decoder runs the whole time. CW is
  * the same: a key, a tone, and text as it is sent.
  */
-export type StreamMode = "RTTY" | "CW" | "PSK31" | "OLIVIA" | "SSTV" | "HELL" | "JTTY";
+export type StreamMode = "RTTY" | "CW" | "PSK31" | "OLIVIA" | "SSTV" | "HELL" | "JTTY" | ModemId;
 
 export function isStreamMode(mode: string | null | undefined): mode is StreamMode {
-  return mode === "RTTY" || mode === "CW" || mode === "PSK31" || mode === "OLIVIA" || mode === "SSTV" || mode === "HELL" || mode === "JTTY";
+  return (
+    mode === "RTTY" ||
+    mode === "CW" ||
+    mode === "PSK31" ||
+    mode === "OLIVIA" ||
+    mode === "SSTV" ||
+    mode === "HELL" ||
+    mode === "JTTY" ||
+    // A modem only once it is registered (lib/radio/modems.ts).
+    (isModemId(mode) && modem(mode) !== null)
+  );
 }
 
 /** SSTV's events: a picture starting, rows as they arrive, the picture complete. */
@@ -370,6 +386,13 @@ export type StreamOptions =
   | {
       /** JTTY: every station in the passband. See lib/digital/jttydemod.ts. */
       mode: "JTTY";
+    }
+  | {
+      /** A registered modem: MFSK, DominoEX, MT63. See lib/radio/modems.ts. */
+      mode: ModemId;
+      centreHz: number;
+      /** Its size or speed: "16" for MFSK16, "1000L" for MT63-1000L. */
+      sub: string;
     };
 
 /** What a stream's heartbeat carries: the running counts, and what that decoder measures. */
@@ -437,6 +460,17 @@ export type StreamHeartbeat =
       levelDb: number;
       /** Whether that is above what noise alone reaches. */
       signal: boolean;
+    }
+  | {
+      mode: ModemId;
+      sub: string;
+      seconds: number;
+      chars: number;
+      errors: number;
+      quality: number;
+      afcHz: number;
+      level: number;
+      open: boolean;
     }
   | {
       mode: "JTTY";
@@ -691,8 +725,11 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
   /** SSTV prints no text; its pictures go out as `sstv` events. */
   private readonly sstvStream = { feed: (s: ArrayLike<number>): string => (this.sstv?.feed(s), "") };
   private get stream(): { feed(samples: ArrayLike<number>): string } | null {
-    return this.rtty ?? this.cw ?? this.psk ?? this.olivia ?? this.hell ?? this.jtty ?? (this.sstv ? this.sstvStream : null);
+    return this.rtty ?? this.cw ?? this.psk ?? this.olivia ?? this.hell ?? this.jtty ?? this.modem ?? (this.sstv ? this.sstvStream : null);
   }
+  /** A registered modem's demodulator, and which sub it is running. */
+  private modem: ModemDemodulator | null = null;
+  private modemSub = "";
   private streamMode: StreamMode | null = null;
   /** fldigi's mode identifier, listened for across the passband in the keyboard modes. Made on first use. */
   private rsid: RsidDetector | null = null;
@@ -883,6 +920,7 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
       this.sstv = null;
       this.hell = null;
       this.jtty = null;
+      this.modem = null;
       this.streamMode = null;
       this.start();
       return;
@@ -923,6 +961,10 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
       this.hell.retune(opts.centreHz);
       return;
     }
+    if (canRetune && isModemId(opts.mode) && this.modem && "sub" in opts) {
+      this.modem.retune(opts.centreHz);
+      return;
+    }
     if (this.timer) {
       clearTimeout(this.timer);
       this.timer = null;
@@ -935,6 +977,7 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
     this.sstv = null;
     this.hell = null;
     this.jtty = null;
+    this.modem = null;
     this.streamMode = opts.mode;
     if (opts.mode === "RTTY") {
       const { mode: _m, ...rest } = opts;
@@ -959,6 +1002,11 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
       });
     } else if (opts.mode === "HELL") {
       this.hell = new HellDemodulator({ sampleRate: this.inputRate, centreHz: opts.centreHz, variant: opts.variant });
+    } else if (isModemId(opts.mode) && "sub" in opts) {
+      const spec = modem(opts.mode);
+      if (!spec) throw new Error(`${opts.mode} is not a registered modem`);
+      this.modemSub = opts.sub;
+      this.modem = spec.demodulator({ sampleRate: this.inputRate, centreHz: opts.centreHz, sub: opts.sub });
     } else if (opts.mode === "JTTY") {
       this.jtty = new JttyDemodulator(this.inputRate, {
         onMessage: (m) => this.emit("jtty", { ...m, at: Date.now() }),
@@ -975,7 +1023,7 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
         code: opts.code,
         syncThreshold: opts.syncThreshold,
       });
-    } else {
+    } else if (opts.mode === "PSK31") {
       // A speed change is a new demodulator: the decimation and the timing are per baud.
       this.pskSpeed = opts.speed ?? 31;
       this.psk = new Psk31Demodulator({
@@ -1066,6 +1114,19 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
       } else if (this.hell) {
         const s = this.hell.statistics;
         this.emit("stream", { mode: "HELL", seconds, columns: s.columns, levelDb: s.levelDb, signal: s.signal });
+      } else if (this.modem && isModemId(this.streamMode)) {
+        const s = this.modem.statistics;
+        this.emit("stream", {
+          mode: this.streamMode,
+          sub: this.modemSub,
+          seconds,
+          chars: s.chars,
+          errors: s.errors,
+          quality: s.quality,
+          afcHz: s.afcHz,
+          level: s.level,
+          open: s.open,
+        });
       } else if (this.jtty) {
         const s = this.jtty.statistics;
         this.emit("stream", {

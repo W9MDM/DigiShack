@@ -12,6 +12,7 @@ import { useMemo, useState } from "react";
 import { Button, Select } from "@/components/ui/primitives";
 import { ApiError, apiPost } from "@/lib/client/api";
 import { DIGITAL_FREQUENCIES, frequenciesForRegion, type DigitalMode } from "@/lib/ham/digital-freqs";
+import { registeredModems } from "@/lib/radio/modems";
 
 const MODES = [
   "FT8",
@@ -26,7 +27,9 @@ const MODES = [
   "SSTV",
   "HELL",
   "JTTY",
-] as const satisfies readonly DigitalMode[];
+  // The registered modems (lib/radio/modems.ts), once each lands.
+  ...registeredModems().map((m) => m.id),
+] satisfies readonly DigitalMode[];
 
 export function BandModePicker({
   currentBand,

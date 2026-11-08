@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { Nudge, NativeSelect, ToggleButton } from "@/components/decodes/controls";
 import { Badge, Button, Input } from "@/components/ui/primitives";
+import { modem as modemSpec, type ModemId } from "@/lib/radio/modems";
 import { cn } from "@/lib/utils";
 
 /** The bridge's once-a-second heartbeat for a stream mode, with what its decoder measures. */
@@ -52,6 +53,18 @@ export type StreamStats =
       open: boolean;
     }
   | {
+      /** A registered modem: MFSK, DominoEX, MT63. */
+      mode: ModemId;
+      sub: string;
+      seconds: number;
+      chars: number;
+      errors: number;
+      quality: number;
+      afcHz: number;
+      level: number;
+      open: boolean;
+    }
+  | {
       mode: "JTTY";
       seconds: number;
       frames: number;
@@ -96,6 +109,15 @@ export interface OliviaTuning {
   code?: "olivia" | "contestia";
 }
 
+/** A registered modem's tuning, as the bridge reports it. */
+export interface ModemTuning {
+  mode: ModemId;
+  centreHz: number;
+  sub: string;
+  label: string;
+  bandwidthHz: number;
+}
+
 /** The sizes the picker offers, as the bridge accepts them. */
 export const OLIVIA_SIZES: readonly { tones: number; bandwidth: number }[] = [
   { tones: 8, bandwidth: 250 },
@@ -116,6 +138,9 @@ interface Props {
   olivia: OliviaTuning | null;
   /** JTTY: where it transmits. The receiver hears the whole passband. */
   jtty?: { txHz: number } | null;
+  /** A registered modem's centre and size, while on one. */
+  modem?: ModemTuning | null;
+  onModemTune?: (centreHz?: number, sub?: string) => void;
   canTune: boolean;
   /** Sending needs an operator and a station callsign for the macros. */
   canSend: boolean;
@@ -151,6 +176,8 @@ export function StreamPanel({
   psk,
   olivia,
   jtty = null,
+  modem = null,
+  onModemTune,
   canTune,
   canSend,
   myCall,
@@ -180,6 +207,9 @@ export function StreamPanel({
   const pskStats = stats && stats.mode === "PSK31" ? stats : null;
   const oliviaStats = stats && stats.mode === "OLIVIA" ? stats : null;
   const jttyStats = stats && stats.mode === "JTTY" ? stats : null;
+  const spec = modemSpec(mode);
+  const modemStats = spec && stats && "sub" in stats ? stats : null;
+  const isModem = spec !== null;
   const isCw = mode === "CW";
   const isPsk = mode === "PSK31";
   const isOlivia = mode === "OLIVIA";
@@ -215,6 +245,12 @@ export function StreamPanel({
     barB = oliviaStats.open ? 100 : 0;
     quiet = oliviaStats.snr < 1;
     idle = oliviaStats.open;
+  } else if (modemStats) {
+    // A modem: how sure the decoder is, and whether it is printing.
+    barA = Math.round(Math.min(1, modemStats.quality) * 100);
+    barB = Math.round(Math.min(1, modemStats.level * 4) * 100);
+    quiet = modemStats.level < 1e-3 && !modemStats.open;
+    idle = modemStats.open;
   } else if (jttyStats) {
     // JTTY: the last frame's S/N on a -20 to +10 dB scale, and whether anything has decoded.
     barA = jttyStats.lastSnr === null ? 0 : Math.round(Math.max(0, Math.min(1, (jttyStats.lastSnr + 20) / 30)) * 100);
@@ -262,6 +298,20 @@ export function StreamPanel({
             </span>
           ) : (
             <span>Waiting for the bridge to report the offset…</span>
+          )
+        ) : isModem ? (
+          modem ? (
+            <span className="tnum">
+              centre <span className="text-fg">{modem.centreHz}</span> Hz · {modem.label} · {modem.bandwidthHz} Hz wide
+              {modemStats && Math.abs(modemStats.afcHz) >= 0.5 && (
+                <>
+                  {" "}
+                  · AFC <span className="text-fg">{modemStats.afcHz > 0 ? "+" : ""}{modemStats.afcHz.toFixed(1)}</span> Hz
+                </>
+              )}
+            </span>
+          ) : (
+            <span>Waiting for the bridge to report the centre…</span>
           )
         ) : isOlivia ? (
           olivia ? (
@@ -359,6 +409,29 @@ export function StreamPanel({
               </NativeSelect>
               <span className="text-fg-subtle">or click the waterfall to set the centre</span>
             </>
+          ) : isModem && spec ? (
+            <>
+              <Nudge
+                step={10}
+                disabled={!modem}
+                onStep={(d) => modem && onModemTune?.(modem.centreHz + d)}
+                downTitle="Move the centre 10 Hz down"
+                upTitle="Move the centre 10 Hz up"
+              />
+              <NativeSelect
+                value={modem?.sub ?? spec.defaultSub}
+                onChange={(e) => onModemTune?.(undefined, e.target.value)}
+                disabled={!modem}
+                aria-label={`${spec.label} speed`}
+              >
+                {spec.subs.map((x) => (
+                  <option key={x.id} value={x.id}>
+                    {x.label}
+                  </option>
+                ))}
+              </NativeSelect>
+              <span className="text-fg-subtle">or click the waterfall to set the centre</span>
+            </>
           ) : isPsk ? (
             <>
               <Nudge
@@ -441,12 +514,12 @@ export function StreamPanel({
       )}
 
       <div className="grid grid-cols-[3rem_1fr_7rem] items-center gap-x-2 text-xs tnum">
-        <span className="text-fg-muted">{isCw ? "peak" : isPsk ? "quality" : isOlivia || isJtty ? "S/N" : "mark"}</span>
+        <span className="text-fg-muted">{isCw ? "peak" : isPsk || isModem ? "quality" : isOlivia || isJtty ? "S/N" : "mark"}</span>
         <div className="h-1.5 bg-surface-2 rounded-sm overflow-hidden">
           <div className={cn("h-full", idle ? "bg-accent" : "bg-ok/70")} style={{ width: `${barA}%` }} />
         </div>
         <span className="text-fg-subtle text-right">{stats ? ("chars" in stats ? `${stats.chars} chars` : `${stats.frames} frames`) : ""}</span>
-        <span className="text-fg-muted">{isCw ? "floor" : isPsk ? "level" : isOlivia ? "sync" : isJtty ? "copy" : "space"}</span>
+        <span className="text-fg-muted">{isCw ? "floor" : isPsk || isModem ? "level" : isOlivia ? "sync" : isJtty ? "copy" : "space"}</span>
         <div className="h-1.5 bg-surface-2 rounded-sm overflow-hidden">
           <div className="h-full bg-ok/70" style={{ width: `${barB}%` }} />
         </div>
@@ -470,6 +543,8 @@ export function StreamPanel({
               ? `${cwStats.unknown} unread`
               : pskStats
                 ? `${pskStats.errors} unread`
+                : modemStats
+                  ? `${modemStats.errors} unread`
                 : oliviaStats
                   ? `${oliviaStats.blocks} blocks`
                   : jttyStats
@@ -556,6 +631,8 @@ export function StreamPanel({
               ? "Nothing at the pitch yet. Tune the radio to a CW signal; the decoder listens where the radio's sidetone is."
               : isPsk
                 ? "No signal at the carrier yet. Tune the radio to a PSK31 signal and click it on the waterfall."
+                : isModem
+                  ? `Nothing at the centre yet. Tune the radio to a ${spec?.label ?? mode} signal and click its centre on the waterfall.`
                 : isOlivia
                   ? "No Olivia block has synced yet. Click the signal's centre on the waterfall; a block takes two seconds, and the first prints a few blocks later."
                   : isJtty

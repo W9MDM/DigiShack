@@ -21,10 +21,12 @@
 // which is the mistake this file exists to avoid.
 
 import type { EventEmitter } from "node:events";
+import type { ModemId } from "@/lib/radio/modems";
+import type { TextTransmitRequest } from "@/lib/radio/text-waveform";
 
 /** The digital modes the bridge can run. Not vendor-specific; listed here so drivers
  * can report what they support without importing the Flex module. */
-export type DigitalMode = "FT8" | "FT4" | "FT2" | "WSPR" | "RTTY" | "CW" | "JS8" | "PSK31" | "OLIVIA" | "SSTV" | "HELL" | "JTTY";
+export type DigitalMode = "FT8" | "FT4" | "FT2" | "WSPR" | "RTTY" | "CW" | "JS8" | "PSK31" | "OLIVIA" | "SSTV" | "HELL" | "JTTY" | ModemId;
 
 /**
  * Audio sample format as it arrives from a radio.
@@ -166,28 +168,8 @@ export interface DigitalTransmitter {
    */
   /** Prepared audio now (an SSTV picture): built at the transmitter's rate, capped, gated. */
   transmitAudio?(build: (sampleRate: number) => Float32Array, label: string, mode: DigitalMode, maxMs: number): Promise<TransmitOutcome>;
-  transmitText?(req: {
-    /** RTTY, PSK31, Olivia, Hell and JTTY go out as audio; CW is handed to the radio's own keyer. */
-    mode: "RTTY" | "CW" | "PSK31" | "OLIVIA" | "HELL" | "JTTY";
-    text: string;
-    centreHz: number;
-    shiftHz: number;
-    sideband: "USB" | "LSB";
-    figures?: "us" | "ita2";
-    usos?: boolean;
-    /** CW speed, words per minute. */
-    wpm?: number;
-    /** RTTY speed. Default 45.45. */
-    baud?: number;
-    /** PSK: 31.25, 62.5 or 125 baud. */
-    speed?: 31 | 63 | 125;
-    /** Olivia: the size, and Contestia on the same engine. */
-    tones?: 2 | 4 | 8 | 16 | 32 | 64 | 128 | 256;
-    bandwidth?: 125 | 250 | 500 | 1000 | 2000;
-    code?: "olivia" | "contestia";
-    /** Hell: which of the Hell modes. Default Feld Hell. */
-    hellVariant?: "feld" | "fm105" | "fm245" | "hell80" | "slow" | "psk";
-  }): Promise<TransmitOutcome>;
+  /** RTTY, PSK, Olivia, Hell, JTTY and the modems go out as audio; CW is handed to the radio's own keyer. */
+  transmitText?(req: TextTransmitRequest): Promise<TransmitOutcome>;
   unkey(): Promise<void>;
 }
 

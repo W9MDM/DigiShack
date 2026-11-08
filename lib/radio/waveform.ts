@@ -14,8 +14,9 @@ import { js8EncodeFrame, js8Waveform } from "@/lib/digital/js8";
 import { js8SubmodeNow } from "@/lib/radio/timing";
 import type { Js8OutFrame } from "@/lib/digital/js8-message";
 import { encodeFT4, encodeFT8 } from "@e04/ft8ts";
+import type { ModemId } from "@/lib/radio/modems";
 
-export type TxMode = "FT8" | "FT4" | "FT2" | "WSPR" | "RTTY" | "CW" | "JS8" | "PSK31" | "OLIVIA" | "SSTV" | "HELL" | "JTTY";
+export type TxMode = "FT8" | "FT4" | "FT2" | "WSPR" | "RTTY" | "CW" | "JS8" | "PSK31" | "OLIVIA" | "SSTV" | "HELL" | "JTTY" | ModemId;
 
 /**
  * Symbol rates, in baud.
@@ -42,6 +43,9 @@ export const SYMBOL_RATE: Record<TxMode, number> = {
   PSK31: 31.25,
   /** 31.25 baud for the common sizes; per size in lib/digital/olivia.ts. A stream. */
   OLIVIA: 31.25,
+  MFSK: 31.25,
+  DOMINO: 31.25,
+  MT63: 31.25,
   /** A picture, not symbols. */
   SSTV: 0,
   HELL: 0,

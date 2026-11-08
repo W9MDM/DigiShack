@@ -29,6 +29,7 @@ import {
 import { LinkLatency } from "@/lib/radio/link-latency";
 import { PanadapterScaler, type PanadapterRow } from "@/lib/radio/panadapter";
 import { UNREAD_RECEIVER, type ReceiverControls } from "@/lib/radio/receiver-controls";
+import { isModemId, modem, type ModemId } from "@/lib/radio/modems";
 
 // Self-contained FT8/FT4 decoding from a FlexRadio, with no external decoder.
 //
@@ -101,7 +102,7 @@ export interface DaxDecode {
   /** Time offset of the transmission within its window, seconds. */
   dt: number;
   message: string;
-  mode: "FT8" | "FT4" | "FT2" | "WSPR" | "RTTY" | "CW" | "JS8" | "PSK31" | "OLIVIA" | "SSTV" | "HELL" | "JTTY";
+  mode: "FT8" | "FT4" | "FT2" | "WSPR" | "RTTY" | "CW" | "JS8" | "PSK31" | "OLIVIA" | "SSTV" | "HELL" | "JTTY" | ModemId;
   /** UTC start of the window this came from. */
   windowStart: Date;
   /** JS8 only: what the message layer read from the frame. */
@@ -113,7 +114,7 @@ export interface DaxSourceOptions {
   port?: number;
   /** DAX channel the slice routes audio to (slice property `dax`). */
   daxChannel?: number;
-  mode?: "FT8" | "FT4" | "FT2" | "WSPR" | "RTTY" | "CW" | "JS8" | "PSK31" | "OLIVIA" | "SSTV" | "HELL" | "JTTY";
+  mode?: "FT8" | "FT4" | "FT2" | "WSPR" | "RTTY" | "CW" | "JS8" | "PSK31" | "OLIVIA" | "SSTV" | "HELL" | "JTTY" | ModemId;
   /**
    * Decoder depth. 2 is the live default: measured at ~0.6 s per window against
    * real 20 m traffic, comfortably inside the ~2.4 s gap between cycles. Depth 3
@@ -655,6 +656,7 @@ export class FlexDaxSource extends EventEmitter<Events> {
     if (this.opts.mode === "SSTV") this.pipeline.setStream({ mode: "SSTV" });
     if (this.opts.mode === "HELL") this.pipeline.setStream(this.hellOptions);
     if (this.opts.mode === "JTTY") this.pipeline.setStream({ mode: "JTTY" });
+    if (isModemId(this.opts.mode)) this.pipeline.setStream(this.modemOptionsFor(this.opts.mode));
   }
 
   private readonly pipeline: DecodePipeline;
@@ -677,7 +679,7 @@ export class FlexDaxSource extends EventEmitter<Events> {
     return this.opts.mode === "FT4" ? FT4_PERIOD_MS : FT8_PERIOD_MS;
   }
 
-  get mode(): "FT8" | "FT4" | "FT2" | "WSPR" | "RTTY" | "CW" | "JS8" | "PSK31" | "OLIVIA" | "SSTV" | "HELL" | "JTTY" {
+  get mode(): "FT8" | "FT4" | "FT2" | "WSPR" | "RTTY" | "CW" | "JS8" | "PSK31" | "OLIVIA" | "SSTV" | "HELL" | "JTTY" | ModemId {
     return this.opts.mode;
   }
 
@@ -689,7 +691,7 @@ export class FlexDaxSource extends EventEmitter<Events> {
    * discarded: a partly-filled FT8 window is not a valid FT4 window, and feeding
    * it to the FT4 decoder would produce nothing while looking like a fault.
    */
-  setMode(mode: "FT8" | "FT4" | "FT2" | "WSPR" | "RTTY" | "CW" | "JS8" | "PSK31" | "OLIVIA" | "SSTV" | "HELL" | "JTTY"): boolean {
+  setMode(mode: "FT8" | "FT4" | "FT2" | "WSPR" | "RTTY" | "CW" | "JS8" | "PSK31" | "OLIVIA" | "SSTV" | "HELL" | "JTTY" | ModemId): boolean {
     if (mode === this.opts.mode) return false;
     this.opts.mode = mode;
     if (mode === "RTTY") {
@@ -708,6 +710,8 @@ export class FlexDaxSource extends EventEmitter<Events> {
       this.pipeline.setStream(this.hellOptions);
     } else if (mode === "JTTY") {
       this.pipeline.setStream({ mode: "JTTY" });
+    } else if (isModemId(mode) && this.modemOptionsFor(mode)) {
+      this.pipeline.setStream(this.modemOptionsFor(mode));
     } else {
       this.pipeline.setStream(null);
       this.pipeline.setMode(mode);
@@ -760,6 +764,22 @@ export class FlexDaxSource extends EventEmitter<Events> {
   }
 
   private hellOptions: Extract<StreamOptions, { mode: "HELL" }> = { mode: "HELL", centreHz: 1000 };
+
+  /** Each registered modem's centre and sub, as the bridge last set them. */
+  private modemOptions = new Map<ModemId, Extract<StreamOptions, { sub: string }>>();
+
+  /** A modem's options: its last setting, or the table's defaults. */
+  private modemOptionsFor(id: ModemId): StreamOptions | null {
+    const spec = modem(id);
+    if (!spec) return null;
+    return this.modemOptions.get(id) ?? { mode: id, centreHz: spec.defaultCentreHz, sub: spec.defaultSub };
+  }
+
+  /** A modem's centre and sub. Takes effect at once while that modem is streaming. */
+  setModemOptions(opts: Extract<StreamOptions, { sub: string }>): void {
+    this.modemOptions.set(opts.mode, opts);
+    if (this.pipeline.streaming === opts.mode) this.pipeline.setStream(opts);
+  }
 
 
   /**

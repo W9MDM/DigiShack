@@ -14,6 +14,7 @@ import {
 } from "@/lib/digital/olivia";
 import { psk31DurationMs, psk31Waveform } from "@/lib/digital/psk31";
 import { RSID_DURATION_MS, rsidCodeFor, rsidWaveform, type RsidMode } from "@/lib/digital/rsid";
+import { isModemId, modem, modemSub, type ModemId } from "@/lib/radio/modems";
 import { rttyDurationMs, rttyWaveform } from "@/lib/digital/rtty";
 
 /** How long a line may be on the air: 240 characters of RTTY, about forty seconds. Slow Hell has its own. */
@@ -22,7 +23,7 @@ export const MAX_TEXT_MS = 40_000;
 /** A line of text to send as it is: RTTY at a tone pair, PSK31 on a carrier, now. */
 export interface TextTransmitRequest {
   /** RTTY, PSK31, Olivia, Hell and JTTY go out as audio; CW is handed to the radio's own keyer. */
-  mode: "RTTY" | "CW" | "PSK31" | "OLIVIA" | "HELL" | "JTTY";
+  mode: "RTTY" | "CW" | "PSK31" | "OLIVIA" | "HELL" | "JTTY" | ModemId;
   text: string;
   /** Centre of the tone pair, Hz audio. */
   centreHz: number;
@@ -43,6 +44,8 @@ export interface TextTransmitRequest {
   code?: OliviaCode;
   /** Hell: which of the Hell modes. Default Feld Hell. */
   hellVariant?: HellVariant;
+  /** A modem's size or speed (lib/radio/modems.ts): "16" for MFSK16, "1000L" for MT63-1000L. */
+  sub?: string;
   /**
    * Send fldigi's RSID first, so a station with RxID on switches to this mode and this
    * frequency by itself. Only where fldigi has a code for the mode as it is set.
@@ -72,6 +75,10 @@ function rsidModeOf(req: TextRequestShape): RsidMode | null {
 /** The RSID code this request would send first, or null when it sends none. */
 export function textRsidCode(req: TextRequestShape): number | null {
   if (!req.rsid) return null;
+  if (isModemId(req.mode)) {
+    const spec = modem(req.mode);
+    return spec ? (modemSub(spec, req.sub).rsidCode ?? null) : null;
+  }
   const m = rsidModeOf(req);
   return m ? rsidCodeFor(m) : null;
 }
@@ -82,7 +89,7 @@ export function textRsidCode(req: TextRequestShape): number | null {
  * Slow Hell is the one exception to forty seconds: a character takes 3.2 s.
  */
 export function maxTextMs(req: TextRequestShape): number {
-  const text = req.mode === "HELL" ? hellVariant(req.hellVariant).maxSendMs : MAX_TEXT_MS;
+  const text = req.mode === "HELL" ? hellVariant(req.hellVariant).maxSendMs : isModemId(req.mode) ? (modem(req.mode)?.maxSendMs ?? MAX_TEXT_MS) : MAX_TEXT_MS;
   // The RSID goes on top: the cap is on the line, not on the 2.3 s that announces it.
   return text + (textRsidCode(req) !== null ? RSID_DURATION_MS : 0);
 }
@@ -108,6 +115,16 @@ function lineWaveform(req: TextTransmitRequest, sampleRate: number): Float32Arra
   const text = req.text.trim();
   if (!text) throw new Error("Nothing to send");
   const cap = maxTextMs({ ...req, rsid: false });
+  if (isModemId(req.mode)) {
+    const spec = modem(req.mode);
+    if (!spec) throw new Error(`${req.mode} is not available here`);
+    const sub = modemSub(spec, req.sub);
+    const ms = spec.durationMs(text, sub.id);
+    if (ms > cap) {
+      throw new Error(`${text.length} characters is ${(ms / 1000).toFixed(0)} s of ${sub.label}, over the ${cap / 1000} s cap - send it in pieces`);
+    }
+    return spec.waveform(text, { sampleRate, centreHz: req.centreHz, sub: sub.id });
+  }
   if (req.mode === "OLIVIA") {
     const size = { tones: req.tones ?? 16, bandwidth: req.bandwidth ?? 500, code: req.code ?? "olivia" } as const;
     const olMs = oliviaDurationMs(text, size);

@@ -13,6 +13,7 @@ import { buildJs8Waveform, buildWaveform, samplesPerSymbol } from "@/lib/radio/w
 import type { Js8OutFrame } from "@/lib/digital/js8-message";
 import { MAX_TEXT_MS, textWaveform, type TextTransmitRequest } from "@/lib/radio/text-waveform";
 import { cwDurationMs } from "@/lib/digital/cw";
+import { isModemId, type ModemId } from "@/lib/radio/modems";
 
 // Native FT8/FT4 transmit over FlexRadio DAX TX. No external decoder, no WSJT-X.
 //
@@ -67,12 +68,12 @@ const PACKET_CLASS_TX_S16 = 0x0123;
  * past the last one. Using 144 here would size the watchdog 27 ms short of the
  * actual transmission.
  */
-const SYMBOLS_PER_FRAME = { FT8: 79, FT4: 105, FT2: 146, WSPR: 162, RTTY: 0, CW: 0, JS8: 79, PSK31: 0, OLIVIA: 0, SSTV: 0, HELL: 0, JTTY: 0 } as const;
+const SYMBOLS_PER_FRAME = { FT8: 79, FT4: 105, FT2: 146, WSPR: 162, RTTY: 0, CW: 0, JS8: 79, PSK31: 0, OLIVIA: 0, SSTV: 0, HELL: 0, JTTY: 0, MFSK: 0, DOMINO: 0, MT63: 0 } as const;
 
 /** Extra time before the watchdog fires, allowing for scheduling jitter. */
 const WATCHDOG_MARGIN_MS = 2_000;
 
-export type TxMode = "FT8" | "FT4" | "FT2" | "WSPR" | "RTTY" | "CW" | "JS8" | "PSK31" | "OLIVIA" | "SSTV" | "HELL" | "JTTY";
+export type TxMode = "FT8" | "FT4" | "FT2" | "WSPR" | "RTTY" | "CW" | "JS8" | "PSK31" | "OLIVIA" | "SSTV" | "HELL" | "JTTY" | ModemId;
 
 /**
  * Above this percentage of the radio's rated output, say something.
@@ -794,7 +795,7 @@ export class FlexDaxTransmitter {
     }
     // RTTY is typed, not framed: it will go out as text through its own path (part three
     // of the mode). Nothing here keys the radio on an RTTY frequency until then.
-    if (req.mode === "RTTY" || req.mode === "CW" || req.mode === "PSK31" || req.mode === "OLIVIA" || req.mode === "HELL" || req.mode === "JTTY") {
+    if (req.mode === "RTTY" || req.mode === "CW" || req.mode === "PSK31" || req.mode === "OLIVIA" || req.mode === "HELL" || req.mode === "JTTY" || isModemId(req.mode)) {
       return { ...base, reason: `${req.mode} is sent as text, not as a timed frame` };
     }
     if (req.mode === "SSTV") {

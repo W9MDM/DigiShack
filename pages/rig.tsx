@@ -31,6 +31,7 @@ import { formatFreqMHz } from "@/lib/ham/bands";
 import { radioCapabilities } from "@/lib/radio/capabilities";
 import { decodeBase64Bins } from "@/lib/spectrum/wire";
 import { useVisibleInterval } from "@/lib/client/use-visible-interval";
+import { MODEM_IDS } from "@/lib/radio/modems";
 
 /** DX cluster spots older than this (by their latest repeat) are left off the panadapter. */
 const DX_SPOT_MAX_AGE_MIN = 30;
@@ -48,7 +49,7 @@ const DX_SPOT_MAX_AGE_MIN = 30;
 
 /** Names the decoder reports, as opposed to modulations. */
 const DIGITAL_MODES = new Set([
-  "FT8", "FT4", "FT2", "WSPR", "RTTY", "CW", "JS8", "PSK31", "OLIVIA", "SSTV", "HELL", "JTTY",
+  "FT8", "FT4", "FT2", "WSPR", "RTTY", "CW", "JS8", "PSK31", "OLIVIA", "SSTV", "HELL", "JTTY", ...MODEM_IDS,
 ]);
 
 /** No panadapter frame for this long and the picture is called stalled, not live. */

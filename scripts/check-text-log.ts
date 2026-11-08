@@ -50,6 +50,18 @@ console.log("\neach mode logs as ADIF knows it");
     HELL80: ["HELL", "HELL80"],
     SLOWHELL: ["HELL", "SLOWHELL"],
     PSKHELL: ["HELL", "PSKHELL"],
+    MFSK8: ["MFSK", "MFSK8"],
+    MFSK11: ["MFSK", "MFSK11"],
+    MFSK16: ["MFSK", "MFSK16"],
+    MFSK22: ["MFSK", "MFSK22"],
+    MFSK32: ["MFSK", "MFSK32"],
+    DOMINOEX: ["DOMINO", "DOMINOEX"],
+    MT63: ["MT63", undefined],
+    QPSK31: ["PSK", "QPSK31"],
+    QPSK63: ["PSK", "QPSK63"],
+    QPSK125: ["PSK", "QPSK125"],
+    PSK250: ["PSK", "PSK250"],
+    PSK500: ["PSK", "PSK500"],
   };
   ok(Object.keys(want).sort().join() === [...TEXT_LOG_MODES].sort().join(), `the bar logs exactly these: ${TEXT_LOG_MODES.join(", ")}`);
   for (const [mode, [m, sub]] of Object.entries(want)) {

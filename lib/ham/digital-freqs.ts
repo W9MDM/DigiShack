@@ -9,7 +9,8 @@
 // The dial frequency is the reliable discriminator: the two modes use distinct,
 // well-established watering holes on every band.
 
-export type DigitalMode = "FT8" | "FT4" | "FT2" | "WSPR" | "RTTY" | "CW" | "JS8" | "PSK31" | "OLIVIA" | "SSTV" | "HELL" | "JTTY";
+export type DigitalMode = "FT8" | "FT4" | "FT2" | "WSPR" | "RTTY" | "CW" | "JS8" | "PSK31" | "OLIVIA" | "SSTV" | "HELL" | "JTTY" | ModemId;
+import type { ModemId } from "@/lib/radio/modems";
 
 
 export interface DigitalFrequency {
@@ -407,6 +408,9 @@ const PERIOD_MS: Record<DigitalMode, number> = {
   /** A stream, as RTTY. */
   PSK31: 1_000,
   OLIVIA: 1_000,
+  MFSK: 1_000,
+  DOMINO: 1_000,
+  MT63: 1_000,
   SSTV: 1_000,
   HELL: 1_000,
   JTTY: 1_000,
