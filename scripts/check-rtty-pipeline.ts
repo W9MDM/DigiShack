@@ -42,7 +42,7 @@ async function main(): Promise<void> {
   ok(!p.windowsArmed, "start() arms nothing while streaming - a stream has no windows");
 
   console.log("\naudio in, text out");
-  const w = rttyWaveform(TEXT, { sampleRate: RATE });
+  const w = rttyWaveform(TEXT, { endNewline: false, sampleRate: RATE });
   // DAX delivers 24 kHz audio in packets of a few hundred samples; feed it that way.
   for (let i = 0; i < w.length; i += 256) p.push(w.subarray(i, Math.min(w.length, i + 256)));
   eq(text.join(""), TEXT, "the text arrives, in pieces, in order");
@@ -61,7 +61,7 @@ async function main(): Promise<void> {
   eq(STREAM_HEARTBEAT_MS, 1_000, "the heartbeat interval is one second");
 
   console.log("\nretuning while streaming keeps the demodulator");
-  const off = rttyWaveform("RETUNED", { sampleRate: RATE, centreHz: RTTY_CENTRE_HZ + 300 });
+  const off = rttyWaveform("RETUNED", { endNewline: false, sampleRate: RATE, centreHz: RTTY_CENTRE_HZ + 300 });
   p.setStream({ mode: "RTTY", ...rttyTones(RTTY_CENTRE_HZ + 300, RTTY_SHIFT_HZ, "USB"), figures: "us", usos: true });
   eq(p.streaming, "RTTY", "still streaming");
   text.length = 0;

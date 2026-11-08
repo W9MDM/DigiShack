@@ -17,9 +17,8 @@
 // UNSHIFT ON SPACE. A convention, not part of the code: a space returns the receiver to
 // letters. Nearly every amateur program has it on by default, because a missed LTRS after
 // a serial number otherwise turns the next word into figures. The encoder here always
-// assumes the receiver unshifts on space - it re-sends FIGS after a space whenever the
-// next character needs it, which costs one character and is correct whether the far end
-// unshifts or not. The decoder unshifts by default and can be told not to.
+// sends LTRS before a space in figures, as fldigi does, and re-sends FIGS after it whenever
+// the next character needs it, so it is correct whether the far end unshifts or not. The decoder unshifts by default and can be told not to.
 //
 // THE FRAME IS ALL THE SYNC THERE IS. There is no preamble to find and no sync vector:
 // the receiver waits on the idle mark for the mark-to-space edge of a start bit, samples
@@ -222,9 +221,11 @@ export function rttyEncodeText(text: string, opts: RttyCodeOptions = {}, initial
     }
     if (raw === "\r") continue;
     if (raw === " ") {
+      // A space in figures goes as LTRS then the space, as fldigi sends it (UOStx): a
+      // receiver that does not unshift on space is put back in letters too. Without the
+      // LTRS, "599 TU" printed as "599 57" there. The next figure re-shifts either way.
+      if (shift === "figures") out.push(ITA2_LTRS);
       out.push(ITA2_SPACE);
-      // The receiver may unshift here; the next figure must re-shift. Letters is the
-      // safe assumption either way.
       if (shift === "figures") shift = "letters";
       continue;
     }
@@ -352,6 +353,8 @@ export interface RttyWaveformOptions extends RttyCodeOptions {
   amplitude?: number;
   /** LTRS characters sent before the text. Default 2, as every RTTY program does. */
   leadingLtrs?: number;
+  /** End the over with CR LF, as fldigi does. Default true. */
+  endNewline?: boolean;
 }
 
 /**
@@ -373,6 +376,9 @@ export function rttyWaveform(text: string, opts: RttyWaveformOptions): Float32Ar
   const codes: number[] = [];
   for (let i = 0; i < leading; i++) codes.push(ITA2_LTRS);
   codes.push(...rttyEncodeText(text, opts, "letters"));
+  // Each over ends with CR LF, as fldigi ends one, so the far screen starts a new line
+  // for the reply; then LTRS.
+  if (opts.endNewline !== false) codes.push(ITA2_CR, ITA2_LF);
   codes.push(ITA2_LTRS);
 
   // The level schedule in BITS, then rendered on the sample grid.
@@ -409,7 +415,7 @@ export function rttyWaveform(text: string, opts: RttyWaveformOptions): Float32Ar
 export function rttyDurationMs(text: string, opts: Partial<RttyWaveformOptions> = {}): number {
   const baud = opts.baud ?? RTTY_BAUD;
   const leading = opts.leadingLtrs ?? 2;
-  const chars = leading + rttyEncodeText(text, opts, "letters").length + 1;
+  const chars = leading + rttyEncodeText(text, opts, "letters").length + (opts.endNewline === false ? 0 : 2) + 1;
   const bits = chars * RTTY_BITS_PER_CHAR;
   return (opts.preambleMs ?? 300) + (bits / baud) * 1000 + (opts.tailMs ?? RTTY_BITS_PER_CHAR * RTTY_BIT_MS);
 }

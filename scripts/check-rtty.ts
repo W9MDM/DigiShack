@@ -162,7 +162,7 @@ console.log("\ntones and the waveform");
   const fs = 12_000;
   const w = rttyWaveform("RYRY", { sampleRate: fs });
   const ms = rttyDurationMs("RYRY");
-  eq(ms, 1620, "RYRY: 300 ms preamble + 7 characters (LTRS LTRS R Y R Y LTRS) at 165 ms + a 165 ms tail");
+  eq(ms, 1950, "RYRY: 300 ms preamble + 9 characters (LTRS LTRS R Y R Y CR LF LTRS) at 165 ms + a 165 ms tail");
   ok(Math.abs(w.length - (ms / 1000) * fs) <= 2, "the waveform is that long to within two samples", w.length);
   let peak = 0;
   let maxStep = 0;
@@ -190,7 +190,7 @@ console.log("\nthe demodulator, end to end");
     chunk = 0,
   ): { text: string; demod: RttyDemodulator } {
     const fs = gen.sampleRate ?? 12_000;
-    const w = rttyWaveform(text, { sampleRate: fs, ...gen });
+    const w = rttyWaveform(text, { endNewline: false, sampleRate: fs, ...gen });
     if (mutate) mutate(w);
     const tones = rttyTones(RTTY_CENTRE_HZ, RTTY_SHIFT_HZ, "USB");
     const d = new RttyDemodulator({ sampleRate: fs, ...tones, ...demod });
@@ -236,8 +236,8 @@ console.log("\nthe demodulator, end to end");
 
   // Two transmissions with a second of idle mark between: the stream carries on.
   const fs = 12_000;
-  const a = rttyWaveform("CQ", { sampleRate: fs });
-  const b = rttyWaveform("DX", { sampleRate: fs });
+  const a = rttyWaveform("CQ", { endNewline: false, sampleRate: fs });
+  const b = rttyWaveform("DX", { endNewline: false, sampleRate: fs });
   const idle = new Float32Array(fs);
   let ph = 0;
   for (let n = 0; n < idle.length; n++) {
@@ -249,7 +249,7 @@ console.log("\nthe demodulator, end to end");
   const streamed = d.feed(a) + d.feed(idle) + d.feed(b);
   eq(streamed, "CQDX", "two transmissions a second apart decode as one stream; idle mark produces nothing");
   d.reset();
-  eq(d.feed(rttyWaveform("OK", { sampleRate: fs })), "OK", "reset forgets the clock and the shift, and decoding resumes");
+  eq(d.feed(rttyWaveform("OK", { endNewline: false, sampleRate: fs })), "OK", "reset forgets the clock and the shift, and decoding resumes");
 
   const silence = new RttyDemodulator({ sampleRate: fs, ...tones });
   eq(silence.feed(new Float32Array(fs * 2)), "", "two seconds of silence produce no text");
@@ -263,8 +263,22 @@ console.log("\nthe demodulator, end to end");
   const unsquelched = open.feed(noiseOnly);
   ok(unsquelched.length > garbage.length + 5, "with the squelch off the same noise prints characters - about two a second on the live station", `${unsquelched.length} chars`);
   const strict = new RttyDemodulator({ sampleRate: fs, ...tones, squelch: 0.9 });
-  eq(strict.feed(rttyWaveform(TEXT, { sampleRate: fs })), TEXT, "a clean signal passes even a 0.9 squelch: its bits carry conviction");
+  eq(strict.feed(rttyWaveform(TEXT, { endNewline: false, sampleRate: fs })), TEXT, "a clean signal passes even a 0.9 squelch: its bits carry conviction");
   eq(strict.statistics.weak, 0, "and loses nothing to it");
+}
+
+console.log("\nas fldigi sends it");
+{
+  // A space in figures goes as LTRS SPACE, so a receiver that does not unshift on space
+  // is back in letters: "599 TU" read as "599 57" there before.
+  const codes = rttyEncodeText("599 TU");
+  const sp = codes.indexOf(4);
+  eq(codes[sp - 1], ITA2_LTRS, "a space after figures is preceded by LTRS");
+  eq(rttyDecodeCodes(codes, { usos: false }), "599 TU", "so a receiver without unshift-on-space prints the letters");
+  const plain = rttyEncodeText("CQ DE");
+  eq(plain.filter((c) => c === ITA2_LTRS).length, 1, "a space in letters needs no extra LTRS");
+  const d = new RttyDemodulator({ sampleRate: 12_000, ...rttyTones(RTTY_CENTRE_HZ, RTTY_SHIFT_HZ, "USB") });
+  eq(d.feed(rttyWaveform("TU", { sampleRate: 12_000 })), "TU\n", "each over ends with CR LF, so the far screen starts a new line");
 }
 
 console.log("");

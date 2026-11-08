@@ -352,7 +352,7 @@ async function safetyChecks(): Promise<void> {
   const wave = enabled.buildTextWaveform({ text: "RYRY CQ DE W1AW", ...tones });
   near((wave.length / 24_000) * 1000, rttyDurationMs("RYRY CQ DE W1AW"), 2, "the text waveform at 24 kHz is as long as the codec says");
   const demod = new RttyDemodulator({ sampleRate: 24_000, ...rttyTones(2210, 170, "USB") });
-  ok(demod.feed(wave) === "RYRY CQ DE W1AW", "and decodes back to the text at the DAX rate - the exact audio the radio would get");
+  ok(demod.feed(wave) === "RYRY CQ DE W1AW\n", "and decodes back to the text at the DAX rate - the exact audio the radio would get");
   const lsb = enabled.buildTextWaveform({ mode: "RTTY", text: "RY", centreHz: 2210, shiftHz: 170, sideband: "LSB" });
   // PSK31 through the same text path: a carrier at the centre, the text's symbols over the baud rate.
   const pskReq = { mode: "PSK31" as const, text: "CQ de W1AW", centreHz: 1000, shiftHz: 0, sideband: "USB" as const };
@@ -383,7 +383,7 @@ async function safetyChecks(): Promise<void> {
   const conWave = enabled.buildTextWaveform({ ...olReq, code: "contestia" as const });
   ok(conWave.length < olWave.length, "the same line as Contestia is shorter on the air: half-length blocks", `${conWave.length} vs ${olWave.length}`);
   const lsbDemod = new RttyDemodulator({ sampleRate: 24_000, ...rttyTones(2210, 170, "LSB") });
-  ok(lsbDemod.feed(lsb) === "RY", "and on LSB the pair is swapped to match");
+  ok(lsbDemod.feed(lsb) === "RY\n", "and on LSB the pair is swapped to match");
 
   console.log("\nCW text: the radio's keyer, behind the same gate");
   const cw = { mode: "CW" as const, centreHz: 0, shiftHz: 0, sideband: "USB" as const };

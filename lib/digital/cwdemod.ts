@@ -149,6 +149,8 @@ export class CwDemodulator {
   private marks: number[] = [];
   private flushed = true;
   private spaced = true;
+  /** Marks in a row under a third of the dit: two are blips, a third is a faster sender. */
+  private shortRun = 0;
   private readonly stats: CwDemodStats;
 
   private readonly onElement: CwDemodOptions["onElement"];
@@ -265,7 +267,13 @@ export class CwDemodulator {
       if (this.keyed) {
         // A mark ended. Shorter than a sixth of a dit, or than any dit there is, is a
         // click or a noise spike and must not reach the estimator.
-        if (runMs >= Math.max(MIN_MARK_MS, this.ditMs / 6)) {
+        // Under a third of the dit is a noise blip at this speed, not a dit: it would
+        // collapse the estimate and turn the next few characters into dahs (fldigi only
+        // takes a speed from marks that fit). Three in a row is the sender speeding up.
+        const blip = runMs < this.ditMs / 3 && this.shortRun < 2;
+        if (runMs < this.ditMs / 3) this.shortRun++;
+        else this.shortRun = 0;
+        if (!blip && runMs >= Math.max(MIN_MARK_MS, this.ditMs / 6)) {
           this.onElement?.("mark", runMs, this.ditMs);
           this.marks.push(runMs);
           this.recent.push(runMs);

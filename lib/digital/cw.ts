@@ -90,6 +90,14 @@ export const MORSE: Readonly<Record<string, string>> = {
   "<KN>": "-.--.",
   "<AS>": ".-...",
   "<HH>": "........",
+  // In fldigi's table, and common on the air: understood, interrupt, hi-mom, new line,
+  // break, start of message.
+  "<SN>": "...-.",
+  "<INT>": "..-.-",
+  "<HM>": "....--",
+  "<AA>": ".-.-",
+  "<BK>": "-...-.-",
+  "<CT>": "-.-.-",
 };
 
 /**

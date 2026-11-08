@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.282.1 - public release
+## 1.282.2 - public release
 
 Development happens in a private repository; this is where the public history starts.
 Earlier entries are not reproduced - they quote real operators by callsign, include
@@ -22,6 +22,7 @@ Notes for anyone running this:
 
 ## Release history
 
+- **1.282.2** — RTTY and CW checked against fldigi
 - **1.282.1** — A click on a CW signal puts you on its frequency
 - **1.282.0** — The text-mode log bar looks up who you are working
 - **1.281.1** — Feld Hell from a FlexRadio no longer arrives as dots

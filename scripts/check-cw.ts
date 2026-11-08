@@ -178,6 +178,24 @@ console.log("\nthe decoder, end to end");
   eq(decode("CQ TEST", 20).text, "CQ TEST", "digits and letters together");
   eq(decode("599 001", 25).text, "599 001", "a contest exchange");
 
+  // A 15 ms noise blip in a word gap at 20 WPM (a 60 ms dit). It used to become the
+  // shortest mark, collapse the dit to 15 ms and turn the next characters into dahs.
+  {
+    const head = cwWaveform("CQ CQ", { sampleRate: fs, wpm: 20 });
+    const tail = cwWaveform("DE W1AW", { sampleRate: fs, wpm: 20 });
+    const gap = Math.round(0.4 * fs);
+    const blip = Math.round(0.015 * fs);
+    const all = new Float32Array(head.length + gap + tail.length);
+    all.set(head, 0);
+    const at = head.length + Math.round(gap / 2);
+    for (let n = 0; n < blip; n++) all[at + n] = Math.sin((2 * Math.PI * 600 * n) / fs);
+    all.set(tail, head.length + gap);
+    const bd = new CwDemodulator({ sampleRate: fs, pitchHz: 600 });
+    eq(bd.feed(all).trim().replace(/ +/g, " "), "CQ CQ DE W1AW", "a noise blip between words does not wreck the speed: the next word reads");
+    ok(Math.abs(bd.statistics.wpm - 20) < 2, "and the estimate stays at 20", bd.statistics.wpm);
+  }
+  eq(decode("<SN> <AA> <BK>", 20).text, "<SN> <AA> <BK>", "prosigns fldigi knows read as themselves: SN, AA, BK");
+
   // A speed change mid-stream. The first character at the new speed may be misread - a
   // lone dah at 35 WPM is as long as a dit at 20, and nothing but context could tell -
   // but the estimate moves within a character and the rest reads.
