@@ -505,7 +505,7 @@ export default function DigitalPage({ wsUrl }: Props) {
           }
           else if (msg.kind === "stream") setStreamStats(msg as unknown as StreamStats);
           else if (msg.kind === "sstv-tx") setSstvTx(msg as unknown as SstvTxState);
-          else if (msg.kind === "sstv-vis" || msg.kind === "sstv-start" || msg.kind === "sstv-rows" || msg.kind === "sstv-image" || msg.kind === "sstv-read") {
+          else if (msg.kind === "sstv-vis" || msg.kind === "sstv-start" || msg.kind === "sstv-rows" || msg.kind === "sstv-image" || msg.kind === "sstv-read" || msg.kind === "sstv-abort") {
             sstvPanel.current?.receive(msg as SstvMessage);
           }
           else if (msg.kind === "spectrum") {

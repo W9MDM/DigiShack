@@ -1468,6 +1468,8 @@ function decideMode(hz: number, radioInCw: boolean): ModeGuess {
 }
 /** The Icom's re-read of the dial and the mode, forced: set when its source starts. */
 let icomRefresh: (() => void) | null = null;
+/** The FlexRadio's: re-apply the active slice. Set when its source starts. */
+let flexRefresh: (() => void) | null = null;
 
 /**
  * Where the station was: dial, slice mode, and the mode chosen by name, saved as it
@@ -1486,6 +1488,8 @@ interface LastTune {
   hz: number;
   sliceMode: string | null;
   sticky: DigitalMode | null;
+  /** Where the sticky mode was chosen: a modem's 5 kHz hold is measured from it. */
+  stickyAtHz?: number | null;
   at: number;
 }
 let lastTuneSaved = "";
@@ -1506,7 +1510,7 @@ async function readLastTune(): Promise<LastTune | null> {
 /** Saved a few seconds after the dial settles, and only when something changed. */
 function saveLastTune(hz: number | null, sliceMode: string | null): void {
   if (!hz) return;
-  const next = JSON.stringify({ hz, sliceMode, sticky: stickyMode });
+  const next = JSON.stringify({ hz, sliceMode, sticky: stickyMode, stickyAtHz });
   // A pending save is always superseded, including by a return to what is already saved:
   // a restored profile slice reports USB for a moment before the bridge puts it in CW,
   // and returning early here left that USB save queued - 1.201.8 saved it.
@@ -1517,7 +1521,7 @@ function saveLastTune(hz: number | null, sliceMode: string | null): void {
   if (next === lastTuneSaved) return;
   lastTuneTimer = setTimeout(() => {
     lastTuneTimer = null;
-    const t: LastTune = { hz, sliceMode, sticky: stickyMode, at: Date.now() };
+    const t: LastTune = { hz, sliceMode, sticky: stickyMode, stickyAtHz, at: Date.now() };
     const value = JSON.stringify(t);
     void writeRadioState(KEY_LAST_TUNE, value)
       .then(() => {
@@ -1962,6 +1966,7 @@ async function tuneTo(
   if (status.source === "flex") {
     const client = flexGuiClient ?? flexRig;
     if (!client) return { ok: false, code: 503, error: "The FlexRadio is not connected", hz };
+    const sameDial = status.dialFrequency === hz;
     const reply = await client.command(`slice tune ${flexSliceIndex ?? 0} ${(hz / 1_000_000).toFixed(6)}`);
     if (reply.status !== 0) {
       return { ok: false, code: 502, error: `The radio rejected the retune (0x${reply.status.toString(16)})`, hz };
@@ -1975,6 +1980,11 @@ async function tuneTo(
     // SSTV below 10 MHz is lower sideband, as its operators run it; everything else digital
     // is upper.
     const wantLsb = mode === "SSTV" && hz < 10_000_000;
+    // A mode chosen where the dial already is moves nothing, and the radio may send no slice
+    // status for it: re-read the slice now so the mode takes effect, as the Icom does. Only
+    // then: after a real retune the slice still reads the old frequency for a moment, and
+    // deciding the mode there would drop the choice for whatever lives on the old one.
+    if (sameDial) flexRefresh?.();
     if (wantCw && !cur.startsWith("CW")) await client.command(`slice set ${flexSliceIndex ?? 0} mode=CW`);
     else if (wantLsb && cur !== "DIGL") await client.command(`slice set ${flexSliceIndex ?? 0} mode=DIGL`);
     else if (!wantCw && !wantLsb && !/^DIG[UL]$/.test(cur)) await client.command(`slice set ${flexSliceIndex ?? 0} mode=DIGU`);
@@ -2050,6 +2060,14 @@ function sampleSstvSmeter(dbm: number): void {
 }
 
 function onSstvEvent(e: SstvEvent): void {
+  if (e.kind === "abort") {
+    // Given up mid-picture: nothing is coming in any more, so SSTV can send again and a page
+    // that connects is not replayed the half picture.
+    if (sstvLive) console.log(`[sstv] ${sstvLive.mode} given up at row ${sstvLive.rows}`);
+    sstvLive = null;
+    broadcast({ kind: "sstv-abort", at: e.at });
+    return;
+  }
   if (e.kind === "vis") {
     // Every header, so one that cannot be drawn still says what it was.
     if (!e.decoded) {
@@ -2511,9 +2529,12 @@ async function startFlexSource(): Promise<() => Promise<void>> {
 
   // Where the station was, for a slice the bridge has to create. See KEY_LAST_TUNE.
   const lastTune = await readLastTune();
-  if (lastTune?.sticky) stickyMode = lastTune.sticky;
+  if (lastTune?.sticky) {
+    stickyMode = lastTune.sticky;
+    stickyAtHz = lastTune.stickyAtHz ?? null;
+  }
   if (lastTune) {
-    lastTuneSaved = JSON.stringify({ hz: lastTune.hz, sliceMode: lastTune.sliceMode, sticky: lastTune.sticky });
+    lastTuneSaved = JSON.stringify({ hz: lastTune.hz, sliceMode: lastTune.sliceMode, sticky: lastTune.sticky, stickyAtHz: lastTune.stickyAtHz ?? null });
     console.log(
       `[bridge] last on ${(lastTune.hz / 1e6).toFixed(4)} MHz ${lastTune.sliceMode ?? ""}${lastTune.sticky ? ` (${lastTune.sticky})` : ""} - a new slice goes back there`,
     );
@@ -3169,6 +3190,7 @@ async function startFlexSource(): Promise<() => Promise<void>> {
     broadcast({ kind: "status", status });
   };
   rig.on("slice", applySlice);
+  flexRefresh = applySlice;
   rig.on("transmit", (tx) => {
     status.transmitting = tx;
     // WHEN THE RADIO WAS ACTUALLY ON THE AIR, kept so a skipped window can be told from

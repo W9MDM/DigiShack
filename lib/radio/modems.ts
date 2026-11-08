@@ -355,9 +355,11 @@ function wefaxDemodulator(sampleRate: number, centreHz: number, onPicture?: (e: 
     },
     retune(c) {
       centre = c;
+      if (dec.statistics.receiving) onPicture?.({ kind: "abort", at: Date.now() });
       dec = make();
     },
     reset() {
+      if (dec.statistics.receiving) onPicture?.({ kind: "abort", at: Date.now() });
       dec = make();
     },
     get statistics() {

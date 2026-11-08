@@ -54,7 +54,8 @@ export function BandModePicker({
     () =>
       new Set(
         frequenciesForRegion(region)
-          .filter((f) => f.mode === decodingAs)
+          // A modem has no frequencies of its own: a band change goes through the band's FT8.
+          .filter((f) => f.mode === (isModemId(decodingAs) ? "FT8" : decodingAs))
           .map((f) => f.band),
       ),
     [decodingAs, region],
@@ -112,14 +113,14 @@ export function BandModePicker({
           disabled={busy !== null}
           onChange={(e) => {
             const band = e.target.value;
-            if (band && band !== currentBand && bandsWithMode.has(band)) void tune(band, decodingAs);
+            if (band && band !== currentBand && bandsWithMode.has(band)) void tune(band, isModemId(decodingAs) ? "FT8" : decodingAs);
           }}
         >
           {!bandListed && <option value={bandValue}>{currentBand ?? "Band"}</option>}
           {bands.map((band) => (
             <option key={band} value={band} disabled={!bandsWithMode.has(band)}>
               {band}
-              {bandsWithMode.has(band) ? "" : ` (no ${decodingAs})`}
+              {bandsWithMode.has(band) ? "" : ` (no ${isModemId(decodingAs) ? "FT8" : decodingAs})`}
             </option>
           ))}
         </Select>

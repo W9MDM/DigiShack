@@ -26,7 +26,9 @@ export type SstvMessage =
   | { kind: "sstv-start"; mode: string; width: number; height: number; at: number }
   | { kind: "sstv-rows"; from: number; to: number; width: number; rgb: string }
   | { kind: "sstv-image"; file: string; mode: string; at: number }
-  | { kind: "sstv-read"; file: string };
+  | { kind: "sstv-read"; file: string }
+  /** A picture given up before it finished: nothing is coming in any more. */
+  | { kind: "sstv-abort"; at: number };
 
 export interface SstvPanelHandle {
   receive: (msg: SstvMessage) => void;
@@ -83,6 +85,10 @@ export const SstvPanel = forwardRef<
     (msg: SstvMessage) => {
       if (msg.kind === "sstv-vis") {
         setLastVis({ name: msg.name, decoded: msg.decoded, at: msg.at });
+        return;
+      }
+      if (msg.kind === "sstv-abort") {
+        setLive(null);
         return;
       }
       if (msg.kind === "sstv-start") {

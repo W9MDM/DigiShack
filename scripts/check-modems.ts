@@ -163,5 +163,47 @@ for (const [speed, qpsk, pskr] of [
   ok(isLoggableMode(logMode) && adif.mode === "PSK" && adif.submode === logMode, `  and logs as MODE=PSK SUBMODE=${logMode}`);
 }
 
+console.log("\nan RSID from another station, and a picture given up");
+{
+  // Copying PSK31 at 1000 Hz while another station sends an RSID at 1800 Hz, mid-line: the
+  // line being copied must come out whole (the decoder is flushed only for an RSID at our centre).
+  const pipe = new DecodePipeline({ mode: "FT8", inputSampleRate: RATE });
+  let text = "";
+  const heard: string[] = [];
+  pipe.on("text", (t) => (text += t.text));
+  pipe.on("rsid", (h) => heard.push(h.name));
+  pipe.on("error", () => {});
+  pipe.setStream({ mode: "PSK31", centreHz: 1000, speed: 31 });
+  const long = "THE QUICK BROWN FOX JUMPS OVER THE LAZY DOG ".repeat(2).trim();
+  const ours = textWaveform({ mode: "PSK31", text: long, centreHz: 1000, shiftHz: 0, sideband: "USB", speed: 31 }, RATE);
+  const theirs = rsidAnnouncement(3, { sampleRate: RATE, centreHz: 1800, amplitude: 0.5 });
+  const mix = Float32Array.from(ours);
+  const at = Math.round(RATE * 4);
+  for (let i = 0; i < theirs.length && at + i < mix.length; i++) mix[at + i] = mix[at + i]! * 0.6 + theirs[i]!;
+  for (let i = 0; i < mix.length; i += 480) pipe.push(mix.subarray(i, Math.min(mix.length, i + 480)));
+  pipe.push(new Float32Array(RATE));
+  ok(heard.includes("QPSK63"), `another station's RSID at 1800 Hz is heard (${heard.join(", ")})`);
+  ok(text.includes(long), `and the PSK31 line at 1000 Hz comes out whole (${JSON.stringify(text.trim().slice(0, 60))}...)`);
+}
+{
+  const wefax = registeredModems().find((m) => m.picture);
+  if (wefax) {
+    const pipe = new DecodePipeline({ mode: "FT8", inputSampleRate: RATE });
+    const kinds: string[] = [];
+    pipe.on("sstv", (e) => kinds.push(e.kind));
+    pipe.on("error", () => {});
+    pipe.setStream({ mode: wefax.id, centreHz: wefax.defaultCentreHz, sub: wefax.defaultSub });
+    const w = wefax.waveform("", { sampleRate: RATE, centreHz: wefax.defaultCentreHz, sub: wefax.defaultSub });
+    // Half the fax, then a click on the waterfall moves the centre.
+    pipe.push(w.subarray(0, Math.round(w.length * 0.7)));
+    pipe.setStream({ mode: wefax.id, centreHz: wefax.defaultCentreHz + 50, sub: wefax.defaultSub });
+    ok(kinds.includes("start") && kinds[kinds.length - 1] === "abort", `a fax given up mid-picture by a retune says so (${kinds.filter((k, i) => k !== kinds[i - 1]).join(" > ")})`);
+    kinds.length = 0;
+    pipe.push(w.subarray(0, Math.round(w.length * 0.7)));
+    pipe.setStream({ mode: "PSK31", centreHz: 1000 });
+    ok(kinds[kinds.length - 1] === "abort", "and so does leaving WEFAX mid-picture");
+  }
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);

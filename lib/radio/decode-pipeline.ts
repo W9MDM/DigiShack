@@ -330,7 +330,9 @@ export type SstvEvent =
   | { kind: "vis"; code: number; name: string; decoded: boolean; at: number }
   | { kind: "start"; mode: string; width: number; height: number; at: number }
   | { kind: "rows"; from: number; to: number; width: number; rgb: Uint8ClampedArray }
-  | { kind: "image"; mode: string; width: number; height: number; rgb: Uint8ClampedArray; at: number; signal: SstvSignal };
+  | { kind: "image"; mode: string; width: number; height: number; rgb: Uint8ClampedArray; at: number; signal: SstvSignal }
+  /** A picture given up before it finished (WEFAX retuned, reset or left). */
+  | { kind: "abort"; at: number };
 
 /** What a stream's demodulator needs: the mode names which. */
 export type StreamOptions =
@@ -930,6 +932,7 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
       this.sstv = null;
       this.hell = null;
       this.jtty = null;
+      if (this.modem && modem(this.streamMode)?.picture) this.emit("sstv", { kind: "abort", at: Date.now() });
       this.modem = null;
       this.streamMode = null;
       this.start();
@@ -984,6 +987,7 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
     this.cw = null;
     this.psk = null;
     this.olivia = null;
+    if ((this.modem && modem(this.streamMode)?.picture) || this.sstv?.statistics.receiving) this.emit("sstv", { kind: "abort", at: Date.now() });
     this.sstv = null;
     this.hell = null;
     this.jtty = null;
@@ -1078,11 +1082,16 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
     if (!demod || !mode) return;
     // RSID: in the keyboard modes, where a station switching mode announces it. Not in
     // SSTV (its own VIS header names the mode) nor JTTY (whole-passband already).
-    if (mode !== "SSTV" && mode !== "JTTY") {
+    const spec = modem(mode);
+    if (mode !== "SSTV" && mode !== "JTTY" && !spec?.receiveOnly && !spec?.picture) {
       this.rsid ??= new RsidDetector(this.inputRate, (h) => {
-        // The detector can name the mode before the last tone has quite ended: the flush
+        // Flushed only for an RSID at our own centre: one from another station elsewhere in
+        // the passband, or an end-of-transmission, must not cost the line being copied. The
+        // detector can name the mode before the last tone has quite ended, so the flush
         // waits 150 ms, inside the five silent symbols (465 ms) before the line.
-        this.rsidFlushIn = Math.round(0.15 * this.inputRate);
+        const c = this.streamConfiguration;
+        const here = !!c && "centreHz" in c && Math.abs(h.hz - c.centreHz) <= 100;
+        if (here && !h.eot) this.rsidFlushIn = Math.round(0.15 * this.inputRate);
         this.emit("rsid", { ...h, at: Date.now() });
       });
       this.rsid.feed(samples);
