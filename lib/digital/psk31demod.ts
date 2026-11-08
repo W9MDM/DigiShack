@@ -68,6 +68,16 @@ const QUALITY_ALPHA = 1 / 24;
 const TIMING_ALPHA = 1 / 32;
 /** AFC step per symbol, as a fraction of the measured error. */
 const AFC_GAIN = 0.08;
+/**
+ * The coarse AFC's average, per decimated sample: about two symbols. The fine AFC measures
+ * the error from symbol to symbol, which wraps at a quarter of the baud (7.8 Hz at
+ * PSK31): a click 10 Hz off read as 5 Hz the other way and the loop ran off to its limit.
+ * The coarse one measures it from one decimated sample to the next, unambiguous to about
+ * the baud, and pulls in until the fine one can take over.
+ */
+const COARSE_ALPHA = 1 / (2 * PHASES);
+/** Coarse pull per symbol, as a fraction of its error. */
+const COARSE_GAIN = 0.25;
 
 export class Psk31Demodulator {
   private readonly fs: number;
@@ -101,6 +111,14 @@ export class Psk31Demodulator {
   private prevQ = 0;
   private qualI = 0;
   private qualQ = 0;
+  // The coarse AFC: the matched filter's output squared (the modulation gone), its
+  // rotation from one decimated sample to the next, averaged; and its power, to tell a
+  // carrier from noise.
+  private prevWI = 0;
+  private prevWQ = 0;
+  private coarseI = 0;
+  private coarseQ = 0;
+  private coarsePow = 0;
 
   private readonly stats: Psk31DemodStats = { chars: 0, errors: 0, quality: 0, afcHz: 0, level: 0, open: false };
 
@@ -119,6 +137,9 @@ export class Psk31Demodulator {
     this.centreHz = centreHz;
     this.lo = centreHz;
     this.stats.afcHz = 0;
+    this.coarseI = 0;
+    this.coarseQ = 0;
+    this.coarsePow = 0;
   }
 
   get statistics(): Readonly<Psk31DemodStats> {
@@ -163,6 +184,7 @@ export class Psk31Demodulator {
         this.filled++;
         continue;
       }
+      if (this.afc) this.coarseStep();
       // Timing: the magnitude of the symbol sum at this phase, averaged.
       const mag = this.sumI * this.sumI + this.sumQ * this.sumQ;
       const t = this.timing[this.phaseIndex] ?? 0;
@@ -185,6 +207,39 @@ export class Psk31Demodulator {
       }
     }
     return out;
+  }
+
+  /** One decimated sample of the coarse AFC. */
+  private coarseStep(): void {
+    const wI = this.sumI * this.sumI - this.sumQ * this.sumQ;
+    const wQ = 2 * this.sumI * this.sumQ;
+    // w times the conjugate of the last w: its angle is 4 pi df over one decimated sample.
+    const cI = wI * this.prevWI + wQ * this.prevWQ;
+    const cQ = wQ * this.prevWI - wI * this.prevWQ;
+    const pow = Math.hypot(wI, wQ) * Math.hypot(this.prevWI, this.prevWQ);
+    this.prevWI = wI;
+    this.prevWQ = wQ;
+    this.coarseI += COARSE_ALPHA * (cI - this.coarseI);
+    this.coarseQ += COARSE_ALPHA * (cQ - this.coarseQ);
+    this.coarsePow += COARSE_ALPHA * (pow - this.coarsePow);
+  }
+
+  /** The coarse frequency error, Hz, or null when what is there is not a steady carrier. */
+  private coarseHz(): number | null {
+    if (this.coarsePow <= 0) return null;
+    // Noise rotates every which way and averages towards 0; a carrier keeps its rotation.
+    if (Math.hypot(this.coarseI, this.coarseQ) < 0.6 * this.coarsePow) return null;
+    const fsd = this.fs / this.decim;
+    return (Math.atan2(this.coarseQ, this.coarseI) * fsd) / (4 * Math.PI);
+  }
+
+  /** Hold the oscillator within one baud of where the operator put it, as fldigi does. */
+  private clampLo(): void {
+    const limit = this.baud;
+    const off = this.lo - this.centreHz;
+    if (off > limit) this.lo = this.centreHz + limit;
+    if (off < -limit) this.lo = this.centreHz - limit;
+    this.stats.afcHz = this.lo - this.centreHz;
   }
 
   private symbol(zI: number, zQ: number): string {
@@ -210,16 +265,19 @@ export class Psk31Demodulator {
     // near 1 and is followed, while noise at 0.1 to 0.3 leaves the oscillator alone.
     const open = this.squelch === 0 || quality >= this.squelch;
     const trusted = quality >= Math.max(0.5, this.squelch);
-    if (this.afc && trusted) {
+    const coarse = this.afc ? this.coarseHz() : null;
+    if (trusted && coarse !== null && Math.abs(coarse) > this.baud / 8) {
+      // Further off than the fine AFC can measure: pull in on the coarse reading. Only on
+      // a signal the squelch trusts: neighbouring matched-filter sums share most of their
+      // samples, so noise too looks like a carrier for a moment.
+      this.lo += COARSE_GAIN * coarse;
+      this.clampLo();
+    } else if (this.afc && trusted) {
       // The averaged angle is 4 pi df T: df = angle * baud / (4 pi).
       const angle = Math.atan2(this.qualQ, this.qualI);
       const dfHz = (angle * this.baud) / (4 * Math.PI);
       this.lo += AFC_GAIN * dfHz;
-      const limit = this.baud / 4;
-      const off = this.lo - this.centreHz;
-      if (off > limit) this.lo = this.centreHz + limit;
-      if (off < -limit) this.lo = this.centreHz - limit;
-      this.stats.afcHz = this.lo - this.centreHz;
+      this.clampLo();
     }
     const bit = dI >= 0 ? 1 : 0;
     const before = this.varicode.errors;

@@ -219,6 +219,41 @@ async function main(): Promise<void> {
     ok(junk.length > 50, `with the squelch off the same noise prints junk (${junk.length} characters), which is the squelch's job`);
   }
 
+  console.log("\nas fldigi sends and reads it");
+  {
+    // The preamble and tail are the same time at every speed: 32, 64 and 128 symbols.
+    for (const [speed, n] of [[31, 32], [63, 64], [125, 128]] as const) {
+      const sy = psk31Symbols("", { speed });
+      const zeros = sy.findIndex((b) => b === 1);
+      ok(zeros === n && sy.length === 2 * n, `PSK${speed}: ${n} symbols of reversals before and ${n} of carrier after (${zeros}, ${sy.length - zeros})`);
+    }
+    const fs = 12_000;
+    const w125 = psk31Waveform(LINE, { sampleRate: fs, centreHz: 1000, speed: 125 });
+    const t125 = decodeAll(new Psk31Demodulator({ sampleRate: fs, centreHz: 1000, speed: 125 }), w125);
+    ok(t125.includes(LINE), "BPSK125 reads back with its default preamble", JSON.stringify(t125));
+
+    // UTF-8, as fldigi sends it: an accented letter is two codes and comes back whole.
+    const bits = psk31EncodeText("é");
+    ok(bits.join("") === PSK31_VARICODE[0xc3] + "00" + PSK31_VARICODE[0xa9] + "00", "é goes as its two UTF-8 bytes, C3 A9");
+    const d = new Psk31VaricodeDecoder();
+    let back = "";
+    for (const b of psk31EncodeText("Café 73 Jürgen")) back += d.pushBit(b);
+    ok(back === "Café 73 Jürgen", `and reads back whole (${back})`);
+    const wu = psk31Waveform("José", { sampleRate: fs, centreHz: 1000 });
+    const tu = decodeAll(new Psk31Demodulator({ sampleRate: fs, centreHz: 1000 }), wu);
+    ok(tu.includes("José"), `through the air too (${JSON.stringify(tu)})`);
+
+    // A click 10 to 15 Hz off at PSK31 (more at the faster speeds): the fine AFC alone wraps
+    // past a quarter of the baud, 7.8 Hz at PSK31, and ran the wrong way.
+    for (const [off, speed] of [[12, 31], [-15, 31], [25, 63], [40, 125]] as const) {
+      const w = psk31Waveform(LINE + " " + LINE, { sampleRate: fs, centreHz: 1000 + off, speed });
+      const demod = new Psk31Demodulator({ sampleRate: fs, centreHz: 1000, speed });
+      const t = decodeAll(demod, w);
+      ok(t.includes(LINE), `PSK${speed} ${off > 0 ? "+" : ""}${off} Hz off the click reads`, JSON.stringify(t));
+      ok(Math.abs(demod.statistics.afcHz - off) < 1.5, `  and the AFC pulled in to it (${demod.statistics.afcHz.toFixed(2)} Hz)`);
+    }
+  }
+
   console.log(`\n${passed} passed, ${failed} failed`);
   if (failed) process.exit(1);
 }

@@ -27,6 +27,8 @@ export function pskBaud(speed: PskSpeed = 31): number {
   return speed === 125 ? 125 : speed === 63 ? 62.5 : PSK31_BAUD;
 }
 
+const UTF8 = new TextEncoder();
+
 const BY_CODE = new Map<string, number>();
 for (let i = 0; i < PSK31_VARICODE.length; i++) BY_CODE.set(PSK31_VARICODE[i]!, i);
 
@@ -61,8 +63,12 @@ export function psk31EncodeText(text: string): number[] {
       continue;
     }
     if (ch === "\r") continue;
-    const code = psk31CodeFor(ch);
-    if (code) push(code);
+    // As UTF-8 bytes, which is what fldigi sends: an accented letter is two codes. ASCII
+    // is one byte and its own code, as before.
+    for (const byte of UTF8.encode(ch)) {
+      const code = PSK31_VARICODE[byte];
+      if (code) push(code);
+    }
   }
   return bits;
 }
@@ -79,6 +85,8 @@ export class Psk31VaricodeDecoder {
   /** Inside a run of 1s longer than any code: a steady carrier, dropped until the next separator. */
   private carrier = false;
   private dropped = 0;
+  /** Bytes to characters: fldigi sends UTF-8, so "é" arrives as two codes. */
+  private utf8 = new TextDecoder("utf-8");
 
   /** Codes dropped as too long or unknown. */
   get errors(): number {
@@ -89,6 +97,7 @@ export class Psk31VaricodeDecoder {
     this.code = "";
     this.lastZero = false;
     this.carrier = false;
+    this.utf8 = new TextDecoder("utf-8");
   }
 
   /** One bit in; the character it completed, "" otherwise. CR is silent and LF is the newline. */
@@ -127,7 +136,9 @@ export class Psk31VaricodeDecoder {
     }
     if (i === 13) return "";
     if (i === 10) return "\n";
-    return String.fromCharCode(i);
+    // A half-received UTF-8 character gives "" until its last byte; a byte that cannot
+    // start or continue one (an old Latin-1 sender) prints as the replacement mark.
+    return this.utf8.decode(Uint8Array.of(i), { stream: true });
   }
 
   /** As push, with the single 0 inside a code kept: this is the bit before a 1 arrives. */
@@ -147,9 +158,9 @@ export interface Psk31WaveformOptions {
   /** Carrier, Hz audio. Default 1000. */
   centreHz?: number;
   speed?: PskSpeed;
-  /** Idle (reversals) before the first character, in symbols, so the far end locks. Default 32. */
+  /** Idle (reversals) before the first character, in symbols, so the far end locks. Default 32 at PSK31, 64 at PSK63, 128 at PSK125. */
   preambleSymbols?: number;
-  /** Steady carrier after the last character, in symbols. Default 32. */
+  /** Steady carrier after the last character, in symbols. Default as the preamble. */
   tailSymbols?: number;
   /** Peak amplitude. Default 1. */
   amplitude?: number;
@@ -157,8 +168,12 @@ export interface Psk31WaveformOptions {
 
 /** The symbols a line sends, idle to steady carrier: preamble 0s, the text, a separator, tail 1s. */
 export function psk31Symbols(text: string, opts: Partial<Psk31WaveformOptions> = {}): number[] {
-  const pre = opts.preambleSymbols ?? 32;
-  const tail = opts.tailSymbols ?? 32;
+  // 32 symbols at PSK31, 64 at PSK63, 128 at PSK125: the same time on the air at every
+  // speed, as fldigi sends them. A fixed 32 was a quarter of a second at PSK125, too short
+  // for fldigi to open its squelch and settle before the first character.
+  const scale = pskBaud(opts.speed ?? 31) / PSK31_BAUD;
+  const pre = opts.preambleSymbols ?? Math.round(32 * scale);
+  const tail = opts.tailSymbols ?? Math.round(32 * scale);
   const bits: number[] = [];
   for (let i = 0; i < pre; i++) bits.push(0);
   bits.push(...psk31EncodeText(text));
