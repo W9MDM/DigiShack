@@ -596,7 +596,7 @@ export function StreamPanel({
 
       {/* Sending: a line at a time. RTTY is about six characters a second; CW at 20 wpm
           about four. The two macros are the lines every contact begins and ends with. */}
-      {canSend && (
+      {canSend && !spec?.receiveOnly && (
         <form
           className="flex flex-wrap items-center gap-2"
           onSubmit={(e) => {

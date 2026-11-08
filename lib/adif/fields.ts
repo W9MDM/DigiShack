@@ -69,6 +69,9 @@ const TO_ADIF: Record<string, AdifMode> = {
   THOR50X1: { mode: "THOR", submode: "THOR50X1" },
   THOR50X2: { mode: "THOR", submode: "THOR50X2" },
   THOR100: { mode: "THOR", submode: "THOR100" },
+  // Throb is ADIF's THRB; ThrobX its THRBX submode, as fldigi logs them.
+  THRB: { mode: "THRB" },
+  THRBX: { mode: "THRB", submode: "THRBX" },
   SSTV: { mode: "SSTV" },
   DIGITALVOICE: { mode: "DIGITALVOICE" },
 };
@@ -98,6 +101,7 @@ export function fromAdifMode(mode: string, submode?: string): string {
     if (m === "PSK" && (s === "QPSK31" || s === "QPSK63" || s === "QPSK125")) return s;
     if (m === "PSK" && ["PSK63F","PSK125R","PSK250R","PSK500R"].includes(s)) return s;
     if (m === "DOMINO" && s === "DOMINOEX") return "DOMINOEX";
+    if (m === "THRB" && s === "THRBX") return "THRBX";
     if (m === "THOR" && ["THOR4","THOR5","THOR8","THOR11","THOR16","THOR22","THOR25X4","THOR50X1","THOR50X2","THOR100"].includes(s)) return s;
     if (m === "HELL" && ["FSKH105", "FSKH245", "HELL80", "SLOWHELL", "PSKHELL"].includes(s)) return s;
     if (s === "JS8") return "JS8";

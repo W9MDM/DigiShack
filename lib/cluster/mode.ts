@@ -74,6 +74,8 @@ const CATEGORY: Record<string, ModeCategory> = {
   THOR50X1: "DIGITAL",
   THOR50X2: "DIGITAL",
   THOR100: "DIGITAL",
+  THRB: "DIGITAL",
+  THRBX: "DIGITAL",
   DOMINO: "DIGITAL",
   JT65: "DIGITAL",
   JT9: "DIGITAL",

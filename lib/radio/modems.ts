@@ -19,11 +19,13 @@ import { MT63_MODES, mt63DurationMs, mt63Params, mt63Waveform, type Mt63Mode } f
 import { Mt63Demodulator } from "@/lib/digital/mt63demod";
 import { THOR_CENTRE_HZ, THOR_MODES, thorDurationMs, thorParams, thorWaveform, type ThorMode } from "@/lib/digital/thor";
 import { ThorDemodulator } from "@/lib/digital/thordemod";
+import { THROB_CENTRE_HZ, THROB_MODES, throbDurationMs, throbParams, throbWaveform, type ThrobMode } from "@/lib/digital/throb";
+import { ThrobDemodulator } from "@/lib/digital/throbdemod";
 
 /** The registered keyboard modes. A name here with no entry in MODEMS is not offered anywhere. */
-export type ModemId = "MFSK" | "DOMINO" | "MT63" | "THOR";
+export type ModemId = "MFSK" | "DOMINO" | "MT63" | "THOR" | "THROB";
 
-export const MODEM_IDS: readonly ModemId[] = ["MFSK", "DOMINO", "MT63", "THOR"];
+export const MODEM_IDS: readonly ModemId[] = ["MFSK", "DOMINO", "MT63", "THOR", "THROB"];
 
 /** What every modem's demodulator does. */
 export interface ModemDemodulator {
@@ -63,6 +65,11 @@ export interface ModemSpec {
   defaultCentreHz: number;
   /** The longest a line may be on the air, ms. */
   maxSendMs: number;
+  /**
+   * Listen only (NAVTEX): no Send box, no exchange bar, and the bridge refuses to key.
+   * `waveform` may still exist, as a test generator.
+   */
+  receiveOnly?: boolean;
   demodulator(opts: { sampleRate: number; centreHz: number; sub: string }): ModemDemodulator;
   waveform(text: string, opts: { sampleRate: number; centreHz: number; sub: string }): Float32Array;
   durationMs(text: string, sub: string): number;
@@ -183,8 +190,39 @@ const THOR: ModemSpec = {
   durationMs: (text, sub) => thorDurationMs(text, { mode: thorMode(sub) }),
 };
 
+/** fldigi's RSID codes for Throb and ThrobX (rsid_defs.cxx). */
+const THROB_RSID: Record<ThrobMode, number> = { THROB1: 43, THROB2: 44, THROB4: 45, THROBX1: 46, THROBX2: 47, THROBX4: 146 };
+
+function throbMode(sub: string): ThrobMode {
+  const m = `THROB${sub}`;
+  return (THROB_MODES as readonly string[]).includes(m) ? (m as ThrobMode) : "THROB2";
+}
+
+const THROB: ModemSpec = {
+  id: "THROB",
+  label: "Throb",
+  subs: THROB_MODES.map((m) => {
+    const sub = m.slice(5);
+    return {
+      id: sub,
+      label: sub.startsWith("X") ? `ThrobX ${sub.slice(1)}` : `Throb ${sub}`,
+      bandwidthHz: Math.round(throbParams(m).bandwidthHz),
+      // fldigi logs Throb as MODE=THRB and ThrobX as MODE=THRB SUBMODE=THRBX (globals.cxx).
+      logMode: sub.startsWith("X") ? "THRBX" : "THRB",
+      rsidCode: THROB_RSID[m],
+    };
+  }),
+  defaultSub: "2",
+  defaultCentreHz: THROB_CENTRE_HZ,
+  // Throb 1 is about a character a second.
+  maxSendMs: 120_000,
+  demodulator: ({ sampleRate, centreHz, sub }) => new ThrobDemodulator({ sampleRate, centreHz, mode: throbMode(sub) }),
+  waveform: (text, { sampleRate, centreHz, sub }) => throbWaveform(text, { sampleRate, centreHz, mode: throbMode(sub) }),
+  durationMs: (text, sub) => throbDurationMs(text, { mode: throbMode(sub) }),
+};
+
 /** The table. Entries are added as each modem lands. */
-export const MODEMS: Partial<Record<ModemId, ModemSpec>> = { MFSK, DOMINO, MT63, THOR };
+export const MODEMS: Partial<Record<ModemId, ModemSpec>> = { MFSK, DOMINO, MT63, THOR, THROB };
 
 export function isModemId(mode: string | null | undefined): mode is ModemId {
   return !!mode && (MODEM_IDS as readonly string[]).includes(mode);

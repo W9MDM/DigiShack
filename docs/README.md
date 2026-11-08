@@ -35,6 +35,7 @@ and a backup moves the whole installation.
 | [Hell](hell.md) | Hellschreiber in six modes (Feld, FM Hell-105 and -245, Hell 80, Slow, PSK), painted live as a scrolling tape, the North American nets, and sending |
 | [Text-mode exchange and log](text-mode-log.md) | F1-F8 lines with the calls filled in, and logging RTTY, CW, PSK, Olivia and Hell with their proper ADIF modes |
 | [RSID](rsid.md) | Hearing fldigi's mode identifier and switching to the mode and frequency it names, and sending one before each line |
+| [Throb](throb.md) | Throb and ThrobX 1, 2 and 4: slow tone pairs that copy far below the noise |
 | [Thor](thor.md) | Thor 4 to 22 and the fast Thor modes: DominoEX's tones with error correction |
 | [PSK speeds and QPSK](psk.md) | BPSK31 to BPSK500 and QPSK31 to 125: what each is for, and QPSK's error correction |
 | [MT63](mt63.md) | MT63-500 to 2000, short and long: the NBEMS and ARES net mode |

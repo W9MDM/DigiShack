@@ -40,7 +40,7 @@ export const LOGGABLE_MODES: readonly string[] = [
   // Submodes stored as modes, as FT4 is, so each exports as its own ADIF SUBMODE.
   ...["PSK63","PSK125","FSKH105","FSKH245","HELL80","SLOWHELL","PSKHELL"],
   // The fldigi modes added after: MFSK, DominoEX and MT63, and the other PSK speeds and QPSK.
-  ...["MFSK8", "MFSK11", "MFSK16", "MFSK22", "MFSK32", "DOMINOEX", "MT63", "QPSK31", "QPSK63", "QPSK125", "PSK250", "PSK500", "PSK63F", "PSK125R", "PSK250R", "PSK500R", "THOR4", "THOR5", "THOR8", "THOR11", "THOR16", "THOR22", "THOR25X4", "THOR50X1", "THOR50X2", "THOR100"],
+  ...["MFSK8", "MFSK11", "MFSK16", "MFSK22", "MFSK32", "DOMINOEX", "MT63", "QPSK31", "QPSK63", "QPSK125", "PSK250", "PSK500", "PSK63F", "PSK125R", "PSK250R", "PSK500R", "THOR4", "THOR5", "THOR8", "THOR11", "THOR16", "THOR22", "THOR25X4", "THOR50X1", "THOR50X2", "THOR100", "THRB", "THRBX"],
   "SSTV",
   "DIGITALVOICE",
 ];
@@ -50,7 +50,7 @@ export const LOGGABLE_MODES: readonly string[] = [
  * with each Hell mode and PSK speed as its own ADIF submode. Not JTTY, which has no ADIF
  * mode yet, and not SSTV, which logs from its picture.
  */
-export const TEXT_LOG_MODES: readonly string[] = ["RTTY", "CW", "PSK31", "OLIVIA", "CONTESTI", "HELL", ...["PSK63","PSK125","FSKH105","FSKH245","HELL80","SLOWHELL","PSKHELL"], ...["MFSK8", "MFSK11", "MFSK16", "MFSK22", "MFSK32", "DOMINOEX", "MT63", "QPSK31", "QPSK63", "QPSK125", "PSK250", "PSK500", "PSK63F", "PSK125R", "PSK250R", "PSK500R", "THOR4", "THOR5", "THOR8", "THOR11", "THOR16", "THOR22", "THOR25X4", "THOR50X1", "THOR50X2", "THOR100"]];
+export const TEXT_LOG_MODES: readonly string[] = ["RTTY", "CW", "PSK31", "OLIVIA", "CONTESTI", "HELL", ...["PSK63","PSK125","FSKH105","FSKH245","HELL80","SLOWHELL","PSKHELL"], ...["MFSK8", "MFSK11", "MFSK16", "MFSK22", "MFSK32", "DOMINOEX", "MT63", "QPSK31", "QPSK63", "QPSK125", "PSK250", "PSK500", "PSK63F", "PSK125R", "PSK250R", "PSK500R", "THOR4", "THOR5", "THOR8", "THOR11", "THOR16", "THOR22", "THOR25X4", "THOR50X1", "THOR50X2", "THOR100", "THRB", "THRBX"]];
 
 const RST_STYLE_BY_MODE = new Map<string, RstStyle>([
   ["SSB", "RS"],
@@ -97,6 +97,8 @@ const RST_STYLE_BY_MODE = new Map<string, RstStyle>([
   ["THOR50X1", "RST"],
   ["THOR50X2", "RST"],
   ["THOR100", "RST"],
+  ["THRB", "RST"],
+  ["THRBX", "RST"],
   ["FT8", "DB"],
   ["FT4", "DB"],
   ["FT2", "DB"],
@@ -152,6 +154,8 @@ const DIGITAL_MODES = new Set([
   "THOR50X1",
   "THOR50X2",
   "THOR100",
+  "THRB",
+  "THRBX",
 ]);
 
 export function isLoggableMode(mode: string): boolean {

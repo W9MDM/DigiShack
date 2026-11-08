@@ -76,6 +76,8 @@ console.log("\neach mode logs as ADIF knows it");
     THOR50X1: ["THOR", "THOR50X1"],
     THOR50X2: ["THOR", "THOR50X2"],
     THOR100: ["THOR", "THOR100"],
+    THRB: ["THRB", undefined],
+    THRBX: ["THRB", "THRBX"],
   };
   ok(Object.keys(want).sort().join() === [...TEXT_LOG_MODES].sort().join(), `the bar logs exactly these: ${TEXT_LOG_MODES.join(", ")}`);
   for (const [mode, [m, sub]] of Object.entries(want)) {

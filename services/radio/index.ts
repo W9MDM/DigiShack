@@ -5618,6 +5618,10 @@ async function main(): Promise<void> {
           return;
         }
         const rtty = status.rtty;
+        if (modem(streamMode)?.receiveOnly) {
+          sendJson(res, 409, { error: `${modem(streamMode)?.label ?? streamMode} is listen-only: nothing is transmitted in it` });
+          return;
+        }
         if (streamMode === "SSTV") {
           sendJson(res, 409, { error: "SSTV sends pictures, not text: use Send a picture" });
           return;

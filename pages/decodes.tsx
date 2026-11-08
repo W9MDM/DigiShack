@@ -1045,7 +1045,8 @@ export default function DigitalPage({ wsUrl }: Props) {
           : { mode: "OLIVIA", label: "Olivia", freqHz: at(status?.olivia?.centreHz) };
       default: {
         const spec = modem(decodingAs);
-        if (!spec || !status?.modem || status.modem.mode !== decodingAs) return null;
+        // A listen-only mode (NAVTEX) has no contacts to log.
+        if (!spec || spec.receiveOnly || !status?.modem || status.modem.mode !== decodingAs) return null;
         const sub = modemSub(spec, status.modem.sub);
         return { mode: sub.logMode, label: sub.label, freqHz: at(status.modem.centreHz) };
       }
