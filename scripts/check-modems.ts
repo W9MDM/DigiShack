@@ -38,7 +38,8 @@ console.log("the table");
   for (const m of reg) {
     ok(m.subs.some((s) => s.id === m.defaultSub), `${m.id}: its default (${m.defaultSub}) is one of its sizes`);
     ok(NO_SEQUENCER_MODES.has(m.id), `${m.id}: no automatic mode runs on it`);
-    for (const s of m.subs) {
+    for (const s of m.subs.filter((x) => x.logMode !== undefined)) {
+      if (!s.logMode) continue;
       ok(isLoggableMode(s.logMode) && TEXT_LOG_MODES.includes(s.logMode) && rstStyleFor(s.logMode) === "RST", `${s.label}: logs as ${s.logMode} (${JSON.stringify(toAdifMode(s.logMode))}), 599`);
     }
   }
@@ -89,7 +90,7 @@ for (const m of registeredModems()) {
     ok(maxTextMs(req) > maxTextMs({ ...req, rsid: false }), `  and the cap grows to hold it`);
     const heard: RsidHeard[] = [];
     const d = new RsidDetector(RATE, (h) => heard.push(h));
-    d.feed(rsidWaveform(withCode.rsidCode!, { sampleRate: RATE, centreHz: 1400 }));
+    d.feed(rsidAnnouncement(withCode.rsidCode!, { sampleRate: RATE, centreHz: 1400 }));
     d.feed(new Float32Array(RATE));
     const h = heard[0];
     ok(h?.mode !== undefined && "sub" in h.mode && h.mode.mode === m.id && h.mode.sub === withCode.id, `  and a station hearing it is told ${m.id} ${withCode.id}`, JSON.stringify(h));

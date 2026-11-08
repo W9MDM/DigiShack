@@ -5627,7 +5627,7 @@ async function main(): Promise<void> {
           return;
         }
         const req1 = isModemId(streamMode)
-          ? { mode: streamMode, text, centreHz: modemTuningFor(streamMode).centreHz, shiftHz: 0, sideband: "USB" as const, sub: modemTuningFor(streamMode).sub }
+          ? { mode: streamMode, text, centreHz: modemTuningFor(streamMode).centreHz, shiftHz: 0, sideband: "USB" as const, sub: modemTuningFor(streamMode).sub, mycall: status.deCall ?? undefined }
           : streamMode === "JTTY"
             ? { mode: "JTTY" as const, text, centreHz: jttyTuning.txHz, shiftHz: 0, sideband: "USB" as const }
             : streamMode === "HELL"

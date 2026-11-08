@@ -51,6 +51,8 @@ export interface TextTransmitRequest {
   hellVariant?: HellVariant;
   /** A modem's size or speed (lib/radio/modems.ts): "16" for MFSK16, "1000L" for MT63-1000L. */
   sub?: string;
+  /** The station's callsign, for a mode that heads each over with it (FSQ). */
+  mycall?: string;
   /**
    * Send fldigi's RSID first, so a station with RxID on switches to this mode and this
    * frequency by itself. Only where fldigi has a code for the mode as it is set.
@@ -129,7 +131,7 @@ function lineWaveform(req: TextTransmitRequest, sampleRate: number): Float32Arra
     if (ms > cap) {
       throw new Error(`${text.length} characters is ${(ms / 1000).toFixed(0)} s of ${sub.label}, over the ${cap / 1000} s cap - send it in pieces`);
     }
-    return spec.waveform(text, { sampleRate, centreHz: req.centreHz, sub: sub.id });
+    return spec.waveform(text, { sampleRate, centreHz: req.centreHz, sub: sub.id, mycall: req.mycall });
   }
   if (req.mode === "OLIVIA") {
     const size = { tones: req.tones ?? 16, bandwidth: req.bandwidth ?? 500, code: req.code ?? "olivia" } as const;

@@ -72,6 +72,8 @@ const TO_ADIF: Record<string, AdifMode> = {
   // Throb is ADIF's THRB; ThrobX its THRBX submode, as fldigi logs them.
   THRB: { mode: "THRB" },
   THRBX: { mode: "THRB", submode: "THRBX" },
+  // FSQ is MFSK's FSQCALL submode in ADIF.
+  FSQCALL: { mode: "MFSK", submode: "FSQCALL" },
   SSTV: { mode: "SSTV" },
   DIGITALVOICE: { mode: "DIGITALVOICE" },
 };

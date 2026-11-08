@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.290.0 - public release
+## 1.291.0 - public release
 
 Development happens in a private repository; this is where the public history starts.
 Earlier entries are not reproduced - they quote real operators by callsign, include
@@ -22,6 +22,7 @@ Notes for anyone running this:
 
 ## Release history
 
+- **1.291.0** — FSQ and IFKP
 - **1.290.0** — Throb and ThrobX
 - **1.289.0** — Thor
 - **1.288.0** — PSK-R: PSK63F, PSK125R, PSK250R and PSK500R

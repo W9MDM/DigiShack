@@ -21,11 +21,15 @@ import { THOR_CENTRE_HZ, THOR_MODES, thorDurationMs, thorParams, thorWaveform, t
 import { ThorDemodulator } from "@/lib/digital/thordemod";
 import { THROB_CENTRE_HZ, THROB_MODES, throbDurationMs, throbParams, throbWaveform, type ThrobMode } from "@/lib/digital/throb";
 import { ThrobDemodulator } from "@/lib/digital/throbdemod";
+import { FSQ_BANDWIDTH_HZ, FSQ_CENTRE_HZ, FSQ_SPEEDS, fsqDurationMs, fsqWaveform, type FsqSpeed } from "@/lib/digital/fsq";
+import { FsqDemodulator } from "@/lib/digital/fsqdemod";
+import { IFKP_BANDWIDTH_HZ, IFKP_CENTRE_HZ, IFKP_SPEEDS, ifkpDurationMs, ifkpWaveform, type IfkpSpeed } from "@/lib/digital/ifkp";
+import { IfkpDemodulator } from "@/lib/digital/ifkpdemod";
 
 /** The registered keyboard modes. A name here with no entry in MODEMS is not offered anywhere. */
-export type ModemId = "MFSK" | "DOMINO" | "MT63" | "THOR" | "THROB";
+export type ModemId = "MFSK" | "DOMINO" | "MT63" | "THOR" | "THROB" | "FSQ" | "IFKP";
 
-export const MODEM_IDS: readonly ModemId[] = ["MFSK", "DOMINO", "MT63", "THOR", "THROB"];
+export const MODEM_IDS: readonly ModemId[] = ["MFSK", "DOMINO", "MT63", "THOR", "THROB", "FSQ", "IFKP"];
 
 /** What every modem's demodulator does. */
 export interface ModemDemodulator {
@@ -50,8 +54,12 @@ export interface ModemSub {
   label: string;
   /** The width it occupies, Hz: the waterfall marks this either side of the centre. */
   bandwidthHz: number;
-  /** As the log stores it (lib/ham/modes.ts), which lib/adif/fields.ts maps to MODE/SUBMODE. */
-  logMode: string;
+  /**
+   * As the log stores it (lib/ham/modes.ts), which lib/adif/fields.ts maps to MODE/SUBMODE.
+   * None for a mode ADIF has no name for (IFKP): no log bar, as JTTY has none, because a
+   * contact under a mode the upload services do not know is refused there.
+   */
+  logMode?: string;
   /** fldigi's RSID code for it, when it has one. */
   rsidCode?: number;
 }
@@ -71,7 +79,8 @@ export interface ModemSpec {
    */
   receiveOnly?: boolean;
   demodulator(opts: { sampleRate: number; centreHz: number; sub: string }): ModemDemodulator;
-  waveform(text: string, opts: { sampleRate: number; centreHz: number; sub: string }): Float32Array;
+  /** `mycall`: the station's callsign, for a mode that heads each over with it (FSQ). */
+  waveform(text: string, opts: { sampleRate: number; centreHz: number; sub: string; mycall?: string }): Float32Array;
   durationMs(text: string, sub: string): number;
 }
 
@@ -221,8 +230,55 @@ const THROB: ModemSpec = {
   durationMs: (text, sub) => throbDurationMs(text, { mode: throbMode(sub) }),
 };
 
+function fsqSpeed(sub: string): FsqSpeed {
+  return (FSQ_SPEEDS as readonly string[]).includes(sub) ? (sub as FsqSpeed) : "4.5";
+}
+
+const FSQ: ModemSpec = {
+  id: "FSQ",
+  label: "FSQ",
+  subs: FSQ_SPEEDS.map((s) => ({
+    id: s,
+    label: `FSQ ${s}`,
+    bandwidthHz: FSQ_BANDWIDTH_HZ,
+    // ADIF's FSQ is MFSK's FSQCALL submode. fldigi has no RSID code for FSQ.
+    logMode: "FSQCALL",
+  })),
+  defaultSub: "4.5",
+  defaultCentreHz: FSQ_CENTRE_HZ,
+  // FSQ 1.5 is about a character a second.
+  maxSendMs: 90_000,
+  demodulator: ({ sampleRate, centreHz, sub }) => new FsqDemodulator({ sampleRate, centreHz, speed: fsqSpeed(sub) }),
+  // fldigi heads every FSQ over with "MYCALL:", which FSQ stations read as who is speaking.
+  waveform: (text, { sampleRate, centreHz, sub, mycall }) => fsqWaveform(text, { sampleRate, centreHz, speed: fsqSpeed(sub), mycall }),
+  durationMs: (text, sub) => fsqDurationMs(text, { speed: fsqSpeed(sub) }),
+};
+
+function ifkpSpeed(sub: string): IfkpSpeed {
+  return (IFKP_SPEEDS as readonly string[]).includes(sub) ? (sub as IfkpSpeed) : "1";
+}
+
+const IFKP: ModemSpec = {
+  id: "IFKP",
+  label: "IFKP",
+  subs: IFKP_SPEEDS.map((s) => ({
+    id: s,
+    label: `IFKP ${Number(s).toFixed(1)}`,
+    bandwidthHz: IFKP_BANDWIDTH_HZ,
+    // fldigi has one RSID code for IFKP, in its second table: on the default speed only,
+    // since a heard code switches to the first sub that carries it.
+    rsidCode: s === "1" ? 1171 : undefined,
+  })),
+  defaultSub: "1",
+  defaultCentreHz: IFKP_CENTRE_HZ,
+  maxSendMs: 90_000,
+  demodulator: ({ sampleRate, centreHz, sub }) => new IfkpDemodulator({ sampleRate, centreHz, speed: ifkpSpeed(sub) }),
+  waveform: (text, { sampleRate, centreHz, sub }) => ifkpWaveform(text, { sampleRate, centreHz, speed: ifkpSpeed(sub) }),
+  durationMs: (text, sub) => ifkpDurationMs(text, { speed: ifkpSpeed(sub) }),
+};
+
 /** The table. Entries are added as each modem lands. */
-export const MODEMS: Partial<Record<ModemId, ModemSpec>> = { MFSK, DOMINO, MT63, THOR, THROB };
+export const MODEMS: Partial<Record<ModemId, ModemSpec>> = { MFSK, DOMINO, MT63, THOR, THROB, FSQ, IFKP };
 
 export function isModemId(mode: string | null | undefined): mode is ModemId {
   return !!mode && (MODEM_IDS as readonly string[]).includes(mode);
@@ -245,7 +301,7 @@ export function registeredModems(): ModemSpec[] {
 
 /** Every log mode the modems write, for the log's tables. */
 export function modemLogModes(): string[] {
-  return registeredModems().flatMap((m) => m.subs.map((s) => s.logMode));
+  return registeredModems().flatMap((m) => m.subs.flatMap((s) => (s.logMode ? [s.logMode] : [])));
 }
 
 /** The modem and sub an RSID code names, if any. */
