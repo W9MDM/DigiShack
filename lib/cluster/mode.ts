@@ -79,6 +79,7 @@ const CATEGORY: Record<string, ModeCategory> = {
   FSQ: "DIGITAL",
   FSQCALL: "DIGITAL",
   IFKP: "DIGITAL",
+  NAVTEX: "DIGITAL",
   DOMINO: "DIGITAL",
   JT65: "DIGITAL",
   JT9: "DIGITAL",

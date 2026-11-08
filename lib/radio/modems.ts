@@ -25,11 +25,13 @@ import { FSQ_BANDWIDTH_HZ, FSQ_CENTRE_HZ, FSQ_SPEEDS, fsqDurationMs, fsqWaveform
 import { FsqDemodulator } from "@/lib/digital/fsqdemod";
 import { IFKP_BANDWIDTH_HZ, IFKP_CENTRE_HZ, IFKP_SPEEDS, ifkpDurationMs, ifkpWaveform, type IfkpSpeed } from "@/lib/digital/ifkp";
 import { IfkpDemodulator } from "@/lib/digital/ifkpdemod";
+import { NAVTEX_CENTRE_HZ, navtexDurationMs, navtexWaveform } from "@/lib/digital/navtex";
+import { NavtexDemodulator } from "@/lib/digital/navtexdemod";
 
 /** The registered keyboard modes. A name here with no entry in MODEMS is not offered anywhere. */
-export type ModemId = "MFSK" | "DOMINO" | "MT63" | "THOR" | "THROB" | "FSQ" | "IFKP";
+export type ModemId = "MFSK" | "DOMINO" | "MT63" | "THOR" | "THROB" | "FSQ" | "IFKP" | "NAVTEX";
 
-export const MODEM_IDS: readonly ModemId[] = ["MFSK", "DOMINO", "MT63", "THOR", "THROB", "FSQ", "IFKP"];
+export const MODEM_IDS: readonly ModemId[] = ["MFSK", "DOMINO", "MT63", "THOR", "THROB", "FSQ", "IFKP", "NAVTEX"];
 
 /** What every modem's demodulator does. */
 export interface ModemDemodulator {
@@ -277,8 +279,29 @@ const IFKP: ModemSpec = {
   durationMs: (text, sub) => ifkpDurationMs(text, { speed: ifkpSpeed(sub) }),
 };
 
+const NAVTEX: ModemSpec = {
+  id: "NAVTEX",
+  label: "NAVTEX",
+  subs: [
+    // 100 baud, 170 Hz shift: the two tones and the keying either side.
+    { id: "NAVTEX", label: "NAVTEX", bandwidthHz: 270 },
+    // The same signal on HF without NAVTEX's message framing.
+    { id: "SITOR-B", label: "SITOR-B", bandwidthHz: 270 },
+  ],
+  defaultSub: "NAVTEX",
+  defaultCentreHz: NAVTEX_CENTRE_HZ,
+  // Only the test generator uses this: the bridge refuses to send in a listen-only mode.
+  maxSendMs: 120_000,
+  // Marine broadcasts: amateurs listen, nobody here sends. The waveform is the receiver's
+  // test generator, never offered on the air.
+  receiveOnly: true,
+  demodulator: ({ sampleRate, centreHz, sub }) => new NavtexDemodulator({ sampleRate, centreHz, sub }),
+  waveform: (text, { sampleRate, centreHz, sub }) => navtexWaveform(text, { sampleRate, centreHz, sitorB: sub === "SITOR-B", phasingSeconds: 3 }),
+  durationMs: (text, sub) => navtexDurationMs(text, { sitorB: sub === "SITOR-B", phasingSeconds: 3 }),
+};
+
 /** The table. Entries are added as each modem lands. */
-export const MODEMS: Partial<Record<ModemId, ModemSpec>> = { MFSK, DOMINO, MT63, THOR, THROB, FSQ, IFKP };
+export const MODEMS: Partial<Record<ModemId, ModemSpec>> = { MFSK, DOMINO, MT63, THOR, THROB, FSQ, IFKP, NAVTEX };
 
 export function isModemId(mode: string | null | undefined): mode is ModemId {
   return !!mode && (MODEM_IDS as readonly string[]).includes(mode);

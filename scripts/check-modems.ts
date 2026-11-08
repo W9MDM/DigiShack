@@ -62,6 +62,11 @@ for (const m of registeredModems()) {
     // MT63 prints a few characters of the random interleaver fill before the line, as
     // fldigi does; nothing may follow the line.
     const got = text.trim();
+    // A listen-only mode (NAVTEX) prints its message framing round the line: the line must be there.
+    if (m.receiveOnly) {
+      ok(got.includes(LINE), `${sub.label}: the test signal decodes through the pipeline (${JSON.stringify(got)})`);
+      continue;
+    }
     ok(got.endsWith(LINE) && got.length - LINE.length <= 10, `${sub.label}: sent through the text path, decoded by the pipeline, and nothing after it (${JSON.stringify(got)})`);
     const last = beats[beats.length - 1];
     ok(last?.mode === m.id && last.sub === sub.id && (last.chars ?? 0) >= LINE.length, `  and the heartbeat names it, with the count`, JSON.stringify(last));

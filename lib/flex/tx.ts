@@ -68,7 +68,7 @@ const PACKET_CLASS_TX_S16 = 0x0123;
  * past the last one. Using 144 here would size the watchdog 27 ms short of the
  * actual transmission.
  */
-const SYMBOLS_PER_FRAME = { FT8: 79, FT4: 105, FT2: 146, WSPR: 162, RTTY: 0, CW: 0, JS8: 79, PSK31: 0, OLIVIA: 0, SSTV: 0, HELL: 0, JTTY: 0, MFSK: 0, DOMINO: 0, MT63: 0, THOR: 0, THROB: 0, FSQ: 0, IFKP: 0 } as const;
+const SYMBOLS_PER_FRAME = { FT8: 79, FT4: 105, FT2: 146, WSPR: 162, RTTY: 0, CW: 0, JS8: 79, PSK31: 0, OLIVIA: 0, SSTV: 0, HELL: 0, JTTY: 0, MFSK: 0, DOMINO: 0, MT63: 0, THOR: 0, THROB: 0, FSQ: 0, IFKP: 0, NAVTEX: 0 } as const;
 
 /** Extra time before the watchdog fires, allowing for scheduling jitter. */
 const WATCHDOG_MARGIN_MS = 2_000;

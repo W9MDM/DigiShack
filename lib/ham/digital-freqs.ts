@@ -415,6 +415,7 @@ const PERIOD_MS: Record<DigitalMode, number> = {
   THROB: 1_000,
   FSQ: 1_000,
   IFKP: 1_000,
+  NAVTEX: 1_000,
   SSTV: 1_000,
   HELL: 1_000,
   JTTY: 1_000,
