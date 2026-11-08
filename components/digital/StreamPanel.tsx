@@ -100,6 +100,8 @@ export interface PskTuning {
   speed: 31 | 63 | 125 | 250 | 500;
   /** QPSK rather than BPSK. */
   qpsk?: boolean;
+  /** PSK-R (PSK63F at 63) rather than BPSK. */
+  pskr?: boolean;
 }
 
 export interface OliviaTuning {
@@ -121,7 +123,15 @@ export interface ModemTuning {
 }
 
 /** The PSK speeds the picker offers: BPSK at each, QPSK at the three fldigi users run it at. */
-const PSK_CHOICES = ["B31", "B63", "B125", "B250", "B500", "Q31", "Q63", "Q125"] as const;
+const PSK_CHOICES = ["B31", "B63", "B125", "B250", "B500", "Q31", "Q63", "Q125", "R63", "R125", "R250", "R500"] as const;
+
+/** As fldigi names them: BPSK31, QPSK63, PSK125R, and PSK63F for PSK-R at 63. */
+function pskChoiceLabel(c: string): string {
+  const speed = c.slice(1);
+  if (c.startsWith("Q")) return `QPSK${speed}`;
+  if (c.startsWith("R")) return speed === "63" ? "PSK63F" : `PSK${speed}R`;
+  return `BPSK${speed}`;
+}
 
 /** The sizes the picker offers, as the bridge accepts them. */
 export const OLIVIA_SIZES: readonly { tones: number; bandwidth: number }[] = [
@@ -154,7 +164,7 @@ interface Props {
   error?: string | null;
   onTune: (centreHz?: number, shiftHz?: number, extra?: { reverse?: boolean; baud?: number }) => void;
   onCwWpm: (wpm: number) => void;
-  onPskTune: (centreHz?: number, speed?: 31 | 63 | 125 | 250 | 500, qpsk?: boolean) => void;
+  onPskTune: (centreHz?: number, speed?: 31 | 63 | 125 | 250 | 500, qpsk?: boolean, pskr?: boolean) => void;
   onOliviaTune: (centreHz?: number, size?: { tones: number; bandwidth: number }, code?: "olivia" | "contestia") => void;
   onJttyTune?: (txHz: number) => void;
   onSend: (text: string) => void;
@@ -342,7 +352,7 @@ export function StreamPanel({
         ) : isPsk ? (
           psk ? (
             <span className="tnum">
-              carrier <span className="text-fg">{psk.centreHz}</span> Hz · {psk.qpsk ? "QPSK" : "BPSK"}{psk.speed}
+              carrier <span className="text-fg">{psk.centreHz}</span> Hz · {pskChoiceLabel(`${psk.qpsk ? "Q" : psk.pskr ? "R" : "B"}${psk.speed}`)}
               {pskStats && Math.abs(pskStats.afcHz) >= 0.5 && (
                 <>
                   {" "}
@@ -447,18 +457,17 @@ export function StreamPanel({
                 upTitle="Move the carrier 10 Hz up"
               />
               <NativeSelect
-                value={`${psk?.qpsk ? "Q" : "B"}${psk?.speed ?? 31}`}
+                value={`${psk?.qpsk ? "Q" : psk?.pskr ? "R" : "B"}${psk?.speed ?? 31}`}
                 onChange={(e) => {
                   const v = e.target.value;
-                  onPskTune(undefined, Number(v.slice(1)) as 31 | 63 | 125 | 250 | 500, v.startsWith("Q"));
+                  onPskTune(undefined, Number(v.slice(1)) as 31 | 63 | 125 | 250 | 500, v.startsWith("Q"), v.startsWith("R"));
                 }}
                 disabled={!psk}
                 aria-label="PSK speed"
               >
                 {PSK_CHOICES.map((c) => (
                   <option key={c} value={c}>
-                    {c.startsWith("Q") ? "QPSK" : "BPSK"}
-                    {c.slice(1)}
+                    {pskChoiceLabel(c)}
                   </option>
                 ))}
               </NativeSelect>

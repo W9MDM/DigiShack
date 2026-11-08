@@ -843,9 +843,9 @@ export default function DigitalPage({ wsUrl }: Props) {
     }
   }, []);
   /** Move the PSK31 carrier (a click on the waterfall or the ± buttons) or change the speed. */
-  const tunePsk = useCallback(async (centreHz?: number, speed?: 31 | 63 | 125 | 250 | 500, qpsk?: boolean) => {
+  const tunePsk = useCallback(async (centreHz?: number, speed?: 31 | 63 | 125 | 250 | 500, qpsk?: boolean, pskr?: boolean) => {
     try {
-      await apiPost("/api/bridge/control", { action: "psk", centreHz, speed, qpsk });
+      await apiPost("/api/bridge/control", { action: "psk", centreHz, speed, qpsk, pskr });
       setRttyError(null);
     } catch (err) {
       setRttyError(err instanceof ApiError ? err.message : "Could not move the PSK31 carrier");
@@ -1036,8 +1036,8 @@ export default function DigitalPage({ wsUrl }: Props) {
       case "PSK31": {
         // As ADIF names them: PSK31 to PSK500, and QPSK31 to QPSK125 (all MODE=PSK).
         const speed = status?.psk?.speed ?? 31;
-        const name = `${status?.psk?.qpsk ? "QPSK" : "PSK"}${speed}`;
-        return { mode: name, label: status?.psk?.qpsk ? name : `BPSK${speed}`, freqHz: at(status?.psk?.centreHz) };
+        const name = status?.psk?.pskr ? (speed === 63 ? "PSK63F" : `PSK${speed}R`) : `${status?.psk?.qpsk ? "QPSK" : "PSK"}${speed}`;
+        return { mode: name, label: status?.psk?.qpsk || status?.psk?.pskr ? name : `BPSK${speed}`, freqHz: at(status?.psk?.centreHz) };
       }
       case "OLIVIA":
         return status?.olivia?.code === "contestia"
@@ -1526,7 +1526,7 @@ export default function DigitalPage({ wsUrl }: Props) {
                   error={rttyError}
                   onTune={(centreHz, shiftHz, extra) => void tuneRtty(centreHz, shiftHz, extra)}
                   onCwWpm={(wpm) => void setCwWpm(wpm)}
-                  onPskTune={(centreHz, speed, qpsk) => void tunePsk(centreHz, speed, qpsk)}
+                  onPskTune={(centreHz, speed, qpsk, pskr) => void tunePsk(centreHz, speed, qpsk, pskr)}
                   onOliviaTune={(centreHz, size, code) => void tuneOlivia(centreHz, size, code)}
                   onSend={(text) => void sendRtty(text)}
                   onClear={clearStream}

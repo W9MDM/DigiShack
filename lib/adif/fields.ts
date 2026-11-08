@@ -53,6 +53,11 @@ const TO_ADIF: Record<string, AdifMode> = {
   QPSK125: { mode: "PSK", submode: "QPSK125" },
   PSK250: { mode: "PSK", submode: "PSK250" },
   PSK500: { mode: "PSK", submode: "PSK500" },
+  // PSK-R and PSK63F: PSK's submodes in ADIF too.
+  PSK63F: { mode: "PSK", submode: "PSK63F" },
+  PSK125R: { mode: "PSK", submode: "PSK125R" },
+  PSK250R: { mode: "PSK", submode: "PSK250R" },
+  PSK500R: { mode: "PSK", submode: "PSK500R" },
   SSTV: { mode: "SSTV" },
   DIGITALVOICE: { mode: "DIGITALVOICE" },
 };
@@ -80,6 +85,7 @@ export function fromAdifMode(mode: string, submode?: string): string {
     if (s === "PSK31") return "PSK31";
     if (s === "PSK63" || s === "PSK125" || s === "PSK250" || s === "PSK500") return s;
     if (m === "PSK" && (s === "QPSK31" || s === "QPSK63" || s === "QPSK125")) return s;
+    if (m === "PSK" && ["PSK63F","PSK125R","PSK250R","PSK500R"].includes(s)) return s;
     if (m === "DOMINO" && s === "DOMINOEX") return "DOMINOEX";
     if (m === "HELL" && ["FSKH105", "FSKH245", "HELL80", "SLOWHELL", "PSKHELL"].includes(s)) return s;
     if (s === "JS8") return "JS8";

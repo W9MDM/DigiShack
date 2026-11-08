@@ -7,7 +7,8 @@ way round.
 
 ## Choosing one
 
-On the PSK31 panel, the speed picker has BPSK31, 63, 125, 250 and 500 and QPSK31, 63 and 125.
+On the PSK31 panel, the speed picker has BPSK31, 63, 125, 250 and 500, QPSK31, 63 and 125, and
+PSK63F, PSK125R, PSK250R and PSK500R.
 The choice holds for the session; Settings has the speed it starts at. Each logs as ADIF
 MODE=PSK with its own SUBMODE (PSK250, QPSK63 and so on), and each has fldigi's RSID code,
 so an RSID heard for any of them switches to it, and yours names it.
@@ -44,7 +45,7 @@ symbol, which BPSK prints as a wrong or missing character.
 
 **What it buys.** On generated signals in white noise, at the default squelch, QPSK copies
 about 2 dB below where BPSK starts dropping characters. At −9 dB in 2.5 kHz, BPSK31 dropped
-9 characters in 495 and QPSK31 none. At −3 dB, BPSK125 dropped 20 and QPSK125 none. It does
+4 characters in 495 and QPSK31 none. At −3 dB, BPSK125 dropped 15 and QPSK125 none. It does
 better still against short bursts of interference, which is what the code was designed for.
 
 **What it costs.**
@@ -60,6 +61,64 @@ better still against short bursts of interference, which is what the code was de
   fldigi's **Rev** set, prints nothing useful. The receiver's *reverse* option is the
   same as fldigi's Rev. Set it when a QPSK signal is clearly there, with good quality,
   but prints nothing.
+
+## PSK-R
+
+PSK-R is fldigi's error-corrected BPSK: PSK125R, PSK250R and PSK500R. On the waterfall
+it looks exactly like BPSK at the same baud and takes the same width. Underneath, the
+text goes as MFSK16's Varicode, through a strong convolutional code (constraint length 7,
+the NASA code MFSK uses), and through an interleaver that spreads each pair of code bits
+over two-thirds of a second. The receiver runs a Viterbi decoder. PSKmail uses it, as it
+gets text through on paths where BPSK prints junk.
+
+| Mode | Baud | Width | Typing speed | Interleaver | Preamble / postamble | fldigi RSID |
+|------|-----:|------:|-------------:|------------:|---------------------:|------------:|
+| PSK63R | 62.5 | about 120 Hz | about 5 | 20 | 128 symbols, 2 s | none |
+| PSK125R | 125 | about 250 Hz | about 10 | 40 | 256 symbols, 2 s | 183 |
+| PSK250R | 250 | about 500 Hz | about 20 | 80 | 512 symbols, 2 s | 186 |
+| PSK500R | 500 | about 1 kHz | about 40 | 160 | 1024 symbols, 2 s | 187 |
+
+**PSK63R is not an fldigi mode.** fldigi has PSK125R, 250R and 500R as single carriers,
+and PSK63R only as a multi-carrier family (4 to 32 carriers). PSK63R here continues the
+series downward the way fldigi's source describes it (an interleaver of depth 20). It
+works between two DigiShack stations, not with fldigi. fldigi's 63-baud error-corrected
+mode is **PSK63F** (Multipsk's design, RSID 22): the same code with no interleaver. The
+picker offers PSK63F, not PSK63R, so the 63-baud choice copies with fldigi; PSK63R stays in
+the code (`pskrDepth: 20` at speed 63) for DigiShack to DigiShack.
+
+**What it buys.** On generated signals in white noise, with the AFC off on both so only the
+codes are compared, PSK-R holds under 1% character errors 5 to 6 dB below where BPSK at the
+same baud does:
+
+| Baud | BPSK copies to | PSK-R copies to |
+|-----:|---------------:|----------------:|
+| 62.5 | −7 dB | −12 dB |
+| 125 | −4 dB | −9 dB |
+| 250 | 0 dB | −6 dB |
+| 500 | +3 dB | −3 dB |
+
+(S/N in 2.5 kHz, 5 runs of 99 characters each.) The interleaver is there for fades and
+bursts of noise, which these figures do not measure.
+
+**What it costs.**
+- *Half the typing speed* of BPSK at the same baud: every bit is sent twice over.
+- *Characters print late:* about 2 seconds at PSK125R, 1.3 at PSK250R, 1 at PSK500R and
+  3.3 at PSK63R. The de-interleaver holds each bit for as long as the interleaver spread
+  it, and the decoder looks ahead 84 bits. The two-second postamble pushes the last character out before the carrier
+  drops, at every fldigi speed. At PSK63R the postamble is shorter than the delay; the
+  last few characters come out of whatever audio follows (noise or silence both do it).
+- *A new signal takes a few seconds to print.* Nothing prints until the bits from the
+  start of the transmission have come through the de-interleaver.
+
+**The receiver.** As fldigi does, it decodes every signal two ways at once, because a
+receiver cannot tell which of two symbols starts a code pair. Both decoders run all the
+time and the one whose path fits the code better prints. The quality is the same phase
+measure BPSK uses, averaged over a second or more instead of a fraction of one, so a
+signal at the copy threshold reads well above noise and the default squelch (0.5) holds
+on a minute of noise without printing a character. The squelch's decision is kept for
+the two seconds a bit takes to come through, so a character prints if the squelch was
+open when it was sent. The long steady carrier that ends every PSK-R transmission closes
+the squelch for everything after it, so the noise after an over prints nothing.
 
 ## Tuning and the squelch, at any speed
 
@@ -90,3 +149,8 @@ convolutional code and the Viterbi decoder) and `lib/digital/psk31demod.ts` (the
 receiver) are the code. `scripts/check-pskx.ts` runs every speed at all three sample
 rates, in odd chunk sizes, off frequency, in noise and on a minute of noise alone. It
 checks the code against outputs worked out by hand from fldigi's encoder.
+
+`lib/digital/pskr.ts` is PSK-R's code, interleaver, decoders and squelch, and
+`scripts/check-pskr.ts` checks it the same way: the encoder against bits worked by hand
+from fldigi's, every PSK-R speed at all three rates, noise against BPSK, a minute of noise
+alone, and silence and noise after a line.

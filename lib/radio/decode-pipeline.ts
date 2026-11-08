@@ -36,6 +36,7 @@ import { HashCallBook as Ft2HashCallBook } from "@/lib/digital/pack77";
 import { js8SubmodeNow, PERIOD_MS, TRANSMISSION_MS } from "@/lib/radio/timing";
 import { RsidDetector, type RsidHeard } from "@/lib/digital/rsid";
 import type { PskSpeed } from "@/lib/digital/psk31";
+import { appPskrDepth } from "@/lib/digital/pskr";
 import { isModemId, modem, type ModemDemodulator, type ModemId } from "@/lib/radio/modems";
 import type { TxMode } from "@/lib/radio/waveform";
 
@@ -273,7 +274,7 @@ function streamConfigurationKey(opts: StreamOptions, includeTuning = true): stri
       tuning = [opts.pitchHz];
       break;
     case "PSK31":
-      configuration = [opts.mode, opts.speed ?? 31, opts.qpsk ?? false, opts.squelch ?? 0.5];
+      configuration = [opts.mode, opts.speed ?? 31, opts.qpsk ?? false, opts.pskr ?? false, opts.squelch ?? 0.5];
       tuning = [opts.centreHz];
       break;
     case "OLIVIA":
@@ -360,6 +361,8 @@ export type StreamOptions =
       speed?: PskSpeed;
       /** QPSK at that speed: the K=5 code and four phases. Default BPSK. */
       qpsk?: boolean;
+      /** PSK-R at that speed (PSK63F at 63): BPSK with the K=7 code and interleaver. */
+      pskr?: boolean;
       /** 0 to 1; see Psk31DemodOptions.squelch. */
       squelch?: number;
     }
@@ -741,6 +744,7 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
   private streamConfiguration: StreamOptions | null = null;
   private pskSpeed: PskSpeed = 31;
   private pskQpsk = false;
+  private pskPskr = false;
   private rttyBaud = 45.45;
   /** Shadow decoders at the other speeds and polarity: see lib/digital/rtty-probe.ts. */
   private rttyProbe: RttyProbe | null = null;
@@ -948,7 +952,7 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
       this.cw.retune(opts.pitchHz);
       return;
     }
-    if (canRetune && opts.mode === "PSK31" && this.psk && (opts.speed ?? 31) === this.pskSpeed && (opts.qpsk ?? false) === this.pskQpsk) {
+    if (canRetune && opts.mode === "PSK31" && this.psk && (opts.speed ?? 31) === this.pskSpeed && (opts.qpsk ?? false) === this.pskQpsk && (opts.pskr ?? false) === this.pskPskr) {
       this.psk.retune(opts.centreHz);
       return;
     }
@@ -1033,11 +1037,14 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
       // A speed change is a new demodulator: the decimation and the timing are per baud.
       this.pskSpeed = opts.speed ?? 31;
       this.pskQpsk = opts.qpsk ?? false;
+      this.pskPskr = opts.pskr ?? false;
       this.psk = new Psk31Demodulator({
         sampleRate: this.inputRate,
         centreHz: opts.centreHz,
         speed: this.pskSpeed,
         qpsk: this.pskQpsk,
+        pskr: this.pskPskr,
+        pskrDepth: this.pskPskr ? appPskrDepth(this.pskSpeed) : undefined,
         squelch: opts.squelch,
       });
     }

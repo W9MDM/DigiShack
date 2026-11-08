@@ -16,7 +16,7 @@ export interface RigStatus {
   /** The CW pitch and sending speed while on CW. */
   cw?: { pitchHz: number; wpm: number; pitchFromRadio: boolean } | null;
   /** The PSK31 carrier and speed while on PSK31. */
-  psk?: { centreHz: number; speed: 31 | 63 | 125 | 250 | 500; qpsk?: boolean } | null;
+  psk?: { centreHz: number; speed: 31 | 63 | 125 | 250 | 500; qpsk?: boolean; pskr?: boolean } | null;
   /** The Olivia centre, size and code while on Olivia. */
   olivia?: { centreHz: number; tones: number; bandwidth: number; code?: "olivia" | "contestia" } | null;
   /** The Feld Hell carrier while on Hell. */

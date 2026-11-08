@@ -45,12 +45,27 @@
 // symbols late; whether the squelch was open is remembered for as long, so a character
 // prints when the squelch was open while it was on the air, not 30 symbols afterwards.
 //
+// PSK-R. The symbols are BPSK's, read the same way, but each one's product along the real
+// axis, scaled by the average symbol strength, goes on as a soft decision (0 a sure
+// reversal, 255 a sure no-change, 128 nothing known) to lib/digital/pskr.ts, which runs
+// fldigi's two de-interleavers and K=7 decoders and its vote between them. The quality is
+// BPSK's, the squared phase averaged, but over far longer, as fldigi does for PSK-R (ten
+// times its BPSK decay, psk.cxx:1572-1576): a signal the code still copies has a phase
+// average of 0.2 to 0.3, which noise reaches over a few dozen symbols but not over a
+// hundred. The decoder's own fit was tried and is no use: noise fits a rate-1/2 code at
+// 0.84, better than a signal at the copy threshold does. pskr.ts holds the squelch's
+// verdict for as long as the decoder takes, and fldigi's BPSK DCD patterns are off here, as
+// fldigi has them for PSK-R (psk.cxx:1620-1660); pskr.ts has its own. A symbol of exact
+// silence still clocks the decoders, with no information, so the end of a line comes out
+// of them when the audio stops dead rather than waiting in the interleaver.
+//
 // Chunks of any size give the same text as one call; nothing here depends on a chunk
 // boundary. scripts/check-psk31.ts and scripts/check-pskx.ts run it clean, offset, in
 // noise and on noise alone.
 
 import { Psk31VaricodeDecoder, pskBaud, type AnyPskSpeed } from "@/lib/digital/psk31";
 import { QPSK_TRACEBACK, QpskViterbi } from "@/lib/digital/qpsk";
+import { PskrReceiver, isPskrSpeed, pskrDcdBits, pskrDepth } from "@/lib/digital/pskr";
 
 export interface Psk31DemodOptions {
   sampleRate: number;
@@ -60,6 +75,10 @@ export interface Psk31DemodOptions {
   qpsk?: boolean;
   /** QPSK only: fldigi's "reverse", for a sender whose phase changes are mirrored. Default false. */
   reverse?: boolean;
+  /** PSK-R (lib/digital/pskr.ts) rather than plain BPSK: speeds 63, 125, 250, 500; 31 throws. Default false. */
+  pskr?: boolean;
+  /** PSK-R only: the interleaver depth, default fldigi's for the speed. 0 at speed 63 is fldigi's PSK63F. */
+  pskrDepth?: number;
   /**
    * Squelch, 0 to 1: the quality (see above) below which characters are not printed. Noise
    * sits near 0.2 with the averaging used; a clean signal near 1; a weak one around 0.6.
@@ -75,7 +94,7 @@ export interface Psk31DemodStats {
   chars: number;
   /** Varicodes dropped as unknown or too long. */
   errors: number;
-  /** 0 to 1: how consistently the symbols read as 0 or pi (QPSK: as one of the four). */
+  /** 0 to 1: how consistently the symbols read as 0 or pi (QPSK, PSK-R: how well they fit the code). */
   quality: number;
   /** Where the oscillator sits relative to the centre asked for, Hz. */
   afcHz: number;
@@ -115,6 +134,33 @@ const TURN_ALPHA = 1 / 4;
 const SOFT_ALPHA = 1 / 32;
 /** QPSK: the decoder fit that noise sits at, which reads as quality 0. See fitQuality. */
 const QPSK_FIT_FLOOR = 0.8;
+/**
+ * PSK-R's soft decision: 128 plus this times the product along the real axis over the
+ * average symbol strength, so a clean symbol reads 128 +/- 64 and a noise peak twice the
+ * average still fits in 0 to 255. The decoder's metric is linear in it; the scale only
+ * decides where the clipping falls.
+ */
+const PSKR_SOFT_SCALE = 64;
+/**
+ * PSK-R's phase average reads 1 on this or more. At the copy threshold (about 3 dB per
+ * symbol) it sits at 0.25 to 0.4; a minute of noise, averaged over 128 symbols, never
+ * passed 0.17. So the default squelch, 0.5, sits at 0.2.
+ */
+const PSKR_PHASE_FULL = 0.4;
+/**
+ * PSK-R's fine AFC moves this many times the phase average's weight, per symbol, of the
+ * error it reads: a time constant of half the average's, quick enough to follow a drifting
+ * rig and slow enough not to chase the average's own lag round in a circle.
+ */
+const PSKR_AFC_GAIN = 2;
+/** A differential product below this is silence (see symbol()). */
+const PSKR_SILENCE = 1e-18;
+/**
+ * The short phase average (24 symbols) PSK-R's coarse AFC needs before it pulls. BPSK's
+ * 0.5 is what PSK-R sees on a weak signal dead on frequency, and there the coarse reading is
+ * noise. A click well off frequency on a signal this strong is what the coarse AFC is for.
+ */
+const PSKR_COARSE_QUALITY = 0.75;
 
 /**
  * Input samples per decimated sample, and decimated samples per symbol. Sixteen phases
@@ -176,6 +222,8 @@ export class Psk31Demodulator {
   private readonly timing: Float64Array;
   private phaseIndex = 0;
   private samplePhase = 0;
+  /** Decimated samples since the last symbol was taken; see feed(). */
+  private sinceSymbol = Infinity;
 
   private prevI = 1;
   private prevQ = 0;
@@ -212,6 +260,12 @@ export class Psk31Demodulator {
   private readonly met = new Float64Array(4);
   private readonly openLine = new Uint8Array(QPSK_TRACEBACK);
   private openHead = 0;
+  // PSK-R: everything after the soft decision.
+  private readonly pskr: PskrReceiver | null;
+  /** PSK-R's phase average: its weight per symbol, and the average. */
+  private readonly pskrAlpha: number = 0;
+  private pskrQI = 0;
+  private pskrQQ = 0;
 
   private readonly stats: Psk31DemodStats = { chars: 0, errors: 0, quality: 0, afcHz: 0, level: 0, open: false };
 
@@ -233,6 +287,12 @@ export class Psk31Demodulator {
     this.reverse = opts.reverse ?? false;
     this.order = this.qpsk ? 4 : 2;
     this.viterbi = this.qpsk ? new QpskViterbi() : null;
+    if (opts.pskr && this.qpsk) throw new RangeError("PSK-R is BPSK: pskr and qpsk together are no mode");
+    if (opts.pskr && !isPskrSpeed(opts.speed ?? 31)) throw new RangeError(`PSK-R has no ${opts.speed ?? 31}-baud mode (63, 125, 250 or 500)`);
+    this.pskr = opts.pskr ? new PskrReceiver(opts.pskrDepth ?? pskrDepth(opts.speed ?? 31)) : null;
+    // 128 symbols, or dcdbits where that is longer (256 and 512 at PSK250R and 500R): about
+    // a second, never more than half the preamble.
+    if (this.pskr) this.pskrAlpha = 1 / Math.max(128, pskrDcdBits(opts.speed ?? 31));
     if (this.qpsk) {
       // Scaled so a steady carrier sums to the same as the plain sum would.
       const w = new Float64Array(phases);
@@ -276,6 +336,9 @@ export class Psk31Demodulator {
     this.softAmp = 0;
     this.fitAvg = QPSK_FIT_FLOOR;
     this.openLine.fill(0);
+    this.pskr?.reset();
+    this.pskrQI = 0;
+    this.pskrQQ = 0;
     // Everything else that remembers the audio, so a reset is as good as a new decoder. An
     // RSID burst left the coarse AFC, the trust count and the matched filter full of its
     // tones, and after a reset that kept them BPSK500 lost the first word of the line.
@@ -300,6 +363,7 @@ export class Psk31Demodulator {
     this.sumQ = 0;
     this.phaseIndex = 0;
     this.samplePhase = 0;
+    this.sinceSymbol = Infinity;
     this.prevI = 1;
     this.prevQ = 0;
     this.openHead = 0;
@@ -345,8 +409,15 @@ export class Psk31Demodulator {
       this.timing[this.phaseIndex] = t + TIMING_ALPHA * (mag - t);
       const thisPhase = this.phaseIndex;
       this.phaseIndex = (this.phaseIndex + 1) % phases;
-      if (thisPhase !== this.samplePhase) continue;
-      // At the sampling phase: one symbol.
+      this.sinceSymbol++;
+      // At the sampling phase: one symbol - but never twice in one symbol's time. A step of
+      // the sampling phase forward (below) names the phase the very next decimated sample
+      // is at, and that sample was being taken as a second symbol one step after the first:
+      // a spurious no-change bit, one wrong character at BPSK, and at PSK-R a pairing knocked
+      // out of step that garbled the next second or two. The step now lands a symbol and one
+      // decimated sample later, as a step back lands a symbol less one.
+      if (thisPhase !== this.samplePhase || this.sinceSymbol < phases / 2) continue;
+      this.sinceSymbol = 0;
       out += this.symbol(this.sumI, this.sumQ);
       // Re-pick the sampling phase for the next symbol from the averaged magnitudes - one
       // step at a time, towards the best, and only when the best is clearly better. In a
@@ -427,7 +498,19 @@ export class Psk31Demodulator {
     this.prevQ = zQ;
     const dm = Math.hypot(dI, dQ);
     this.stats.level = Math.sqrt(Math.hypot(zI, zQ) / this.phases);
-    if (dm === 0) return "";
+    // PSK-R: silence is still a symbol, one the decoders learn nothing from (see the header).
+    // PSK-R also counts as silence what the running sum leaves of it: rounding residue near
+    // 1e-14 a sample, which is the same every symbol and so read as a perfect steady
+    // carrier, quality 1 into the silence. 1e-18 is far below any real audio: one step of
+    // 24-bit audio summed over a symbol gives a product near 1e-12.
+    if (dm === 0 || (this.pskr && dm < PSKR_SILENCE)) {
+      if (!this.pskr) return "";
+      // Nothing there: the phase average falls as it would on noise, and the quality with it.
+      this.pskrQI -= this.pskrAlpha * this.pskrQI;
+      this.pskrQQ -= this.pskrAlpha * this.pskrQQ;
+      this.stats.quality = Math.min(1, Math.hypot(this.pskrQI, this.pskrQQ) / PSKR_PHASE_FULL);
+      return this.pskrDeliver(128, false);
+    }
     const uI = dI / dm;
     const uQ = dQ / dm;
     // Squared unit product: 0 and pi both land at angle 0; the frequency error is what is
@@ -442,17 +525,30 @@ export class Psk31Demodulator {
     this.qualI += QUALITY_ALPHA * (sI - this.qualI);
     this.qualQ += QUALITY_ALPHA * (sQ - this.qualQ);
     let bit: number;
+    let soft = 128;
     if (this.viterbi) {
       bit = this.qpskDecide(dI, dQ, dm);
       this.fitAvg += QUALITY_ALPHA * (this.viterbi.fit - this.fitAvg);
+    } else if (this.pskr) {
+      bit = dI >= 0 ? 1 : 0;
+      this.softAmp += SOFT_ALPHA * (dm - this.softAmp);
+      soft = this.softAmp > 0 ? 128 + (PSKR_SOFT_SCALE * dI) / this.softAmp : 128;
+      this.pskrQI += this.pskrAlpha * (sI - this.pskrQI);
+      this.pskrQQ += this.pskrAlpha * (sQ - this.pskrQQ);
     } else {
       bit = dI >= 0 ? 1 : 0;
       this.gateI += QUALITY_ALPHA * (sI - this.gateI);
       this.gateQ += QUALITY_ALPHA * (sQ - this.gateQ);
     }
-    this.dcdPatterns(dI, dQ);
-    const quality = this.qpsk ? this.fitQuality() : Math.hypot(this.qualI, this.qualQ);
-    const gate = this.qpsk ? quality : Math.hypot(this.gateI, this.gateQ);
+    // fldigi turns its BPSK DCD patterns off for PSK-R: its preamble is not reversals.
+    if (!this.pskr) this.dcdPatterns(dI, dQ);
+    const coded = this.qpsk || this.pskr !== null;
+    const quality = this.qpsk
+      ? this.fitQuality()
+      : this.pskr
+        ? Math.min(1, Math.hypot(this.pskrQI, this.pskrQQ) / PSKR_PHASE_FULL)
+        : Math.hypot(this.qualI, this.qualQ);
+    const gate = coded ? quality : Math.hypot(this.gateI, this.gateQ);
     this.stats.quality = quality;
     // The AFC follows only what the squelch would print: quality measures how consistent
     // the symbols are, not how far off the carrier is, so a signal 5 Hz off still reads
@@ -461,7 +557,7 @@ export class Psk31Demodulator {
     // QPSK: the AFC reads its error from the fourth-power average, so that average's own
     // length says whether the error is worth following. On a signal the decoder still
     // copies at -10 dB it is short, the angle is noise, and following it lost the signal.
-    const phaseQuality = this.qpsk ? Math.hypot(this.qualI, this.qualQ) : quality;
+    const phaseQuality = coded ? Math.hypot(this.qualI, this.qualQ) : quality;
     const trusted = quality >= Math.max(0.5, this.squelch) && phaseQuality >= 0.5;
     this.trustedRun = trusted ? this.trustedRun + 1 : 0;
     // The same turn as the symbol before, within 30 degrees: the preamble's reversals (or
@@ -494,7 +590,7 @@ export class Psk31Demodulator {
     let coarse: number | null = null;
     if (this.afc && this.qpsk && phaseQuality >= 0.5 && this.sameTurnRun >= QPSK_COARSE_RUN) {
       coarse = (Math.atan2(this.turnQ, this.turnI) * this.baud) / (2 * Math.PI);
-    } else if (this.afc && !this.qpsk && steady) {
+    } else if (this.afc && !this.qpsk && steady && (!this.pskr || phaseQuality >= PSKR_COARSE_QUALITY)) {
       coarse = this.coarseHz();
     }
     // The fine AFC wraps at a quarter of the baud for BPSK, an eighth for QPSK; hand over
@@ -505,6 +601,16 @@ export class Psk31Demodulator {
       // samples, so noise too looks like a carrier for a moment.
       this.lo += COARSE_GAIN * coarse;
       this.clampLo();
+    } else if (this.afc && this.pskr) {
+      // PSK-R: from the long phase average, at its own pace, whenever the squelch trusts it.
+      // The short average steers BPSK, which never copies where it is noise; PSK-R copies at
+      // 3 dB a symbol, where a 24-symbol angle wanders by several Hz and the AFC followed it
+      // 30 Hz off a signal that was dead on frequency.
+      if (quality >= Math.max(0.5, this.squelch)) {
+        const angle = Math.atan2(this.pskrQQ, this.pskrQI);
+        this.lo += this.pskrAlpha * PSKR_AFC_GAIN * ((angle * this.baud) / (4 * Math.PI));
+        this.clampLo();
+      }
     } else if (this.afc && steady) {
       // The averaged angle is 2 pi df T times the order (4 pi df T for BPSK).
       const angle = Math.atan2(this.qualQ, this.qualI);
@@ -513,6 +619,7 @@ export class Psk31Demodulator {
       this.clampLo();
     }
     this.stats.open = open;
+    if (this.pskr) return this.pskrDeliver(soft, open);
     if (!this.viterbi) return this.deliver(bit, open);
     // QPSK: the bit just decided went out QPSK_TRACEBACK symbols ago; print it if the
     // squelch was open then.
@@ -585,6 +692,22 @@ export class Psk31Demodulator {
     this.met[2] = -qI * scale;
     this.met[3] = -qQ * scale;
     return this.viterbi!.step(this.met);
+  }
+
+  /**
+   * One PSK-R soft symbol through the decoders, with the squelch's verdict on it; pskr.ts
+   * applies that verdict to the characters whose bits these are, when they come out. With
+   * the squelch off nothing is held back, not even after a postamble.
+   */
+  private pskrDeliver(soft: number, open: boolean): string {
+    const rx = this.pskr!;
+    const before = rx.errors;
+    const text = rx.push(soft, open, this.squelch > 0);
+    this.stats.errors += rx.errors - before;
+    this.stats.open = rx.open;
+    // Characters, not UTF-16 units, as deliver() counts them.
+    this.stats.chars += Array.from(text).length;
+    return text;
   }
 
   private deliver(bit: number, open: boolean): string {

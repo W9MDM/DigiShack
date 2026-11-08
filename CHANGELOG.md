@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.287.0 - public release
+## 1.288.0 - public release
 
 Development happens in a private repository; this is where the public history starts.
 Earlier entries are not reproduced - they quote real operators by callsign, include
@@ -22,6 +22,7 @@ Notes for anyone running this:
 
 ## Release history
 
+- **1.288.0** — PSK-R: PSK63F, PSK125R, PSK250R and PSK500R
 - **1.287.0** — BPSK250 and 500, and QPSK31, 63 and 125
 - **1.286.0** — MT63
 - **1.285.0** — MFSK

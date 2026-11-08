@@ -62,6 +62,10 @@ console.log("\neach mode logs as ADIF knows it");
     QPSK125: ["PSK", "QPSK125"],
     PSK250: ["PSK", "PSK250"],
     PSK500: ["PSK", "PSK500"],
+    PSK63F: ["PSK", "PSK63F"],
+    PSK125R: ["PSK", "PSK125R"],
+    PSK250R: ["PSK", "PSK250R"],
+    PSK500R: ["PSK", "PSK500R"],
   };
   ok(Object.keys(want).sort().join() === [...TEXT_LOG_MODES].sort().join(), `the bar logs exactly these: ${TEXT_LOG_MODES.join(", ")}`);
   for (const [mode, [m, sub]] of Object.entries(want)) {

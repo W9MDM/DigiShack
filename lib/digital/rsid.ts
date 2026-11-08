@@ -86,7 +86,7 @@ export function rsidEncode(code: number): number[] {
 
 /** What a heard RSID asks this station to switch to, for the modes DigiShack has. */
 export type RsidMode =
-  | { mode: "PSK31"; speed: PskSpeed; qpsk?: boolean }
+  | { mode: "PSK31"; speed: PskSpeed; qpsk?: boolean; pskr?: boolean }
   | { mode: "RTTY"; baud: number; shiftHz: number }
   | { mode: "OLIVIA"; code: OliviaCode; tones: OliviaTones; bandwidth: OliviaBandwidth }
   | { mode: "HELL"; variant: HellVariant }
@@ -117,9 +117,9 @@ export const RSID_TABLE: readonly RsidEntry[] = [
   { code: 126, name: "BPSK250", mode: { mode: "PSK31", speed: 250 } },
   { code: 127, name: "QPSK250" },
   { code: 173, name: "BPSK500", mode: { mode: "PSK31", speed: 500 } },
-  { code: 183, name: "PSK125R" },
-  { code: 186, name: "PSK250R" },
-  { code: 187, name: "PSK500R" },
+  { code: 183, name: "PSK125R", mode: { mode: "PSK31", speed: 125, pskr: true } },
+  { code: 186, name: "PSK250R", mode: { mode: "PSK31", speed: 250, pskr: true } },
+  { code: 187, name: "PSK500R", mode: { mode: "PSK31", speed: 500, pskr: true } },
   { code: 7, name: "PSKFEC31" },
   { code: 8, name: "PSK10" },
   { code: 9, name: "MT63-500L" },
@@ -134,7 +134,7 @@ export const RSID_TABLE: readonly RsidEntry[] = [
   { code: 19, name: "PSKAM10" },
   { code: 20, name: "PSKAM31" },
   { code: 21, name: "PSKAM50" },
-  { code: 22, name: "PSK63F" },
+  { code: 22, name: "PSK63F", mode: { mode: "PSK31", speed: 63, pskr: true } },
   { code: 23, name: "PSK220F" },
   { code: 24, name: "CHIP64" },
   { code: 25, name: "CHIP128" },
@@ -280,7 +280,11 @@ export function rsidCodeFor(m: RsidMode): number | null {
     if (!x || x.mode !== m.mode) return false;
     switch (m.mode) {
       case "PSK31":
-        return (x as typeof m).speed === m.speed && ((x as typeof m).qpsk ?? false) === (m.qpsk ?? false);
+        return (
+          (x as typeof m).speed === m.speed &&
+          ((x as typeof m).qpsk ?? false) === (m.qpsk ?? false) &&
+          ((x as typeof m).pskr ?? false) === (m.pskr ?? false)
+        );
       case "RTTY":
         return (x as typeof m).baud === m.baud && (x as typeof m).shiftHz === m.shiftHz;
       case "OLIVIA": {

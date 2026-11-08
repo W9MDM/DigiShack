@@ -174,6 +174,7 @@ import { RSID_DURATION_MS, type RsidHeard } from "@/lib/digital/rsid";
 import { isModemId, modem, modemSub, registeredModems, type ModemId } from "@/lib/radio/modems";
 import { textRsidCode } from "@/lib/radio/text-waveform";
 import { isPskSpeed, PSK31_CENTRE_HZ, psk31DurationMs, type PskSpeed } from "@/lib/digital/psk31";
+import { appPskrDepth } from "@/lib/digital/pskr";
 import { OLIVIA_MODES, oliviaDurationMs, type OliviaBandwidth, type OliviaCode, type OliviaTones } from "@/lib/digital/olivia";
 import {
   HELL_CENTRE_HZ,
@@ -266,7 +267,7 @@ interface RigStatus {
   /** The CW pitch the decoder listens on and the speed the keyer sends at, while on CW. */
   cw: { pitchHz: number; wpm: number; pitchFromRadio: boolean } | null;
   /** The PSK31 carrier and speed, while on PSK31. */
-  psk: { centreHz: number; speed: PskSpeed; qpsk: boolean } | null;
+  psk: { centreHz: number; speed: PskSpeed; qpsk: boolean; pskr: boolean } | null;
   /** The Olivia centre, size and code, while on Olivia. */
   olivia: { centreHz: number; tones: OliviaTones; bandwidth: OliviaBandwidth; code: OliviaCode } | null;
   /** The Feld Hell carrier, while on Hell. */
@@ -1539,7 +1540,7 @@ const cwTuning = { pitchHz: 600, wpm: 20, thresholdDb: 16 };
 let cwApply: (() => void) | null = null;
 
 /** PSK31: the carrier the decoder listens on and sends at, the speed, and the squelch. */
-const pskTuning: { centreHz: number; speed: PskSpeed; squelch: number; qpsk: boolean } = { centreHz: PSK31_CENTRE_HZ, speed: 31, squelch: 0.5, qpsk: false };
+const pskTuning: { centreHz: number; speed: PskSpeed; squelch: number; qpsk: boolean; pskr: boolean } = { centreHz: PSK31_CENTRE_HZ, speed: 31, squelch: 0.5, qpsk: false, pskr: false };
 /** Set by the live source: hands the tuning to the demodulator. */
 let pskApply: (() => void) | null = null;
 
@@ -1692,8 +1693,8 @@ function wireStreamTuning(source: StreamTuningTarget, cwPitchFromRadio: () => nu
     status.cw = { pitchHz, wpm: cwTuning.wpm, pitchFromRadio: fromRadio !== null };
   };
   pskApply = () => {
-    source.setPskOptions({ mode: "PSK31", centreHz: pskTuning.centreHz, speed: pskTuning.speed, qpsk: pskTuning.qpsk, squelch: pskTuning.squelch });
-    status.psk = { centreHz: pskTuning.centreHz, speed: pskTuning.speed, qpsk: pskTuning.qpsk };
+    source.setPskOptions({ mode: "PSK31", centreHz: pskTuning.centreHz, speed: pskTuning.speed, qpsk: pskTuning.qpsk, pskr: pskTuning.pskr, squelch: pskTuning.squelch });
+    status.psk = { centreHz: pskTuning.centreHz, speed: pskTuning.speed, qpsk: pskTuning.qpsk, pskr: pskTuning.pskr };
   };
   oliviaApply = () => {
     source.setOliviaOptions({
@@ -1797,6 +1798,7 @@ async function applyRsid(h: RsidHeard): Promise<boolean> {
     case "PSK31":
       pskTuning.speed = m.speed;
       pskTuning.qpsk = m.qpsk ?? false;
+      pskTuning.pskr = m.pskr ?? false;
       pskTuning.centreHz = hz;
       break;
     case "RTTY":
@@ -5638,7 +5640,7 @@ async function main(): Promise<void> {
                 code: oliviaTuning.code,
               }
             : streamMode === "PSK31"
-            ? { mode: "PSK31" as const, text, centreHz: pskTuning.centreHz, shiftHz: 0, sideband: "USB" as const, speed: pskTuning.speed, qpsk: pskTuning.qpsk }
+            ? { mode: "PSK31" as const, text, centreHz: pskTuning.centreHz, shiftHz: 0, sideband: "USB" as const, speed: pskTuning.speed, qpsk: pskTuning.qpsk, pskr: pskTuning.pskr }
             : streamMode === "CW" || !rtty
             ? { mode: "CW" as const, text, centreHz: 0, shiftHz: 0, sideband: "USB" as const, wpm: cwTuning.wpm }
             : {
@@ -5682,7 +5684,7 @@ async function main(): Promise<void> {
           : streamMode === "CW"
             ? cwDurationMs(text, cwTuning.wpm)
             : streamMode === "PSK31"
-              ? psk31DurationMs(text, { speed: pskTuning.speed, qpsk: pskTuning.qpsk })
+              ? psk31DurationMs(text, { speed: pskTuning.speed, qpsk: pskTuning.qpsk, ...(pskTuning.pskr ? { pskr: true, pskrDepth: appPskrDepth(pskTuning.speed) } : {}) })
               : streamMode === "OLIVIA"
                 ? oliviaDurationMs(text, { tones: oliviaTuning.tones, bandwidth: oliviaTuning.bandwidth, code: oliviaTuning.code })
                 : streamMode === "HELL"
@@ -5835,12 +5837,23 @@ async function main(): Promise<void> {
           sendJson(res, 400, { error: "speed must be 31, 63, 125, 250 or 500" });
           return;
         }
-        const qpsk = body.qpsk === undefined ? pskTuning.qpsk : body.qpsk === true;
+        // Choosing one of QPSK and PSK-R clears the other.
+        const pskr = body.pskr === undefined ? (body.qpsk === true ? false : pskTuning.pskr) : body.pskr === true;
+        const qpsk = body.qpsk === undefined ? (pskr ? false : pskTuning.qpsk) : body.qpsk === true;
         if (qpsk && speedRaw > 125) {
           sendJson(res, 400, { error: "QPSK is 31, 63 or 125" });
           return;
         }
+        if (pskr && speedRaw === 31) {
+          sendJson(res, 400, { error: "PSK-R is PSK63F, PSK125R, PSK250R or PSK500R" });
+          return;
+        }
+        if (qpsk && pskr) {
+          sendJson(res, 400, { error: "QPSK or PSK-R, not both" });
+          return;
+        }
         pskTuning.qpsk = qpsk;
+        pskTuning.pskr = pskr;
         pskTuning.centreHz = Math.round(centre);
         pskTuning.speed = speedRaw;
         pskApply?.();

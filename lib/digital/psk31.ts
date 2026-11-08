@@ -13,11 +13,15 @@
 // QPSK (option qpsk) sends the same Varicode through a K=5 convolutional code, one of four
 // phase changes a symbol; the code and its decoder are lib/digital/qpsk.ts.
 //
+// PSK-R (option pskr) is BPSK on the air keyed by MFSK Varicode through a K=7 code and an
+// interleaver, fldigi's PSK125R, 250R and 500R; the bit path is lib/digital/pskr.ts.
+//
 // The decoder is lib/digital/psk31demod.ts; scripts/check-psk31.ts runs the one through
 // the other on generated signals, clean, offset and in noise.
 
 import { PSK31_VARICODE } from "@/lib/digital/psk31-varicode";
 import { QpskEncoder, qpskPhaseChange } from "@/lib/digital/qpsk";
+import { isPskrSpeed, pskrDcdBits, pskrSymbols } from "@/lib/digital/pskr";
 
 export const PSK31_BAUD = 31.25;
 /** The audio centre the mode chip tunes the decoder to. 1000 Hz, the long-standing convention. */
@@ -192,9 +196,20 @@ export interface Psk31WaveformOptions {
   qpsk?: boolean;
   /** QPSK only: fldigi's "reverse", the phase changes mirrored, for a sideband that mirrors the audio. Default false. */
   reverse?: boolean;
-  /** Idle (reversals) before the first character, in symbols, so the far end locks. Default fldigi's dcdbits: 32 at PSK31, 64, 128, 256, 512 at PSK500. */
+  /**
+   * PSK-R rather than plain BPSK: MFSK Varicode through the K=7 code and the interleaver,
+   * keyed as BPSK (lib/digital/pskr.ts). Speeds 63, 125, 250 and 500; 31 throws. Default false.
+   */
+  pskr?: boolean;
+  /** PSK-R only: the interleaver depth, default fldigi's for the speed. 0 at speed 63 is fldigi's PSK63F. */
+  pskrDepth?: number;
+  /**
+   * Idle (reversals) before the first character, in symbols, so the far end locks. Default
+   * fldigi's dcdbits: 32 at PSK31, 64, 128, 256, 512 at PSK500. PSK-R: 1-0 data bits through
+   * the code, default twice dcdbits (two symbols a bit).
+   */
   preambleSymbols?: number;
-  /** After the last character, in symbols: steady carrier for BPSK, the encoder flushed with 0s (reversals) for QPSK. Default as the preamble. */
+  /** After the last character, in symbols: steady carrier for BPSK, the encoder flushed with 0s (reversals) for QPSK, 1 bits through the code (steady carrier) for PSK-R. Default as the preamble. */
   tailSymbols?: number;
   /** Peak amplitude. Default 1. */
   amplitude?: number;
@@ -211,6 +226,17 @@ export function psk31Symbols(text: string, opts: Partial<Psk31WaveformOptions> =
   // tx_flush): 32 symbols at PSK31, doubling with the speed to 512 at PSK500 - the same
   // time on the air at every speed. A fixed 32 was a quarter of a second at PSK125, too
   // short for fldigi to open its squelch and settle before the first character.
+  if (opts.pskr) {
+    // Two symbols a data bit, and fldigi sends dcdbits data bits at each end (pskr.ts).
+    const speed = opts.speed ?? 31;
+    if (!isPskrSpeed(speed)) throw new RangeError(`PSK-R has no ${speed}-baud mode (63, 125, 250 or 500)`);
+    return pskrSymbols(text, {
+      speed,
+      depth: opts.pskrDepth,
+      preambleSymbols: opts.preambleSymbols ?? 2 * pskrDcdBits(speed),
+      tailSymbols: opts.tailSymbols ?? 2 * pskrDcdBits(speed),
+    });
+  }
   const scale = pskBaud(opts.speed ?? 31) / PSK31_BAUD;
   const pre = opts.preambleSymbols ?? Math.round(32 * scale);
   const tail = opts.tailSymbols ?? Math.round(32 * scale);
@@ -254,7 +280,7 @@ export function psk31Waveform(text: string, opts: Psk31WaveformOptions): Float32
   const syms = psk31Symbols(text, opts);
   const n = syms.length;
 
-  // The symbol vector, unit length. BPSK: +1 / -1. QPSK: the phase turned by each dibit.
+  // The symbol vector, unit length. BPSK (and PSK-R): +1 / -1. QPSK: the phase turned by each dibit.
   const sI = new Float64Array(n);
   const sQ = new Float64Array(n);
   if (opts.qpsk) {
