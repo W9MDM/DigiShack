@@ -17,11 +17,13 @@ import { MFSK_CENTRE_HZ, MFSK_MODES, mfskDurationMs, mfskWaveform, type MfskMode
 import { MfskDemodulator } from "@/lib/digital/mfskdemod";
 import { MT63_MODES, mt63DurationMs, mt63Params, mt63Waveform, type Mt63Mode } from "@/lib/digital/mt63";
 import { Mt63Demodulator } from "@/lib/digital/mt63demod";
+import { THOR_CENTRE_HZ, THOR_MODES, thorDurationMs, thorParams, thorWaveform, type ThorMode } from "@/lib/digital/thor";
+import { ThorDemodulator } from "@/lib/digital/thordemod";
 
 /** The registered keyboard modes. A name here with no entry in MODEMS is not offered anywhere. */
-export type ModemId = "MFSK" | "DOMINO" | "MT63";
+export type ModemId = "MFSK" | "DOMINO" | "MT63" | "THOR";
 
-export const MODEM_IDS: readonly ModemId[] = ["MFSK", "DOMINO", "MT63"];
+export const MODEM_IDS: readonly ModemId[] = ["MFSK", "DOMINO", "MT63", "THOR"];
 
 /** What every modem's demodulator does. */
 export interface ModemDemodulator {
@@ -151,8 +153,38 @@ const MT63: ModemSpec = {
   durationMs: (text, sub) => mt63DurationMs(text, { sampleRate: 12_000, centreHz: 1500, mode: mt63Mode(sub) }),
 };
 
+/** fldigi's RSID codes for Thor (rsid_defs.cxx): the fast ones are in its second table. */
+const THOR_RSID: Record<ThorMode, number> = {
+  "4": 136, "5": 139, "8": 137, "11": 143, "16": 138, "22": 145,
+  "25x4": 639, "50x1": 649, "50x2": 653, "100": 658,
+};
+
+function thorMode(sub: string): ThorMode {
+  return (THOR_MODES as readonly string[]).includes(sub) ? (sub as ThorMode) : "16";
+}
+
+const THOR: ModemSpec = {
+  id: "THOR",
+  label: "Thor",
+  subs: THOR_MODES.map((m) => ({
+    id: m,
+    label: `Thor ${m}`,
+    bandwidthHz: Math.round(thorParams(m).bandwidthHz),
+    // ADIF's THOR submodes: THOR4 to THOR22, THOR25X4, THOR50X1, THOR50X2, THOR100.
+    logMode: `THOR${m.toUpperCase()}`,
+    rsidCode: THOR_RSID[m],
+  })),
+  defaultSub: "16",
+  defaultCentreHz: THOR_CENTRE_HZ,
+  // Thor 4 is about three characters a second, with the interleaver's flush on top.
+  maxSendMs: 90_000,
+  demodulator: ({ sampleRate, centreHz, sub }) => new ThorDemodulator({ sampleRate, centreHz, mode: thorMode(sub) }),
+  waveform: (text, { sampleRate, centreHz, sub }) => thorWaveform(text, { sampleRate, centreHz, mode: thorMode(sub) }),
+  durationMs: (text, sub) => thorDurationMs(text, { mode: thorMode(sub) }),
+};
+
 /** The table. Entries are added as each modem lands. */
-export const MODEMS: Partial<Record<ModemId, ModemSpec>> = { MFSK, DOMINO, MT63 };
+export const MODEMS: Partial<Record<ModemId, ModemSpec>> = { MFSK, DOMINO, MT63, THOR };
 
 export function isModemId(mode: string | null | undefined): mode is ModemId {
   return !!mode && (MODEM_IDS as readonly string[]).includes(mode);

@@ -13,7 +13,7 @@ import {
   type OliviaTones,
 } from "@/lib/digital/olivia";
 import { psk31DurationMs, psk31Waveform, type PskSpeed } from "@/lib/digital/psk31";
-import { RSID_DURATION_MS, rsidCodeFor, rsidWaveform, type RsidMode } from "@/lib/digital/rsid";
+import { rsidAnnouncement, rsidAnnouncementMs, rsidCodeFor, type RsidMode } from "@/lib/digital/rsid";
 import { appPskrDepth } from "@/lib/digital/pskr";
 import { isModemId, modem, modemSub, type ModemId } from "@/lib/radio/modems";
 import { rttyDurationMs, rttyWaveform } from "@/lib/digital/rtty";
@@ -96,7 +96,8 @@ export function textRsidCode(req: TextRequestShape): number | null {
 export function maxTextMs(req: TextRequestShape): number {
   const text = req.mode === "HELL" ? hellVariant(req.hellVariant).maxSendMs : isModemId(req.mode) ? (modem(req.mode)?.maxSendMs ?? MAX_TEXT_MS) : MAX_TEXT_MS;
   // The RSID goes on top: the cap is on the line, not on the 2.3 s that announces it.
-  return text + (textRsidCode(req) !== null ? RSID_DURATION_MS : 0);
+  const code = textRsidCode(req);
+  return text + (code !== null ? rsidAnnouncementMs(code) : 0);
 }
 
 /**
@@ -108,7 +109,7 @@ export function textWaveform(req: TextTransmitRequest, sampleRate: number): Floa
   const body = lineWaveform(req, sampleRate);
   const code = textRsidCode(req);
   if (code === null) return body;
-  const id = rsidWaveform(code, { sampleRate, centreHz: req.centreHz, amplitude: 0.9 });
+  const id = rsidAnnouncement(code, { sampleRate, centreHz: req.centreHz, amplitude: 0.9 });
   const out = new Float32Array(id.length + body.length);
   out.set(id, 0);
   out.set(body, id.length);

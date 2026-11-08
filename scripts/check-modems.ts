@@ -5,7 +5,7 @@
 // Run: npm run check:modems
 
 import { toAdifMode } from "@/lib/adif/fields";
-import { RsidDetector, rsidWaveform, type RsidHeard } from "@/lib/digital/rsid";
+import { RsidDetector, rsidAnnouncement, rsidWaveform, type RsidHeard } from "@/lib/digital/rsid";
 import { isLoggableMode, rstStyleFor, TEXT_LOG_MODES } from "@/lib/ham/modes";
 import { DecodePipeline, isStreamMode } from "@/lib/radio/decode-pipeline";
 import { isModemId, MODEM_IDS, modemSub, registeredModems } from "@/lib/radio/modems";
@@ -93,6 +93,15 @@ for (const m of registeredModems()) {
     d.feed(new Float32Array(RATE));
     const h = heard[0];
     ok(h?.mode !== undefined && "sub" in h.mode && h.mode.mode === m.id && h.mode.sub === withCode.id, `  and a station hearing it is told ${m.id} ${withCode.id}`, JSON.stringify(h));
+  }
+  // A code from fldigi's second table goes as ESCAPE then the code, and is heard as itself.
+  for (const s2 of m.subs.filter((s) => (s.rsidCode ?? 0) > 300)) {
+    const heard2: RsidHeard[] = [];
+    const d2 = new RsidDetector(RATE, (h) => heard2.push(h));
+    d2.feed(rsidAnnouncement(s2.rsidCode!, { sampleRate: RATE, centreHz: 1400 }));
+    d2.feed(new Float32Array(RATE));
+    const h2 = heard2[0];
+    ok(heard2.length === 1 && h2?.mode !== undefined && "sub" in h2.mode && h2.mode.sub === s2.id, `${s2.label}: its RSID (${s2.rsidCode}, after ESCAPE) is heard as ${s2.label}`, JSON.stringify(heard2));
   }
   ok(isModemId(m.id) && modemSub(m, "nonsense").id === m.defaultSub, `an unknown size falls back to the default`);
 }

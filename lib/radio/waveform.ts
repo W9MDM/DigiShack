@@ -46,6 +46,7 @@ export const SYMBOL_RATE: Record<TxMode, number> = {
   MFSK: 31.25,
   DOMINO: 31.25,
   MT63: 31.25,
+  THOR: 31.25,
   /** A picture, not symbols. */
   SSTV: 0,
   HELL: 0,

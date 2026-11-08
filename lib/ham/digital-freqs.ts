@@ -411,6 +411,7 @@ const PERIOD_MS: Record<DigitalMode, number> = {
   MFSK: 1_000,
   DOMINO: 1_000,
   MT63: 1_000,
+  THOR: 1_000,
   SSTV: 1_000,
   HELL: 1_000,
   JTTY: 1_000,

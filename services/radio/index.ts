@@ -170,7 +170,7 @@ import { locksFor } from "@/lib/radio/api";
 import { postWsprSpots, wsprSpotOf, type WsprSpotReport } from "@/lib/wsprnet/upload";
 import { RTTY_CENTRE_HZ, RTTY_SHIFT_HZ, rttyDurationMs, rttyTones } from "@/lib/digital/rtty";
 import { cwDurationMs } from "@/lib/digital/cw";
-import { RSID_DURATION_MS, type RsidHeard } from "@/lib/digital/rsid";
+import { rsidAnnouncementMs, type RsidHeard } from "@/lib/digital/rsid";
 import { isModemId, modem, modemSub, registeredModems, type ModemId } from "@/lib/radio/modems";
 import { textRsidCode } from "@/lib/radio/text-waveform";
 import { isPskSpeed, PSK31_CENTRE_HZ, psk31DurationMs, type PskSpeed } from "@/lib/digital/psk31";
@@ -5657,7 +5657,7 @@ async function main(): Promise<void> {
         // fldigi's RSID first, where it is on and the mode has one: CW and JTTY never.
         const req2 = { ...req1, rsid: rsidTuning.transmit };
         const rsidCode = textRsidCode(req2);
-        const rsidMs = rsidCode !== null ? RSID_DURATION_MS : 0;
+        const rsidMs = rsidCode !== null ? rsidAnnouncementMs(rsidCode) : 0;
         if (rsidCode !== null) rsidSent = { code: rsidCode, at: Date.now() };
         // Hell names its mode in the log: a Feld Hell receiver paints FM Hell as columns of
         // ripple, and on 2026-11-06 a garbled line could not be traced to one or the other.

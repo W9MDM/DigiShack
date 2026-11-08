@@ -327,6 +327,28 @@ export function rsidWaveform(code: number, opts: { sampleRate: number; centreHz:
   return out;
 }
 
+/**
+ * The whole announcement for `code`: one burst for a code in the first table; for one in
+ * the second (Thor 25x4 and the other fast modes), ESCAPE, ten symbols of silence, then the
+ * code, as fldigi sends it (send(), rsid.cxx). A second-table code sent alone would be
+ * heard as nothing.
+ */
+export function rsidAnnouncement(code: number, opts: { sampleRate: number; centreHz: number; amplitude?: number }): Float32Array {
+  if (!RSID_TABLE2.some((e) => e.code === code)) return rsidWaveform(code, opts);
+  // Each burst carries five silent symbols either side: back to back, that is the ten.
+  const esc = rsidWaveform(RSID_ESCAPE, opts);
+  const second = rsidWaveform(code, opts);
+  const out = new Float32Array(esc.length + second.length);
+  out.set(esc, 0);
+  out.set(second, esc.length);
+  return out;
+}
+
+/** How long the announcement for `code` takes, ms. */
+export function rsidAnnouncementMs(code: number): number {
+  return RSID_TABLE2.some((e) => e.code === code) ? 2 * RSID_DURATION_MS : RSID_DURATION_MS;
+}
+
 export interface RsidHeard {
   code: number;
   name: string;
