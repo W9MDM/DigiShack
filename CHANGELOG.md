@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.284.0 - public release
+## 1.285.0 - public release
 
 Development happens in a private repository; this is where the public history starts.
 Earlier entries are not reproduced - they quote real operators by callsign, include
@@ -22,6 +22,7 @@ Notes for anyone running this:
 
 ## Release history
 
+- **1.285.0** — MFSK
 - **1.284.0** — DominoEX
 - **1.283.1** — One table for the fldigi modes still to come
 - **1.283.0** — RSID: hear which mode a station is in, and say which we are in

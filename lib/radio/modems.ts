@@ -13,6 +13,8 @@
 
 import { DOMINOEX_CENTRE_HZ, DOMINOEX_MODES, dominoexDurationMs, dominoexParams, dominoexWaveform, type DominoexMode } from "@/lib/digital/dominoex";
 import { DominoexDemodulator } from "@/lib/digital/dominoexdemod";
+import { MFSK_CENTRE_HZ, MFSK_MODES, mfskDurationMs, mfskWaveform, type MfskModeName } from "@/lib/digital/mfsk";
+import { MfskDemodulator } from "@/lib/digital/mfskdemod";
 
 /** The registered keyboard modes. A name here with no entry in MODEMS is not offered anywhere. */
 export type ModemId = "MFSK" | "DOMINO" | "MT63";
@@ -90,8 +92,37 @@ function dominoexMode(sub: string): DominoexMode {
   return (DOMINOEX_MODES as readonly number[]).includes(n) ? (n as DominoexMode) : 11;
 }
 
+/** fldigi's RSID codes for MFSK, by speed (rsid_defs.cxx). */
+const MFSK_RSID: Record<MfskModeName, number> = { MFSK8: 60, MFSK11: 148, MFSK16: 57, MFSK22: 152, MFSK32: 147 };
+const MFSK_ORDER: readonly MfskModeName[] = ["MFSK8", "MFSK11", "MFSK16", "MFSK22", "MFSK32"];
+
+function mfskName(sub: string): MfskModeName {
+  const n = `MFSK${sub}` as MfskModeName;
+  return MFSK_ORDER.includes(n) ? n : "MFSK16";
+}
+
+const MFSK: ModemSpec = {
+  id: "MFSK",
+  label: "MFSK",
+  subs: MFSK_ORDER.map((name) => ({
+    id: name.slice(4),
+    label: name,
+    bandwidthHz: Math.round(MFSK_MODES[name].bandwidthHz),
+    // ADIF's MFSK submodes, as FT4 is one: MODE=MFSK SUBMODE=MFSK16.
+    logMode: name,
+    rsidCode: MFSK_RSID[name],
+  })),
+  defaultSub: "16",
+  defaultCentreHz: MFSK_CENTRE_HZ,
+  // MFSK8 is under four characters a second: a minute holds a line.
+  maxSendMs: 60_000,
+  demodulator: ({ sampleRate, centreHz, sub }) => new MfskDemodulator({ sampleRate, centreHz, mode: mfskName(sub) }),
+  waveform: (text, { sampleRate, centreHz, sub }) => mfskWaveform(text, { sampleRate, centreHz, mode: mfskName(sub) }),
+  durationMs: (text, sub) => mfskDurationMs(text, { mode: mfskName(sub) }),
+};
+
 /** The table. Entries are added as each modem lands. */
-export const MODEMS: Partial<Record<ModemId, ModemSpec>> = { DOMINO };
+export const MODEMS: Partial<Record<ModemId, ModemSpec>> = { MFSK, DOMINO };
 
 export function isModemId(mode: string | null | undefined): mode is ModemId {
   return !!mode && (MODEM_IDS as readonly string[]).includes(mode);
