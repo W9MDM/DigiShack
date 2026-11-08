@@ -35,6 +35,7 @@ import type { OliviaBandwidth, OliviaCode, OliviaTones } from "@/lib/digital/oli
 import { HashCallBook as Ft2HashCallBook } from "@/lib/digital/pack77";
 import { js8SubmodeNow, PERIOD_MS, TRANSMISSION_MS } from "@/lib/radio/timing";
 import { RsidDetector, type RsidHeard } from "@/lib/digital/rsid";
+import type { PskSpeed } from "@/lib/digital/psk31";
 import { isModemId, modem, type ModemDemodulator, type ModemId } from "@/lib/radio/modems";
 import type { TxMode } from "@/lib/radio/waveform";
 
@@ -272,7 +273,7 @@ function streamConfigurationKey(opts: StreamOptions, includeTuning = true): stri
       tuning = [opts.pitchHz];
       break;
     case "PSK31":
-      configuration = [opts.mode, opts.speed ?? 31, opts.squelch ?? 0.5];
+      configuration = [opts.mode, opts.speed ?? 31, opts.qpsk ?? false, opts.squelch ?? 0.5];
       tuning = [opts.centreHz];
       break;
     case "OLIVIA":
@@ -356,7 +357,9 @@ export type StreamOptions =
       /** The carrier, Hz audio. */
       centreHz: number;
       /** 31.25, 62.5 or 125 baud. */
-      speed?: 31 | 63 | 125;
+      speed?: PskSpeed;
+      /** QPSK at that speed: the K=5 code and four phases. Default BPSK. */
+      qpsk?: boolean;
       /** 0 to 1; see Psk31DemodOptions.squelch. */
       squelch?: number;
     }
@@ -733,8 +736,11 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
   private streamMode: StreamMode | null = null;
   /** fldigi's mode identifier, listened for across the passband in the keyboard modes. Made on first use. */
   private rsid: RsidDetector | null = null;
+  /** Samples until the decoder is flushed after an RSID; 0 when none is due. */
+  private rsidFlushIn = 0;
   private streamConfiguration: StreamOptions | null = null;
-  private pskSpeed: 31 | 63 | 125 = 31;
+  private pskSpeed: PskSpeed = 31;
+  private pskQpsk = false;
   private rttyBaud = 45.45;
   /** Shadow decoders at the other speeds and polarity: see lib/digital/rtty-probe.ts. */
   private rttyProbe: RttyProbe | null = null;
@@ -942,7 +948,7 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
       this.cw.retune(opts.pitchHz);
       return;
     }
-    if (canRetune && opts.mode === "PSK31" && this.psk && (opts.speed ?? 31) === this.pskSpeed) {
+    if (canRetune && opts.mode === "PSK31" && this.psk && (opts.speed ?? 31) === this.pskSpeed && (opts.qpsk ?? false) === this.pskQpsk) {
       this.psk.retune(opts.centreHz);
       return;
     }
@@ -1026,15 +1032,37 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
     } else if (opts.mode === "PSK31") {
       // A speed change is a new demodulator: the decimation and the timing are per baud.
       this.pskSpeed = opts.speed ?? 31;
+      this.pskQpsk = opts.qpsk ?? false;
       this.psk = new Psk31Demodulator({
         sampleRate: this.inputRate,
         centreHz: opts.centreHz,
         speed: this.pskSpeed,
+        qpsk: this.pskQpsk,
         squelch: opts.squelch,
       });
     }
     this.streamSamples = 0;
     this.streamNextBeat = Math.round((this.inputRate * STREAM_HEARTBEAT_MS) / 1000);
+  }
+
+  /**
+   * An RSID was just heard: its tones were sitting in the decoder's window for two
+   * seconds, and an AFC that reaches as far as BPSK250's followed them off frequency and
+   * lost the first word of the line behind them. Start the decoder again on its own centre,
+   * as fldigi flushes its receiver on an RSID (rx_flush). The line follows five symbols of
+   * silence later.
+   */
+  private flushAfterRsid(): void {
+    const c = this.streamConfiguration;
+    if (!c || !("centreHz" in c)) return;
+    // A reset, not only a retune: the symbol-timing average was built on the RSID tones too.
+    if (this.psk) {
+      this.psk.retune(c.centreHz);
+      this.psk.reset();
+    } else if (this.modem) {
+      this.modem.retune(c.centreHz);
+      this.modem.reset();
+    }
   }
 
   private feedStream(samples: ArrayLike<number>): void {
@@ -1044,8 +1072,17 @@ export class DecodePipeline extends EventEmitter<DecodePipelineEvents> {
     // RSID: in the keyboard modes, where a station switching mode announces it. Not in
     // SSTV (its own VIS header names the mode) nor JTTY (whole-passband already).
     if (mode !== "SSTV" && mode !== "JTTY") {
-      this.rsid ??= new RsidDetector(this.inputRate, (h) => this.emit("rsid", { ...h, at: Date.now() }));
+      this.rsid ??= new RsidDetector(this.inputRate, (h) => {
+        // The detector can name the mode before the last tone has quite ended: the flush
+        // waits 150 ms, inside the five silent symbols (465 ms) before the line.
+        this.rsidFlushIn = Math.round(0.15 * this.inputRate);
+        this.emit("rsid", { ...h, at: Date.now() });
+      });
       this.rsid.feed(samples);
+    }
+    if (this.rsidFlushIn > 0) {
+      this.rsidFlushIn -= samples.length;
+      if (this.rsidFlushIn <= 0) this.flushAfterRsid();
     }
     const text = demod.feed(samples);
     if (text) this.emit("text", { mode, text, at: Date.now() });

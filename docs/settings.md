@@ -214,7 +214,7 @@ Where the PSK31 carrier starts in the audio passband, which speed, and how sure 
 | Setting | Key | Type | Default | What it does |
 |---|---|---|---|---|
 | PSK31 carrier (Hz audio) *(advanced)* | `psk31.centreHz` | number | `1000` | Where the decoder listens and the transmitter sends when the PSK31 chip is pressed, Hz above the dial. 1000 is the convention: the 20 m watering hole at a 14.070 dial sits at 14.071. A click on the waterfall moves it for the session. |
-| PSK speed *(advanced)* | `psk31.speed` | number | `31` | 31, 63 or 125: BPSK31 at 31.25 baud, BPSK63 at 62.5, BPSK125 at 125. The panel's picker changes it for the session. |
+| PSK speed *(advanced)* | `psk31.speed` | number | `31` | 31, 63, 125, 250 or 500: BPSK at 31.25, 62.5, 125, 250 and 500 baud. QPSK31, 63 and 125 are on the panel's picker, which changes the speed for the session. |
 | PSK31 squelch (0 to 1) *(advanced)* | `psk31.squelch` | number | `0.5` | The decoder's quality - how consistently the symbols read as a phase or its reverse - below which nothing prints. Noise sits near 0.2, a clean signal near 1, a weak one around 0.6. 0 prints everything, which on an empty channel is a stream of random characters. |
 
 ## CW

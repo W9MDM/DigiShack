@@ -1245,7 +1245,7 @@ export const SETTINGS: SettingDef[] = [
     type: "number",
     group: "psk31",
     advanced: true,
-    help: "31, 63 or 125: BPSK31 at 31.25 baud, BPSK63 at 62.5, BPSK125 at 125. The panel's picker changes it for the session.",
+    help: "31, 63, 125, 250 or 500: BPSK at 31.25, 62.5, 125, 250 and 500 baud. QPSK31, 63 and 125 are on the panel's picker, which changes the speed for the session.",
     default: "31",
   },
   {

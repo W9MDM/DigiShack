@@ -97,7 +97,9 @@ export interface CwTuning {
 export interface PskTuning {
   /** The carrier, Hz audio: where the decoder listens and the transmitter sends. */
   centreHz: number;
-  speed: 31 | 63 | 125;
+  speed: 31 | 63 | 125 | 250 | 500;
+  /** QPSK rather than BPSK. */
+  qpsk?: boolean;
 }
 
 export interface OliviaTuning {
@@ -117,6 +119,9 @@ export interface ModemTuning {
   label: string;
   bandwidthHz: number;
 }
+
+/** The PSK speeds the picker offers: BPSK at each, QPSK at the three fldigi users run it at. */
+const PSK_CHOICES = ["B31", "B63", "B125", "B250", "B500", "Q31", "Q63", "Q125"] as const;
 
 /** The sizes the picker offers, as the bridge accepts them. */
 export const OLIVIA_SIZES: readonly { tones: number; bandwidth: number }[] = [
@@ -149,7 +154,7 @@ interface Props {
   error?: string | null;
   onTune: (centreHz?: number, shiftHz?: number, extra?: { reverse?: boolean; baud?: number }) => void;
   onCwWpm: (wpm: number) => void;
-  onPskTune: (centreHz?: number, speed?: 31 | 63 | 125) => void;
+  onPskTune: (centreHz?: number, speed?: 31 | 63 | 125 | 250 | 500, qpsk?: boolean) => void;
   onOliviaTune: (centreHz?: number, size?: { tones: number; bandwidth: number }, code?: "olivia" | "contestia") => void;
   onJttyTune?: (txHz: number) => void;
   onSend: (text: string) => void;
@@ -337,7 +342,7 @@ export function StreamPanel({
         ) : isPsk ? (
           psk ? (
             <span className="tnum">
-              carrier <span className="text-fg">{psk.centreHz}</span> Hz · BPSK{psk.speed}
+              carrier <span className="text-fg">{psk.centreHz}</span> Hz · {psk.qpsk ? "QPSK" : "BPSK"}{psk.speed}
               {pskStats && Math.abs(pskStats.afcHz) >= 0.5 && (
                 <>
                   {" "}
@@ -442,14 +447,20 @@ export function StreamPanel({
                 upTitle="Move the carrier 10 Hz up"
               />
               <NativeSelect
-                value={psk?.speed ?? 31}
-                onChange={(e) => onPskTune(undefined, Number(e.target.value) as 31 | 63 | 125)}
+                value={`${psk?.qpsk ? "Q" : "B"}${psk?.speed ?? 31}`}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  onPskTune(undefined, Number(v.slice(1)) as 31 | 63 | 125 | 250 | 500, v.startsWith("Q"));
+                }}
                 disabled={!psk}
                 aria-label="PSK speed"
               >
-                <option value={31}>BPSK31</option>
-                <option value={63}>BPSK63</option>
-                <option value={125}>BPSK125</option>
+                {PSK_CHOICES.map((c) => (
+                  <option key={c} value={c}>
+                    {c.startsWith("Q") ? "QPSK" : "BPSK"}
+                    {c.slice(1)}
+                  </option>
+                ))}
               </NativeSelect>
               <span className="text-fg-subtle">or click the waterfall to set the carrier</span>
             </>

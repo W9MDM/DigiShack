@@ -8,12 +8,16 @@
 // signal inside about 60 Hz, and why an idle line (all 0s, a reversal every symbol) looks
 // like two tones 31.25 Hz apart. Characters are Varicode: every code starts and ends with
 // a 1 and never holds two 0s in a row, so "00" is the separator and the common letters
-// get the short codes. 62.5 and 125 baud (BPSK63, BPSK125) are the same thing faster.
+// get the short codes. 62.5 to 500 baud (BPSK63, 125, 250, 500) are the same thing faster.
+//
+// QPSK (option qpsk) sends the same Varicode through a K=5 convolutional code, one of four
+// phase changes a symbol; the code and its decoder are lib/digital/qpsk.ts.
 //
 // The decoder is lib/digital/psk31demod.ts; scripts/check-psk31.ts runs the one through
 // the other on generated signals, clean, offset and in noise.
 
 import { PSK31_VARICODE } from "@/lib/digital/psk31-varicode";
+import { QpskEncoder, qpskPhaseChange } from "@/lib/digital/qpsk";
 
 export const PSK31_BAUD = 31.25;
 /** The audio centre the mode chip tunes the decoder to. 1000 Hz, the long-standing convention. */
@@ -21,10 +25,36 @@ export const PSK31_CENTRE_HZ = 1000;
 /** The longest Varicode is twelve bits; a run longer than that between separators is noise. */
 export const PSK31_MAX_CODE_BITS = 12;
 
-export type PskSpeed = 31 | 63 | 125;
+/**
+ * The speed by its name: BPSK31, 63, 125, 250, 500 (or QPSK at the same baud). fldigi
+ * runs them all at 8 kHz with 256, 128, 64, 32 and 16 samples a symbol (psk/psk.cxx:384-447),
+ * which is 31.25, 62.5, 125, 250 and 500 baud. Everything here takes any of them.
+ */
+export type AnyPskSpeed = 31 | 63 | 125 | 250 | 500;
 
-export function pskBaud(speed: PskSpeed = 31): number {
-  return speed === 125 ? 125 : speed === 63 ? 62.5 : PSK31_BAUD;
+/** Every speed, as the app plumbs it: the picker, the bridge, the pipeline and the transmit request. */
+export type PskSpeed = AnyPskSpeed;
+
+export const PSK_SPEEDS: readonly AnyPskSpeed[] = [31, 63, 125, 250, 500];
+
+export function pskBaud(speed: AnyPskSpeed = 31): number {
+  switch (speed) {
+    case 500:
+      return 500;
+    case 250:
+      return 250;
+    case 125:
+      return 125;
+    case 63:
+      return 62.5;
+    default:
+      return PSK31_BAUD;
+  }
+}
+
+/** Whether a number from a setting or a request is one of the speeds. */
+export function isPskSpeed(n: unknown): n is AnyPskSpeed {
+  return typeof n === "number" && (PSK_SPEEDS as readonly number[]).includes(n);
 }
 
 const UTF8 = new TextEncoder();
@@ -157,28 +187,48 @@ export interface Psk31WaveformOptions {
   sampleRate: number;
   /** Carrier, Hz audio. Default 1000. */
   centreHz?: number;
-  speed?: PskSpeed;
-  /** Idle (reversals) before the first character, in symbols, so the far end locks. Default 32 at PSK31, 64 at PSK63, 128 at PSK125. */
+  speed?: AnyPskSpeed;
+  /** QPSK rather than BPSK: the Varicode through the K=5 code, four phases. Default false. */
+  qpsk?: boolean;
+  /** QPSK only: fldigi's "reverse", the phase changes mirrored, for a sideband that mirrors the audio. Default false. */
+  reverse?: boolean;
+  /** Idle (reversals) before the first character, in symbols, so the far end locks. Default fldigi's dcdbits: 32 at PSK31, 64, 128, 256, 512 at PSK500. */
   preambleSymbols?: number;
-  /** Steady carrier after the last character, in symbols. Default as the preamble. */
+  /** After the last character, in symbols: steady carrier for BPSK, the encoder flushed with 0s (reversals) for QPSK. Default as the preamble. */
   tailSymbols?: number;
   /** Peak amplitude. Default 1. */
   amplitude?: number;
 }
 
-/** The symbols a line sends, idle to steady carrier: preamble 0s, the text, a separator, tail 1s. */
+/**
+ * The symbols a line sends. BPSK: one bit a symbol, 1 for no change and 0 for a reversal -
+ * preamble 0s, the text, tail 1s (steady carrier). QPSK: one dibit a symbol, the phase
+ * change being 180 + 90 d degrees (see lib/digital/qpsk.ts) - preamble reversals (dibit 0,
+ * not through the encoder), then the text and tail 0 bits through the encoder.
+ */
 export function psk31Symbols(text: string, opts: Partial<Psk31WaveformOptions> = {}): number[] {
-  // 32 symbols at PSK31, 64 at PSK63, 128 at PSK125: the same time on the air at every
-  // speed, as fldigi sends them. A fixed 32 was a quarter of a second at PSK125, too short
-  // for fldigi to open its squelch and settle before the first character.
+  // fldigi's dcdbits, the preamble and the postamble alike (psk/psk.cxx:384-447, tx_process,
+  // tx_flush): 32 symbols at PSK31, doubling with the speed to 512 at PSK500 - the same
+  // time on the air at every speed. A fixed 32 was a quarter of a second at PSK125, too
+  // short for fldigi to open its squelch and settle before the first character.
   const scale = pskBaud(opts.speed ?? 31) / PSK31_BAUD;
   const pre = opts.preambleSymbols ?? Math.round(32 * scale);
   const tail = opts.tailSymbols ?? Math.round(32 * scale);
-  const bits: number[] = [];
-  for (let i = 0; i < pre; i++) bits.push(0);
-  bits.push(...psk31EncodeText(text));
-  for (let i = 0; i < tail; i++) bits.push(1);
-  return bits;
+  const out: number[] = [];
+  const bits = psk31EncodeText(text);
+  if (opts.qpsk) {
+    // Preamble: tx_symbol(0) straight, a reversal (psk/psk.cxx tx_process). The text and
+    // the postamble go through the encoder, which starts at zero (see qpsk.ts).
+    for (let i = 0; i < pre; i++) out.push(0);
+    const enc = new QpskEncoder();
+    for (const b of bits) out.push(enc.encode(b));
+    for (let i = 0; i < tail; i++) out.push(enc.encode(0));
+    return out;
+  }
+  for (let i = 0; i < pre; i++) out.push(0);
+  out.push(...bits);
+  for (let i = 0; i < tail; i++) out.push(1);
+  return out;
 }
 
 /**
@@ -189,6 +239,11 @@ export function psk31Symbols(text: string, opts: Partial<Psk31WaveformOptions> =
  * constant s when they agree and s_k cos(pi t / T) when they differ, which passes through
  * zero at the boundary and arrives at s_{k+1} - the G3PLX envelope. The first half symbol
  * and the last ramp from and to zero so the carrier never starts or stops with a click.
+ *
+ * QPSK is the same envelope on a complex baseband: between centres the vector moves from
+ * one symbol's to the next's with the same raised-cosine weight (fldigi's tx_shape,
+ * psk/psk.cxx tx_carriers), so a reversal still passes through zero and a quarter turn
+ * dips to 0.71. The audio is Re(z e^{jwt}): its phase is the symbol's.
  */
 export function psk31Waveform(text: string, opts: Psk31WaveformOptions): Float32Array {
   const fs = opts.sampleRate;
@@ -196,15 +251,27 @@ export function psk31Waveform(text: string, opts: Psk31WaveformOptions): Float32
   const T = fs / baud;
   const fc = opts.centreHz ?? PSK31_CENTRE_HZ;
   const amp = opts.amplitude ?? 1;
-  const bits = psk31Symbols(text, opts);
-  const n = bits.length;
+  const syms = psk31Symbols(text, opts);
+  const n = syms.length;
 
-  // Phase per symbol, +1 / -1.
-  const s = new Int8Array(n);
-  let p = 1;
-  for (let k = 0; k < n; k++) {
-    if (!bits[k]) p = -p;
-    s[k] = p;
+  // The symbol vector, unit length. BPSK: +1 / -1. QPSK: the phase turned by each dibit.
+  const sI = new Float64Array(n);
+  const sQ = new Float64Array(n);
+  if (opts.qpsk) {
+    let theta = 0;
+    for (let k = 0; k < n; k++) {
+      theta += qpskPhaseChange(syms[k]!, opts.reverse);
+      // Snap to the exact quarter so 0 and 180 stay exactly real over a long line.
+      const q = ((Math.round(theta / (Math.PI / 2)) % 4) + 4) % 4;
+      sI[k] = [1, 0, -1, 0][q]!;
+      sQ[k] = [0, 1, 0, -1][q]!;
+    }
+  } else {
+    let p = 1;
+    for (let k = 0; k < n; k++) {
+      if (!syms[k]) p = -p;
+      sI[k] = p;
+    }
   }
 
   const total = Math.round(n * T);
@@ -216,20 +283,27 @@ export function psk31Waveform(text: string, opts: Psk31WaveformOptions): Float32
     const u = i / T - 0.5;
     const k = Math.floor(u);
     const frac = u - k;
-    let base: number;
+    let bI: number;
+    let bQ: number;
     if (k < 0) {
       // Rising half cosine from zero into the first symbol's centre.
-      base = s[0]! * Math.sin((Math.PI / 2) * (1 + u * 2)) ;
-      if (u < -0.5) base = 0;
+      const g = u < -0.5 ? 0 : Math.sin((Math.PI / 2) * (1 + u * 2));
+      bI = sI[0]! * g;
+      bQ = sQ[0]! * g;
     } else if (k >= n - 1) {
       // Falling half cosine from the last centre to zero.
-      base = frac <= 0.5 ? s[n - 1]! * Math.cos(Math.PI * frac) : 0;
+      const g = frac <= 0.5 ? Math.cos(Math.PI * frac) : 0;
+      bI = sI[n - 1]! * g;
+      bQ = sQ[n - 1]! * g;
     } else {
-      const a = s[k]!;
-      const b = s[k + 1]!;
-      base = a === b ? a : a * Math.cos(Math.PI * frac);
+      // From centre k to centre k+1: weight w rises 0 to 1 as a raised cosine. For BPSK
+      // this is the old a cos(pi frac) between opposite symbols and a constant otherwise.
+      const w = 0.5 - 0.5 * Math.cos(Math.PI * frac);
+      bI = sI[k]! * (1 - w) + sI[k + 1]! * w;
+      bQ = sQ[k]! * (1 - w) + sQ[k + 1]! * w;
     }
-    out[i] = amp * base * Math.cos(phase);
+    // Re((bI + j bQ) e^{j phase}).
+    out[i] = amp * (bI * Math.cos(phase) - bQ * Math.sin(phase));
     phase += dphi;
     if (phase > 2 * Math.PI) phase -= 2 * Math.PI;
   }

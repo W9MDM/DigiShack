@@ -843,9 +843,9 @@ export default function DigitalPage({ wsUrl }: Props) {
     }
   }, []);
   /** Move the PSK31 carrier (a click on the waterfall or the ± buttons) or change the speed. */
-  const tunePsk = useCallback(async (centreHz?: number, speed?: 31 | 63 | 125) => {
+  const tunePsk = useCallback(async (centreHz?: number, speed?: 31 | 63 | 125 | 250 | 500, qpsk?: boolean) => {
     try {
-      await apiPost("/api/bridge/control", { action: "psk", centreHz, speed });
+      await apiPost("/api/bridge/control", { action: "psk", centreHz, speed, qpsk });
       setRttyError(null);
     } catch (err) {
       setRttyError(err instanceof ApiError ? err.message : "Could not move the PSK31 carrier");
@@ -1034,8 +1034,10 @@ export default function DigitalPage({ wsUrl }: Props) {
       case "CW":
         return { mode: "CW", label: "CW", freqHz: dial };
       case "PSK31": {
+        // As ADIF names them: PSK31 to PSK500, and QPSK31 to QPSK125 (all MODE=PSK).
         const speed = status?.psk?.speed ?? 31;
-        return { mode: `PSK${speed === 31 ? 31 : speed === 63 ? 63 : 125}`, label: `PSK${speed}`, freqHz: at(status?.psk?.centreHz) };
+        const name = `${status?.psk?.qpsk ? "QPSK" : "PSK"}${speed}`;
+        return { mode: name, label: status?.psk?.qpsk ? name : `BPSK${speed}`, freqHz: at(status?.psk?.centreHz) };
       }
       case "OLIVIA":
         return status?.olivia?.code === "contestia"
@@ -1524,7 +1526,7 @@ export default function DigitalPage({ wsUrl }: Props) {
                   error={rttyError}
                   onTune={(centreHz, shiftHz, extra) => void tuneRtty(centreHz, shiftHz, extra)}
                   onCwWpm={(wpm) => void setCwWpm(wpm)}
-                  onPskTune={(centreHz, speed) => void tunePsk(centreHz, speed)}
+                  onPskTune={(centreHz, speed, qpsk) => void tunePsk(centreHz, speed, qpsk)}
                   onOliviaTune={(centreHz, size, code) => void tuneOlivia(centreHz, size, code)}
                   onSend={(text) => void sendRtty(text)}
                   onClear={clearStream}

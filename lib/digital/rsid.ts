@@ -86,7 +86,7 @@ export function rsidEncode(code: number): number[] {
 
 /** What a heard RSID asks this station to switch to, for the modes DigiShack has. */
 export type RsidMode =
-  | { mode: "PSK31"; speed: PskSpeed }
+  | { mode: "PSK31"; speed: PskSpeed; qpsk?: boolean }
   | { mode: "RTTY"; baud: number; shiftHz: number }
   | { mode: "OLIVIA"; code: OliviaCode; tones: OliviaTones; bandwidth: OliviaBandwidth }
   | { mode: "HELL"; variant: HellVariant }
@@ -109,14 +109,14 @@ export const RSID_TABLE: readonly RsidEntry[] = [
   { code: 263, name: "EOT" },
   { code: 6, name: "ESCAPE" },
   { code: 1, name: "BPSK31", mode: { mode: "PSK31", speed: 31 } },
-  { code: 110, name: "QPSK31" },
+  { code: 110, name: "QPSK31", mode: { mode: "PSK31", speed: 31, qpsk: true } },
   { code: 2, name: "BPSK63", mode: { mode: "PSK31", speed: 63 } },
-  { code: 3, name: "QPSK63" },
+  { code: 3, name: "QPSK63", mode: { mode: "PSK31", speed: 63, qpsk: true } },
   { code: 4, name: "BPSK125", mode: { mode: "PSK31", speed: 125 } },
-  { code: 5, name: "QPSK125" },
-  { code: 126, name: "BPSK250" },
+  { code: 5, name: "QPSK125", mode: { mode: "PSK31", speed: 125, qpsk: true } },
+  { code: 126, name: "BPSK250", mode: { mode: "PSK31", speed: 250 } },
   { code: 127, name: "QPSK250" },
-  { code: 173, name: "BPSK500" },
+  { code: 173, name: "BPSK500", mode: { mode: "PSK31", speed: 500 } },
   { code: 183, name: "PSK125R" },
   { code: 186, name: "PSK250R" },
   { code: 187, name: "PSK500R" },
@@ -280,7 +280,7 @@ export function rsidCodeFor(m: RsidMode): number | null {
     if (!x || x.mode !== m.mode) return false;
     switch (m.mode) {
       case "PSK31":
-        return (x as typeof m).speed === m.speed;
+        return (x as typeof m).speed === m.speed && ((x as typeof m).qpsk ?? false) === (m.qpsk ?? false);
       case "RTTY":
         return (x as typeof m).baud === m.baud && (x as typeof m).shiftHz === m.shiftHz;
       case "OLIVIA": {

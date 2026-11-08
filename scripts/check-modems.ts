@@ -97,5 +97,31 @@ for (const m of registeredModems()) {
   ok(isModemId(m.id) && modemSub(m, "nonsense").id === m.defaultSub, `an unknown size falls back to the default`);
 }
 
+console.log("\nPSK at every speed, and QPSK, through the same layers");
+for (const [speed, qpsk] of [[31, false], [250, false], [500, false], [31, true], [63, true], [125, true]] as const) {
+  const name = `${qpsk ? "QPSK" : "BPSK"}${speed}`;
+  const pipe = new DecodePipeline({ mode: "FT8", inputSampleRate: RATE });
+  let text = "";
+  pipe.on("text", (t) => (text += t.text));
+  pipe.on("error", () => {});
+  pipe.setStream({ mode: "PSK31", centreHz: 1500, speed, qpsk });
+  const req = { mode: "PSK31" as const, text: LINE, centreHz: 1500, shiftHz: 0, sideband: "USB" as const, speed, qpsk, rsid: true };
+  const w = textWaveform(req, RATE);
+  for (let i = 0; i < w.length; i += 480) pipe.push(w.subarray(i, Math.min(w.length, i + 480)));
+  pipe.push(new Float32Array(RATE * 2));
+  ok(text.trim() === LINE, `${name}: sent with its RSID through the text path, decoded by the pipeline (${JSON.stringify(text.trim())})`);
+  const code = textRsidCode(req);
+  const want: Record<string, number> = { BPSK31: 1, BPSK250: 126, BPSK500: 173, QPSK31: 110, QPSK63: 3, QPSK125: 5 };
+  ok(code === want[name], `  and the RSID is fldigi's ${want[name]} (${code})`);
+  const heard: RsidHeard[] = [];
+  const d = new RsidDetector(RATE, (h) => heard.push(h));
+  d.feed(w);
+  const m = heard[0]?.mode;
+  ok(m?.mode === "PSK31" && "speed" in m && m.speed === speed && (m.qpsk ?? false) === qpsk, `  and a station hearing it is told ${name}`, JSON.stringify(heard[0]));
+  const logMode = `${qpsk ? "QPSK" : "PSK"}${speed}`;
+  const adif = toAdifMode(logMode);
+  ok(isLoggableMode(logMode) && adif.mode === "PSK" && adif.submode === logMode, `  and logs as MODE=PSK SUBMODE=${logMode}`);
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);

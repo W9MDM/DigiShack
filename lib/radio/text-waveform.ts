@@ -12,7 +12,7 @@ import {
   type OliviaCode,
   type OliviaTones,
 } from "@/lib/digital/olivia";
-import { psk31DurationMs, psk31Waveform } from "@/lib/digital/psk31";
+import { psk31DurationMs, psk31Waveform, type PskSpeed } from "@/lib/digital/psk31";
 import { RSID_DURATION_MS, rsidCodeFor, rsidWaveform, type RsidMode } from "@/lib/digital/rsid";
 import { isModemId, modem, modemSub, type ModemId } from "@/lib/radio/modems";
 import { rttyDurationMs, rttyWaveform } from "@/lib/digital/rtty";
@@ -36,7 +36,9 @@ export interface TextTransmitRequest {
   /** RTTY speed. Default 45.45. */
   baud?: number;
   /** PSK: 31.25, 62.5 or 125 baud. Default 31. */
-  speed?: 31 | 63 | 125;
+  speed?: PskSpeed;
+  /** PSK: QPSK rather than BPSK at that speed. */
+  qpsk?: boolean;
   /** Olivia: the size. Default 500/16. */
   tones?: OliviaTones;
   bandwidth?: OliviaBandwidth;
@@ -60,7 +62,7 @@ type TextRequestShape = Pick<TextTransmitRequest, "mode"> & Partial<Omit<TextTra
 function rsidModeOf(req: TextRequestShape): RsidMode | null {
   switch (req.mode) {
     case "PSK31":
-      return { mode: "PSK31", speed: req.speed ?? 31 };
+      return { mode: "PSK31", speed: req.speed ?? 31, qpsk: req.qpsk ?? false };
     case "RTTY":
       return { mode: "RTTY", baud: req.baud ?? 45.45, shiftHz: req.shiftHz ?? 170 };
     case "OLIVIA":
@@ -155,13 +157,13 @@ function lineWaveform(req: TextTransmitRequest, sampleRate: number): Float32Arra
     return hellWaveform(text, { sampleRate, centreHz: req.centreHz, variant: v.id });
   }
   if (req.mode === "PSK31") {
-    const pskMs = psk31DurationMs(text, { speed: req.speed });
+    const pskMs = psk31DurationMs(text, { speed: req.speed, qpsk: req.qpsk });
     if (pskMs > cap) {
       throw new Error(
         `${text.length} characters is ${(pskMs / 1000).toFixed(0)} s of PSK, over the ${cap / 1000} s cap - send it in pieces`,
       );
     }
-    return psk31Waveform(text, { sampleRate, centreHz: req.centreHz, speed: req.speed });
+    return psk31Waveform(text, { sampleRate, centreHz: req.centreHz, speed: req.speed, qpsk: req.qpsk });
   }
   const ms = rttyDurationMs(text, { baud: req.baud });
   if (ms > cap) {

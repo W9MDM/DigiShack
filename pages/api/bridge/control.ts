@@ -97,7 +97,9 @@ const bodySchema = z.object({
   /** Audio offset for action "js8-send", Hz. */
   offsetHz: z.number().min(200).max(2800).optional(),
   /** PSK speed for action "psk": 31, 63 or 125 (baud 31.25, 62.5, 125). */
-  speed: z.union([z.literal(31), z.literal(63), z.literal(125)]).optional(),
+  speed: z.union([z.literal(31), z.literal(63), z.literal(125), z.literal(250), z.literal(500)]).optional(),
+  /** QPSK rather than BPSK, for action "psk" (31, 63 and 125). */
+  qpsk: z.boolean().optional(),
   /** Olivia size for action "olivia": tones and bandwidth, one of the listed pairs. */
   tones: z.number().int().min(2).max(256).optional(),
   bandwidth: z.number().int().min(125).max(2000).optional(),
