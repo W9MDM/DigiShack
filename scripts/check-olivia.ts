@@ -169,7 +169,7 @@ async function main(): Promise<void> {
     const fs = 12_000;
     const mode = { tones: 16, bandwidth: 500 } as const;
     const symbols = oliviaSymbols("CQ", { ...mode });
-    eq(symbols.length, 3 * 64, "one idle block before, the text block, one idle after");
+    eq(symbols.length, 4 * 64, "one idle block before, the text block, two idle after, as fldigi needs");
     const wave = oliviaWaveform(symbols, { ...mode, sampleRate: fs, centreHz: 1500 });
     const p = oliviaParams(mode);
     eq(wave.length, (symbols.length + 1) * Math.round((p.refSymbolSepar * fs) / 8000), "the length is the symbols plus the last half symbol");

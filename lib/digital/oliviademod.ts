@@ -81,13 +81,16 @@ class LowPass3 {
   output = 0;
   process(inp: number, weight: number, feedback = 0.1): void {
     weight *= 2;
-    let d = (inp - this.out1) * weight;
-    this.out1 += d;
-    d = (this.out1 - this.out2) * weight;
-    this.out2 += d;
-    d = (this.output - this.output) * 0 + (this.out2 - this.output) * weight;
-    this.output += d;
-    this.out2 += d * feedback;
+    // All three differences from the old values first, then the updates, as
+    // pj_lowpass3.h does it. Updating each stage before the next difference was a
+    // different, faster filter than the one the sync was tuned with.
+    const d1 = (inp - this.out1) * weight;
+    const d12 = (this.out1 - this.out2) * weight;
+    const d23 = (this.out2 - this.output) * weight;
+    this.out1 += d1;
+    this.out2 += d12;
+    this.output += d23;
+    this.out2 += d23 * feedback;
   }
 }
 

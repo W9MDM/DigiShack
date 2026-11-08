@@ -120,11 +120,14 @@ export function oliviaParams(mode: OliviaMode): OliviaParams {
 }
 
 /**
- * The first carrier's FFT bin for a tone set centred on `centreHz`, as fldigi places it:
- * the first tone sits half the bandwidth below the centre, plus half a tone spacing.
+ * The first carrier's FFT bin for a tone set centred on `centreHz`, as fldigi places it.
+ * Olivia: the first tone half the bandwidth below the centre, plus half a tone spacing
+ * (olivia.cxx). Contestia: half the bandwidth below, with no half spacing
+ * (contestia.cxx), so the same centre puts Contestia's tones half a bin lower. Using
+ * Olivia's for both set ours half a bin, sometimes a whole one, off fldigi's.
  */
 export function oliviaFirstCarrierBin(params: OliviaParams, centreHz: number): number {
-  const fcOffset = (params.bandwidth * (1 - 0.5 / params.tones)) / 2;
+  const fcOffset = params.code === "contestia" ? params.bandwidth / 2 : (params.bandwidth * (1 - 0.5 / params.tones)) / 2;
   const multiplier = (centreHz - fcOffset) / 500;
   return Math.floor((params.refSymbolLen / 16) * multiplier) + 1;
 }
@@ -328,7 +331,7 @@ export interface OliviaWaveformOptions extends OliviaMode {
   centreHz?: number;
   /** Idle blocks (all-zero characters) before the text, so the far end syncs. Default 1. */
   preambleBlocks?: number;
-  /** Idle blocks after the text. Default 1. */
+  /** Idle blocks after the text. Default 2: fldigi judges a block on its signal over the next few, so with one a weak last block fell under its squelch. */
   tailBlocks?: number;
   amplitude?: number;
 }
@@ -344,7 +347,7 @@ export function oliviaSymbols(text: string, opts: Partial<OliviaWaveformOptions>
   const blocks: number[][] = [];
   for (let i = 0; i < (opts.preambleBlocks ?? 1); i++) blocks.push([]);
   for (let i = 0; i < chars.length; i += p.bitsPerSymbol) blocks.push(chars.slice(i, i + p.bitsPerSymbol));
-  for (let i = 0; i < (opts.tailBlocks ?? 1); i++) blocks.push([]);
+  for (let i = 0; i < (opts.tailBlocks ?? 2); i++) blocks.push([]);
   const out = new Uint8Array(blocks.length * cp.symbolsPerBlock);
   blocks.forEach((b, i) => out.set(oliviaEncodeBlock(b, p.bitsPerSymbol, opts.code), i * cp.symbolsPerBlock));
   return out;
