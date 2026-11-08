@@ -15,6 +15,8 @@ import { DOMINOEX_CENTRE_HZ, DOMINOEX_MODES, dominoexDurationMs, dominoexParams,
 import { DominoexDemodulator } from "@/lib/digital/dominoexdemod";
 import { MFSK_CENTRE_HZ, MFSK_MODES, mfskDurationMs, mfskWaveform, type MfskModeName } from "@/lib/digital/mfsk";
 import { MfskDemodulator } from "@/lib/digital/mfskdemod";
+import { MT63_MODES, mt63DurationMs, mt63Params, mt63Waveform, type Mt63Mode } from "@/lib/digital/mt63";
+import { Mt63Demodulator } from "@/lib/digital/mt63demod";
 
 /** The registered keyboard modes. A name here with no entry in MODEMS is not offered anywhere. */
 export type ModemId = "MFSK" | "DOMINO" | "MT63";
@@ -121,8 +123,36 @@ const MFSK: ModemSpec = {
   durationMs: (text, sub) => mfskDurationMs(text, { mode: mfskName(sub) }),
 };
 
+/** fldigi's RSID codes for MT63 (rsid_defs.cxx). */
+const MT63_RSID: Record<Mt63Mode, number> = { "500L": 9, "500S": 10, "1000L": 12, "1000S": 13, "2000L": 15, "2000S": 17 };
+
+function mt63Mode(sub: string): Mt63Mode {
+  return (MT63_MODES as readonly string[]).includes(sub) ? (sub as Mt63Mode) : "1000L";
+}
+
+const MT63: ModemSpec = {
+  id: "MT63",
+  label: "MT63",
+  subs: MT63_MODES.map((m) => ({
+    id: m,
+    label: `MT63-${m}`,
+    bandwidthHz: mt63Params(m).bandwidth,
+    // ADIF has MT63 as a mode with no submodes.
+    logMode: "MT63",
+    rsidCode: MT63_RSID[m],
+  })),
+  // What NBEMS and ARES nets run most: 2000L on a wide channel, 1000L where it is tight.
+  defaultSub: "1000L",
+  defaultCentreHz: 1500,
+  // The interleaver's fill and flush ride on every line: 13 s of them at MT63-500L.
+  maxSendMs: 90_000,
+  demodulator: ({ sampleRate, centreHz, sub }) => new Mt63Demodulator({ sampleRate, centreHz, mode: mt63Mode(sub) }),
+  waveform: (text, { sampleRate, centreHz, sub }) => mt63Waveform(text, { sampleRate, centreHz, mode: mt63Mode(sub) }),
+  durationMs: (text, sub) => mt63DurationMs(text, { sampleRate: 12_000, centreHz: 1500, mode: mt63Mode(sub) }),
+};
+
 /** The table. Entries are added as each modem lands. */
-export const MODEMS: Partial<Record<ModemId, ModemSpec>> = { MFSK, DOMINO };
+export const MODEMS: Partial<Record<ModemId, ModemSpec>> = { MFSK, DOMINO, MT63 };
 
 export function isModemId(mode: string | null | undefined): mode is ModemId {
   return !!mode && (MODEM_IDS as readonly string[]).includes(mode);
